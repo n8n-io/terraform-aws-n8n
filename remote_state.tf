@@ -19,7 +19,7 @@ data "terraform_remote_state" "prerequisites" {
   backend = "local"
 
   config = {
-    path = "../prerequisites/terraform.tfstate"
+    path = "./prerequisites/terraform.tfstate"
   }
 }
 
