@@ -7,29 +7,13 @@ Foundation workspace for the root [`terraform-aws-n8n`](../) module. Holds the r
 
 The root module reads this workspace's outputs via `terraform_remote_state` — domain, region, and cluster name are not re-declared there.
 
+For apply and teardown steps, see the [prerequisites guide](../docs/prerequisites.md).
+
 ## Why separate?
 
 - **Isolates the one manual DNS step.** The registrar touch happens here; the root module applies unattended.
 - **Fast app-stack iteration.** Re-applying n8n config doesn't touch the VPC or re-validate the cert.
 - **HCP Terraform ready.** Each workspace maps 1:1 to a future HCP Terraform workspace.
-
-## Apply flow
-
-```bash
-cp terraform.tfvars.example terraform.tfvars
-# edit terraform.tfvars and set n8n_domain
-terraform init
-terraform apply
-```
-
-`apply` requests the cert and starts building the VPC, then blocks on `aws_acm_certificate_validation.n8n` for up to 15 minutes. While it's blocked, grab the validation CNAME from a second shell:
-
-```bash
-terraform output -raw acm_validation_cname_name
-terraform output -raw acm_validation_cname_value
-```
-
-Add that CNAME at your DNS provider (TTL 300 is fine). Once it propagates, the in-flight `apply` completes on its own.
 
 ## Outputs consumed by the root module
 
@@ -43,10 +27,6 @@ Add that CNAME at your DNS provider (TTL 300 is fine). Once it propagates, the i
 | `public_subnets` | ALB placement |
 | `vpc_cidr_block` | RDS/Redis ingress rules |
 | `certificate_arn` | ALB Ingress TLS termination |
-
-## Teardown
-
-Destroy the root module first (it depends on these outputs), then `terraform destroy` here and remove the validation CNAME at your DNS provider.
 
 ## Reference
 
