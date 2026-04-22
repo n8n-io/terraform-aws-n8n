@@ -1,4 +1,16 @@
 locals {
+  # Aliases for inputs so the rest of the module can reference them uniformly.
+  # Formerly sourced from the sibling prerequisites workspace via
+  # data.terraform_remote_state.
+  aws_region      = var.aws_region
+  cluster_name    = var.cluster_name
+  n8n_domain      = var.n8n_domain
+  vpc_id          = var.vpc_id
+  private_subnets = var.private_subnets
+  public_subnets  = var.public_subnets
+  vpc_cidr_block  = var.vpc_cidr_block
+  certificate_arn = var.certificate_arn
+
   common_tags = merge(
     {
       ManagedBy = "terraform"

@@ -50,6 +50,16 @@ output "cluster_name" {
   value       = aws_eks_cluster.n8n.name
 }
 
+output "cluster_endpoint" {
+  description = "EKS cluster API endpoint — pass to the kubernetes/helm providers as host."
+  value       = aws_eks_cluster.n8n.endpoint
+}
+
+output "cluster_certificate_authority_data" {
+  description = "Base64-encoded EKS cluster CA certificate — pass to kubernetes/helm providers as cluster_ca_certificate (after base64decode)."
+  value       = aws_eks_cluster.n8n.certificate_authority[0].data
+}
+
 output "aws_region" {
   description = "AWS region"
   value       = local.aws_region

@@ -1,9 +1,56 @@
-# NOTE: aws_region, cluster_name, and n8n_domain are defined in the
-# prerequisites workspace. This workspace reads them via
-# data.terraform_remote_state.prerequisites (see remote_state.tf).
+# ── Foundation inputs ─────────────────────────────────────────────────────────
+# Region, cluster naming, and the pre-built VPC + ACM certificate the module
+# deploys into. Supply these from a VPC module (e.g. terraform-aws-modules/vpc)
+# and an aws_acm_certificate_validation resource — see examples/complete/.
+
+variable "aws_region" {
+  description = "AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1). Must match the region the AWS provider is configured for."
+  type        = string
+}
+
+variable "cluster_name" {
+  description = "Name for the EKS cluster. Keep to 14 characters or fewer — the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars."
+  type        = string
+  default     = "n8n-cluster"
+
+  validation {
+    condition     = length(var.cluster_name) <= 14
+    error_message = "cluster_name must be 14 characters or fewer (ElastiCache cluster ID <cluster_name>-redis must stay <= 20 chars)."
+  }
+}
+
+variable "n8n_domain" {
+  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate_arn."
+  type        = string
+}
+
+variable "vpc_id" {
+  description = "ID of the VPC n8n will deploy into. Must contain both public and private subnets with the EKS/ALB subnet tags applied."
+  type        = string
+}
+
+variable "private_subnets" {
+  description = "IDs of private subnets (one per AZ, minimum two AZs). RDS, ElastiCache, and EKS nodes attach here."
+  type        = list(string)
+}
+
+variable "public_subnets" {
+  description = "IDs of public subnets (one per AZ, minimum two AZs). The ALB attaches here."
+  type        = list(string)
+}
+
+variable "vpc_cidr_block" {
+  description = "CIDR block of the VPC — used by the RDS and Redis security groups to allow intra-VPC traffic."
+  type        = string
+}
+
+variable "certificate_arn" {
+  description = "ARN of a validated ACM certificate for n8n_domain. Wired into the ALB Ingress for TLS termination."
+  type        = string
+}
 
 variable "tags" {
-  description = "Additional AWS tags to apply to all resources created by this workspace. Merged on top of the built-in ManagedBy/Project tags."
+  description = "Additional AWS tags to apply to all resources this module creates. Merged on top of the built-in ManagedBy/Project tags."
   type        = map(string)
   default     = {}
 }

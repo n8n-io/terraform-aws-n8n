@@ -2,9 +2,9 @@
 
 Terraform module for deploying [n8n](https://n8n.io) on AWS.
 
-This Terraform configuration deploys the production-grade multi-main setup from Part B of `EKS.md`: multiple n8n main instances, dedicated worker pods, external PostgreSQL (RDS), Redis (ElastiCache), and S3 for shared file storage. An **n8n Enterprise license is required**.
+Deploys the production-grade multi-main setup: multiple n8n main instances, dedicated worker pods, external PostgreSQL (RDS), Redis (ElastiCache), and S3 for shared file storage. An **n8n Enterprise license is required**.
 
-Foundation resources (VPC, ACM certificate) live in the sibling [`./prerequisites/`](./prerequisites/) workspace so the one human-in-the-loop step (adding a DNS record at your registrar) is isolated from the application stack.
+The module expects a pre-existing VPC and an ACM certificate. For a ready-to-run end-to-end deployment — VPC, ACM, and module — see [`examples/complete/`](./examples/complete/).
 
 ## Goals
 
@@ -35,8 +35,24 @@ Features we may want to address along the way:
 ```hcl
 module "n8n" {
   source = "github.com/n8n-io/terraform-aws-n8n"
+
+  aws_region      = "us-east-1"
+  cluster_name    = "n8n-cluster"
+  n8n_domain      = "n8n.example.com"
+  n8n_license_key = var.n8n_license_key
+
+  # Pre-existing foundation resources — bring your own VPC + ACM cert.
+  vpc_id          = module.vpc.vpc_id
+  private_subnets = module.vpc.private_subnets
+  public_subnets  = module.vpc.public_subnets
+  vpc_cidr_block  = module.vpc.vpc_cidr_block
+  certificate_arn = aws_acm_certificate_validation.n8n.certificate_arn
 }
 ```
+
+The module declares `required_providers` but does **not** configure them. Callers must configure `aws`, `kubernetes`, and `helm` providers. `kubernetes` and `helm` are configured against the cluster this module creates — see [`examples/complete/providers.tf`](./examples/complete/providers.tf) for the standard wiring.
+
+For a full end-to-end example including the VPC and ACM certificate, see [`examples/complete/`](./examples/complete/).
 
 ## Reference
 

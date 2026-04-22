@@ -1,11 +1,11 @@
-# Plan-time tests for terraform_multi using mocked providers.
+# Plan-time tests for the terraform-aws-n8n module using mocked providers.
 #
-# These tests exercise the multi-main configuration (RDS, Redis, S3, KEDA)
-# without contacting AWS. Providers are mocked and network-backed data
-# sources are overridden with fixed values.
+# Exercises the module end-to-end (EKS, RDS, Redis, S3, KEDA, n8n Helm release)
+# without contacting AWS. Providers are mocked and network-backed data sources
+# are overridden with fixed values.
 #
 # Run: terraform test
-#   (from terraform_templates/terraform_multi/ — requires terraform >= 1.7)
+#   (from the module root — requires terraform >= 1.7)
 
 mock_provider "aws" {
   override_data {
@@ -33,26 +33,16 @@ mock_provider "helm" {}
 mock_provider "random" {}
 mock_provider "null" {}
 
-# The installation workspace reads aws_region, cluster_name, n8n_domain, VPC
-# IDs, and the ACM certificate ARN from the prerequisites workspace's state.
-# Override the data source to provide deterministic test values.
-override_data {
-  target = data.terraform_remote_state.prerequisites
-  values = {
-    outputs = {
-      aws_region      = "us-east-1"
-      cluster_name    = "n8n-cluster"
-      n8n_domain      = "n8n.test.example.com"
-      vpc_id          = "vpc-test12345"
-      private_subnets = ["subnet-priv1", "subnet-priv2", "subnet-priv3"]
-      public_subnets  = ["subnet-pub1", "subnet-pub2", "subnet-pub3"]
-      vpc_cidr_block  = "10.0.0.0/16"
-      certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/test-cert"
-    }
-  }
-}
-
 variables {
+  aws_region      = "us-east-1"
+  cluster_name    = "n8n-cluster"
+  n8n_domain      = "n8n.test.example.com"
+  vpc_id          = "vpc-test12345"
+  private_subnets = ["subnet-priv1", "subnet-priv2", "subnet-priv3"]
+  public_subnets  = ["subnet-pub1", "subnet-pub2", "subnet-pub3"]
+  vpc_cidr_block  = "10.0.0.0/16"
+  certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/test-cert"
+
   n8n_license_key = "test-license-key-not-real"
 }
 
@@ -61,7 +51,7 @@ run "defaults_produce_valid_plan" {
 
   assert {
     condition     = aws_eks_cluster.n8n.name == "n8n-cluster"
-    error_message = "cluster_name from prerequisites should flow through to aws_eks_cluster.name"
+    error_message = "var.cluster_name should flow through to aws_eks_cluster.name"
   }
 
   assert {

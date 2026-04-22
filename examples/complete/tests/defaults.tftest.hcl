@@ -1,9 +1,9 @@
-# Plan-time tests for the prerequisites workspace using mocked providers.
+# Plan-time tests for the complete example using mocked providers.
 #
-# Exercises the VPC + ACM configuration without contacting AWS.
+# Exercises the VPC + ACM + module wiring without contacting AWS.
 #
 # Run: terraform test
-#   (from terraform_templates/prerequisites/ — mocks require terraform >= 1.7)
+#   (from examples/complete/ — mocks require terraform >= 1.7)
 
 mock_provider "aws" {
   override_data {
@@ -14,8 +14,12 @@ mock_provider "aws" {
   }
 }
 
+mock_provider "kubernetes" {}
+mock_provider "helm" {}
+
 variables {
-  n8n_domain = "n8n.test.example.com"
+  n8n_domain      = "n8n.test.example.com"
+  n8n_license_key = "test-license-key-not-real"
 }
 
 run "defaults_produce_valid_plan" {

@@ -1,0 +1,21 @@
+# Copy this file to terraform.tfvars and fill in your values.
+
+# Fully-qualified domain for n8n. You must own this domain and be able to edit
+# its DNS records — the ACM certificate is DNS-validated.
+n8n_domain = "n8n.example.com"
+
+# n8n Enterprise license activation key. Get one at https://n8n.io/pricing.
+n8n_license_key = "your-enterprise-license-key-here"
+
+# AWS region. Change if you're deploying outside us-east-1.
+# aws_region = "eu-west-1"
+
+# EKS cluster name. Keep to 14 characters or fewer — ElastiCache cluster IDs
+# derived from this name are capped at 20 chars, and '-redis' consumes 6.
+# cluster_name = "n8n-cluster"
+
+# Extra AWS tags applied to every resource this example creates.
+# tags = {
+#   Environment = "production"
+#   Owner       = "platform-team"
+# }

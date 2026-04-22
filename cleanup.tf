@@ -110,8 +110,8 @@ resource "null_resource" "cleanup_alb_sgs" {
     EOT
   }
 
-  # The VPC now lives in the prerequisites workspace, so we rely on workflow-level
-  # ordering: destroy this (installation) workspace first, then destroy the
-  # prerequisites workspace. Adding null_resource.cleanup_alb_sgs to the Ingress
+  # The VPC is owned by the caller, so orphans created outside Terraform state
+  # (ALB SGs, dynamically provisioned EBS) must be swept before the caller's
+  # VPC destroy runs. Adding null_resource.cleanup_alb_sgs to the Ingress
   # depends_on ensures the Ingress is destroyed BEFORE this cleanup runs.
 }
