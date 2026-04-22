@@ -1,0 +1,20 @@
+# Copy this file to terraform.tfvars and fill in your domain.
+# Only n8n_domain is required — aws_region and cluster_name have sensible defaults.
+
+# Your domain for n8n. You must own this domain and be able to edit DNS records.
+n8n_domain = "n8n.example.com"
+
+# AWS region. Change if you're deploying outside us-east-1.
+# aws_region = "eu-west-1"
+
+# EKS cluster name. Keep to 14 characters or fewer if you plan to use
+# terraform_multi — ElastiCache cluster IDs derived from this are capped at 20
+# chars and the '-redis' suffix consumes 6.
+# cluster_name = "n8n-cluster"
+
+# Extra AWS tags applied to every resource this workspace creates (VPC, ACM cert).
+# Merged on top of the built-in ManagedBy/Project tags.
+# tags = {
+#   Environment = "production"
+#   Owner       = "platform-team"
+# }

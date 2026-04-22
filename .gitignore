@@ -1,22 +1,70 @@
-# Local .terraform directories
-.terraform/
-.terraform.lock.hcl
+# ── Terraform runtime files ───────────────────────────────────────────────────
 
-# State files
+# User-specific variable values — may contain secrets (API keys, license keys)
+terraform.tfvars
+terraform.tfvars.json
+
+# State files — contain resource IDs, connection strings, and generated secrets.
+# Use remote state (GCS, S3, Azure Blob) for team workflows; never commit local state.
+terraform.tfstate
+terraform.tfstate.backup
 *.tfstate
 *.tfstate.*
-*.tfstate.backup
+*.terraform.lock.*
 
-# Crash log files
+# Saved plan files
+*.tfplan
+*.plan
+
+# Provider downloads and module cache — large and fully reproducible via `terraform init`
+.terraform/
+
+# Crash logs
 crash.log
 crash.*.log
 
-# Variable files that may contain secrets
-*.tfvars
-*.tfvars.json
-!example.tfvars
+# Local override files (used for temporary dev changes — not for sharing)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 
-# CLI config / plan output
-.terraformrc
-terraform.rc
-*.tfplan
+# ── Kubernetes runtime files ──────────────────────────────────────────────────
+
+# Kubeconfig files — contain cluster credentials
+kubeconfig
+kubeconfig.yaml
+*.kubeconfig
+.kube/
+
+# Helm chart cache and downloads
+charts/
+chart-cache/
+
+# ── Secrets and credentials ───────────────────────────────────────────────────
+
+# Environment files (see scripts/.env.example for the template)
+.env
+.env.*
+!.env.example
+
+# TLS certificates and keys
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+*.cert
+
+# ── Claude Code ──────────────────────────────────────────────────────────────
+
+.claude/
+
+# ── OS and editor noise ───────────────────────────────────────────────────────
+
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
