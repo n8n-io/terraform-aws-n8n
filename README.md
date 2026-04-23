@@ -6,6 +6,10 @@ Deploys the production-grade multi-main setup: multiple n8n main instances, dedi
 
 The module expects a pre-existing VPC and an ACM certificate. For a ready-to-run end-to-end deployment — VPC, ACM, and module — see [`examples/complete/`](./examples/complete/).
 
+## Support
+
+This module is open source software, maintained by the n8n Solutions team independently of n8n's enterprise products. While the n8n Support team provides dedicated support for the enterprise offerings, this module isn't included.
+
 ## Goals
 
 ### Phase 1 - Internal baseline
