@@ -7,7 +7,8 @@ After `terraform apply` completes, finish setup by pointing your domain at the l
 AWS provisions the ALB asynchronously after creating the Ingress, so Terraform's state doesn't have the hostname yet. Refresh state first:
 
 ```bash
-terraform refresh && terraform output alb_hostname
+terraform refresh
+terraform output -raw alb_hostname
 ```
 
 If the output still shows a placeholder, check the Ingress directly:
