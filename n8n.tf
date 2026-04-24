@@ -368,7 +368,10 @@ resource "kubernetes_ingress_v1" "n8n" {
     }
   }
 
+  wait_for_load_balancer = true
+
   timeouts {
+    create = "10m"
     delete = "30m"
   }
 

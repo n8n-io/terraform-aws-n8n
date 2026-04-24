@@ -16,7 +16,12 @@ variable "cluster_name" {
 }
 
 variable "n8n_domain" {
-  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). You must own this domain and be able to edit its DNS records — the ACM certificate is DNS-validated."
+  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). The parent zone must be hosted in Route53 (pass its ID via route53_zone_id)."
+  type        = string
+}
+
+variable "route53_zone_id" {
+  description = "Route53 hosted zone ID for the parent of n8n_domain (e.g. the zone for example.com if n8n_domain = n8n.example.com). The module creates the ACM certificate, validation records, and alias A-record inside this zone."
   type        = string
 }
 

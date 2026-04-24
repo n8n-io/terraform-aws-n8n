@@ -1,28 +1,12 @@
-# ── ACM validation CNAME ──────────────────────────────────────────────────────
-# ACM will not issue the certificate until you add this CNAME at your DNS
-# provider. Fetch both values during the first apply:
-#   terraform output -raw acm_validation_cname_name
-#   terraform output -raw acm_validation_cname_value
-
-output "acm_validation_cname_name" {
-  description = "CNAME record NAME to add at your DNS provider (certificate validation)"
-  value       = tolist(aws_acm_certificate.n8n.domain_validation_options)[0].resource_record_name
-}
-
-output "acm_validation_cname_value" {
-  description = "CNAME record VALUE to add at your DNS provider (certificate validation)"
-  value       = tolist(aws_acm_certificate.n8n.domain_validation_options)[0].resource_record_value
-}
-
 # ── App DNS + access ──────────────────────────────────────────────────────────
 
 output "alb_hostname" {
-  description = "ALB hostname — create a CNAME record: n8n_domain → this value."
+  description = "ALB hostname. The alias A-record for n8n_domain is already created in Route53 — this output is informational."
   value       = module.n8n.alb_hostname
 }
 
 output "n8n_url" {
-  description = "URL to access n8n once DNS propagates."
+  description = "URL to access n8n once the ALB finishes provisioning (~5 min after apply)."
   value       = module.n8n.n8n_url
 }
 

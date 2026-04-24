@@ -1,7 +1,7 @@
 # ── App DNS ───────────────────────────────────────────────────────────────────
 
 output "alb_hostname" {
-  description = "ALB hostname — create a CNAME record: your domain → this value"
+  description = "ALB hostname. When route53_zone_id is set, the module already creates the alias record — this output is informational. When certificate_arn is used, create a CNAME: your domain → this value."
   value = try(
     kubernetes_ingress_v1.n8n.status[0].load_balancer[0].ingress[0].hostname,
     "ALB not yet provisioned — run: kubectl get ingress n8n-ingress -n ${var.namespace}"

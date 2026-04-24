@@ -48,32 +48,9 @@ module "vpc" {
   tags = local.common_tags
 }
 
-# ── ACM certificate ───────────────────────────────────────────────────────────
-# Requests a TLS certificate for n8n_domain using DNS validation. AWS will not
-# issue the certificate until you add the validation CNAME at your DNS provider.
-# aws_acm_certificate_validation blocks for up to 15 minutes during apply; fetch
-# the CNAME from the outputs during that window and add it at your registrar.
-
-resource "aws_acm_certificate" "n8n" {
-  domain_name       = var.n8n_domain
-  validation_method = "DNS"
-
-  tags = local.common_tags
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_acm_certificate_validation" "n8n" {
-  certificate_arn = aws_acm_certificate.n8n.arn
-
-  timeouts {
-    create = "15m"
-  }
-}
-
 # ── n8n ───────────────────────────────────────────────────────────────────────
+# The module issues the ACM certificate and creates the Route53 alias record
+# itself when route53_zone_id is set — single terraform apply, no manual DNS.
 
 module "n8n" {
   source = "../.."
@@ -85,7 +62,7 @@ module "n8n" {
   private_subnets = module.vpc.private_subnets
   public_subnets  = module.vpc.public_subnets
   vpc_cidr_block  = module.vpc.vpc_cidr_block
-  certificate_arn = aws_acm_certificate_validation.n8n.certificate_arn
+  route53_zone_id = var.route53_zone_id
 
   n8n_license_key = var.n8n_license_key
 

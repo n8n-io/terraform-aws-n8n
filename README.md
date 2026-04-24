@@ -4,7 +4,7 @@ Terraform module for deploying [n8n](https://n8n.io) on AWS.
 
 Deploys the production-grade multi-main setup: multiple n8n main instances, dedicated worker pods, external PostgreSQL (RDS), Redis (ElastiCache), and S3 for shared file storage. An **n8n Enterprise license is required**.
 
-The module expects a pre-existing VPC and an ACM certificate. For a ready-to-run end-to-end deployment — VPC, ACM, and module — see [`examples/complete/`](./examples/complete/).
+The module expects a pre-existing VPC. If your parent domain is hosted in Route53, pass `route53_zone_id` and the module will issue the ACM certificate and create the DNS alias record itself — a single `terraform apply` brings up n8n end to end with no manual DNS steps. If your DNS is elsewhere, pass a pre-validated `certificate_arn` instead. For a ready-to-run end-to-end deployment see [`examples/complete/`](./examples/complete/).
 
 ## Support
 
@@ -45,18 +45,23 @@ module "n8n" {
   n8n_domain      = "n8n.example.com"
   n8n_license_key = var.n8n_license_key
 
-  # Pre-existing foundation resources — bring your own VPC + ACM cert.
+  # Pre-existing VPC — bring your own.
   vpc_id          = module.vpc.vpc_id
   private_subnets = module.vpc.private_subnets
   public_subnets  = module.vpc.public_subnets
   vpc_cidr_block  = module.vpc.vpc_cidr_block
-  certificate_arn = aws_acm_certificate_validation.n8n.certificate_arn
+
+  # DNS — set exactly one:
+  # 1. Parent domain in Route53 → module handles ACM + alias record.
+  route53_zone_id = "Z0123456789ABCDEFGHIJ"
+  # 2. DNS elsewhere → bring your own pre-validated cert.
+  # certificate_arn = aws_acm_certificate_validation.n8n.certificate_arn
 }
 ```
 
 The module declares `required_providers` but does **not** configure them. Callers must configure `aws`, `kubernetes`, and `helm` providers. `kubernetes` and `helm` are configured against the cluster this module creates — see [`examples/complete/providers.tf`](./examples/complete/providers.tf) for the standard wiring.
 
-For a full end-to-end example including the VPC and ACM certificate, see [`examples/complete/`](./examples/complete/).
+For a full end-to-end example including the VPC, see [`examples/complete/`](./examples/complete/).
 
 ## Reference
 

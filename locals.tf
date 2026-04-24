@@ -9,7 +9,7 @@ locals {
   private_subnets = var.private_subnets
   public_subnets  = var.public_subnets
   vpc_cidr_block  = var.vpc_cidr_block
-  certificate_arn = var.certificate_arn
+  certificate_arn = var.route53_zone_id != null ? aws_acm_certificate_validation.n8n[0].certificate_arn : var.certificate_arn
 
   common_tags = merge(
     {

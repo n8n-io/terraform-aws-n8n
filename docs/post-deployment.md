@@ -1,33 +1,30 @@
 # Post-deployment setup
 
-After `terraform apply` completes, finish setup by pointing your domain at the load balancer and activating your n8n Enterprise license.
+After `terraform apply` completes, finish setup by activating your n8n Enterprise license.
 
-## Point your domain at n8n
+## Wait for the ALB
 
-AWS provisions the ALB asynchronously after creating the Ingress, so Terraform's state doesn't have the hostname yet. Refresh state first:
+The ALB is provisioned asynchronously after the Ingress resource is created. Allow ~5 minutes after apply for it to become reachable. Verify:
 
 ```bash
 terraform refresh
 terraform output -raw alb_hostname
-```
-
-If the output still shows a placeholder, check the Ingress directly:
-
-```bash
 kubectl get ingress n8n-ingress -n n8n
 ```
 
-### Add a second CNAME at your DNS provider
+## Point your domain at n8n
 
-| Type | Name | Value | TTL |
-|---|---|---|---|
-| CNAME | `n8n` (or your subdomain) | ALB hostname from the Terraform output | 300 |
-
-Verify propagation:
+**If you used `route53_zone_id`:** nothing to do — the alias A-record was created during apply. Verify propagation:
 
 ```bash
 dig +short n8n.yourdomain.com
 ```
+
+**If you supplied your own `certificate_arn`:** add a CNAME at your DNS provider.
+
+| Type  | Name                      | Value                                                  | TTL |
+| ----- | ------------------------- | ------------------------------------------------------ | --- |
+| CNAME | `n8n` (or your subdomain) | ALB hostname from `terraform output -raw alb_hostname` | 300 |
 
 ## Access n8n and activate your license
 
