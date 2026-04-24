@@ -60,13 +60,15 @@ resource "kubernetes_secret" "n8n_db" {
 # ── Helm release ──────────────────────────────────────────────────────────────
 
 resource "helm_release" "n8n" {
-  name       = "n8n"
-  repository = "oci://ghcr.io/n8n-io/n8n-helm-chart"
-  chart      = "n8n"
-  version    = var.n8n_chart_version
-  namespace  = kubernetes_namespace.n8n.metadata[0].name
-  wait       = true
-  timeout    = 600
+  name            = "n8n"
+  repository      = "oci://ghcr.io/n8n-io/n8n-helm-chart"
+  chart           = "n8n"
+  version         = var.n8n_chart_version
+  namespace       = kubernetes_namespace.n8n.metadata[0].name
+  wait            = true
+  timeout         = 600
+  atomic          = true
+  cleanup_on_fail = true
 
   values = [yamlencode({
     license = {
@@ -383,7 +385,25 @@ resource "kubernetes_ingress_v1" "n8n" {
     helm_release.n8n,
     aws_iam_role.lbc,
     aws_iam_role_policy_attachment.lbc,
-    aws_iam_role_policy.lbc_describe_listener_attributes,
-    null_resource.cleanup_alb_sgs,
+    time_sleep.wait_for_alb_cleanup,
   ]
+}
+
+# ── Destroy-time pause ────────────────────────────────────────────────────────
+# After the Ingress is deleted, the LBC begins deprovisioning the ALB. The ALB
+# deletion is asynchronous — ENIs and security groups may linger for 30-60s.
+# This pause gives AWS time to fully release those resources before Terraform
+# moves on to deleting the namespace, node group, and cluster.
+#
+# Dependency chain (create order, reversed for destroy):
+#   namespace → time_sleep → ingress
+# Destroy order (reversed):
+#   1. kubernetes_ingress_v1.n8n        ← Ingress deleted, LBC starts ALB teardown
+#   2. time_sleep.wait_for_alb_cleanup  ← pauses 60s for ENI/SG release
+#   3. kubernetes_namespace.n8n         ← namespace deleted (resources fully gone)
+
+resource "time_sleep" "wait_for_alb_cleanup" {
+  destroy_duration = "60s"
+
+  depends_on = [kubernetes_namespace.n8n]
 }

@@ -1,14 +1,23 @@
 # ── AWS Load Balancer Controller ──────────────────────────────────────────────
 # The Helm chart creates its own ServiceAccount (aws-load-balancer-controller
 # in kube-system) and EKS Pod Identity binds it to the IAM role via iam.tf.
+#
+# Destroy ordering: n8n Helm depends_on this release, so during destroy the
+# n8n release and ingress are deleted FIRST (while LBC is still running to
+# clean up the ALB). LBC is destroyed only after all ingresses are gone.
+#
+# failurePolicy=Ignore on the webhook prevents the LBC admission webhook from
+# blocking Ingress mutations when LBC pods are unhealthy during destroy.
 
 resource "helm_release" "lbc" {
-  name       = "aws-load-balancer-controller"
-  repository = "https://aws.github.io/eks-charts"
-  chart      = "aws-load-balancer-controller"
-  namespace  = "kube-system"
-  wait       = true
-  timeout    = 300
+  name            = "aws-load-balancer-controller"
+  repository      = "https://aws.github.io/eks-charts"
+  chart           = "aws-load-balancer-controller"
+  namespace       = "kube-system"
+  wait            = true
+  timeout         = 300
+  atomic          = true
+  cleanup_on_fail = true
 
   set {
     name  = "clusterName"
@@ -20,10 +29,17 @@ resource "helm_release" "lbc" {
     value = local.vpc_id
   }
 
+  # Prevent the LBC validating webhook from blocking Ingress deletions when
+  # LBC pods are unhealthy during destroy. With failurePolicy=Ignore, the
+  # webhook is best-effort — if LBC can't respond, the API server proceeds.
+  set {
+    name  = "webhookConfig.failurePolicy"
+    value = "Ignore"
+  }
+
   depends_on = [
     aws_eks_node_group.n8n,
     aws_iam_role_policy_attachment.lbc,
-    aws_iam_role_policy.lbc_describe_listener_attributes,
     aws_eks_pod_identity_association.lbc,
   ]
 }
@@ -36,12 +52,14 @@ resource "helm_release" "lbc" {
 # to the IAM role via Pod Identity (iam.tf).
 
 resource "helm_release" "cluster_autoscaler" {
-  name       = "cluster-autoscaler"
-  repository = "https://kubernetes.github.io/autoscaler"
-  chart      = "cluster-autoscaler"
-  namespace  = "kube-system"
-  wait       = true
-  timeout    = 300
+  name            = "cluster-autoscaler"
+  repository      = "https://kubernetes.github.io/autoscaler"
+  chart           = "cluster-autoscaler"
+  namespace       = "kube-system"
+  wait            = true
+  timeout         = 300
+  atomic          = true
+  cleanup_on_fail = true
 
   set {
     name  = "autoDiscovery.clusterName"
@@ -78,12 +96,14 @@ resource "helm_release" "cluster_autoscaler" {
 #   inside the VPC.
 
 resource "helm_release" "metrics_server" {
-  name       = "metrics-server"
-  repository = "https://kubernetes-sigs.github.io/metrics-server/"
-  chart      = "metrics-server"
-  namespace  = "kube-system"
-  wait       = true
-  timeout    = 300
+  name            = "metrics-server"
+  repository      = "https://kubernetes-sigs.github.io/metrics-server/"
+  chart           = "metrics-server"
+  namespace       = "kube-system"
+  wait            = true
+  timeout         = 300
+  atomic          = true
+  cleanup_on_fail = true
 
   set {
     name  = "args[0]"

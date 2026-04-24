@@ -6,6 +6,11 @@
 variable "aws_region" {
   description = "AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1). Must match the region the AWS provider is configured for."
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z]{2}-[a-z]+-[0-9]$", var.aws_region))
+    error_message = "Value must be a valid AWS region (e.g. us-east-1, eu-west-1)."
+  }
 }
 
 variable "cluster_name" {
@@ -22,26 +27,51 @@ variable "cluster_name" {
 variable "n8n_domain" {
   description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate_arn."
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9][a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$", var.n8n_domain))
+    error_message = "Value must be a valid fully qualified domain name (e.g. n8n.example.com)."
+  }
 }
 
 variable "vpc_id" {
   description = "ID of the VPC n8n will deploy into. Must contain both public and private subnets with the EKS/ALB subnet tags applied."
   type        = string
+
+  validation {
+    condition     = can(regex("^vpc-[a-zA-Z0-9]+$", var.vpc_id))
+    error_message = "Value must be a valid VPC ID (e.g. vpc-0123456789abcdef0)."
+  }
 }
 
 variable "private_subnets" {
   description = "IDs of private subnets (one per AZ, minimum two AZs). RDS, ElastiCache, and EKS nodes attach here."
   type        = list(string)
+
+  validation {
+    condition     = length(var.private_subnets) >= 2
+    error_message = "At least two private subnets in different AZs are required for RDS Multi-AZ and EKS."
+  }
 }
 
 variable "public_subnets" {
   description = "IDs of public subnets (one per AZ, minimum two AZs). The ALB attaches here."
   type        = list(string)
+
+  validation {
+    condition     = length(var.public_subnets) >= 2
+    error_message = "At least two public subnets in different AZs are required for the ALB."
+  }
 }
 
 variable "vpc_cidr_block" {
   description = "CIDR block of the VPC — used by the RDS and Redis security groups to allow intra-VPC traffic."
   type        = string
+
+  validation {
+    condition     = can(cidrhost(var.vpc_cidr_block, 0))
+    error_message = "Value must be a valid CIDR block (e.g. 10.0.0.0/16)."
+  }
 }
 
 variable "certificate_arn" {
@@ -71,6 +101,11 @@ variable "kubernetes_version" {
   description = "Kubernetes version for the EKS cluster"
   type        = string
   default     = "1.35"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+$", var.kubernetes_version))
+    error_message = "Value must be a Kubernetes version (e.g. 1.35)."
+  }
 }
 
 variable "n8n_webhook_url" {
@@ -99,24 +134,44 @@ variable "node_instance_type" {
   description = "EC2 instance type for EKS worker nodes. t3.xlarge (4 vCPU, 16GB) is the recommended minimum for multi-main — the 6 n8n pods (main × 2, worker × 2, webhook × 2) request ~3,600m CPU at minimum replicas, leaving t3.medium nodes with insufficient headroom for HPA to scale."
   type        = string
   default     = "t3.xlarge"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9]*\\.[a-z0-9]+$", var.node_instance_type))
+    error_message = "Value must be a valid EC2 instance type (e.g. t3.xlarge, m5.large)."
+  }
 }
 
 variable "node_desired" {
   description = "Desired number of worker nodes at startup"
   type        = number
   default     = 3
+
+  validation {
+    condition     = var.node_desired >= 1
+    error_message = "Desired node count must be at least 1."
+  }
 }
 
 variable "node_min" {
   description = "Minimum number of worker nodes"
   type        = number
   default     = 3
+
+  validation {
+    condition     = var.node_min >= 1
+    error_message = "Minimum node count must be at least 1."
+  }
 }
 
 variable "node_max" {
   description = "Maximum number of worker nodes"
   type        = number
   default     = 6
+
+  validation {
+    condition     = var.node_max >= 1
+    error_message = "Maximum node count must be at least 1."
+  }
 }
 
 # ── n8n chart ─────────────────────────────────────────────────────────────────
@@ -213,6 +268,11 @@ variable "n8n_worker_concurrency" {
   description = "Number of jobs each worker pod can process simultaneously"
   type        = number
   default     = 10
+
+  validation {
+    condition     = var.n8n_worker_concurrency >= 1
+    error_message = "Worker concurrency must be at least 1."
+  }
 }
 
 variable "n8n_execution_timeout" {
@@ -251,12 +311,22 @@ variable "n8n_termination_grace_period" {
   description = "Seconds Kubernetes waits after SIGTERM before force-killing pods. MINIMUM — do not lower below 60. Workers need time to finish in-flight executions before being terminated."
   type        = number
   default     = 60
+
+  validation {
+    condition     = var.n8n_termination_grace_period >= 60
+    error_message = "Termination grace period must be at least 60 seconds to allow in-flight executions to complete."
+  }
 }
 
 variable "n8n_prestop_sleep" {
   description = "Seconds the preStop hook sleeps before SIGTERM is sent, giving the load balancer time to drain the pod. MINIMUM — do not lower below 10."
   type        = number
   default     = 10
+
+  validation {
+    condition     = var.n8n_prestop_sleep >= 10
+    error_message = "Pre-stop sleep must be at least 10 seconds for load balancer drain."
+  }
 }
 
 # ── Task runners ──────────────────────────────────────────────────────────────
@@ -309,6 +379,11 @@ variable "db_instance_class" {
   description = "RDS instance class (db.t3.small ~$25/month, db.t3.medium for higher load)"
   type        = string
   default     = "db.t3.small"
+
+  validation {
+    condition     = can(regex("^db\\.", var.db_instance_class))
+    error_message = "Value must be a valid RDS instance class (e.g. db.t3.small, db.r6g.large)."
+  }
 }
 
 variable "db_multi_az" {
@@ -321,6 +396,11 @@ variable "db_allocated_storage" {
   description = "Allocated storage for RDS in GB"
   type        = number
   default     = 50
+
+  validation {
+    condition     = var.db_allocated_storage >= 20
+    error_message = "RDS allocated storage must be at least 20 GB."
+  }
 }
 
 # ── ElastiCache Redis ──────────────────────────────────────────────────────────
@@ -329,6 +409,11 @@ variable "redis_node_type" {
   description = "ElastiCache node type (cache.t3.medium ~$25/month)"
   type        = string
   default     = "cache.t3.medium"
+
+  validation {
+    condition     = can(regex("^cache\\.", var.redis_node_type))
+    error_message = "Value must be a valid ElastiCache node type (e.g. cache.t3.medium)."
+  }
 }
 
 variable "n8n_runners_task_request_timeout" {

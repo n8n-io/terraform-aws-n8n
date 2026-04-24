@@ -16,14 +16,11 @@ mock_provider "aws" {
       user_id    = "AIDATESTUSER"
     }
   }
-}
 
-mock_provider "http" {
   override_data {
-    target = data.http.lbc_iam_policy
+    target = data.aws_iam_policy_document.lbc
     values = {
-      response_body = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
-      status_code   = 200
+      json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"elasticloadbalancing:*\"],\"Resource\":\"*\"}]}"
     }
   }
 }
@@ -31,7 +28,7 @@ mock_provider "http" {
 mock_provider "kubernetes" {}
 mock_provider "helm" {}
 mock_provider "random" {}
-mock_provider "null" {}
+mock_provider "time" {}
 
 variables {
   aws_region      = "us-east-1"
