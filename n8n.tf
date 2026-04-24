@@ -21,6 +21,10 @@ resource "kubernetes_namespace" "n8n" {
     name = var.namespace
   }
 
+  timeouts {
+    delete = "2m"
+  }
+
   depends_on = [aws_eks_node_group.n8n]
 }
 
@@ -372,7 +376,7 @@ resource "kubernetes_ingress_v1" "n8n" {
 
   timeouts {
     create = "10m"
-    delete = "30m"
+    delete = "5m"
   }
 
   depends_on = [
