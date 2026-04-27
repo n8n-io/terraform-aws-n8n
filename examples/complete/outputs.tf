@@ -15,6 +15,11 @@ output "kubectl_config_command" {
   value       = module.n8n.kubectl_config_command
 }
 
+output "namespace" {
+  description = "Kubernetes namespace n8n is deployed into. Read by tests/scripts/smoke-test.sh."
+  value       = module.n8n.namespace
+}
+
 # ── Secrets ───────────────────────────────────────────────────────────────────
 # Retrieve with: terraform output -raw <name>
 
