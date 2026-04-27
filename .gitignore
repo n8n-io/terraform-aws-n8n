@@ -16,6 +16,9 @@ terraform.tfstate.backup
 *.tfplan
 *.plan
 
+# Local apply / debug output captured during interactive runs
+*.log
+
 # Provider downloads and module cache — large and fully reproducible via `terraform init`
 .terraform/
 

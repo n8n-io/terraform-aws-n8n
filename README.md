@@ -61,7 +61,7 @@ module "n8n" {
 
 The module declares `required_providers` but does **not** configure them. Callers must configure `aws`, `kubernetes`, and `helm` providers. `kubernetes` and `helm` are configured against the cluster this module creates — see [`examples/complete/providers.tf`](./examples/complete/providers.tf) for the standard wiring.
 
-For a full end-to-end example including the VPC, see [`examples/complete/`](./examples/complete/).
+For a full end-to-end example including the VPC, see [`examples/complete/`](./examples/complete/). If `terraform apply` fails on a `helm_release` (most often due to a Helm 4 cache layout issue or a webhook race on first install), see [`docs/troubleshooting.md`](./docs/troubleshooting.md).
 
 ## Reference
 
