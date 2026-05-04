@@ -34,11 +34,12 @@ jobs:
     name: terraform-docs (README in sync)
     runs-on: ubuntu-latest
     env:
-      # Pinned to match what AGENTS.md tells contributors to install locally.
-      # Different terraform-docs versions emit different markdown table
-      # whitespace (v0.20.0: '|---|---|', v0.22.0+: '| --- | --- |'),
-      # so any drift between local and CI versions causes spurious diffs.
-      TERRAFORM_DOCS_VERSION: v0.20.0
+      # Tracks the version `brew install terraform-docs` installs on macOS, so
+      # contributors don't need a special install path. Different terraform-docs
+      # versions emit different markdown table whitespace, so any drift between
+      # CI and the version contributors actually use produces spurious diffs.
+      # Bump together with the brew default.
+      TERRAFORM_DOCS_VERSION: v0.22.0
     steps:
       - uses: actions/checkout@v4
 
@@ -51,8 +52,10 @@ jobs:
           sudo install -m 0755 /tmp/terraform-docs /usr/local/bin/terraform-docs
           terraform-docs --version
 
+      # All formatting options live in .terraform-docs.yml so this command
+      # stays identical to what contributors run locally.
       - name: terraform-docs --output-check
-        run: terraform-docs markdown table --output-file README.md --output-mode inject --output-check .
+        run: terraform-docs --output-check .
 
   validate:
     name: terraform validate (${{ matrix.target }})

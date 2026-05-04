@@ -136,47 +136,21 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
 ### 4. Clear documentation
 
 - `README.md` is the entry point. The `## Reference` section between
-  `<!-- BEGIN_TF_DOCS -->` and `<!-- END_TF_DOCS -->` is **auto-generated** —
-  do not hand-edit it. Refresh it with:
+  `<!-- BEGIN_TF_DOCS -->` and `<!-- END_TF_DOCS -->` is **auto-generated**
+  — do not hand-edit it. All rendering options (formatter, output template,
+  `lockfile: false` to keep providers shown as constraints) live in
+  `.terraform-docs.yml`, so refreshing the README is one command:
 
   ```bash
-  terraform-docs markdown table --output-file README.md --output-mode inject .
+  brew install terraform-docs   # or: see the install step in .github/workflows/terraform-tests.yml
+  terraform-docs .
   ```
 
-  **Two things matter when re-rendering:**
-
-  1. **Use terraform-docs v0.20.0.** CI installs that exact version (see the
-     `docs` job in `.github/workflows/terraform-tests.yml`). Newer
-     terraform-docs (v0.22.0+) emits different table-separator whitespace
-     (`| --- | --- |` vs. `|---|---|`), and v0.22.0 also reads
-     `.terraform.lock.hcl` while v0.20.0 doesn't — either drift will fail CI.
-     Install with:
-
-     ```bash
-     curl -sSLo /tmp/td.tar.gz \
-       "https://terraform-docs.io/dl/v0.20.0/terraform-docs-v0.20.0-$(uname)-amd64.tar.gz"
-     tar -xzf /tmp/td.tar.gz -C /tmp terraform-docs
-     sudo install -m 0755 /tmp/terraform-docs /usr/local/bin/terraform-docs
-     ```
-
-  2. **Render without `.terraform/` and without `.terraform.lock.hcl`.** When
-     either is present, terraform-docs reports the resolved provider versions
-     (e.g. `5.100.0`); when neither is, it falls back to the version
-     *constraints* declared in `versions.tf` (e.g. `~> 5.0`). CI never has
-     `.terraform/` or `.terraform.lock.hcl` (both are gitignored — the lock
-     file deliberately so, per
-     <https://developer.hashicorp.com/terraform/language/files/dependency-lock>:
-     'if you're developing a module to publish, we recommend not committing
-     the lock file'). The README must therefore show **constraints**.
-     Stash both before rendering:
-
-     ```bash
-     mv .terraform /tmp/td-stash-tf 2>/dev/null || true
-     mv .terraform.lock.hcl /tmp/td-stash-lock 2>/dev/null || true
-     terraform-docs markdown table --output-file README.md --output-mode inject .
-     mv /tmp/td-stash-tf .terraform 2>/dev/null || true
-     mv /tmp/td-stash-lock .terraform.lock.hcl 2>/dev/null || true
-     ```
+  CI installs the same version (`v0.22.0`, tracking the brew default) and
+  runs `terraform-docs --output-check .` — see the `docs` job in
+  `.github/workflows/terraform-tests.yml`. If your local version differs
+  from CI's, the markdown table whitespace will drift and the check will
+  fail; bump both together when upgrading.
 
 - `examples/complete/README.md` documents the runnable example.
 - `docs/troubleshooting.md`, `docs/post-deployment.md`, and
