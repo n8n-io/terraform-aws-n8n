@@ -143,12 +143,18 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
   terraform-docs markdown table --output-file README.md --output-mode inject .
   ```
 
-  **Use terraform-docs v0.20.0 locally.** CI pins `terraform-docs/gh-actions@v1.4.1`,
-  whose container ships terraform-docs v0.20.0. Newer terraform-docs versions
-  (v0.22.0+) emit different table-separator whitespace (`| --- | --- |` vs.
-  `|---|---|`) and your re-render will fail CI even though the content is
-  identical. Install via `brew install terraform-docs@0.20.0` or download from
-  <https://github.com/terraform-docs/terraform-docs/releases/tag/v0.20.0>.
+  **Use terraform-docs v0.20.0 locally.** CI installs that exact version
+  (see the `docs` job in `.github/workflows/terraform-tests.yml`). Newer
+  terraform-docs versions (v0.22.0+) emit different table-separator whitespace
+  (`| --- | --- |` vs. `|---|---|`) and your re-render will fail CI even though
+  the content is identical. Install with:
+
+  ```bash
+  curl -sSLo /tmp/td.tar.gz \
+    "https://terraform-docs.io/dl/v0.20.0/terraform-docs-v0.20.0-$(uname)-amd64.tar.gz"
+  tar -xzf /tmp/td.tar.gz -C /tmp terraform-docs
+  sudo install -m 0755 /tmp/terraform-docs /usr/local/bin/terraform-docs
+  ```
 
 - `examples/complete/README.md` documents the runnable example.
 - `docs/troubleshooting.md`, `docs/post-deployment.md`, and

@@ -33,22 +33,26 @@ jobs:
   docs:
     name: terraform-docs (README in sync)
     runs-on: ubuntu-latest
+    env:
+      # Pinned to match what AGENTS.md tells contributors to install locally.
+      # Different terraform-docs versions emit different markdown table
+      # whitespace (v0.20.0: '|---|---|', v0.22.0+: '| --- | --- |'),
+      # so any drift between local and CI versions causes spurious diffs.
+      TERRAFORM_DOCS_VERSION: v0.20.0
     steps:
       - uses: actions/checkout@v4
 
-      # Pinned to v1.4.1 — the container bundles terraform-docs v0.20.0,
-      # which differs from newer releases in markdown table whitespace
-      # (v0.20.0: '|---|---|', v0.22.0+: '| --- | --- |'). Pinning here keeps
-      # CI deterministic; AGENTS.md tells contributors which version to run
-      # locally to match.
+      - name: install terraform-docs
+        run: |
+          set -euo pipefail
+          curl -sSLo /tmp/td.tar.gz \
+            "https://terraform-docs.io/dl/${TERRAFORM_DOCS_VERSION}/terraform-docs-${TERRAFORM_DOCS_VERSION}-$(uname)-amd64.tar.gz"
+          tar -xzf /tmp/td.tar.gz -C /tmp terraform-docs
+          sudo install -m 0755 /tmp/terraform-docs /usr/local/bin/terraform-docs
+          terraform-docs --version
+
       - name: terraform-docs --output-check
-        uses: terraform-docs/gh-actions@v1.4.1
-        with:
-          working-dir: .
-          output-file: README.md
-          output-method: inject
-          output-format: markdown table
-          fail-on-diff: true
+        run: terraform-docs markdown table --output-file README.md --output-mode inject --output-check .
 
   validate:
     name: terraform validate (${{ matrix.target }})
