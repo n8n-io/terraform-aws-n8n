@@ -36,8 +36,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned to v1.4.1 — the container bundles terraform-docs v0.20.0,
+      # which differs from newer releases in markdown table whitespace
+      # (v0.20.0: '|---|---|', v0.22.0+: '| --- | --- |'). Pinning here keeps
+      # CI deterministic; AGENTS.md tells contributors which version to run
+      # locally to match.
       - name: terraform-docs --output-check
-        uses: terraform-docs/gh-actions@v1
+        uses: terraform-docs/gh-actions@v1.4.1
         with:
           working-dir: .
           output-file: README.md
