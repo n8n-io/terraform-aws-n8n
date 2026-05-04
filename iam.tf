@@ -300,6 +300,8 @@ resource "aws_eks_pod_identity_association" "lbc" {
   service_account = "aws-load-balancer-controller"
   role_arn        = aws_iam_role.lbc.arn
 
+  tags = local.common_tags
+
   depends_on = [aws_eks_addon.pod_identity_agent]
 }
 
@@ -365,6 +367,8 @@ resource "aws_eks_pod_identity_association" "cluster_autoscaler" {
   namespace       = "kube-system"
   service_account = "cluster-autoscaler"
   role_arn        = aws_iam_role.cluster_autoscaler.arn
+
+  tags = local.common_tags
 
   depends_on = [aws_eks_addon.pod_identity_agent]
 }

@@ -1,3 +1,7 @@
+# ── Locals ────────────────────────────────────────────────────────────────────
+# Shared values derived from inputs: input aliases, the common tag set every
+# taggable resource merges in, and the deterministic S3 bucket name.
+
 locals {
   # Aliases for inputs so the rest of the module can reference them uniformly.
   # Formerly sourced from the sibling prerequisites workspace via

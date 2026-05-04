@@ -77,5 +77,7 @@ resource "aws_eks_pod_identity_association" "s3" {
   service_account = "n8n-enterprise"
   role_arn        = aws_iam_role.s3.arn
 
+  tags = local.common_tags
+
   depends_on = [aws_eks_addon.pod_identity_agent]
 }

@@ -30,6 +30,21 @@ jobs:
       - name: terraform fmt -check -recursive
         run: terraform fmt -check -recursive -diff
 
+  docs:
+    name: terraform-docs (README in sync)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: terraform-docs --output-check
+        uses: terraform-docs/gh-actions@v1
+        with:
+          working-dir: .
+          output-file: README.md
+          output-method: inject
+          output-format: markdown table
+          fail-on-diff: true
+
   validate:
     name: terraform validate (${{ matrix.target }})
     runs-on: ubuntu-latest

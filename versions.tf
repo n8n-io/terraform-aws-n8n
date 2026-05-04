@@ -1,3 +1,8 @@
+# ── Terraform & provider requirements ──────────────────────────────────────
+# Declares the minimum Terraform CLI and the providers this module needs.
+# Provider configuration (region, auth, kube/helm wiring) is the caller's job
+# — see examples/complete/providers.tf.
+
 terraform {
   required_version = ">= 1.7"
 
