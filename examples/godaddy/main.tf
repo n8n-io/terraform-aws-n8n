@@ -47,7 +47,7 @@ module "vpc" {
 
 # ── n8n ───────────────────────────────────────────────────────────────────────
 # dns.tf in this example issues the ACM certificate and validates it via
-# Cloudflare DNS records. The validated certificate_arn is passed here so
+# GoDaddy DNS records. The validated certificate_arn is passed here so
 # the module stays AWS-only.
 
 module "n8n" {

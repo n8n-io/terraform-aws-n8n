@@ -14,11 +14,5 @@ terraform {
       source  = "hashicorp/helm"
       version = "~> 2.12"
     }
-    # Declared so `mock_provider "cloudflare"` in tests/ can resolve the correct
-    # source. This example uses Route53 only — no provider block is configured.
-    cloudflare = {
-      source  = "cloudflare/cloudflare"
-      version = ">= 4.0.0, < 4.52.7"
-    }
   }
 }

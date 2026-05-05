@@ -15,6 +15,12 @@ env:
   TFLINT_VERSION: "v0.53.0"
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
+  # Stub credentials so the veksh/godaddy-dns provider initializes during
+  # terraform test. No real GoDaddy API calls are made — godaddy-dns_record
+  # resources use for_each over unknown ACM domain_validation_options, which
+  # evaluates to an empty map under a mocked AWS provider.
+  GODADDY_API_KEY: "ci-stub-not-real"
+  GODADDY_API_SECRET: "ci-stub-not-real"
 
 jobs:
   fmt:
@@ -65,13 +71,17 @@ jobs:
         working-directory: examples/cloudflare
         run: terraform-docs --output-check .
 
+      - name: terraform-docs --output-check (examples/godaddy)
+        working-directory: examples/godaddy
+        run: terraform-docs --output-check .
+
   validate:
     name: terraform validate (${{ matrix.target }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete", "examples/cloudflare"]
+        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy"]
     steps:
       - uses: actions/checkout@v4
 
@@ -94,7 +104,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete", "examples/cloudflare"]
+        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy"]
     steps:
       - uses: actions/checkout@v4
 
@@ -116,7 +126,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete", "examples/cloudflare"]
+        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy"]
     steps:
       - uses: actions/checkout@v4
 

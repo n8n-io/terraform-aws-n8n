@@ -16,10 +16,6 @@ mock_provider "aws" {
 
 mock_provider "kubernetes" {}
 mock_provider "helm" {}
-# The root module conditionally uses cloudflare (when cloudflare_zone_id is set).
-# This example uses Route53 only, but the provider still needs to be mocked so the
-# test framework doesn't try to initialize it without credentials.
-mock_provider "cloudflare" {}
 
 variables {
   n8n_domain      = "n8n.test.example.com"

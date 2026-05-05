@@ -1,7 +1,7 @@
-# Plan-time tests for the cloudflare example using mocked providers.
+# Plan-time tests for the godaddy example using mocked providers.
 #
 # Run: terraform test
-#   (from examples/cloudflare/ — requires terraform >= 1.9)
+#   (from examples/godaddy/ — requires terraform >= 1.9)
 
 mock_provider "aws" {
   override_data {
@@ -14,18 +14,21 @@ mock_provider "aws" {
 
 mock_provider "kubernetes" {}
 mock_provider "helm" {}
-mock_provider "cloudflare" {}
+# mock_provider does not support hyphenated provider names (godaddy-dns). Set
+# GODADDY_API_KEY and GODADDY_API_SECRET to any non-empty value before running
+# terraform test locally — no real API calls are made in plan-time tests.
 
 variables {
-  n8n_domain           = "n8n.test.example.com"
-  n8n_license_key      = "test-license-key-not-real"
-  cloudflare_zone_id   = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
-  cloudflare_api_token = "test-api-token-not-real"
+  n8n_domain         = "n8n.test.example.com"
+  n8n_license_key    = "test-license-key-not-real"
+  godaddy_domain     = "test.example.com"
+  godaddy_api_key    = "test-api-key-not-real"
+  godaddy_api_secret = "test-api-secret-not-real"
 }
 
 # NOTE: A full `command = plan` is not feasible for this example.
 # dns.tf issues an aws_acm_certificate and then uses `for_each` over its
-# `domain_validation_options` to create Cloudflare validation records.
+# `domain_validation_options` to create GoDaddy validation records.
 # That attribute is computed and unknown at plan time under a mocked AWS
 # provider, so any plan-level test would fail before reaching the graph walk.
 #

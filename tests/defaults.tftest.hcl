@@ -7,8 +7,6 @@
 # Run: terraform test
 #   (from the module root — requires terraform >= 1.7)
 
-mock_provider "cloudflare" {}
-
 mock_provider "aws" {
   override_data {
     target = data.aws_caller_identity.current
@@ -253,30 +251,6 @@ run "custom_database_sizing" {
     condition     = aws_db_instance.n8n.allocated_storage == 200
     error_message = "db_allocated_storage variable did not propagate"
   }
-}
-
-run "cloudflare_rejects_dual_dns_configuration" {
-  # Supplying cloudflare_zone_id alongside certificate_arn (from the base
-  # variables block above) must trigger the three-way exclusivity validation.
-  command = plan
-
-  variables {
-    cloudflare_zone_id = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
-  }
-
-  expect_failures = [var.route53_zone_id]
-}
-
-run "cloudflare_rejects_combined_with_route53" {
-  command = plan
-
-  variables {
-    certificate_arn    = null
-    route53_zone_id    = "Z0123456789ABCDEFGHIJ"
-    cloudflare_zone_id = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
-  }
-
-  expect_failures = [var.route53_zone_id]
 }
 
 run "custom_namespace_propagates_to_s3_binding" {

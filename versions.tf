@@ -30,11 +30,5 @@ terraform {
       source  = "hashicorp/time"
       version = "~> 0.12"
     }
-    cloudflare = {
-      source = "cloudflare/cloudflare"
-      # 4.52.7 introduced a credential-sensitivity change that breaks api_token
-      # when the value comes from a sensitive Terraform variable. Pin below that.
-      version = ">= 4.0.0, < 4.52.7"
-    }
   }
 }
