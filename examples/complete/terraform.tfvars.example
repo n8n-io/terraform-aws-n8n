@@ -1,0 +1,25 @@
+# Copy this file to terraform.tfvars and fill in your values.
+
+# Fully-qualified domain for n8n. The parent zone must be hosted in Route53.
+n8n_domain = "n8n.example.com"
+
+# Route53 hosted zone ID for the parent domain (e.g. example.com). The module
+# issues the ACM certificate, validates it, and creates the alias A-record
+# here — single terraform apply, no manual DNS steps.
+route53_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# n8n Enterprise license activation key. Get one at https://n8n.io/pricing.
+n8n_license_key = "your-enterprise-license-key-here"
+
+# AWS region. Change if you're deploying outside us-east-1.
+# aws_region = "eu-west-1"
+
+# EKS cluster name. Keep to 14 characters or fewer — ElastiCache cluster IDs
+# derived from this name are capped at 20 chars, and '-redis' consumes 6.
+# cluster_name = "n8n-cluster"
+
+# Extra AWS tags applied to every resource this example creates.
+# tags = {
+#   Environment = "production"
+#   Owner       = "platform-team"
+# }

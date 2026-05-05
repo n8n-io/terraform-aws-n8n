@@ -1,0 +1,154 @@
+name: Terraform Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  TF_VERSION: "1.9.8"
+  TFLINT_VERSION: "v0.53.0"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform fmt -check -recursive
+        run: terraform fmt -check -recursive -diff
+
+  docs:
+    name: terraform-docs (README in sync)
+    runs-on: ubuntu-latest
+    env:
+      # Tracks the version `brew install terraform-docs` installs on macOS, so
+      # contributors don't need a special install path. Different terraform-docs
+      # versions emit different markdown table whitespace, so any drift between
+      # CI and the version contributors actually use produces spurious diffs.
+      # Bump together with the brew default.
+      TERRAFORM_DOCS_VERSION: v0.22.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install terraform-docs
+        run: |
+          set -euo pipefail
+          curl -sSLo /tmp/td.tar.gz \
+            "https://terraform-docs.io/dl/${TERRAFORM_DOCS_VERSION}/terraform-docs-${TERRAFORM_DOCS_VERSION}-$(uname)-amd64.tar.gz"
+          tar -xzf /tmp/td.tar.gz -C /tmp terraform-docs
+          sudo install -m 0755 /tmp/terraform-docs /usr/local/bin/terraform-docs
+          terraform-docs --version
+
+      # All formatting options live in .terraform-docs.yml so this command
+      # stays identical to what contributors run locally.
+      - name: terraform-docs --output-check
+        run: terraform-docs --output-check .
+
+  validate:
+    name: terraform validate (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [".", "examples/complete"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform init (no backend, providers only)
+        working-directory: ${{ matrix.target }}
+        run: terraform init -backend=false
+
+      - name: terraform validate
+        working-directory: ${{ matrix.target }}
+        run: terraform validate -no-color
+
+  test:
+    name: terraform test (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [".", "examples/complete"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform init
+        working-directory: ${{ matrix.target }}
+        run: terraform init -backend=false
+
+      - name: terraform test
+        working-directory: ${{ matrix.target }}
+        run: terraform test -verbose
+
+  tflint:
+    name: tflint (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [".", "examples/complete"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+
+      - name: terraform init (fetch modules for tflint)
+        working-directory: ${{ matrix.target }}
+        run: terraform init -backend=false
+
+      - name: tflint --init
+        working-directory: ${{ matrix.target }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: tflint --init
+
+      - name: tflint
+        working-directory: ${{ matrix.target }}
+        run: tflint --format compact
+
+  checkov:
+    name: checkov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform
+          quiet: true
+          # Module surfaces low-severity findings (e.g. RDS deletion protection,
+          # encryption knobs) that are intentional defaults for a getting-started
+          # template. Flip soft_fail to false once we curate suppressions.
+          soft_fail: true
+          output_format: cli
+          output_file_path: console

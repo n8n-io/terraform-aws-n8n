@@ -1,0 +1,37 @@
+# terraform-docs configuration for terraform-aws-n8n.
+#
+# Locks every rendering option in one place so CI and contributors produce
+# identical output, regardless of who runs the tool from where. Without this,
+# the same `terraform-docs` invocation can yield different README.md content
+# depending on (a) which CLI flags the caller remembered, (b) whether
+# `.terraform/` is initialised, and (c) whether `.terraform.lock.hcl` is
+# present — causing spurious CI diffs.
+#
+# Refresh the README with:
+#
+#   terraform-docs .
+#
+# CI verifies with `terraform-docs --output-check .` — see the `docs` job in
+# .github/workflows/terraform-tests.yml.
+
+formatter: markdown table
+
+output:
+  file: README.md
+  mode: inject
+  template: |-
+    <!-- BEGIN_TF_DOCS -->
+    {{ .Content }}
+    <!-- END_TF_DOCS -->
+
+settings:
+  # Always render provider versions as the constraints declared in
+  # versions.tf (e.g. `~> 5.0`), never as the resolved versions from
+  # `.terraform.lock.hcl` (e.g. `5.100.0`). Constraints are what consumers
+  # of this registry module actually contract against; resolved versions
+  # are local-environment noise. Per HashiCorp's guidance for modules
+  # published to the registry, `.terraform.lock.hcl` is intentionally not
+  # committed (see .gitignore), so this also keeps local renders matching
+  # CI even after a contributor runs `terraform init`.
+  # https://developer.hashicorp.com/terraform/language/files/dependency-lock
+  lockfile: false
