@@ -1,27 +1,33 @@
-# Complete example
+# Cloudflare DNS example
 
-End-to-end deployment of the `terraform-aws-n8n` module, including the VPC it depends on. Use this example as your starting point for a fresh AWS account. Assumes the parent zone for `n8n_domain` is hosted in Route53.
+End-to-end deployment of the `terraform-aws-n8n` module, including the VPC it depends on, using Cloudflare for DNS and ACM certificate validation. Use this example when your domain is managed in Cloudflare rather than Route53.
 
 ## What it creates
 
 - VPC with public and private subnets across two AZs, NAT gateway, EKS/ALB subnet tags (via `terraform-aws-modules/vpc/aws`)
-- Everything the `terraform-aws-n8n` module creates: the ACM certificate (with automated Route53 validation), the alias A-record for `n8n_domain`, EKS cluster, managed node group, RDS PostgreSQL, ElastiCache Redis, S3 bucket, AWS Load Balancer Controller, Cluster Autoscaler, metrics-server, KEDA, and the n8n Helm release
+- Everything the `terraform-aws-n8n` module creates: the ACM certificate (DNS-validated via Cloudflare), the CNAME record for `n8n_domain` pointing at the ALB, EKS cluster, managed node group, RDS PostgreSQL, ElastiCache Redis, S3 bucket, AWS Load Balancer Controller, Cluster Autoscaler, metrics-server, KEDA, and the n8n Helm release
 
 ## Prerequisites
 
-- A Route53 hosted zone for the parent domain (e.g. `example.com` if `n8n_domain = n8n.example.com`). Note its zone ID.
+- A Cloudflare zone for the parent domain (e.g. `example.com` if `n8n_domain = n8n.example.com`). Note the **Zone ID** from the Overview page in the Cloudflare dashboard.
+- A Cloudflare API token with **Zone:DNS:Edit** permission scoped to that zone. Create one at https://dash.cloudflare.com/profile/api-tokens.
 
 ## Apply
 
 ```bash
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars and set n8n_domain, route53_zone_id, n8n_license_key
+# Edit terraform.tfvars and set n8n_domain, cloudflare_zone_id,
+# cloudflare_api_token, and n8n_license_key
 
 terraform init
 terraform apply
 ```
 
-That's it. Terraform provisions the VPC, issues the ACM certificate (validating it automatically via Route53), stands up EKS and everything on top, and creates the alias record pointing `n8n_domain` at the ALB. Allow ~5 minutes after apply for the ALB to become reachable.
+Terraform provisions the VPC, issues the ACM certificate (validating it automatically via Cloudflare DNS records), stands up EKS and everything on top, and creates the CNAME pointing `n8n_domain` at the ALB. Allow ~5 minutes after apply for the ALB to become reachable.
+
+## Cloudflare proxy
+
+The CNAME record is created with `proxied = false` by default so that ACM certificate renewal and ALB health checks work without Cloudflare-specific configuration. To route traffic through Cloudflare's proxy (for DDoS protection and CDN), set `proxied = true` on `cloudflare_record.n8n_cname` in `dns_cloudflare.tf` **and** set your Cloudflare SSL/TLS mode to **Full (strict)**.
 
 ## Post-deployment
 
@@ -69,17 +75,18 @@ terraform destroy
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
 | <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1). | `string` | `"us-east-1"` | no |
+| <a name="input_cloudflare_api_token"></a> [cloudflare\_api\_token](#input\_cloudflare\_api\_token) | Cloudflare API token with Zone:DNS:Edit permission for the zone. Create one at https://dash.cloudflare.com/profile/api-tokens. Can also be supplied via the CLOUDFLARE\_API\_TOKEN environment variable. | `string` | n/a | yes |
+| <a name="input_cloudflare_zone_id"></a> [cloudflare\_zone\_id](#input\_cloudflare\_zone\_id) | Cloudflare zone ID for the domain that contains n8n\_domain. Find it on the Overview page of your zone in the Cloudflare dashboard. | `string` | n/a | yes |
 | <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | Name for the EKS cluster. Keep to 14 characters or fewer — the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. | `string` | `"n8n-cluster"` | no |
-| <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). The parent zone must be hosted in Route53 (pass its ID via route53\_zone\_id). | `string` | n/a | yes |
+| <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). Must be a subdomain of the zone identified by cloudflare\_zone\_id. | `string` | n/a | yes |
 | <a name="input_n8n_license_key"></a> [n8n\_license\_key](#input\_n8n\_license\_key) | n8n Enterprise license activation key. Get one at https://n8n.io/pricing | `string` | n/a | yes |
-| <a name="input_route53_zone_id"></a> [route53\_zone\_id](#input\_route53\_zone\_id) | Route53 hosted zone ID for the parent of n8n\_domain (e.g. the zone for example.com if n8n\_domain = n8n.example.com). The module creates the ACM certificate, validation records, and alias A-record inside this zone. | `string` | n/a | yes |
 | <a name="input_tags"></a> [tags](#input\_tags) | Additional AWS tags to apply to every resource this example creates. | `map(string)` | `{}` | no |
 
 ## Outputs
 
 | Name | Description |
 | ---- | ----------- |
-| <a name="output_alb_hostname"></a> [alb\_hostname](#output\_alb\_hostname) | ALB hostname. The alias A-record for n8n\_domain is already created in Route53 — this output is informational. |
+| <a name="output_alb_hostname"></a> [alb\_hostname](#output\_alb\_hostname) | ALB hostname. The CNAME for n8n\_domain is already created in Cloudflare — this output is informational. |
 | <a name="output_db_password"></a> [db\_password](#output\_db\_password) | RDS PostgreSQL password — back this up in a password manager. |
 | <a name="output_kubectl_config_command"></a> [kubectl\_config\_command](#output\_kubectl\_config\_command) | Command to configure kubectl for this cluster. |
 | <a name="output_n8n_encryption_key"></a> [n8n\_encryption\_key](#output\_n8n\_encryption\_key) | n8n encryption key — back this up in a password manager. |

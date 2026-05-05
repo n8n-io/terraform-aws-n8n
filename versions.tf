@@ -4,7 +4,10 @@
 # — see examples/complete/providers.tf.
 
 terraform {
-  required_version = ">= 1.7"
+  # >= 1.9 required: cross-variable references in validation blocks
+  # (var.route53_zone_id's validation references var.certificate_arn and
+  # var.cloudflare_zone_id). This feature landed in Terraform 1.9.0.
+  required_version = ">= 1.9"
 
   required_providers {
     aws = {
@@ -26,6 +29,12 @@ terraform {
     time = {
       source  = "hashicorp/time"
       version = "~> 0.12"
+    }
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+      # 4.52.7 introduced a credential-sensitivity change that breaks api_token
+      # when the value comes from a sensitive Terraform variable. Pin below that.
+      version = ">= 4.0.0, < 4.52.7"
     }
   }
 }

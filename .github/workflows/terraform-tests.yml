@@ -52,9 +52,17 @@ jobs:
           sudo install -m 0755 /tmp/terraform-docs /usr/local/bin/terraform-docs
           terraform-docs --version
 
-      # All formatting options live in .terraform-docs.yml so this command
-      # stays identical to what contributors run locally.
-      - name: terraform-docs --output-check
+      # All formatting options live in .terraform-docs.yml so these commands
+      # stay identical to what contributors run locally.
+      - name: terraform-docs --output-check (root)
+        run: terraform-docs --output-check .
+
+      - name: terraform-docs --output-check (examples/complete)
+        working-directory: examples/complete
+        run: terraform-docs --output-check .
+
+      - name: terraform-docs --output-check (examples/cloudflare)
+        working-directory: examples/cloudflare
         run: terraform-docs --output-check .
 
   validate:
@@ -63,7 +71,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete"]
+        target: [".", "examples/complete", "examples/cloudflare"]
     steps:
       - uses: actions/checkout@v4
 
@@ -86,7 +94,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete"]
+        target: [".", "examples/complete", "examples/cloudflare"]
     steps:
       - uses: actions/checkout@v4
 
@@ -108,7 +116,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete"]
+        target: [".", "examples/complete", "examples/cloudflare"]
     steps:
       - uses: actions/checkout@v4
 
