@@ -1,0 +1,32 @@
+# Copy this file to terraform.tfvars and fill in your values.
+
+# Fully-qualified domain for n8n. Must be a subdomain of the GoDaddy domain
+# below (e.g. n8n.example.com if godaddy_domain = "example.com").
+n8n_domain = "n8n.example.com"
+
+# GoDaddy domain that contains n8n_domain. The module creates ACM certificate
+# validation records and a CNAME record here.
+godaddy_domain = "example.com"
+
+# GoDaddy API key and secret with DNS write permissions.
+# Create one at https://developer.godaddy.com/keys.
+# You can also export GODADDY_API_KEY and GODADDY_API_SECRET instead of
+# setting these.
+godaddy_api_key    = "your-godaddy-api-key-here"
+godaddy_api_secret = "your-godaddy-api-secret-here"
+
+# n8n Enterprise license activation key. Get one at https://n8n.io/pricing.
+n8n_license_key = "your-enterprise-license-key-here"
+
+# AWS region. Change if you're deploying outside us-east-1.
+# aws_region = "eu-west-1"
+
+# EKS cluster name. Keep to 14 characters or fewer — ElastiCache cluster IDs
+# derived from this name are capped at 20 chars, and '-redis' consumes 6.
+# cluster_name = "n8n-cluster"
+
+# Extra AWS tags applied to every resource this example creates.
+# tags = {
+#   Environment = "production"
+#   Owner       = "platform-team"
+# }

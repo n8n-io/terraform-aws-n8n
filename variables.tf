@@ -75,13 +75,13 @@ variable "vpc_cidr_block" {
 }
 
 variable "certificate_arn" {
-  description = "ARN of a pre-validated ACM certificate for n8n_domain. Use this if your DNS is not hosted in Route53. Set exactly one of certificate_arn or route53_zone_id."
+  description = "ARN of a pre-validated ACM certificate for n8n_domain. Use this for Cloudflare, GoDaddy, or any DNS provider other than Route53 — the respective examples (examples/cloudflare, examples/godaddy) issue the certificate and pass its ARN here. Set exactly one of certificate_arn or route53_zone_id."
   type        = string
   default     = null
 }
 
 variable "route53_zone_id" {
-  description = "Route53 hosted zone ID for the parent of n8n_domain (e.g. the zone for example.com if n8n_domain = n8n.example.com). When set, the module issues a DNS-validated ACM certificate and creates the alias A-record automatically — single terraform apply, no manual DNS steps. Leave null and pass certificate_arn instead if your DNS is not on Route53. Set exactly one of certificate_arn or route53_zone_id."
+  description = "Route53 hosted zone ID for the parent of n8n_domain (e.g. the zone for example.com if n8n_domain = n8n.example.com). When set, the module issues a DNS-validated ACM certificate and creates the alias A-record automatically — single terraform apply, no manual DNS steps. Leave null and pass certificate_arn instead. Set exactly one of certificate_arn or route53_zone_id."
   type        = string
   default     = null
 

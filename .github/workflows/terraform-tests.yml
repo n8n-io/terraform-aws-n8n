@@ -52,9 +52,21 @@ jobs:
           sudo install -m 0755 /tmp/terraform-docs /usr/local/bin/terraform-docs
           terraform-docs --version
 
-      # All formatting options live in .terraform-docs.yml so this command
-      # stays identical to what contributors run locally.
-      - name: terraform-docs --output-check
+      # All formatting options live in .terraform-docs.yml so these commands
+      # stay identical to what contributors run locally.
+      - name: terraform-docs --output-check (root)
+        run: terraform-docs --output-check .
+
+      - name: terraform-docs --output-check (examples/complete)
+        working-directory: examples/complete
+        run: terraform-docs --output-check .
+
+      - name: terraform-docs --output-check (examples/cloudflare)
+        working-directory: examples/cloudflare
+        run: terraform-docs --output-check .
+
+      - name: terraform-docs --output-check (examples/godaddy)
+        working-directory: examples/godaddy
         run: terraform-docs --output-check .
 
   validate:
@@ -63,7 +75,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete"]
+        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy"]
     steps:
       - uses: actions/checkout@v4
 
@@ -83,10 +95,19 @@ jobs:
     name: terraform test (${{ matrix.target }})
     runs-on: ubuntu-latest
     needs: validate
+    env:
+      # Stub credentials so the veksh/godaddy-dns provider initializes during
+      # terraform test. Scoped to this job only — no real GoDaddy API calls
+      # are made; godaddy-dns_record resources use for_each over unknown ACM
+      # domain_validation_options, which evaluates to an empty map under a
+      # mocked AWS provider. Other jobs (fmt, validate, tflint, checkov)
+      # don't need these set.
+      GODADDY_API_KEY: "ci-stub-not-real"
+      GODADDY_API_SECRET: "ci-stub-not-real"
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete"]
+        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy"]
     steps:
       - uses: actions/checkout@v4
 
@@ -108,7 +129,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete"]
+        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy"]
     steps:
       - uses: actions/checkout@v4
 
