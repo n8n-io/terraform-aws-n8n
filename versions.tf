@@ -4,9 +4,9 @@
 # — see examples/complete/providers.tf.
 
 terraform {
-  # >= 1.9 required: cross-variable references in validation blocks
-  # (var.route53_zone_id's validation references var.certificate_arn and
-  # var.cloudflare_zone_id). This feature landed in Terraform 1.9.0.
+  # >= 1.9 required: var.route53_zone_id's validation block references
+  # var.certificate_arn (cross-variable references in validation blocks were
+  # stabilized in Terraform 1.9.0).
   required_version = ">= 1.9"
 
   required_providers {

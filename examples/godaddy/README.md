@@ -81,9 +81,9 @@ terraform destroy
 | <a name="input_godaddy_api_key"></a> [godaddy\_api\_key](#input\_godaddy\_api\_key) | GoDaddy API key with DNS write permissions. Create one at https://developer.godaddy.com/keys. Can also be supplied via the GODADDY\_API\_KEY environment variable. | `string` | n/a | yes |
 | <a name="input_godaddy_api_secret"></a> [godaddy\_api\_secret](#input\_godaddy\_api\_secret) | GoDaddy API secret corresponding to godaddy\_api\_key. Can also be supplied via the GODADDY\_API\_SECRET environment variable. | `string` | n/a | yes |
 | <a name="input_godaddy_domain"></a> [godaddy\_domain](#input\_godaddy\_domain) | GoDaddy domain name that contains n8n\_domain (e.g. example.com if n8n\_domain = n8n.example.com). The module creates ACM certificate validation records and a CNAME record in this domain. | `string` | n/a | yes |
-| <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). Must be a subdomain of godaddy\_domain. | `string` | n/a | yes |
+| <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). Must be a single label below godaddy\_domain (e.g. 'n8n' below 'example.com'). Deeper nesting like 'n8n.prod.example.com' under 'example.com' is not supported by this example's name-stripping logic — host such records under godaddy\_domain = 'prod.example.com' instead. | `string` | n/a | yes |
 | <a name="input_n8n_license_key"></a> [n8n\_license\_key](#input\_n8n\_license\_key) | n8n Enterprise license activation key. Get one at https://n8n.io/pricing | `string` | n/a | yes |
-| <a name="input_tags"></a> [tags](#input\_tags) | Additional AWS tags to apply to every resource this example creates. | `map(string)` | `{}` | no |
+| <a name="input_tags"></a> [tags](#input\_tags) | Additional AWS tags to apply to all resources this example creates. Merged on top of the built-in ManagedBy/Project tags. | `map(string)` | `{}` | no |
 
 ## Outputs
 

@@ -66,5 +66,10 @@ module "n8n" {
 
   tags = local.common_tags
 
+  # Explicit module-level dependency ensures the ENTIRE VPC (including NAT
+  # gateway routes, IGW, etc.) stays up until n8n is fully destroyed. Without
+  # this, Terraform may delete NAT routes in parallel — nodes in private
+  # subnets lose API-server connectivity, LBC pods die, and the Ingress
+  # finalizer can never be removed.
   depends_on = [module.vpc]
 }

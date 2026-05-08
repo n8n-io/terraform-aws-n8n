@@ -71,6 +71,9 @@ resource "aws_route53_record" "n8n_alias" {
 # Ingress is created. We look up the ALB by the tags that LBC applies — this is
 # more robust than parsing the ALB hostname with a regex, which varies between
 # LBC versions and hostname formats.
+#
+# wait_for_load_balancer = true on kubernetes_ingress_v1.n8n ensures the ALB
+# exists before this data source evaluates.
 
 data "aws_lb" "n8n" {
   count = local.dns_automated ? 1 : 0

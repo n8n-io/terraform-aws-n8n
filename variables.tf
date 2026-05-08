@@ -86,7 +86,7 @@ variable "route53_zone_id" {
   default     = null
 
   validation {
-    condition     = (var.certificate_arn != null ? 1 : 0) + (var.route53_zone_id != null ? 1 : 0) == 1
+    condition     = (var.certificate_arn == null) != (var.route53_zone_id == null)
     error_message = "Set exactly one of certificate_arn or route53_zone_id."
   }
 }

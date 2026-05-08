@@ -38,7 +38,7 @@ variable "n8n_license_key" {
 }
 
 variable "tags" {
-  description = "Additional AWS tags to apply to every resource this example creates."
+  description = "Additional AWS tags to apply to all resources this example creates. Merged on top of the built-in ManagedBy/Project tags."
   type        = map(string)
   default     = {}
 }

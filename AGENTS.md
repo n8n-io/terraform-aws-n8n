@@ -20,9 +20,11 @@ multi-main [n8n Enterprise](https://n8n.io) installation on AWS**. A single
   Identity** (no static IAM keys in pods).
 - **AWS Load Balancer Controller** + **Cluster Autoscaler** + **KEDA** for
   ingress, node scaling, and queue-driven worker scaling.
-- **ACM certificate + DNS record** automated via Route 53 (`route53_zone_id`),
-  Cloudflare (`cloudflare_zone_id`), or GoDaddy (`godaddy_domain`), or BYO
-  pre-validated `certificate_arn`.
+- **ACM certificate + DNS record** automated end-to-end via Route 53 inside
+  the module (`route53_zone_id`), or via Cloudflare / GoDaddy in the
+  respective examples (which issue the certificate themselves and pass the
+  validated ARN to the module via `certificate_arn`). For any other DNS
+  provider, BYO a pre-validated `certificate_arn`.
 
 An **n8n Enterprise license key** is required (`var.n8n_license_key`) — the
 module does not provision a community-edition deployment.

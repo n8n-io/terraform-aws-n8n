@@ -16,8 +16,13 @@ variable "cluster_name" {
 }
 
 variable "n8n_domain" {
-  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). Must be a subdomain of godaddy_domain."
+  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). Must be a single label below godaddy_domain (e.g. 'n8n' below 'example.com'). Deeper nesting like 'n8n.prod.example.com' under 'example.com' is not supported by this example's name-stripping logic — host such records under godaddy_domain = 'prod.example.com' instead."
   type        = string
+
+  validation {
+    condition     = endswith(var.n8n_domain, ".${var.godaddy_domain}") && length(split(".", trimsuffix(var.n8n_domain, ".${var.godaddy_domain}"))) == 1
+    error_message = "n8n_domain must be a single label directly below godaddy_domain (e.g. n8n.example.com when godaddy_domain = example.com)."
+  }
 }
 
 variable "godaddy_domain" {
@@ -44,7 +49,7 @@ variable "n8n_license_key" {
 }
 
 variable "tags" {
-  description = "Additional AWS tags to apply to every resource this example creates."
+  description = "Additional AWS tags to apply to all resources this example creates. Merged on top of the built-in ManagedBy/Project tags."
   type        = map(string)
   default     = {}
 }

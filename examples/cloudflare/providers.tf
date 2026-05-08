@@ -18,6 +18,8 @@ terraform {
       source = "cloudflare/cloudflare"
       # 4.52.7 introduced a credential-sensitivity change that breaks api_token
       # when the value comes from a sensitive Terraform variable. Pin below that.
+      # TODO: drop the upper bound once the upstream regression is fixed and
+      # bump to ~> 5.0 when the v5 provider stabilizes.
       version = ">= 4.0.0, < 4.52.7"
     }
   }

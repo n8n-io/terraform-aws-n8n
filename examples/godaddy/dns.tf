@@ -4,6 +4,11 @@
 #
 # The record name must be relative to the domain — strip the trailing dot and
 # domain suffix that ACM appends to resource_record_name.
+#
+# We `for_each` on toset([var.n8n_domain]) (a static, plan-time-known key set)
+# rather than on aws_acm_certificate.n8n.domain_validation_options (whose keys
+# are unknown at plan). This is safe because we only request a certificate for
+# a single domain — for a multi-SAN cert, switch to the dynamic-key idiom.
 
 resource "aws_acm_certificate" "n8n" {
   domain_name       = var.n8n_domain
@@ -16,27 +21,29 @@ resource "aws_acm_certificate" "n8n" {
   }
 }
 
-resource "godaddy-dns_record" "cert_validation" {
-  for_each = {
-    for o in aws_acm_certificate.n8n.domain_validation_options : o.domain_name => {
-      name = o.resource_record_name
-      type = o.resource_record_type
-      data = o.resource_record_value
-    }
+locals {
+  # Lookup keyed by domain_name. Values are unknown at plan time but the keys
+  # in for_each below come from var.n8n_domain, so plan succeeds.
+  cert_validation = {
+    for o in aws_acm_certificate.n8n.domain_validation_options : o.domain_name => o
   }
+}
+
+resource "godaddy-dns_record" "cert_validation" {
+  for_each = toset([var.n8n_domain])
 
   domain = var.godaddy_domain
   # ACM returns FQDNs with trailing dots; strip the dot and parent domain.
-  name = trimsuffix(trimsuffix(each.value.name, "."), ".${var.godaddy_domain}")
-  type = each.value.type
-  data = trimsuffix(each.value.data, ".")
+  name = trimsuffix(trimsuffix(local.cert_validation[each.key].resource_record_name, "."), ".${var.godaddy_domain}")
+  type = local.cert_validation[each.key].resource_record_type
+  data = trimsuffix(local.cert_validation[each.key].resource_record_value, ".")
   ttl  = 600
 }
 
 resource "aws_acm_certificate_validation" "n8n" {
   certificate_arn = aws_acm_certificate.n8n.arn
   validation_record_fqdns = [
-    for k, r in godaddy-dns_record.cert_validation : "${r.name}.${var.godaddy_domain}"
+    for r in godaddy-dns_record.cert_validation : "${r.name}.${var.godaddy_domain}"
   ]
 }
 

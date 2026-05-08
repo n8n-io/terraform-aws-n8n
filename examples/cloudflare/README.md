@@ -27,7 +27,7 @@ Terraform provisions the VPC, issues the ACM certificate (validating it automati
 
 ## Cloudflare proxy
 
-The CNAME record is created with `proxied = false` by default so that ACM certificate renewal and ALB health checks work without Cloudflare-specific configuration. To route traffic through Cloudflare's proxy (for DDoS protection and CDN), set `proxied = true` on `cloudflare_record.n8n_cname` in `dns_cloudflare.tf` **and** set your Cloudflare SSL/TLS mode to **Full (strict)**.
+The CNAME record is created with `proxied = false` by default so that ACM certificate renewal and ALB health checks work without Cloudflare-specific configuration. To route traffic through Cloudflare's proxy (for DDoS protection and CDN), set `proxied = true` on `cloudflare_record.n8n_cname` in `dns.tf` **and** set your Cloudflare SSL/TLS mode to **Full (strict)**.
 
 ## Post-deployment
 
@@ -85,7 +85,7 @@ terraform destroy
 | <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | Name for the EKS cluster. Keep to 14 characters or fewer — the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. | `string` | `"n8n-cluster"` | no |
 | <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). Must be a subdomain of the zone identified by cloudflare\_zone\_id. | `string` | n/a | yes |
 | <a name="input_n8n_license_key"></a> [n8n\_license\_key](#input\_n8n\_license\_key) | n8n Enterprise license activation key. Get one at https://n8n.io/pricing | `string` | n/a | yes |
-| <a name="input_tags"></a> [tags](#input\_tags) | Additional AWS tags to apply to every resource this example creates. | `map(string)` | `{}` | no |
+| <a name="input_tags"></a> [tags](#input\_tags) | Additional AWS tags to apply to all resources this example creates. Merged on top of the built-in ManagedBy/Project tags. | `map(string)` | `{}` | no |
 
 ## Outputs
 

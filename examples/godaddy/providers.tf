@@ -15,7 +15,10 @@ terraform {
       version = "~> 2.12"
     }
     godaddy-dns = {
-      source  = "veksh/godaddy-dns"
+      source = "veksh/godaddy-dns"
+      # Pinned to the 0.3.x line: veksh/godaddy-dns is a community provider on
+      # a 0.x release train, so minor bumps may be breaking. Re-evaluate when
+      # 1.0 ships.
       version = "~> 0.3"
     }
   }

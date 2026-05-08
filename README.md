@@ -4,7 +4,11 @@ Terraform module for deploying [n8n](https://n8n.io) on AWS.
 
 Deploys the production-grade multi-main setup: multiple n8n main instances, dedicated worker pods, external PostgreSQL (RDS), Redis (ElastiCache), and S3 for shared file storage. An **n8n Enterprise license is required**.
 
-The module expects a pre-existing VPC. If your parent domain is hosted in Route53, pass `route53_zone_id` and the module will issue the ACM certificate and create the DNS alias record itself — a single `terraform apply` brings up n8n end to end with no manual DNS steps. If your DNS is elsewhere, pass a pre-validated `certificate_arn` instead. For a ready-to-run end-to-end deployment see [`examples/complete/`](./examples/complete/).
+The module expects a pre-existing VPC. If your parent domain is hosted in Route53, pass `route53_zone_id` and the module will issue the ACM certificate and create the DNS alias record itself — a single `terraform apply` brings up n8n end to end with no manual DNS steps. If your DNS is elsewhere, pass a pre-validated `certificate_arn` instead. End-to-end examples (including the VPC):
+
+- [`examples/complete/`](./examples/complete/) — Route 53
+- [`examples/cloudflare/`](./examples/cloudflare/) — Cloudflare DNS
+- [`examples/godaddy/`](./examples/godaddy/) — GoDaddy DNS
 
 ## Support
 
@@ -61,7 +65,7 @@ module "n8n" {
 
 The module declares `required_providers` but does **not** configure them. Callers must configure `aws`, `kubernetes`, and `helm` providers. `kubernetes` and `helm` are configured against the cluster this module creates — see [`examples/complete/providers.tf`](./examples/complete/providers.tf) for the standard wiring.
 
-For a full end-to-end example including the VPC, see [`examples/complete/`](./examples/complete/). If `terraform apply` fails on a `helm_release` (most often due to a Helm 4 cache layout issue or a webhook race on first install), see [`docs/troubleshooting.md`](./docs/troubleshooting.md).
+For a full end-to-end example including the VPC, see [`examples/complete/`](./examples/complete/) (Route 53), [`examples/cloudflare/`](./examples/cloudflare/), or [`examples/godaddy/`](./examples/godaddy/). If `terraform apply` fails on a `helm_release` (most often due to a Helm 4 cache layout issue or a webhook race on first install), see [`docs/troubleshooting.md`](./docs/troubleshooting.md).
 
 ## Reference
 
