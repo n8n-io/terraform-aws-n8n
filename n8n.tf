@@ -252,8 +252,13 @@ resource "helm_release" "n8n" {
           { name = "DB_POSTGRESDB_SSL_ENABLED", value = "false" },
         ],
         [
-          { name = "N8N_LOG_LEVEL", value = "info" },
-          { name = "N8N_LOG_OUTPUT", value = "json" },
+          { name = "N8N_LOG_LEVEL", value = var.n8n_log_level },
+          # N8N_LOG_OUTPUT controls *where* logs go (console / file), not their
+          # format. Setting it to anything other than "console" / "file" / a
+          # comma-separated combination leaves Winston without a transport, at
+          # which point every log line is replaced with a Winston warning and
+          # the actual logs are silently dropped. See variable description.
+          { name = "N8N_LOG_OUTPUT", value = var.n8n_log_output },
           { name = "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS", value = "true" },
           # Override the internally computed http://host:5678 URL so webhooks show the correct HTTPS address.
           { name = "WEBHOOK_URL", value = coalesce(var.n8n_webhook_url, "https://${local.n8n_domain}") },

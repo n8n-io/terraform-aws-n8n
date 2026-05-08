@@ -291,3 +291,63 @@ run "custom_namespace_propagates_to_s3_binding" {
     error_message = "S3 pod identity namespace should track var.namespace"
   }
 }
+
+# ── Logging variables ────────────────────────────────────────────────────────
+# N8N_LOG_OUTPUT was previously a hardcoded "json", which is not a valid value
+# (it controls log destinations, not format). With an invalid value Winston
+# attaches no transport and silently drops every log line. These tests pin the
+# corrected defaults and the validators that prevent the regression. The Helm
+# values blob itself is unknown at plan time under the helm mock provider, so
+# we assert at the variable contract level — n8n.tf wires both vars through
+# verbatim into the extraEnv list.
+
+run "log_defaults" {
+  command = plan
+
+  assert {
+    # Regression guard: the previous hardcoded value was "json". Anything other
+    # than a console/file combination here breaks logging entirely.
+    condition     = var.n8n_log_output == "console"
+    error_message = "n8n_log_output must default to 'console' — 'json' (the previous value) silently drops all logs."
+  }
+
+  assert {
+    condition     = var.n8n_log_level == "info"
+    error_message = "n8n_log_level must default to 'info'."
+  }
+}
+
+run "log_level_validator_rejects_invalid_value" {
+  command = plan
+
+  variables {
+    n8n_log_level = "trace"
+  }
+
+  expect_failures = [var.n8n_log_level]
+}
+
+run "log_output_validator_rejects_json" {
+  command = plan
+
+  variables {
+    # The original bug: "json" is not a valid N8N_LOG_OUTPUT value. The
+    # validator must catch this at plan time so the regression cannot recur.
+    n8n_log_output = "json"
+  }
+
+  expect_failures = [var.n8n_log_output]
+}
+
+run "log_output_accepts_console_and_file_combination" {
+  command = plan
+
+  variables {
+    n8n_log_output = "console,file"
+  }
+
+  assert {
+    condition     = var.n8n_log_output == "console,file"
+    error_message = "n8n_log_output validator should accept comma-separated console,file."
+  }
+}
