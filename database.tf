@@ -34,8 +34,12 @@ resource "aws_security_group" "rds" {
 # ── Subnet group ──────────────────────────────────────────────────────────────
 # RDS must be placed in private subnets. We need at least two subnets in
 # different AZs for Multi-AZ support.
+# Skipped when create_database = false — the caller manages its own subnet
+# group (e.g. for an Aurora cluster created in the example folder).
 
 resource "aws_db_subnet_group" "n8n" {
+  count = var.create_database ? 1 : 0
+
   name       = "n8n-db-subnet-group-${local.cluster_name}"
   subnet_ids = local.private_subnets
 
@@ -43,8 +47,13 @@ resource "aws_db_subnet_group" "n8n" {
 }
 
 # ── RDS PostgreSQL instance ───────────────────────────────────────────────────
+# Skipped when create_database = false — the caller provides an external
+# database (e.g. Amazon Aurora). n8n.tf uses db_host / db_password directly
+# in that case.
 
 resource "aws_db_instance" "n8n" {
+  count = var.create_database ? 1 : 0
+
   identifier        = "n8n-postgres-${local.cluster_name}"
   engine            = "postgres"
   engine_version    = "16.3"
@@ -55,7 +64,7 @@ resource "aws_db_instance" "n8n" {
   username = "n8n"
   password = random_password.db_password.result
 
-  db_subnet_group_name    = aws_db_subnet_group.n8n.name
+  db_subnet_group_name    = aws_db_subnet_group.n8n[0].name
   vpc_security_group_ids  = [aws_security_group.rds.id]
   publicly_accessible     = false
   multi_az                = var.db_multi_az

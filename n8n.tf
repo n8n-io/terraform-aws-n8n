@@ -53,7 +53,8 @@ resource "kubernetes_secret" "n8n_db" {
   }
 
   data = {
-    password = random_password.db_password.result
+    # Use caller-supplied password when an external DB is provided, otherwise use the generated one.
+    password = var.create_database ? random_password.db_password.result : var.db_password
   }
 }
 
@@ -66,7 +67,7 @@ resource "helm_release" "n8n" {
   version         = var.n8n_chart_version
   namespace       = kubernetes_namespace.n8n.metadata[0].name
   wait            = true
-  timeout         = 600
+  timeout         = var.n8n_helm_timeout
   atomic          = true
   cleanup_on_fail = true
 
@@ -99,11 +100,13 @@ resource "helm_release" "n8n" {
     database = {
       type        = "postgresdb"
       useExternal = true
-      host        = aws_db_instance.n8n.address
-      port        = 5432
-      database    = "n8n_enterprise"
-      schema      = "public"
-      user        = "n8n"
+      # Module-managed RDS when create_database = true, otherwise the caller-supplied
+      # db_host (which may point at an external DB or an in-cluster connection pooler).
+      host     = var.create_database ? aws_db_instance.n8n[0].address : var.db_host
+      port     = 5432
+      database = "n8n_enterprise"
+      schema   = "public"
+      user     = "n8n"
       passwordSecret = {
         name = kubernetes_secret.n8n_db.metadata[0].name
         key  = "password"
@@ -238,17 +241,29 @@ resource "helm_release" "n8n" {
 
     config = {
       timezone = var.n8n_timezone
-      extraEnv = [
-        { name = "N8N_LOG_LEVEL", value = "info" },
-        { name = "N8N_LOG_OUTPUT", value = "json" },
-        { name = "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS", value = "true" },
-        { name = "DB_POSTGRESDB_SSL_ENABLED", value = "true" },
-        # RDS uses an AWS CA not trusted by Node.js — safe to disable within the VPC
-        { name = "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED", value = "false" },
-        # Override the internally computed http://host:5678 URL so webhooks show the correct HTTPS address
-        { name = "WEBHOOK_URL", value = coalesce(var.n8n_webhook_url, "https://${local.n8n_domain}") },
-        { name = "N8N_RUNNERS_TASK_REQUEST_TIMEOUT", value = tostring(var.n8n_runners_task_request_timeout) },
-      ]
+      extraEnv = concat(
+        # Direct connections to RDS/Aurora use SSL with the AWS CA (not trusted by Node.js — safe
+        # to skip cert verification within the VPC). Set db_postgresdb_ssl_enabled = false when
+        # n8n's DB host is an in-cluster pooler (e.g. PgBouncer) that handles SSL on its upstream leg.
+        var.db_postgresdb_ssl_enabled ? [
+          { name = "DB_POSTGRESDB_SSL_ENABLED", value = "true" },
+          { name = "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED", value = "false" },
+          ] : [
+          { name = "DB_POSTGRESDB_SSL_ENABLED", value = "false" },
+        ],
+        [
+          { name = "N8N_LOG_LEVEL", value = "info" },
+          { name = "N8N_LOG_OUTPUT", value = "json" },
+          { name = "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS", value = "true" },
+          # Override the internally computed http://host:5678 URL so webhooks show the correct HTTPS address.
+          { name = "WEBHOOK_URL", value = coalesce(var.n8n_webhook_url, "https://${local.n8n_domain}") },
+          { name = "N8N_RUNNERS_TASK_REQUEST_TIMEOUT", value = tostring(var.n8n_runners_task_request_timeout) },
+          # Keeps ElastiCache from dropping idle Redis subscriber connections under sustained load.
+          # Without this, Bull detects dropped connections, emits queue errors, and pods crash.
+          { name = "QUEUE_BULL_REDIS_KEEP_ALIVE", value = "true" },
+          { name = "DB_POSTGRESDB_POOL_SIZE", value = tostring(var.db_postgresdb_pool_size) },
+        ]
+      )
     }
 
     # ── Graceful shutdown ─────────────────────────────────────────────────────
@@ -314,7 +329,7 @@ resource "helm_release" "n8n" {
   depends_on = [
     helm_release.lbc,
     helm_release.keda,
-    aws_db_instance.n8n,
+    aws_db_instance.n8n, # no-op (empty list) when create_database = false
     aws_elasticache_cluster.n8n,
     aws_iam_role_policy_attachment.s3,
     aws_eks_pod_identity_association.s3,

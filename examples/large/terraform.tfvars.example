@@ -1,0 +1,31 @@
+# Copy this file to terraform.tfvars and fill in your values.
+
+# Fully-qualified domain for n8n. The parent zone must be hosted in Route53.
+n8n_domain = "n8n.example.com"
+
+# Route53 hosted zone ID for the parent domain (e.g. example.com).
+# aws route53 list-hosted-zones --query "HostedZones[?Name=='example.com.'].Id" --output text
+route53_zone_id = "ZXXXXXXXXXXXXXXXXX"
+
+# n8n Enterprise license activation key. Get one at https://n8n.io/pricing.
+n8n_license_key = "your-license-key-here"
+
+# AWS region. Change if deploying outside us-east-1.
+# aws_region = "eu-west-1"
+
+# EKS cluster name. Keep to 14 characters or fewer.
+cluster_name = "n8n-large"
+
+# Aurora instance class for the writer and reader.
+# db.r6g.8xlarge is the class validated for this example's target throughput
+# of ~50–60+M executions/day (~$5,600/month per instance). Scale down for
+# lower throughput targets:
+#   db.r6g.4xlarge  ~$2,800/month  suitable for ~30–40M executions/day
+#   db.r6g.8xlarge  ~$5,600/month  validated for ~50–60+M executions/day
+aurora_instance_class = "db.r6g.8xlarge"
+
+# Extra AWS tags applied to every resource this example creates.
+tags = {
+  Environment = "production"
+  Owner       = "your-team"
+}

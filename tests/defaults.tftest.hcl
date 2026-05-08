@@ -93,38 +93,58 @@ run "rds_hardened_defaults" {
   command = plan
 
   assert {
-    condition     = aws_db_instance.n8n.engine == "postgres"
+    condition     = aws_db_instance.n8n[0].engine == "postgres"
     error_message = "RDS engine should be postgres"
   }
 
   assert {
-    condition     = aws_db_instance.n8n.engine_version == "16.3"
+    condition     = aws_db_instance.n8n[0].engine_version == "16.3"
     error_message = "RDS engine_version should be pinned to 16.3"
   }
 
   assert {
-    condition     = aws_db_instance.n8n.instance_class == "db.t3.small"
+    condition     = aws_db_instance.n8n[0].instance_class == "db.t3.small"
     error_message = "db_instance_class should default to db.t3.small"
   }
 
   assert {
-    condition     = aws_db_instance.n8n.allocated_storage == 50
+    condition     = aws_db_instance.n8n[0].allocated_storage == 50
     error_message = "db_allocated_storage should default to 50 GB"
   }
 
   assert {
-    condition     = aws_db_instance.n8n.multi_az == true
+    condition     = aws_db_instance.n8n[0].multi_az == true
     error_message = "db_multi_az should default to true — HA is the point of the multi template"
   }
 
   assert {
-    condition     = aws_db_instance.n8n.publicly_accessible == false
+    condition     = aws_db_instance.n8n[0].publicly_accessible == false
     error_message = "RDS must NOT be publicly accessible"
   }
 
   assert {
-    condition     = aws_db_instance.n8n.backup_retention_period >= 7
+    condition     = aws_db_instance.n8n[0].backup_retention_period >= 7
     error_message = "RDS backup retention must be >= 7 days"
+  }
+}
+
+run "external_db_skips_rds_instance" {
+  command = plan
+
+  variables {
+    create_database = false
+    db_host         = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password     = "external-db-password"
+  }
+
+  assert {
+    condition     = length(aws_db_instance.n8n) == 0
+    error_message = "No RDS instance should be created when create_database = false"
+  }
+
+  assert {
+    condition     = length(aws_db_subnet_group.n8n) == 0
+    error_message = "No RDS subnet group should be created when create_database = false"
   }
 }
 
@@ -243,12 +263,12 @@ run "custom_database_sizing" {
   }
 
   assert {
-    condition     = aws_db_instance.n8n.instance_class == "db.r6g.large"
+    condition     = aws_db_instance.n8n[0].instance_class == "db.r6g.large"
     error_message = "db_instance_class variable did not propagate"
   }
 
   assert {
-    condition     = aws_db_instance.n8n.allocated_storage == 200
+    condition     = aws_db_instance.n8n[0].allocated_storage == 200
     error_message = "db_allocated_storage variable did not propagate"
   }
 }
