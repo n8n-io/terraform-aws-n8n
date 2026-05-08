@@ -98,8 +98,8 @@ run "rds_hardened_defaults" {
   }
 
   assert {
-    condition     = aws_db_instance.n8n[0].engine_version == "16.3"
-    error_message = "RDS engine_version should be pinned to 16.3"
+    condition     = aws_db_instance.n8n[0].engine_version == "16.9"
+    error_message = "RDS engine_version should default to 16.9 (var.db_engine_version)"
   }
 
   assert {
@@ -260,6 +260,7 @@ run "custom_database_sizing" {
     db_instance_class    = "db.r6g.large"
     db_allocated_storage = 200
     db_multi_az          = true
+    db_engine_version    = "16.13"
   }
 
   assert {
@@ -270,6 +271,11 @@ run "custom_database_sizing" {
   assert {
     condition     = aws_db_instance.n8n[0].allocated_storage == 200
     error_message = "db_allocated_storage variable did not propagate"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].engine_version == "16.13"
+    error_message = "db_engine_version variable did not propagate to aws_db_instance.engine_version"
   }
 }
 

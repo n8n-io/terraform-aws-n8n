@@ -72,7 +72,7 @@ resource "aws_db_instance" "n8n" {
 
   identifier        = "n8n-postgres-${local.cluster_name}"
   engine            = "postgres"
-  engine_version    = "16.3"
+  engine_version    = var.db_engine_version
   instance_class    = var.db_instance_class
   allocated_storage = var.db_allocated_storage
 

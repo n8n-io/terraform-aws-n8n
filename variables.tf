@@ -397,6 +397,17 @@ variable "db_instance_class" {
   }
 }
 
+variable "db_engine_version" {
+  description = "PostgreSQL engine version for the RDS instance. Must be a version available from `aws rds describe-db-engine-versions --engine postgres` in the target region — RDS deprecates and removes minor versions over time, and supported versions vary by region. Bump as needed without forking."
+  type        = string
+  default     = "16.9"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+$", var.db_engine_version))
+    error_message = "db_engine_version must be of the form MAJOR.MINOR (e.g. 16.9)."
+  }
+}
+
 variable "db_multi_az" {
   description = "Deploy RDS in Multi-AZ mode for automatic failover (recommended for production)"
   type        = bool
