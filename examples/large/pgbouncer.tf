@@ -17,8 +17,15 @@
 #     tags against current PgBouncer releases.
 #   - Transaction mode confirmed compatible with n8n's TypeORM (no prepared
 #     statements or LISTEN/NOTIFY that would force session mode).
-#   - Two replicas with preferred anti-affinity survive a node failure
-#     without a thundering-herd reconnect from all n8n pods at once.
+#   - Two replicas with REQUIRED pod anti-affinity guarantee placement on
+#     two distinct nodes (a `preferred` rule was observed losing the race
+#     against node-group startup ordering, co-locating both replicas on the
+#     first Ready node — a single-node failure would then have taken out
+#     all n8n DB traffic). A PodDisruptionBudget with min_available=1
+#     keeps at least one replica up during voluntary node drains.
+#   - With required anti-affinity, the second replica stays Pending until a
+#     second node is Ready (typically <60s); the deployment as a whole is
+#     never blocked.
 #   - n8n connects over plain TCP (in-cluster); PgBouncer terminates SSL on
 #     its upstream leg to Aurora.
 #   - AUTH_TYPE=plain stores the plaintext password in userlist.txt so
@@ -80,14 +87,11 @@ resource "kubernetes_deployment" "pgbouncer" {
       spec {
         affinity {
           pod_anti_affinity {
-            preferred_during_scheduling_ignored_during_execution {
-              weight = 100
-              pod_affinity_term {
-                label_selector {
-                  match_labels = { app = "pgbouncer" }
-                }
-                topology_key = "kubernetes.io/hostname"
+            required_during_scheduling_ignored_during_execution {
+              label_selector {
+                match_labels = { app = "pgbouncer" }
               }
+              topology_key = "kubernetes.io/hostname"
             }
           }
         }
@@ -168,6 +172,23 @@ resource "kubernetes_deployment" "pgbouncer" {
           }
         }
       }
+    }
+  }
+}
+
+# PodDisruptionBudget so voluntary node drains can never take both pgbouncer
+# replicas down at the same time. min_available=1 with 2 replicas means at
+# most one can be evicted at a time; drains will wait if both are healthy.
+resource "kubernetes_pod_disruption_budget_v1" "pgbouncer" {
+  metadata {
+    name      = "pgbouncer"
+    namespace = kubernetes_namespace.pgbouncer.metadata[0].name
+  }
+
+  spec {
+    min_available = 1
+    selector {
+      match_labels = { app = "pgbouncer" }
     }
   }
 }
