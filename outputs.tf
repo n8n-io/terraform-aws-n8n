@@ -23,16 +23,16 @@ output "n8n_encryption_key" {
 }
 
 output "db_password" {
-  description = "RDS PostgreSQL password — back this up in a password manager."
-  value       = random_password.db_password.result
+  description = "Database password — module-managed when create_database = true, or the value of var.db_password when using an external database. Retrieve with: terraform output -raw db_password"
+  value       = var.create_database ? random_password.db_password.result : var.db_password
   sensitive   = true
 }
 
 # ── Infrastructure ─────────────────────────────────────────────────────────────
 
 output "rds_endpoint" {
-  description = "RDS PostgreSQL endpoint"
-  value       = aws_db_instance.n8n.address
+  description = "Database endpoint — module-managed RDS when create_database = true, or the value of var.db_host when using an external database (e.g. Aurora)."
+  value       = var.create_database ? aws_db_instance.n8n[0].address : var.db_host
 }
 
 output "redis_endpoint" {

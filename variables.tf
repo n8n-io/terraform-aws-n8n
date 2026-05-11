@@ -182,6 +182,17 @@ variable "n8n_chart_version" {
   default     = "1.4.0"
 }
 
+variable "n8n_helm_timeout" {
+  description = "Seconds Terraform waits for the n8n Helm release to converge. Increase for large deployments where rolling out 50+ pods (workers + webhook processors + main) exceeds the default. 600s is fine for the default/medium examples; large deployments at 250+ pods need ~1800s."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.n8n_helm_timeout >= 60
+    error_message = "n8n_helm_timeout must be at least 60 seconds."
+  }
+}
+
 variable "n8n_timezone" {
   description = "Timezone for n8n (e.g. UTC, America/New_York, Europe/London)"
   type        = string
@@ -401,6 +412,42 @@ variable "db_allocated_storage" {
     condition     = var.db_allocated_storage >= 20
     error_message = "RDS allocated storage must be at least 20 GB."
   }
+}
+
+variable "create_database" {
+  description = "When true (the default), the module creates and manages an Amazon RDS PostgreSQL instance. Set to false to use an external database (e.g. Amazon Aurora created by the caller) — db_host and db_password must then be supplied. Kept as a static boolean rather than `db_host == null` because count expressions cannot depend on values computed at apply time."
+  type        = bool
+  default     = true
+}
+
+variable "db_host" {
+  description = "External database host. Required when create_database = false. Ignored otherwise. Use this to pass in an Amazon Aurora cluster endpoint or any external PostgreSQL host."
+  type        = string
+  default     = null
+}
+
+variable "db_password" {
+  description = "Password for the external database specified by db_host. Required when create_database = false. Ignored otherwise (the module generates a random password for its managed RDS instance)."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "db_postgresdb_pool_size" {
+  description = "Number of TypeORM connection pool slots per n8n pod. Each pod holds this many persistent PostgreSQL connections. Rule of thumb: pool_size >= worker_concurrency / 4. With PgBouncer in transaction mode a lower value (5) is sufficient; without PgBouncer use a value matching concurrency (10-20)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.db_postgresdb_pool_size >= 1
+    error_message = "db_postgresdb_pool_size must be at least 1."
+  }
+}
+
+variable "db_postgresdb_ssl_enabled" {
+  description = "Whether n8n connects to the database over SSL. Set to true (the default) for direct connections to RDS or Aurora — they use the AWS CA which Node.js doesn't trust by default, so the connection still negotiates SSL but skips certificate verification. Set to false when n8n connects to an in-cluster connection pooler (e.g. PgBouncer) that handles SSL on its upstream leg — the pod-to-pod traffic stays inside the cluster network."
+  type        = bool
+  default     = true
 }
 
 # ── ElastiCache Redis ──────────────────────────────────────────────────────────
