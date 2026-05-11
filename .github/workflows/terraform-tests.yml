@@ -69,13 +69,21 @@ jobs:
         working-directory: examples/godaddy
         run: terraform-docs --output-check .
 
+      - name: terraform-docs --output-check (examples/medium)
+        working-directory: examples/medium
+        run: terraform-docs --output-check .
+
+      - name: terraform-docs --output-check (examples/large)
+        working-directory: examples/large
+        run: terraform-docs --output-check .
+
   validate:
     name: terraform validate (${{ matrix.target }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy"]
+        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large"]
     steps:
       - uses: actions/checkout@v4
 
@@ -107,7 +115,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy"]
+        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large"]
     steps:
       - uses: actions/checkout@v4
 
@@ -129,7 +137,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy"]
+        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large"]
     steps:
       - uses: actions/checkout@v4
 
