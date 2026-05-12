@@ -99,6 +99,21 @@ kubectl rollout status deployment/n8n-worker deployment/n8n-webhook-processor \
 2. Restart PgBouncer once (`kubectl rollout restart deployment/pgbouncer`) to drop ghost Aurora connections.
 3. If still stuck: scale all n8n pods to 0, wait for Aurora to show <10 connections, then scale back up.
 
+## Production considerations
+
+This example is a reference deployment optimized for clean `apply` / `destroy` cycles during evaluation and load testing. Before promoting it to production, review and flip the teardown-friendly defaults baked into both this example and the underlying module:
+
+| Where | Setting | Current | Production |
+|---|---|---|---|
+| `examples/large/aurora.tf` | `aws_rds_cluster.n8n.deletion_protection` | `false` | `true` |
+| `examples/large/aurora.tf` | `aws_rds_cluster.n8n.skip_final_snapshot` | `true` | `false`, plus set `final_snapshot_identifier` |
+| Module `database.tf` (unused here; Aurora replaces it) | `aws_db_instance.n8n.skip_final_snapshot` | `true` | `false` |
+| Module `s3.tf` | `aws_s3_bucket.n8n.force_destroy` | `true` | `false` |
+
+The Aurora cluster also carries a `# checkov:skip=CKV_AWS_139` annotation that should be removed once `deletion_protection = true` is set. The annotation exists specifically because flipping the default would break this example's documented `terraform destroy` flow, not because the underlying check is wrong.
+
+The S3 `force_destroy` setting lives in the module and is not currently exposed as a variable; for production you would wrap or fork the module to override it.
+
 ## Reference
 
 <!-- BEGIN_TF_DOCS -->
