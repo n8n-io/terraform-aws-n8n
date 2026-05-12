@@ -70,12 +70,12 @@ resource "aws_rds_cluster" "n8n" {
   # export to CloudWatch (CKV_AWS_324) round out the baseline so a new resource
   # does not regress curated findings. copy_tags_to_snapshot (CKV_AWS_313)
   # propagates the existing tag set onto automated + manual snapshots.
-  # CKV_AWS_327 (encrypt with a customer-managed KMS key rather than the
-  # AWS-managed `aws/rds` key) is intentionally deferred — tracked as a
-  # follow-up alongside the other still-failing Aurora findings: instance-
-  # level CKV_AWS_354 (PI CMK) / CKV_AWS_118 (enhanced monitoring), cluster-
-  # level CKV_AWS_139 (deletion_protection — see checkov:skip annotation),
-  # and log-group CKV_AWS_158.
+  # All remaining deferred findings are CMK-encryption work tracked as a
+  # single follow-up: cluster-level CKV_AWS_327, instance-level CKV_AWS_354
+  # (PI CMK on writer + reader), and log-group CKV_AWS_158 — the same
+  # aws_kms_key resource will satisfy all three. CKV_AWS_139 (deletion
+  # protection) is the only other unresolved finding and is intentionally
+  # skipped via a checkov:skip annotation on the cluster (see below).
   storage_encrypted                   = true
   iam_database_authentication_enabled = true
   enabled_cloudwatch_logs_exports     = ["postgresql"]
@@ -112,6 +112,33 @@ resource "aws_cloudwatch_log_group" "aurora_postgresql" {
   tags = merge(local.common_tags, { Name = "${var.cluster_name}-aurora-postgresql-logs" })
 }
 
+# ── Enhanced Monitoring IAM role ──────────────────────────────────────────────
+# RDS Enhanced Monitoring writes OS-level metrics (CPU steal, swap, per-process
+# activity, IOPS depth) to CloudWatch Logs at a configurable cadence. 60-second
+# granularity is the AWS-recommended default for production and the cheapest
+# billable interval; sub-60s costs scale with CloudWatch Logs ingestion volume.
+# Shared by writer + reader.
+
+resource "aws_iam_role" "rds_enhanced_monitoring" {
+  name = "${var.cluster_name}-rds-monitoring"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "monitoring.rds.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = merge(local.common_tags, { Name = "${var.cluster_name}-rds-monitoring" })
+}
+
+resource "aws_iam_role_policy_attachment" "rds_enhanced_monitoring" {
+  role       = aws_iam_role.rds_enhanced_monitoring.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
+}
+
 resource "aws_rds_cluster_instance" "writer" {
   identifier         = "${var.cluster_name}-writer"
   cluster_identifier = aws_rds_cluster.n8n.id
@@ -131,6 +158,11 @@ resource "aws_rds_cluster_instance" "writer" {
   # — tracked alongside the cluster-level CKV_AWS_327 CMK follow-up.
   performance_insights_enabled          = true
   performance_insights_retention_period = 7
+
+  # CKV_AWS_118: RDS Enhanced Monitoring at the 60-second AWS-recommended
+  # cadence. See the aws_iam_role.rds_enhanced_monitoring resource above.
+  monitoring_interval = 60
+  monitoring_role_arn = aws_iam_role.rds_enhanced_monitoring.arn
 
   lifecycle {
     ignore_changes = [engine_version]
@@ -158,6 +190,11 @@ resource "aws_rds_cluster_instance" "reader" {
   # — tracked alongside the cluster-level CKV_AWS_327 CMK follow-up.
   performance_insights_enabled          = true
   performance_insights_retention_period = 7
+
+  # CKV_AWS_118: RDS Enhanced Monitoring at the 60-second AWS-recommended
+  # cadence. See the aws_iam_role.rds_enhanced_monitoring resource above.
+  monitoring_interval = 60
+  monitoring_role_arn = aws_iam_role.rds_enhanced_monitoring.arn
 
   lifecycle {
     ignore_changes = [engine_version]
