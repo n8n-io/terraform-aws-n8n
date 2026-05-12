@@ -542,6 +542,12 @@ else
     pass "/healthz returned HTTP $healthz_status"
   elif [[ "$healthz_status" == "000" ]]; then
     fail "/healthz — connection failed (timeout or DNS error)"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      info "On macOS, a recent destroy + re-apply against the same FQDN often"
+      info "leaves mDNSResponder serving the destroy-phase NXDOMAIN for 5-15 min."
+      info "Fix: sudo killall -HUP mDNSResponder"
+      info "Details: docs/troubleshooting.md → 'Smoke test reports HTTP 000'"
+    fi
   else
     fail "/healthz returned HTTP $healthz_status (expected 200)"
   fi
