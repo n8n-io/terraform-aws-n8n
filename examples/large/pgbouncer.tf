@@ -97,8 +97,12 @@ resource "kubernetes_deployment" "pgbouncer" {
         }
 
         container {
-          name  = "pgbouncer"
-          image = "edoburu/pgbouncer:v1.23.1-p3"
+          name = "pgbouncer"
+          # Pinned to the multi-arch image-index digest so a re-tag upstream
+          # cannot silently change what we deploy. Keep the tag for human
+          # readability; the @sha256:... suffix is the immutable contract.
+          # Refresh both together when bumping the PgBouncer version.
+          image = "edoburu/pgbouncer:v1.23.1-p3@sha256:377dec3c0e4a66a1077ec043e16a26ed5702a6d954011a7983a1457c2e070b1d"
 
           port {
             container_port = 5432
