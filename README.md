@@ -6,7 +6,7 @@ Deploys the production-grade multi-main setup: multiple n8n main instances, dedi
 
 The module expects a pre-existing VPC. If your parent domain is hosted in Route53, pass `route53_zone_id` and the module will issue the ACM certificate and create the DNS alias record itself — a single `terraform apply` brings up n8n end to end with no manual DNS steps. If your DNS is elsewhere, pass a pre-validated `certificate_arn` instead. End-to-end examples (including the VPC):
 
-- [`examples/complete/`](./examples/complete/) — Route 53
+- [`examples/small/`](./examples/small/) — Route 53
 - [`examples/cloudflare/`](./examples/cloudflare/) — Cloudflare DNS
 - [`examples/godaddy/`](./examples/godaddy/) — GoDaddy DNS
 
@@ -63,15 +63,15 @@ module "n8n" {
 }
 ```
 
-The module declares `required_providers` but does **not** configure them. Callers must configure `aws`, `kubernetes`, and `helm` providers. `kubernetes` and `helm` are configured against the cluster this module creates — see [`examples/complete/providers.tf`](./examples/complete/providers.tf) for the standard wiring.
+The module declares `required_providers` but does **not** configure them. Callers must configure `aws`, `kubernetes`, and `helm` providers. `kubernetes` and `helm` are configured against the cluster this module creates — see [`examples/small/providers.tf`](./examples/small/providers.tf) for the standard wiring.
 
-For a full end-to-end example including the VPC, see [`examples/complete/`](./examples/complete/) (Route 53), [`examples/cloudflare/`](./examples/cloudflare/), or [`examples/godaddy/`](./examples/godaddy/). If `terraform apply` fails on a `helm_release` (most often due to a Helm 4 cache layout issue or a webhook race on first install), see [`docs/troubleshooting.md`](./docs/troubleshooting.md).
+For a full end-to-end example including the VPC, see [`examples/small/`](./examples/small/) (Route 53), [`examples/cloudflare/`](./examples/cloudflare/), or [`examples/godaddy/`](./examples/godaddy/). If `terraform apply` fails on a `helm_release` (most often due to a Helm 4 cache layout issue or a webhook race on first install), see [`docs/troubleshooting.md`](./docs/troubleshooting.md).
 
 ## Examples
 
 Three runnable examples ship with the module, each tuned for a different operational scale. Sizing decisions for `medium` and `large` are derived from internal load testing.
 
-| Dimension | [complete](./examples/complete/) (default) | [medium](./examples/medium/) | [large](./examples/large/) |
+| Dimension | [small](./examples/small/) (default) | [medium](./examples/medium/) | [large](./examples/large/) |
 |---|---|---|---|
 | Target scale | Dev / small team | ~5–15M exec/day | ~50–60+M exec/day |
 | Avg req/s | ~10–30 | ~60–175 | ~350–960 |
@@ -96,7 +96,7 @@ Three runnable examples ship with the module, each tuned for a different operati
 | Est. cost / month (on-demand) | ~$440 | ~$2,000 | ~$21,000+ |
 | Est. cost / month (1-yr reserved) | ~$285 | ~$1,300 | ~$13,600 |
 
-The DNS-variant examples (`cloudflare`, `godaddy`) are sizing-equivalent to `complete` — they only swap the DNS provider for cert validation and the alias record.
+The DNS-variant examples (`cloudflare`, `godaddy`) are sizing-equivalent to `small` — they only swap the DNS provider for cert validation and the alias record.
 
 ## Reference
 
