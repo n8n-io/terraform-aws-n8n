@@ -11,8 +11,30 @@
 # The module-managed RDS instance is skipped (db_host is set in main.tf).
 
 resource "random_password" "aurora" {
-  length           = 24
-  special          = true
+  length  = 24
+  special = true
+
+  # override_special intentionally includes URL-reserved characters (`:` `?`
+  # `#` `&` `=` `+` `(` `)` `*` `!` `$` `[` `]`, plus `%` which is the URI
+  # percent-encoding escape character itself). These are safe in the current
+  # data flow:
+  #
+  #   random_password.aurora.result
+  #     → master_password on aws_rds_cluster.n8n (AWS API, not URL)
+  #     → kubernetes_secret.pgbouncer DB_PASSWORD field (binary data)
+  #     → DB_PASSWORD env var on the pgbouncer container
+  #     → pgbouncer's userlist.txt (newline-delimited, not URL-parsed)
+  #     → module.n8n.db_password (passed verbatim to n8n via env)
+  #
+  # None of those paths parse the password as a URI, so the broader character
+  # set gives stronger entropy without operational risk today.
+  #
+  # If a future maintainer plumbs this password into a `postgres://` connection
+  # URI (for example, exposing a JDBC URL output or wiring it through a tool
+  # that builds the URL itself), the URL-reserved characters must either be
+  # percent-encoded by the caller or trimmed from this override_special set.
+  # The URL-safe subset of the current characters is just `-_`; anything else
+  # would need encoding.
   override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
