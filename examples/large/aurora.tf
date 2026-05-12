@@ -67,10 +67,13 @@ resource "aws_rds_cluster" "n8n" {
   # encrypted at rest"), which is Registry table-stakes for any new RDS-family
   # resource. IAM database authentication (CKV_AWS_162) and postgresql log
   # export to CloudWatch (CKV_AWS_354) round out the baseline so a new resource
-  # does not regress curated findings. CKV_AWS_327 (encrypt with a customer
-  # managed KMS key rather than the AWS-managed `aws/rds` key) is intentionally
-  # deferred — tracked as a follow-up alongside the still-failing instance-
-  # level Aurora findings (353 / 226 / 118) and CKV_AWS_313 / CKV_AWS_139.
+  # does not regress curated findings. copy_tags_to_snapshot (CKV_AWS_313)
+  # propagates the existing tag set onto automated + manual snapshots.
+  # CKV_AWS_327 (encrypt with a customer-managed KMS key rather than the
+  # AWS-managed `aws/rds` key) is intentionally deferred — tracked as a
+  # follow-up alongside the other still-failing Aurora findings: instance-
+  # level CKV_AWS_353 / CKV_AWS_118, cluster-level CKV_AWS_139, and log-group
+  # CKV_AWS_158.
   storage_encrypted                   = true
   iam_database_authentication_enabled = true
   enabled_cloudwatch_logs_exports     = ["postgresql"]
@@ -78,10 +81,20 @@ resource "aws_rds_cluster" "n8n" {
   backup_retention_period = 7
   skip_final_snapshot     = true
   deletion_protection     = false
+  copy_tags_to_snapshot   = true
 
   # Ensure the log group exists (with our retention) before RDS would otherwise
   # auto-create it at "Never expire".
   depends_on = [aws_cloudwatch_log_group.aurora_postgresql]
+
+  lifecycle {
+    # auto_minor_version_upgrade = true on the instances lets AWS bump the
+    # engine version during the maintenance window (clears CKV_AWS_226). Ignore
+    # the resulting drift here so the next `terraform apply` doesn't try to
+    # downgrade back to the originally-pinned engine_version — Aurora does
+    # not support minor-version downgrades and the apply would fail.
+    ignore_changes = [engine_version]
+  }
 
   tags = merge(local.common_tags, { Name = "${var.cluster_name}-aurora" })
 }
@@ -104,6 +117,15 @@ resource "aws_rds_cluster_instance" "writer" {
   engine             = aws_rds_cluster.n8n.engine
   engine_version     = aws_rds_cluster.n8n.engine_version
 
+  # CKV_AWS_226: pick up Aurora-PostgreSQL minor releases during the maintenance
+  # window. See the cluster's lifecycle.ignore_changes above — it also covers
+  # the instances, since AWS upgrades them in lockstep with the cluster.
+  auto_minor_version_upgrade = true
+
+  lifecycle {
+    ignore_changes = [engine_version]
+  }
+
   tags = merge(local.common_tags, { Name = "${var.cluster_name}-writer" })
 }
 
@@ -113,6 +135,15 @@ resource "aws_rds_cluster_instance" "reader" {
   instance_class     = var.aurora_instance_class
   engine             = aws_rds_cluster.n8n.engine
   engine_version     = aws_rds_cluster.n8n.engine_version
+
+  # CKV_AWS_226: pick up Aurora-PostgreSQL minor releases during the maintenance
+  # window. See the cluster's lifecycle.ignore_changes above — it also covers
+  # the instances, since AWS upgrades them in lockstep with the cluster.
+  auto_minor_version_upgrade = true
+
+  lifecycle {
+    ignore_changes = [engine_version]
+  }
 
   tags = merge(local.common_tags, { Name = "${var.cluster_name}-reader" })
 }
