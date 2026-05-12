@@ -176,6 +176,78 @@ run "rds_hardened_defaults" {
     condition     = aws_cloudwatch_log_group.rds_postgresql[0].retention_in_days == 365
     error_message = "RDS postgresql log group must have retention pinned (default would be 'Never expire'; clears CKV_AWS_338)"
   }
+
+  # ── CMK encryption (CKV_AWS_16 + CKV_AWS_354 + CKV_AWS_158) ──────────────
+  # A single CMK encrypts the RDS storage, Performance Insights data, and the
+  # postgresql log group. Mirrors the Aurora pattern (PR #13).
+
+  assert {
+    condition     = aws_db_instance.n8n[0].storage_encrypted == true
+    error_message = "RDS storage_encrypted must default to true so new deployments get CMK encryption out of the box (clears CKV_AWS_16)"
+  }
+
+  assert {
+    condition     = length(aws_kms_key.db) == 1
+    error_message = "Module must create a CMK when db_storage_encrypted = true (the default)"
+  }
+
+  assert {
+    condition     = aws_kms_key.db[0].enable_key_rotation == true
+    error_message = "CMK key rotation must be enabled — annual rotation is the AWS-recommended default and requires no ongoing operator action"
+  }
+
+  # ARN-linkage between aws_kms_key.db[0].arn and its three consumers
+  # (aws_db_instance.kms_key_id, performance_insights_kms_key_id, and the
+  # postgresql log group's kms_key_id) is verified by the live-apply step
+  # documented in README.md → "Upgrading from a pre-CMK apply" rather than at
+  # plan time — the ARN is computed and would require terraform >= 1.11's
+  # `override_during = plan` to assert against under the mock provider, which
+  # exceeds the module's `required_version = ">= 1.9"` floor.
+}
+
+run "db_storage_encrypted_false_skips_cmk" {
+  command = plan
+
+  variables {
+    db_storage_encrypted = false
+  }
+
+  assert {
+    condition     = length(aws_kms_key.db) == 0
+    error_message = "Setting db_storage_encrypted = false must skip CMK creation so existing unencrypted deployments see no plan change"
+  }
+
+  assert {
+    condition     = length(aws_kms_alias.db) == 0
+    error_message = "Setting db_storage_encrypted = false must also skip the KMS alias"
+  }
+
+  # storage_encrypted explicitly false on the instance — preserves prior
+  # unencrypted behavior on existing applies (no surprise replacement).
+  assert {
+    condition     = aws_db_instance.n8n[0].storage_encrypted == false
+    error_message = "With db_storage_encrypted = false, aws_db_instance.storage_encrypted must also be false so existing unencrypted deployments see no plan change"
+  }
+}
+
+run "external_db_skips_cmk_too" {
+  command = plan
+
+  variables {
+    create_database = false
+    db_host         = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password     = "external-db-password"
+  }
+
+  assert {
+    condition     = length(aws_kms_key.db) == 0
+    error_message = "With create_database = false there is no module-managed RDS to encrypt; the CMK must not be created"
+  }
+
+  assert {
+    condition     = length(aws_kms_alias.db) == 0
+    error_message = "With create_database = false the alias must also be skipped"
+  }
 }
 
 run "external_db_skips_rds_instance" {
