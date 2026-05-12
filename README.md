@@ -69,7 +69,7 @@ For a full end-to-end example including the VPC, see [`examples/small/`](./examp
 
 ## Examples
 
-Three runnable examples ship with the module, each tuned for a different operational scale. Sizing decisions for `medium` and `large` are derived from internal load testing.
+Five runnable examples ship with the module: three sizing tiers (`small`, `medium`, `large`) on Route 53, plus two DNS-variant examples (`cloudflare`, `godaddy`) at `small` sizing. Sizing decisions for `medium` and `large` are derived from internal load testing.
 
 | Dimension | [small](./examples/small/) (default) | [medium](./examples/medium/) | [large](./examples/large/) |
 |---|---|---|---|
