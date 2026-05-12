@@ -68,6 +68,7 @@ module "n8n" {
   public_subnets  = module.vpc.public_subnets
   vpc_cidr_block  = module.vpc.vpc_cidr_block
   route53_zone_id = var.route53_zone_id
+  certificate_arn = var.certificate_arn
 
   n8n_license_key = var.n8n_license_key
 

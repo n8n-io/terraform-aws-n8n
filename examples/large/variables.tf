@@ -16,13 +16,25 @@ variable "cluster_name" {
 }
 
 variable "n8n_domain" {
-  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). The parent zone must be hosted in Route53 (pass its ID via route53_zone_id)."
+  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). The parent zone must either be hosted in Route53 (pass its ID via route53_zone_id) or covered by a pre-validated ACM certificate (pass its ARN via certificate_arn)."
   type        = string
 }
 
 variable "route53_zone_id" {
-  description = "Route53 hosted zone ID for the parent of n8n_domain."
+  description = "Route53 hosted zone ID for the parent of n8n_domain. Set this when you want the example to issue the ACM certificate and create the alias record automatically. Set exactly one of route53_zone_id or certificate_arn."
   type        = string
+  default     = null
+}
+
+variable "certificate_arn" {
+  description = "ARN of a pre-validated ACM certificate covering n8n_domain. Set this when you already manage your certificate lifecycle outside this example (for example a wildcard cert reused across multiple deployments). Set exactly one of route53_zone_id or certificate_arn."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = (var.route53_zone_id == null) != (var.certificate_arn == null)
+    error_message = "Set exactly one of route53_zone_id or certificate_arn (not both, not neither)."
+  }
 }
 
 variable "n8n_license_key" {
