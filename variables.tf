@@ -199,6 +199,28 @@ variable "n8n_timezone" {
   default     = "UTC"
 }
 
+variable "n8n_log_level" {
+  description = "n8n log level. Maps to the N8N_LOG_LEVEL environment variable. One of: silent, error, warn, info, debug, verbose."
+  type        = string
+  default     = "info"
+
+  validation {
+    condition     = contains(["silent", "error", "warn", "info", "debug", "verbose"], var.n8n_log_level)
+    error_message = "n8n_log_level must be one of: silent, error, warn, info, debug, verbose."
+  }
+}
+
+variable "n8n_log_output" {
+  description = "n8n log output destination(s). Maps to the N8N_LOG_OUTPUT environment variable. Comma-separated subset of: console, file (e.g. \"console\", \"file\", \"console,file\"). Note: this variable does NOT control log *format* — setting an invalid value (e.g. \"json\") leaves Winston with no transport and silently drops all logs. To emit JSON-formatted logs, configure n8n's logging block separately; this env var only selects destinations."
+  type        = string
+  default     = "console"
+
+  validation {
+    condition     = alltrue([for v in split(",", var.n8n_log_output) : contains(["console", "file"], trimspace(v))])
+    error_message = "n8n_log_output only accepts console and/or file (comma-separated, e.g. \"console\" or \"console,file\")."
+  }
+}
+
 # ── n8n resource requests and limits ──────────────────────────────────────────
 
 variable "n8n_main_cpu_request" {
@@ -394,6 +416,17 @@ variable "db_instance_class" {
   validation {
     condition     = can(regex("^db\\.", var.db_instance_class))
     error_message = "Value must be a valid RDS instance class (e.g. db.t3.small, db.r6g.large)."
+  }
+}
+
+variable "db_engine_version" {
+  description = "PostgreSQL engine version for the RDS instance. Must be a version available from `aws rds describe-db-engine-versions --engine postgres` in the target region — RDS deprecates and removes minor versions over time, and supported versions vary by region. Bump as needed without forking."
+  type        = string
+  default     = "16.9"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+$", var.db_engine_version))
+    error_message = "db_engine_version must be of the form MAJOR.MINOR (e.g. 16.9)."
   }
 }
 
