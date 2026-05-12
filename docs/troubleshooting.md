@@ -59,6 +59,28 @@ The AWS Load Balancer Controller registers a cluster-wide `MutatingWebhookConfig
 
 The module serializes KEDA on `helm_release.lbc` (which has `wait = true`), so LBC pods are guaranteed Ready before KEDA installs. If you hit this on an older revision of the module, simply re-run `terraform apply` — by the time the second apply starts, LBC is up and KEDA installs cleanly.
 
+## Smoke test reports `HTTP 000` after a recent destroy + re-apply
+
+**Symptom**
+
+`tests/scripts/smoke-test.sh` fails the HTTP health, redirect, and API checks with `HTTP 000` against the n8n URL. Direct `dig n8n.example.com` resolves correctly, but `curl https://n8n.example.com/healthz` exits with code 6 (`CURLE_COULDNT_RESOLVE_HOST`).
+
+**Cause (macOS)**
+
+`mDNSResponder` cached the NXDOMAIN response from the previous deployment's destroy phase and is serving it for 5–15 minutes even after Terraform re-created the Route 53 alias record. `dig` and `host` bypass `mDNSResponder`; `curl`, browsers, and anything else using `getaddrinfo()` do not.
+
+This only reproduces when the same FQDN is reused across consecutive `apply` → `destroy` → `apply` cycles on the same workstation, which is common during iterative development of this module but unusual in production.
+
+**Fix**
+
+Flush the macOS DNS cache:
+
+```bash
+sudo killall -HUP mDNSResponder
+```
+
+Or wait for the negative cache to age out (typically 5–15 minutes). To avoid the issue entirely, use a fresh subdomain per deployment.
+
 ## `terraform destroy` hangs on namespace or finalizers
 
 See [destroy-cleanup.md](./destroy-cleanup.md).
