@@ -126,6 +126,56 @@ run "rds_hardened_defaults" {
     condition     = aws_db_instance.n8n[0].backup_retention_period >= 7
     error_message = "RDS backup retention must be >= 7 days"
   }
+
+  # ── Production hardening defaults ────────────────────────────────────────
+  # Each of these clears a Checkov finding that would otherwise ride on
+  # soft_fail = true in CI. They are also defenses against silent regression
+  # when someone trims the resource down later.
+
+  assert {
+    condition     = aws_db_instance.n8n[0].iam_database_authentication_enabled == true
+    error_message = "RDS IAM database authentication must be enabled"
+  }
+
+  assert {
+    condition     = contains(aws_db_instance.n8n[0].enabled_cloudwatch_logs_exports, "postgresql")
+    error_message = "RDS must export postgresql logs to CloudWatch"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].copy_tags_to_snapshot == true
+    error_message = "RDS must copy tags to snapshots so the existing tag set survives backup restores"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].auto_minor_version_upgrade == true
+    error_message = "RDS auto_minor_version_upgrade must be true (managed patching during maintenance window)"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].performance_insights_enabled == true
+    error_message = "RDS Performance Insights must be enabled (free tier with default 7-day retention)"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].performance_insights_retention_period == 7
+    error_message = "PI retention must be pinned to 7 (free-tier window) so a future AWS default change cannot silently make the deployment billable"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].monitoring_interval == 60
+    error_message = "RDS Enhanced Monitoring interval must be 60s (cheapest billable interval, AWS-recommended production default)"
+  }
+
+  # The explicit log group is what keeps RDS from auto-creating it with
+  # "Never expire" retention as soon as enabled_cloudwatch_logs_exports fires.
+  # Without this resource the operational drift is invisible to Checkov (the
+  # auto-created group isn't in Terraform state) but very real — a single
+  # busy RDS instance accumulates GB of logs per month with no cap.
+  assert {
+    condition     = aws_cloudwatch_log_group.rds_postgresql[0].retention_in_days == 365
+    error_message = "RDS postgresql log group must have retention pinned (default would be 'Never expire'; clears CKV_AWS_338)"
+  }
 }
 
 run "external_db_skips_rds_instance" {
