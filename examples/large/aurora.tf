@@ -62,11 +62,39 @@ resource "aws_rds_cluster" "n8n" {
   # throughput. Breaks even vs standard Aurora at ~25% I/O utilization.
   storage_type = "aurora-iopt1"
 
+  # Hardening defaults. Aurora leaves storage_encrypted = false unless set
+  # explicitly (CKV_AWS_96 — "Ensure all data stored in Aurora is securely
+  # encrypted at rest"), which is Registry table-stakes for any new RDS-family
+  # resource. IAM database authentication (CKV_AWS_162) and postgresql log
+  # export to CloudWatch (CKV_AWS_354) round out the baseline so a new resource
+  # does not regress curated findings. CKV_AWS_327 (encrypt with a customer
+  # managed KMS key rather than the AWS-managed `aws/rds` key) is intentionally
+  # deferred — tracked as a follow-up alongside the still-failing instance-
+  # level Aurora findings (353 / 226 / 118) and CKV_AWS_313 / CKV_AWS_139.
+  storage_encrypted                   = true
+  iam_database_authentication_enabled = true
+  enabled_cloudwatch_logs_exports     = ["postgresql"]
+
   backup_retention_period = 7
   skip_final_snapshot     = true
   deletion_protection     = false
 
+  # Ensure the log group exists (with our retention) before RDS would otherwise
+  # auto-create it at "Never expire".
+  depends_on = [aws_cloudwatch_log_group.aurora_postgresql]
+
   tags = merge(local.common_tags, { Name = "${var.cluster_name}-aurora" })
+}
+
+# CloudWatch Log Group for the postgresql log export. Created explicitly so we
+# own retention (CKV_AWS_338); without this resource, RDS auto-creates the group
+# with "Never expire" retention. CMK encryption on the log group (CKV_AWS_158)
+# is intentionally deferred alongside the cluster-level CKV_AWS_327 follow-up.
+resource "aws_cloudwatch_log_group" "aurora_postgresql" {
+  name              = "/aws/rds/cluster/${var.cluster_name}-aurora/postgresql"
+  retention_in_days = 365
+
+  tags = merge(local.common_tags, { Name = "${var.cluster_name}-aurora-postgresql-logs" })
 }
 
 resource "aws_rds_cluster_instance" "writer" {

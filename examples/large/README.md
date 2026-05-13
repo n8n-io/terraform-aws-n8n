@@ -131,6 +131,7 @@ kubectl rollout status deployment/n8n-worker deployment/n8n-webhook-processor \
 
 | Name | Type |
 | ---- | ---- |
+| [aws_cloudwatch_log_group.aurora_postgresql](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
 | [aws_db_subnet_group.aurora](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_subnet_group) | resource |
 | [aws_eks_addon.vpc_cni](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_addon) | resource |
 | [aws_rds_cluster.n8n](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/rds_cluster) | resource |
