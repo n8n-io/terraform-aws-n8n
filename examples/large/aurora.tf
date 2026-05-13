@@ -47,6 +47,7 @@ resource "aws_security_group" "aurora" {
 }
 
 resource "aws_rds_cluster" "n8n" {
+  # checkov:skip=CKV_AWS_139:Deletion protection is intentionally disabled in this reference example so `terraform destroy` works cleanly during evaluation and load testing. Flip to `true` for production use. See README.md → "Production considerations".
   cluster_identifier = "${var.cluster_name}-aurora"
   engine             = "aurora-postgresql"
   engine_version     = "16.4"

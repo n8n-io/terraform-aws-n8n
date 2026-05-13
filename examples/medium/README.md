@@ -65,6 +65,19 @@ Configure kubectl:
 $(terraform output -raw kubectl_config_command)
 ```
 
+## Production considerations
+
+This example is a reference deployment optimized for clean `apply` / `destroy` cycles during evaluation. The module ships with teardown-friendly defaults that you should review before promoting to production:
+
+| Where (in the module) | Setting | Current | Production |
+|---|---|---|---|
+| `database.tf` | `aws_db_instance.n8n.deletion_protection` | `false` (provider default; not set) | `true` |
+| `database.tf` | `aws_db_instance.n8n.skip_final_snapshot` | `true` | `false`, plus set `final_snapshot_identifier` |
+| `database.tf` | `aws_db_instance.n8n.delete_automated_backups` | `true` | `false` |
+| `s3.tf` | `aws_s3_bucket.n8n.force_destroy` | `true` | `false` |
+
+These settings live in the module's `database.tf` and `s3.tf` and are not currently exposed as variables. To override them you would wrap or fork the module.
+
 ## Reference
 
 <!-- BEGIN_TF_DOCS -->
