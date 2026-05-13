@@ -9,11 +9,11 @@
 #
 # Usage:
 #   # Run from the example directory — outputs are read automatically:
-#   cd examples/complete
+#   cd examples/small
 #   ../../tests/scripts/smoke-test.sh
 #
 #   # Or point at a Terraform directory explicitly:
-#   TERRAFORM_DIR=examples/complete ./tests/scripts/smoke-test.sh
+#   TERRAFORM_DIR=examples/small ./tests/scripts/smoke-test.sh
 #
 #   # Override any value by setting it in .env (next to this script,
 #   # or next to terraform.tfstate):

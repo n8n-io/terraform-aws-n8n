@@ -9,7 +9,7 @@ locals {
 }
 
 # ── VPC ───────────────────────────────────────────────────────────────────────
-# Same VPC configuration as examples/complete — EKS requires subnets in at
+# Same VPC configuration as examples/small — EKS requires subnets in at
 # least two availability zones.
 
 data "aws_availability_zones" "available" {

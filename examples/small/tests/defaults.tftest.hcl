@@ -1,9 +1,9 @@
-# Plan-time tests for the complete example using mocked providers.
+# Plan-time tests for the small example using mocked providers.
 #
 # Exercises the VPC + ACM + module wiring without contacting AWS.
 #
 # Run: terraform test
-#   (from examples/complete/ — mocks require terraform >= 1.7)
+#   (from examples/small/ — mocks require terraform >= 1.7)
 
 mock_provider "aws" {
   override_data {

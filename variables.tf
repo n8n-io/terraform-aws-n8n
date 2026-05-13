@@ -1,7 +1,7 @@
 # ── Foundation inputs ─────────────────────────────────────────────────────────
 # Region, cluster naming, and the pre-built VPC + ACM certificate the module
 # deploys into. Supply these from a VPC module (e.g. terraform-aws-modules/vpc)
-# and an aws_acm_certificate_validation resource — see examples/complete/.
+# and an aws_acm_certificate_validation resource — see examples/small/.
 
 variable "aws_region" {
   description = "AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1). Must match the region the AWS provider is configured for."

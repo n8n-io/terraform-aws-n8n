@@ -1,4 +1,4 @@
-# Complete example
+# Small example
 
 End-to-end deployment of the `terraform-aws-n8n` module, including the VPC it depends on. Use this example as your starting point for a fresh AWS account. Assumes the parent zone for `n8n_domain` is hosted in Route53.
 

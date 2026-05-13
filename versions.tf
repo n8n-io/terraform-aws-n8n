@@ -1,7 +1,7 @@
 # ── Terraform & provider requirements ──────────────────────────────────────
 # Declares the minimum Terraform CLI and the providers this module needs.
 # Provider configuration (region, auth, kube/helm wiring) is the caller's job
-# — see examples/complete/providers.tf.
+# — see examples/small/providers.tf.
 
 terraform {
   # >= 1.9 required: var.route53_zone_id's validation block references

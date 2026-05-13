@@ -24,7 +24,7 @@ Post-deployment smoke test for `terraform-aws-n8n`. Verifies the multi-main depl
 The script reads `namespace`, `n8n_url`, and `kubectl_config_command` automatically from `terraform output`.
 
 ```bash
-cd examples/complete           # or wherever your terraform.tfstate lives
+cd examples/small              # or wherever your terraform.tfstate lives
 ../../tests/scripts/smoke-test.sh
 ```
 
@@ -34,7 +34,7 @@ The script automatically:
 2. Runs the `kubectl_config_command` output to point kubectl at the right cluster
 3. Runs all checks and prints a pass / fail / warn / skip summary
 
-> **Note:** Run the script from the directory that holds `terraform.tfstate` (e.g. `examples/complete/`), not from `tests/scripts/`. The script calls `terraform output` against the current working directory by default.
+> **Note:** Run the script from the directory that holds `terraform.tfstate` (e.g. `examples/small/`), not from `tests/scripts/`. The script calls `terraform output` against the current working directory by default.
 
 ## API key (required for API and execution tests)
 

@@ -57,8 +57,8 @@ jobs:
       - name: terraform-docs --output-check (root)
         run: terraform-docs --output-check .
 
-      - name: terraform-docs --output-check (examples/complete)
-        working-directory: examples/complete
+      - name: terraform-docs --output-check (examples/small)
+        working-directory: examples/small
         run: terraform-docs --output-check .
 
       - name: terraform-docs --output-check (examples/cloudflare)
@@ -83,7 +83,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large"]
     steps:
       - uses: actions/checkout@v4
 
@@ -115,7 +115,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large"]
     steps:
       - uses: actions/checkout@v4
 
@@ -137,7 +137,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/complete", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large"]
     steps:
       - uses: actions/checkout@v4
 
