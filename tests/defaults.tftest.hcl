@@ -148,6 +148,35 @@ run "external_db_skips_rds_instance" {
   }
 }
 
+# Cross-variable validation: when the caller opts into an external database
+# (create_database = false), both db_host and db_password are required at plan
+# time. Without these the failure would surface deep inside the n8n Helm release
+# at apply time, after EKS and the database resources have already been built.
+
+run "external_db_missing_host_fails_validation" {
+  command = plan
+
+  variables {
+    create_database = false
+    db_password     = "external-db-password"
+    # db_host intentionally unset
+  }
+
+  expect_failures = [var.db_host]
+}
+
+run "external_db_missing_password_fails_validation" {
+  command = plan
+
+  variables {
+    create_database = false
+    db_host         = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    # db_password intentionally unset
+  }
+
+  expect_failures = [var.db_password]
+}
+
 run "redis_private_and_sized" {
   command = plan
 

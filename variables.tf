@@ -457,6 +457,11 @@ variable "db_host" {
   description = "External database host. Required when create_database = false. Ignored otherwise. Use this to pass in an Amazon Aurora cluster endpoint or any external PostgreSQL host."
   type        = string
   default     = null
+
+  validation {
+    condition     = var.create_database || var.db_host != null
+    error_message = "db_host is required when create_database = false."
+  }
 }
 
 variable "db_password" {
@@ -464,6 +469,11 @@ variable "db_password" {
   type        = string
   default     = null
   sensitive   = true
+
+  validation {
+    condition     = var.create_database || var.db_password != null
+    error_message = "db_password is required when create_database = false."
+  }
 }
 
 variable "db_postgresdb_pool_size" {
