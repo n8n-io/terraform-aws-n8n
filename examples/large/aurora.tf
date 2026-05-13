@@ -67,14 +67,15 @@ resource "aws_rds_cluster" "n8n" {
   # explicitly (CKV_AWS_96 — "Ensure all data stored in Aurora is securely
   # encrypted at rest"), which is Registry table-stakes for any new RDS-family
   # resource. IAM database authentication (CKV_AWS_162) and postgresql log
-  # export to CloudWatch (CKV_AWS_354) round out the baseline so a new resource
+  # export to CloudWatch (CKV_AWS_324) round out the baseline so a new resource
   # does not regress curated findings. copy_tags_to_snapshot (CKV_AWS_313)
   # propagates the existing tag set onto automated + manual snapshots.
   # CKV_AWS_327 (encrypt with a customer-managed KMS key rather than the
   # AWS-managed `aws/rds` key) is intentionally deferred — tracked as a
   # follow-up alongside the other still-failing Aurora findings: instance-
-  # level CKV_AWS_353 / CKV_AWS_118, cluster-level CKV_AWS_139, and log-group
-  # CKV_AWS_158.
+  # level CKV_AWS_354 (PI CMK) / CKV_AWS_118 (enhanced monitoring), cluster-
+  # level CKV_AWS_139 (deletion_protection — see checkov:skip annotation),
+  # and log-group CKV_AWS_158.
   storage_encrypted                   = true
   iam_database_authentication_enabled = true
   enabled_cloudwatch_logs_exports     = ["postgresql"]
@@ -123,6 +124,14 @@ resource "aws_rds_cluster_instance" "writer" {
   # the instances, since AWS upgrades them in lockstep with the cluster.
   auto_minor_version_upgrade = true
 
+  # CKV_AWS_353: Performance Insights with the default 7-day retention window
+  # is included in the AWS free tier. Pinning the retention period explicitly
+  # prevents silent cost regression if AWS changes the default. CKV_AWS_354 (PI
+  # data encrypted with a customer-managed KMS key) is intentionally deferred
+  # — tracked alongside the cluster-level CKV_AWS_327 CMK follow-up.
+  performance_insights_enabled          = true
+  performance_insights_retention_period = 7
+
   lifecycle {
     ignore_changes = [engine_version]
   }
@@ -141,6 +150,14 @@ resource "aws_rds_cluster_instance" "reader" {
   # window. See the cluster's lifecycle.ignore_changes above — it also covers
   # the instances, since AWS upgrades them in lockstep with the cluster.
   auto_minor_version_upgrade = true
+
+  # CKV_AWS_353: Performance Insights with the default 7-day retention window
+  # is included in the AWS free tier. Pinning the retention period explicitly
+  # prevents silent cost regression if AWS changes the default. CKV_AWS_354 (PI
+  # data encrypted with a customer-managed KMS key) is intentionally deferred
+  # — tracked alongside the cluster-level CKV_AWS_327 CMK follow-up.
+  performance_insights_enabled          = true
+  performance_insights_retention_period = 7
 
   lifecycle {
     ignore_changes = [engine_version]
