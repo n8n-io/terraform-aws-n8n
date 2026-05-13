@@ -245,4 +245,17 @@ run "pgbouncer_pdb_and_clusterip_service" {
   }
 }
 
+run "pgbouncer_image_pinned_by_digest" {
+  command = plan
+
+  # Without the @sha256:<digest> suffix, an upstream re-tag of
+  # edoburu/pgbouncer:v1.23.1-p3 would silently change deployed bits on every
+  # fresh apply. The pgbouncer.tf comment near the image field documents the
+  # refresh procedure when bumping the version.
+  assert {
+    condition     = strcontains(kubernetes_deployment.pgbouncer.spec[0].template[0].spec[0].container[0].image, "@sha256:")
+    error_message = "PgBouncer container image must include an @sha256:<digest> suffix to pin to an immutable OCI reference (clears CKV_K8S_43)"
+  }
+}
+
 
