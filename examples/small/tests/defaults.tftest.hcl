@@ -23,13 +23,16 @@ variables {
   route53_zone_id = "Z00000000000000000000"
 }
 
-# NOTE: A `command = plan` smoke test of the full example currently isn't
-# feasible: the module's dns.tf uses `for_each` over the ACM certificate's
-# `domain_validation_options`, whose keys are unknown at plan time under a
-# mocked AWS provider (the real provider returns them, but mocks don't).
-# Variable-validation checks below run before the graph walk, so they work.
-# The module itself is exercised via tests/defaults.tftest.hcl at the repo
-# root, which mocks the lower-level resources directly.
+# NOTE on test coverage:
+#
+# Only variable-validation tests run here today. Architecture asserts that
+# would require a full `command = plan` over the example are doable via the
+# same BYO-cert workaround used by examples/large/tests/defaults.tftest.hcl
+# (plumb certificate_arn through, set it to a stub in tests, leave
+# route53_zone_id null so the module's dns.tf for_each over
+# domain_validation_options never instantiates) — tracked as a separate
+# follow-up. The module itself is already exercised by tests/defaults.tftest.hcl
+# at the repo root, which mocks the lower-level resources directly.
 
 run "cluster_name_length_validation_rejects_long_names" {
   command = plan
