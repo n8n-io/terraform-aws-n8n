@@ -116,6 +116,7 @@ moved {
 }
 
 resource "aws_db_instance" "n8n" {
+  # checkov:skip=CKV_AWS_293:Deletion protection is intentionally left at the provider default (false) so `terraform destroy` works cleanly during evaluation and example teardown. Flip to `true` for production. See examples/*/README.md → "Production considerations" for the full set of teardown-friendly defaults to review before promoting any example to production.
   count = var.create_database ? 1 : 0
 
   identifier        = "n8n-postgres-${local.cluster_name}"
