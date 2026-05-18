@@ -4,11 +4,44 @@ Terraform module for deploying [n8n](https://n8n.io) on AWS.
 
 Deploys the production-grade multi-main setup: multiple n8n main instances, dedicated worker pods, external PostgreSQL (RDS), Redis (ElastiCache), and S3 for shared file storage. An **n8n Enterprise license is required**.
 
-The module expects a pre-existing VPC. If your parent domain is hosted in Route53, pass `route53_zone_id` and the module will issue the ACM certificate and create the DNS alias record itself — a single `terraform apply` brings up n8n end to end with no manual DNS steps. If your DNS is elsewhere, pass a pre-validated `certificate_arn` instead. End-to-end examples (including the VPC):
+The module expects a pre-existing VPC. If your parent domain is hosted in Route53, pass `route53_zone_id` and the module will issue the ACM certificate and create the DNS alias record itself — a single `terraform apply` brings up n8n end to end with no manual DNS steps. If your DNS is elsewhere, pass a pre-validated `certificate_arn` instead.
 
-- [`examples/small/`](./examples/small/) — Route 53
-- [`examples/cloudflare/`](./examples/cloudflare/) — Cloudflare DNS
-- [`examples/godaddy/`](./examples/godaddy/) — GoDaddy DNS
+## Usage
+
+```hcl
+module "n8n" {
+  source  = "n8n-io/n8n/aws"
+  version = "~> 0.1"
+
+  aws_region      = "us-east-1"
+  cluster_name    = "n8n-cluster"
+  n8n_domain      = "n8n.example.com"
+  n8n_license_key = var.n8n_license_key
+
+  # Pre-existing VPC — bring your own.
+  vpc_id          = module.vpc.vpc_id
+  private_subnets = module.vpc.private_subnets
+  public_subnets  = module.vpc.public_subnets
+  vpc_cidr_block  = module.vpc.vpc_cidr_block
+
+  # EKS node group autoscaling bounds (defaults shown). Driven by Cluster
+  # Autoscaler — see note below; you pay for `node_min` nodes 24/7.
+  node_min = 3
+  node_max = 6
+
+  # DNS — set exactly one:
+  # 1. Parent domain in Route53 → module handles ACM + alias record.
+  route53_zone_id = "Z0123456789ABCDEFGHIJ"
+  # 2. DNS elsewhere → bring your own pre-validated cert.
+  # certificate_arn = aws_acm_certificate_validation.n8n.certificate_arn
+}
+```
+
+The module declares `required_providers` but does **not** configure them. Callers must configure `aws`, `kubernetes`, and `helm` providers. `kubernetes` and `helm` are configured against the cluster this module creates — see [`examples/small/providers.tf`](./examples/small/providers.tf) for the standard wiring.
+
+`node_min` and `node_max` are the EKS node group's autoscaling bounds. `node_min` is your steady-state floor — you pay for those nodes 24/7 even when idle. `node_max` is a hard ceiling: if peak workload needs more nodes than allowed, pods stay `Pending`. Defaults fit the `small` example only; see the Examples table for production sizing.
+
+For a full end-to-end example including the VPC, see [`examples/small/`](./examples/small/) (Route 53), [`examples/cloudflare/`](./examples/cloudflare/), or [`examples/godaddy/`](./examples/godaddy/). If `terraform apply` fails on a `helm_release` (most often due to a Helm 4 cache layout issue or a webhook race on first install), see [`docs/troubleshooting.md`](./docs/troubleshooting.md).
 
 ## Support
 
@@ -37,35 +70,6 @@ Features we may want to address along the way:
 - Bring your own Secrets Manager
 - Bring your own Certificates
 - Bring your own Networking
-
-## Usage
-
-```hcl
-module "n8n" {
-  source = "github.com/n8n-io/terraform-aws-n8n"
-
-  aws_region      = "us-east-1"
-  cluster_name    = "n8n-cluster"
-  n8n_domain      = "n8n.example.com"
-  n8n_license_key = var.n8n_license_key
-
-  # Pre-existing VPC — bring your own.
-  vpc_id          = module.vpc.vpc_id
-  private_subnets = module.vpc.private_subnets
-  public_subnets  = module.vpc.public_subnets
-  vpc_cidr_block  = module.vpc.vpc_cidr_block
-
-  # DNS — set exactly one:
-  # 1. Parent domain in Route53 → module handles ACM + alias record.
-  route53_zone_id = "Z0123456789ABCDEFGHIJ"
-  # 2. DNS elsewhere → bring your own pre-validated cert.
-  # certificate_arn = aws_acm_certificate_validation.n8n.certificate_arn
-}
-```
-
-The module declares `required_providers` but does **not** configure them. Callers must configure `aws`, `kubernetes`, and `helm` providers. `kubernetes` and `helm` are configured against the cluster this module creates — see [`examples/small/providers.tf`](./examples/small/providers.tf) for the standard wiring.
-
-For a full end-to-end example including the VPC, see [`examples/small/`](./examples/small/) (Route 53), [`examples/cloudflare/`](./examples/cloudflare/), or [`examples/godaddy/`](./examples/godaddy/). If `terraform apply` fails on a `helm_release` (most often due to a Helm 4 cache layout issue or a webhook race on first install), see [`docs/troubleshooting.md`](./docs/troubleshooting.md).
 
 ## Examples
 
@@ -97,62 +101,6 @@ Five runnable examples ship with the module: three sizing tiers (`small`, `mediu
 | Est. cost / month (1-yr reserved) | ~$285 | ~$1,300 | ~$13,600 |
 
 The DNS-variant examples (`cloudflare`, `godaddy`) are sizing-equivalent to `small` — they only swap the DNS provider for cert validation and the alias record.
-
-## Upgrading from a pre-CMK apply
-
-`var.db_storage_encrypted` defaults to `true`, which encrypts the RDS
-instance's storage, Performance Insights data, and postgresql CloudWatch log
-group with a module-managed Customer Managed KMS Key. AWS does **not** support
-enabling storage encryption in place on an existing unencrypted RDS instance,
-so flipping this from `false` to `true` on an existing deployment forces a
-**replacement** of `aws_db_instance.n8n` — i.e. the database is dropped and
-recreated empty.
-
-If you are upgrading an existing module-managed deployment to this version,
-choose one of:
-
-1. **Stay unencrypted (no plan change).** Pin `db_storage_encrypted = false`
-   in your tfvars before the next `terraform apply`. The CMK is not created,
-   the RDS instance is not replaced, and the only diff you will see is three
-   in-place attribute updates on the instance (from the hardening defaults).
-
-2. **Migrate to CMK encryption (recommended).** Plan a maintenance window and
-   follow the snapshot → restore-with-encryption recipe:
-
-   ```bash
-   # 1. Take a manual snapshot of the current unencrypted instance.
-   aws rds create-db-snapshot \
-     --db-instance-identifier n8n-postgres-<cluster_name> \
-     --db-snapshot-identifier n8n-postgres-<cluster_name>-pre-cmk
-
-   # 2. Copy the snapshot into a new, encrypted snapshot using the AWS-managed
-   #    aws/rds key (the encrypted copy can then be restored to a CMK-encrypted
-   #    instance in step 4).
-   aws rds copy-db-snapshot \
-     --source-db-snapshot-identifier n8n-postgres-<cluster_name>-pre-cmk \
-     --target-db-snapshot-identifier n8n-postgres-<cluster_name>-pre-cmk-enc \
-     --kms-key-id alias/aws/rds
-
-   # 3. Stop the n8n workload (scale main + worker deployments to 0) so no
-   #    writes are missed during the swap.
-   kubectl -n n8n-enterprise scale deploy --all --replicas=0
-
-   # 4. Apply with db_storage_encrypted = true. Terraform replaces the RDS
-   #    instance with a new encrypted one. Before applying, set
-   #    skip_final_snapshot = false on the resource (or take a final manual
-   #    snapshot first) so step 5 has a fallback.
-   terraform apply
-
-   # 5. Restore the encrypted snapshot into the new instance using the AWS
-   #    console or `aws rds restore-db-instance-from-db-snapshot`, pointing
-   #    at the CMK created by this module (alias/n8n-rds-<cluster_name>-*).
-   ```
-
-   For most deployments option 1 is the right interim choice; switch to option
-   2 at the next planned maintenance window.
-
-New deployments do not need this section — the default-on encryption applies
-on first `apply` with no migration required.
 
 ## KMS key after `terraform destroy`
 
