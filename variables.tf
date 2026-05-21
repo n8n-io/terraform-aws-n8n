@@ -558,6 +558,14 @@ variable "n8n_webhook_hpa_cpu_threshold" {
   default     = 65
 }
 
+# ── Observability ─────────────────────────────────────────────────────────────
+
+variable "n8n_metrics_enabled" {
+  description = "Enable n8n's built-in Prometheus metrics endpoint. When true, the module appends N8N_METRICS=true to the main pod's extraEnv, which makes n8n expose /metrics on its HTTP port (5678) — the same port and service the chart already publishes for the UI/API. The n8n Helm chart at the currently pinned version (see n8n_chart_version) exposes no top-level metrics / serviceMonitor block of its own, so this toggle is intentionally env-var-only. Scrape configuration (Prometheus scrape annotations or a ServiceMonitor CR) is left to the caller's monitoring stack. Defaults to false; when false the env var is omitted entirely so n8n's own defaults apply."
+  type        = bool
+  default     = false
+}
+
 # ── KEDA: worker pods ─────────────────────────────────────────────────────────
 
 variable "n8n_worker_keda_min_replicas" {

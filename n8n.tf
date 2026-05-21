@@ -267,7 +267,16 @@ resource "helm_release" "n8n" {
           # Without this, Bull detects dropped connections, emits queue errors, and pods crash.
           { name = "QUEUE_BULL_REDIS_KEEP_ALIVE", value = "true" },
           { name = "DB_POSTGRESDB_POOL_SIZE", value = tostring(var.db_postgresdb_pool_size) },
-        ]
+        ],
+        # n8n exposes Prometheus metrics on /metrics over its HTTP port (5678) when
+        # N8N_METRICS is set. The pinned chart version exposes no metrics /
+        # serviceMonitor block (verified via `helm show values` against
+        # var.n8n_chart_version), so the toggle is env-var-only — omit the var
+        # entirely when disabled so n8n's own defaults apply (prefix, default
+        # process metrics, etc). Scrape config is the caller's job.
+        var.n8n_metrics_enabled ? [
+          { name = "N8N_METRICS", value = "true" },
+        ] : []
       )
     }
 
