@@ -88,6 +88,55 @@ v0.1.0 ships against specific provider majors. Notably:
 - **EKS:** validated on Kubernetes `1.35`.
 - **PostgreSQL:** validated on RDS `16.9`.
 
+## Out of scope
+
+v0.1.0 intentionally does not cover the following. Each item is
+documented here so that issues filed against them can be triaged
+quickly; several are candidates for future minor releases (see
+[`ROADMAP.md`](./ROADMAP.md)).
+
+- **VPC creation.** The module requires a pre-existing VPC with both
+  public and private subnets tagged for EKS/ALB. The examples
+  provision one with `terraform-aws-modules/vpc/aws`, but that VPC is
+  *not* managed by this module. Rationale: VPCs are
+  organization-shaped, not service-shaped.
+
+- **Multi-region / cross-region deployments.** One module instance =
+  one region = one EKS cluster = one n8n deployment. Cross-region
+  replication of the database or S3 binary storage is the caller's
+  problem. Rationale: pre-1.0 surface area; AWS provider 6.x's
+  per-resource `region` argument is the natural foundation for this
+  in a future minor.
+
+- **GovCloud, AWS China, and Outposts.** The module uses generic AWS
+  APIs that *probably* work in these partitions, but it has not been
+  validated. Endpoint differences (e.g. EKS Pod Identity GA dates per
+  region) may break things.
+
+- **Air-gapped / private-image deployments.** The module pulls images
+  from public registries: the n8n chart from `ghcr.io/n8n-io`, plus
+  KEDA / Cluster Autoscaler / AWS Load Balancer Controller /
+  metrics-server charts from their respective upstreams. Replacing
+  all of these with ECR mirrors is possible but the module exposes
+  no inputs for image-registry overrides today.
+
+- **Backup/DR automation beyond RDS snapshots.** The module enables
+  RDS automated backups (defaulting to RDS's own defaults). It does
+  *not* automate restore drills, cross-region snapshot copy, S3
+  versioning policy, or n8n encryption-key escrow. The
+  `n8n_encryption_key` output is emitted exactly once at apply time;
+  backing it up is the operator's job and is the single most
+  important thing they will forget.
+
+- **Bundled observability.** The module installs KEDA (for worker
+  autoscaling) and metrics-server (for HPA on mains/webhooks) because
+  they are load-bearing for the autoscaling story. It does *not*
+  install Prometheus, Grafana, Loki, OpenSearch, Datadog Agent, or
+  any log shipper. `n8n_metrics_enabled` exposes the metrics
+  endpoint; scrape configuration is the caller's monitoring stack.
+  Rationale: observability stacks are deeply opinionated per-org;
+  bundling one is more harmful than helpful.
+
 ## Examples
 
 Five runnable examples ship with the module: three sizing tiers (`small`, `medium`, `large`) on Route 53, plus two DNS-variant examples (`cloudflare`, `godaddy`) at `small` sizing. Sizing decisions for `medium` and `large` are derived from internal load testing.
