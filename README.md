@@ -53,6 +53,41 @@ This module is open source software, maintained by the n8n Solutions team indepe
 
 **General n8n questions** (not specific to this module): use the [n8n community forum](https://community.n8n.io/).
 
+## Stability & versioning
+
+This module is pre-1.0. We use minor versions (0.1, 0.2, …) as the
+breaking-change boundary and patches (0.1.0, 0.1.1, …) for additive or
+bug-fix changes.
+
+| Across | What may change |
+| ------ | --------------- |
+| `0.MINOR.PATCH` → `0.MINOR.PATCH+1` | Bug fixes, new optional inputs, new outputs, new resources whose absence wouldn't affect existing callers. No removed or renamed inputs/outputs. No changed defaults that move infra. No changed resource addresses. |
+| `0.MINOR` → `0.MINOR+1` | Anything else, including removed inputs, renamed inputs, default changes that force resource replacement, refactored resource addresses, and bumped provider version floors. Each such change is called out in [`CHANGELOG.md`](./CHANGELOG.md) with an upgrade note. |
+
+Pin with `version = "~> 0.1"` to auto-receive 0.1.x patches without
+accidentally crossing a 0.1 → 0.2 boundary. To upgrade across minor
+lines, retype the constraint (`version = "~> 0.2"`) and read the
+release notes.
+
+This contract goes away at 1.0.0 in favor of standard SemVer.
+
+### Compatibility
+
+v0.1.0 ships against specific provider majors. Notably:
+
+- **AWS provider:** `~> 5.0`. Callers who already pin `aws ~> 6.0` in
+  their root module will hit a constraint conflict at `terraform init`.
+  A bump to `~> 6.0` is tracked for v0.2.0.
+- **Helm provider:** `~> 2.12`. A bump to `~> 3.0` is tracked for v0.2.0.
+- **Kubernetes provider:** `~> 2.0`.
+- **Terraform CLI:** `>= 1.9`.
+- **n8n Helm chart:** validated against `1.4.0` (the current default).
+  Newer chart versions can be selected via `n8n_chart_version` but are
+  not part of the v0.1.0 test matrix; a default bump is tracked for
+  v0.2.0.
+- **EKS:** validated on Kubernetes `1.35`.
+- **PostgreSQL:** validated on RDS `16.9`.
+
 ## Examples
 
 Five runnable examples ship with the module: three sizing tiers (`small`, `medium`, `large`) on Route 53, plus two DNS-variant examples (`cloudflare`, `godaddy`) at `small` sizing. Sizing decisions for `medium` and `large` are derived from internal load testing.
