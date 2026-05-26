@@ -512,8 +512,8 @@ variable "redis_node_type" {
   }
 }
 
-variable "n8n_runners_task_request_timeout" {
-  description = "Seconds n8n waits for a task runner to accept a Code node task. Increase if Code nodes fail with 'task request timed out' under high concurrency (many parallel Code nodes competing for the single runner sidecar)."
+variable "n8n_task_runner_request_timeout" {
+  description = "Seconds n8n waits for a task runner to accept a Code node task. Wired to the N8N_RUNNERS_TASK_REQUEST_TIMEOUT env var on the main pod. Increase if Code nodes fail with 'task request timed out' under high concurrency (many parallel Code nodes competing for the single runner sidecar)."
   type        = number
   default     = 300
 }
