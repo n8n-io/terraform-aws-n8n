@@ -55,9 +55,16 @@ Initial release on the Terraform Registry as `n8n-io/n8n/aws`.
   release explicitly does not cover (VPC creation, multi-region,
   GovCloud, air-gapped, backup/DR automation beyond RDS snapshots,
   bundled observability).
-- v0.1.0 was real-applied against `examples/small` only. Other examples
-  pass plan-time mocked tests but were not real-applied for this
-  release.
+- v0.1.0's AWS infrastructure creation path was validated against
+  `examples/small` (a full `terraform apply` provisioned EKS, RDS with
+  CMK encryption, ElastiCache, S3, ACM, Route 53, IAM, KMS, the LBC /
+  Cluster Autoscaler / metrics-server / KEDA controllers, and the n8n
+  Helm release reached the licensing layer; AWS resources destroyed
+  cleanly with no orphans). The end-to-end smoke test in
+  `tests/scripts/smoke-test.sh` was not run against a fully Ready n8n
+  install for this release. Other examples pass plan-time mocked tests
+  but were not real-applied. A full end-to-end validation cycle
+  including the smoke test is tracked for v0.2.0.
 - Checkov runs in `soft_fail` mode; findings are surfaced but do not
   block CI. Curated suppressions and a flip to hard-fail are tracked
   for v0.2.0.
