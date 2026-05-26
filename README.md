@@ -47,30 +47,6 @@ For a full end-to-end example including the VPC, see [`examples/small/`](./examp
 
 This module is open source software, maintained by the n8n Solutions team independently of n8n's enterprise products. While the n8n Support team provides dedicated support for the enterprise offerings, this module isn't included.
 
-## Goals
-
-### Phase 1 - Internal baseline
-
-A minimal, lean Terraform module that is ready for publishing and validated through n8n-internal testing.
-
-### Phase 2 - Lighthouse rollout
-
-Publish the module and evaluate it through lighthouse customer engagements, iterating early on real-world feedback.
-
-### Phase 3 - Multi-cloud expansion
-
-Apply the learnings from the AWS module to sibling modules for deploying n8n on Azure and GCP, reusing shared patterns.
-
-### Candidate features
-
-Features we may want to address along the way:
-
-- Custom ENV variables via templates (SSO, Owner, etc.)
-- Install community packages via API
-- Bring your own Secrets Manager
-- Bring your own Certificates
-- Bring your own Networking
-
 ## Examples
 
 Five runnable examples ship with the module: three sizing tiers (`small`, `medium`, `large`) on Route 53, plus two DNS-variant examples (`cloudflare`, `godaddy`) at `small` sizing. Sizing decisions for `medium` and `large` are derived from internal load testing.
