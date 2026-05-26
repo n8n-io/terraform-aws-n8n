@@ -437,7 +437,7 @@ variable "db_multi_az" {
 }
 
 variable "db_storage_encrypted" {
-  description = "When true (the default), encrypt the RDS instance's storage, Performance Insights data, and the postgresql CloudWatch log group with a module-created Customer Managed KMS Key (aws_kms_key.db). Clears Checkov findings CKV_AWS_16, CKV_AWS_354, and CKV_AWS_158. Flipping this from false to true on an existing RDS instance forces a replacement — AWS does not support enabling storage encryption in place; see README.md → 'Upgrading from a pre-CMK apply' for the snapshot → restore-with-encryption migration recipe. Set to false in your tfvars to preserve current behavior on pre-existing unencrypted deployments. The CMK rotates annually and uses a 7-day deletion window (AWS minimum). Ignored when create_database = false."
+  description = "When true (the default), encrypt the RDS instance's storage, Performance Insights data, and the postgresql CloudWatch log group with a module-created Customer Managed KMS Key (aws_kms_key.db). Clears Checkov findings CKV_AWS_16, CKV_AWS_354, and CKV_AWS_158. Flipping this from false to true on an existing RDS instance forces a replacement — AWS does not support enabling storage encryption in place, so the upgrade path is snapshot → restore into a new encrypted instance. Set to false in your tfvars to preserve current behavior on pre-existing unencrypted deployments. The CMK rotates annually and uses a 7-day deletion window (AWS minimum). Ignored when create_database = false."
   type        = bool
   default     = true
 }
