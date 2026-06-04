@@ -7,7 +7,7 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-MM-DD
+## [0.1.0] - 2026-06-04
 
 Initial release on the Terraform Registry as `n8n-io/n8n/aws`.
 
