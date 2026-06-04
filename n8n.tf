@@ -262,7 +262,7 @@ resource "helm_release" "n8n" {
           { name = "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS", value = "true" },
           # Override the internally computed http://host:5678 URL so webhooks show the correct HTTPS address.
           { name = "WEBHOOK_URL", value = coalesce(var.n8n_webhook_url, "https://${local.n8n_domain}") },
-          { name = "N8N_RUNNERS_TASK_REQUEST_TIMEOUT", value = tostring(var.n8n_runners_task_request_timeout) },
+          { name = "N8N_RUNNERS_TASK_REQUEST_TIMEOUT", value = tostring(var.n8n_task_runner_request_timeout) },
           # Keeps ElastiCache from dropping idle Redis subscriber connections under sustained load.
           # Without this, Bull detects dropped connections, emits queue errors, and pods crash.
           { name = "QUEUE_BULL_REDIS_KEEP_ALIVE", value = "true" },

@@ -4,45 +4,14 @@ Terraform module for deploying [n8n](https://n8n.io) on AWS.
 
 Deploys the production-grade multi-main setup: multiple n8n main instances, dedicated worker pods, external PostgreSQL (RDS), Redis (ElastiCache), and S3 for shared file storage. An **n8n Enterprise license is required**.
 
-The module expects a pre-existing VPC. If your parent domain is hosted in Route53, pass `route53_zone_id` and the module will issue the ACM certificate and create the DNS alias record itself — a single `terraform apply` brings up n8n end to end with no manual DNS steps. If your DNS is elsewhere, pass a pre-validated `certificate_arn` instead. End-to-end examples (including the VPC):
-
-- [`examples/small/`](./examples/small/) — Route 53
-- [`examples/cloudflare/`](./examples/cloudflare/) — Cloudflare DNS
-- [`examples/godaddy/`](./examples/godaddy/) — GoDaddy DNS
-
-## Support
-
-This module is open source software, maintained by the n8n Solutions team independently of n8n's enterprise products. While the n8n Support team provides dedicated support for the enterprise offerings, this module isn't included.
-
-## Goals
-
-### Phase 1 - Internal baseline
-
-A minimal, lean Terraform module that is ready for publishing and validated through n8n-internal testing.
-
-### Phase 2 - Lighthouse rollout
-
-Publish the module and evaluate it through lighthouse customer engagements, iterating early on real-world feedback.
-
-### Phase 3 - Multi-cloud expansion
-
-Apply the learnings from the AWS module to sibling modules for deploying n8n on Azure and GCP, reusing shared patterns.
-
-### Candidate features
-
-Features we may want to address along the way:
-
-- Custom ENV variables via templates (SSO, Owner, etc.)
-- Install community packages via API
-- Bring your own Secrets Manager
-- Bring your own Certificates
-- Bring your own Networking
+The module expects a pre-existing VPC. If your parent domain is hosted in Route53, pass `route53_zone_id` and the module will issue the ACM certificate and create the DNS alias record itself — a single `terraform apply` brings up n8n end to end with no manual DNS steps. If your DNS is elsewhere, pass a pre-validated `certificate_arn` instead.
 
 ## Usage
 
 ```hcl
 module "n8n" {
-  source = "github.com/n8n-io/terraform-aws-n8n"
+  source  = "n8n-io/n8n/aws"
+  version = "~> 0.1"
 
   aws_region      = "us-east-1"
   cluster_name    = "n8n-cluster"
@@ -55,6 +24,11 @@ module "n8n" {
   public_subnets  = module.vpc.public_subnets
   vpc_cidr_block  = module.vpc.vpc_cidr_block
 
+  # EKS node group autoscaling bounds (defaults shown). Driven by Cluster
+  # Autoscaler — see note below; you pay for `node_min` nodes 24/7.
+  node_min = 3
+  node_max = 6
+
   # DNS — set exactly one:
   # 1. Parent domain in Route53 → module handles ACM + alias record.
   route53_zone_id = "Z0123456789ABCDEFGHIJ"
@@ -65,7 +39,103 @@ module "n8n" {
 
 The module declares `required_providers` but does **not** configure them. Callers must configure `aws`, `kubernetes`, and `helm` providers. `kubernetes` and `helm` are configured against the cluster this module creates — see [`examples/small/providers.tf`](./examples/small/providers.tf) for the standard wiring.
 
+`node_min` and `node_max` are the EKS node group's autoscaling bounds. `node_min` is your steady-state floor — you pay for those nodes 24/7 even when idle. `node_max` is a hard ceiling: if peak workload needs more nodes than allowed, pods stay `Pending`. Defaults fit the `small` example only; see the Examples table for production sizing.
+
 For a full end-to-end example including the VPC, see [`examples/small/`](./examples/small/) (Route 53), [`examples/cloudflare/`](./examples/cloudflare/), or [`examples/godaddy/`](./examples/godaddy/). If `terraform apply` fails on a `helm_release` (most often due to a Helm 4 cache layout issue or a webhook race on first install), see [`docs/troubleshooting.md`](./docs/troubleshooting.md).
+
+## Support
+
+This module is open source software, maintained by the n8n Solutions team independently of n8n's enterprise products. While the n8n Support team provides dedicated support for the enterprise offerings, this module isn't included.
+
+**Bug reports and feature requests:** open a [GitHub issue](https://github.com/n8n-io/terraform-aws-n8n/issues). We triage on a best-effort basis; there is no SLA.
+
+**Security issues:** see [`SECURITY.md`](./SECURITY.md) for the disclosure process. **Do not** open public issues for security findings.
+
+**General n8n questions** (not specific to this module): use the [n8n community forum](https://community.n8n.io/).
+
+## Stability & versioning
+
+This module is pre-1.0. We use minor versions (0.1, 0.2, …) as the
+breaking-change boundary and patches (0.1.0, 0.1.1, …) for additive or
+bug-fix changes.
+
+| Across | What may change |
+| ------ | --------------- |
+| `0.MINOR.PATCH` → `0.MINOR.PATCH+1` | Bug fixes, new optional inputs, new outputs, new resources whose absence wouldn't affect existing callers. No removed or renamed inputs/outputs. No changed defaults that move infra. No changed resource addresses. |
+| `0.MINOR` → `0.MINOR+1` | Anything else, including removed inputs, renamed inputs, default changes that force resource replacement, refactored resource addresses, and bumped provider version floors. Each such change is called out in [`CHANGELOG.md`](./CHANGELOG.md) with an upgrade note. |
+
+Pin with `version = "~> 0.1"` to auto-receive 0.1.x patches without
+accidentally crossing a 0.1 → 0.2 boundary. To upgrade across minor
+lines, retype the constraint (`version = "~> 0.2"`) and read the
+release notes.
+
+This contract goes away at 1.0.0 in favor of standard SemVer.
+
+### Compatibility
+
+v0.1.0 ships against specific provider majors. Notably:
+
+- **AWS provider:** `~> 5.0`. Callers who already pin `aws ~> 6.0` in
+  their root module will hit a constraint conflict at `terraform init`.
+  A bump to `~> 6.0` is tracked for v0.2.0.
+- **Helm provider:** `~> 2.12`. A bump to `~> 3.0` is tracked for v0.2.0.
+- **Kubernetes provider:** `~> 2.0`.
+- **Terraform CLI:** `>= 1.9`.
+- **n8n Helm chart:** validated against `1.4.0` (the current default).
+  Newer chart versions can be selected via `n8n_chart_version` but are
+  not part of the v0.1.0 test matrix; a default bump is tracked for
+  v0.2.0.
+- **EKS:** validated on Kubernetes `1.35`.
+- **PostgreSQL:** validated on RDS `16.9`.
+
+## Out of scope
+
+v0.1.0 intentionally does not cover the following. Each item is
+documented here so that issues filed against them can be triaged
+quickly; several are candidates for future minor releases (see
+[`ROADMAP.md`](./ROADMAP.md)).
+
+- **VPC creation.** The module requires a pre-existing VPC with both
+  public and private subnets tagged for EKS/ALB. The examples
+  provision one with `terraform-aws-modules/vpc/aws`, but that VPC is
+  *not* managed by this module. Rationale: VPCs are
+  organization-shaped, not service-shaped.
+
+- **Multi-region / cross-region deployments.** One module instance =
+  one region = one EKS cluster = one n8n deployment. Cross-region
+  replication of the database or S3 binary storage is the caller's
+  problem. Rationale: pre-1.0 surface area; AWS provider 6.x's
+  per-resource `region` argument is the natural foundation for this
+  in a future minor.
+
+- **GovCloud, AWS China, and Outposts.** The module uses generic AWS
+  APIs that *probably* work in these partitions, but it has not been
+  validated. Endpoint differences (e.g. EKS Pod Identity GA dates per
+  region) may break things.
+
+- **Air-gapped / private-image deployments.** The module pulls images
+  from public registries: the n8n chart from `ghcr.io/n8n-io`, plus
+  KEDA / Cluster Autoscaler / AWS Load Balancer Controller /
+  metrics-server charts from their respective upstreams. Replacing
+  all of these with ECR mirrors is possible but the module exposes
+  no inputs for image-registry overrides today.
+
+- **Backup/DR automation beyond RDS snapshots.** The module enables
+  RDS automated backups (defaulting to RDS's own defaults). It does
+  *not* automate restore drills, cross-region snapshot copy, S3
+  versioning policy, or n8n encryption-key escrow. The
+  `n8n_encryption_key` output is emitted exactly once at apply time;
+  backing it up is the operator's job and is the single most
+  important thing they will forget.
+
+- **Bundled observability.** The module installs KEDA (for worker
+  autoscaling) and metrics-server (for HPA on mains/webhooks) because
+  they are load-bearing for the autoscaling story. It does *not*
+  install Prometheus, Grafana, Loki, OpenSearch, Datadog Agent, or
+  any log shipper. `n8n_metrics_enabled` exposes the metrics
+  endpoint; scrape configuration is the caller's monitoring stack.
+  Rationale: observability stacks are deeply opinionated per-org;
+  bundling one is more harmful than helpful.
 
 ## Examples
 
@@ -97,62 +167,6 @@ Five runnable examples ship with the module: three sizing tiers (`small`, `mediu
 | Est. cost / month (1-yr reserved) | ~$285 | ~$1,300 | ~$13,600 |
 
 The DNS-variant examples (`cloudflare`, `godaddy`) are sizing-equivalent to `small` — they only swap the DNS provider for cert validation and the alias record.
-
-## Upgrading from a pre-CMK apply
-
-`var.db_storage_encrypted` defaults to `true`, which encrypts the RDS
-instance's storage, Performance Insights data, and postgresql CloudWatch log
-group with a module-managed Customer Managed KMS Key. AWS does **not** support
-enabling storage encryption in place on an existing unencrypted RDS instance,
-so flipping this from `false` to `true` on an existing deployment forces a
-**replacement** of `aws_db_instance.n8n` — i.e. the database is dropped and
-recreated empty.
-
-If you are upgrading an existing module-managed deployment to this version,
-choose one of:
-
-1. **Stay unencrypted (no plan change).** Pin `db_storage_encrypted = false`
-   in your tfvars before the next `terraform apply`. The CMK is not created,
-   the RDS instance is not replaced, and the only diff you will see is three
-   in-place attribute updates on the instance (from the hardening defaults).
-
-2. **Migrate to CMK encryption (recommended).** Plan a maintenance window and
-   follow the snapshot → restore-with-encryption recipe:
-
-   ```bash
-   # 1. Take a manual snapshot of the current unencrypted instance.
-   aws rds create-db-snapshot \
-     --db-instance-identifier n8n-postgres-<cluster_name> \
-     --db-snapshot-identifier n8n-postgres-<cluster_name>-pre-cmk
-
-   # 2. Copy the snapshot into a new, encrypted snapshot using the AWS-managed
-   #    aws/rds key (the encrypted copy can then be restored to a CMK-encrypted
-   #    instance in step 4).
-   aws rds copy-db-snapshot \
-     --source-db-snapshot-identifier n8n-postgres-<cluster_name>-pre-cmk \
-     --target-db-snapshot-identifier n8n-postgres-<cluster_name>-pre-cmk-enc \
-     --kms-key-id alias/aws/rds
-
-   # 3. Stop the n8n workload (scale main + worker deployments to 0) so no
-   #    writes are missed during the swap.
-   kubectl -n n8n-enterprise scale deploy --all --replicas=0
-
-   # 4. Apply with db_storage_encrypted = true. Terraform replaces the RDS
-   #    instance with a new encrypted one. Before applying, set
-   #    skip_final_snapshot = false on the resource (or take a final manual
-   #    snapshot first) so step 5 has a fallback.
-   terraform apply
-
-   # 5. Restore the encrypted snapshot into the new instance using the AWS
-   #    console or `aws rds restore-db-instance-from-db-snapshot`, pointing
-   #    at the CMK created by this module (alias/n8n-rds-<cluster_name>-*).
-   ```
-
-   For most deployments option 1 is the right interim choice; switch to option
-   2 at the next planned maintenance window.
-
-New deployments do not need this section — the default-on encryption applies
-on first `apply` with no migration required.
 
 ## KMS key after `terraform destroy`
 
@@ -291,7 +305,7 @@ No modules.
 | <a name="input_db_password"></a> [db\_password](#input\_db\_password) | Password for the external database specified by db\_host. Required when create\_database = false. Ignored otherwise (the module generates a random password for its managed RDS instance). | `string` | `null` | no |
 | <a name="input_db_postgresdb_pool_size"></a> [db\_postgresdb\_pool\_size](#input\_db\_postgresdb\_pool\_size) | Number of TypeORM connection pool slots per n8n pod. Each pod holds this many persistent PostgreSQL connections. Rule of thumb: pool\_size >= worker\_concurrency / 4. With PgBouncer in transaction mode a lower value (5) is sufficient; without PgBouncer use a value matching concurrency (10-20). | `number` | `10` | no |
 | <a name="input_db_postgresdb_ssl_enabled"></a> [db\_postgresdb\_ssl\_enabled](#input\_db\_postgresdb\_ssl\_enabled) | Whether n8n connects to the database over SSL. Set to true (the default) for direct connections to RDS or Aurora — they use the AWS CA which Node.js doesn't trust by default, so the connection still negotiates SSL but skips certificate verification. Set to false when n8n connects to an in-cluster connection pooler (e.g. PgBouncer) that handles SSL on its upstream leg — the pod-to-pod traffic stays inside the cluster network. | `bool` | `true` | no |
-| <a name="input_db_storage_encrypted"></a> [db\_storage\_encrypted](#input\_db\_storage\_encrypted) | When true (the default), encrypt the RDS instance's storage, Performance Insights data, and the postgresql CloudWatch log group with a module-created Customer Managed KMS Key (aws\_kms\_key.db). Clears Checkov findings CKV\_AWS\_16, CKV\_AWS\_354, and CKV\_AWS\_158. Flipping this from false to true on an existing RDS instance forces a replacement — AWS does not support enabling storage encryption in place; see README.md → 'Upgrading from a pre-CMK apply' for the snapshot → restore-with-encryption migration recipe. Set to false in your tfvars to preserve current behavior on pre-existing unencrypted deployments. The CMK rotates annually and uses a 7-day deletion window (AWS minimum). Ignored when create\_database = false. | `bool` | `true` | no |
+| <a name="input_db_storage_encrypted"></a> [db\_storage\_encrypted](#input\_db\_storage\_encrypted) | When true (the default), encrypt the RDS instance's storage, Performance Insights data, and the postgresql CloudWatch log group with a module-created Customer Managed KMS Key (aws\_kms\_key.db). Clears Checkov findings CKV\_AWS\_16, CKV\_AWS\_354, and CKV\_AWS\_158. Flipping this from false to true on an existing RDS instance forces a replacement — AWS does not support enabling storage encryption in place, so the upgrade path is snapshot → restore into a new encrypted instance. Set to false in your tfvars to preserve current behavior on pre-existing unencrypted deployments. The CMK rotates annually and uses a 7-day deletion window (AWS minimum). Ignored when create\_database = false. | `bool` | `true` | no |
 | <a name="input_kubernetes_version"></a> [kubernetes\_version](#input\_kubernetes\_version) | Kubernetes version for the EKS cluster | `string` | `"1.35"` | no |
 | <a name="input_n8n_chart_version"></a> [n8n\_chart\_version](#input\_n8n\_chart\_version) | n8n Helm chart version to deploy | `string` | `"1.4.0"` | no |
 | <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate\_arn. | `string` | n/a | yes |
@@ -313,13 +327,13 @@ No modules.
 | <a name="input_n8n_prestop_sleep"></a> [n8n\_prestop\_sleep](#input\_n8n\_prestop\_sleep) | Seconds the preStop hook sleeps before SIGTERM is sent, giving the load balancer time to drain the pod. MINIMUM — do not lower below 10. | `number` | `10` | no |
 | <a name="input_n8n_pruning_max_age"></a> [n8n\_pruning\_max\_age](#input\_n8n\_pruning\_max\_age) | Maximum age of execution records to retain, in hours (336 = 14 days) | `number` | `336` | no |
 | <a name="input_n8n_pruning_max_count"></a> [n8n\_pruning\_max\_count](#input\_n8n\_pruning\_max\_count) | Maximum number of execution records to retain (0 = no limit) | `number` | `10000` | no |
-| <a name="input_n8n_runners_task_request_timeout"></a> [n8n\_runners\_task\_request\_timeout](#input\_n8n\_runners\_task\_request\_timeout) | Seconds n8n waits for a task runner to accept a Code node task. Increase if Code nodes fail with 'task request timed out' under high concurrency (many parallel Code nodes competing for the single runner sidecar). | `number` | `300` | no |
 | <a name="input_n8n_task_runner_auto_shutdown_timeout"></a> [n8n\_task\_runner\_auto\_shutdown\_timeout](#input\_n8n\_task\_runner\_auto\_shutdown\_timeout) | Seconds of inactivity before the runner process shuts down. Set to 0 to disable. | `number` | `15` | no |
 | <a name="input_n8n_task_runner_cpu_limit"></a> [n8n\_task\_runner\_cpu\_limit](#input\_n8n\_task\_runner\_cpu\_limit) | CPU limit for task runner sidecar containers (e.g. 1, 2000m) | `string` | `"1"` | no |
 | <a name="input_n8n_task_runner_cpu_request"></a> [n8n\_task\_runner\_cpu\_request](#input\_n8n\_task\_runner\_cpu\_request) | CPU request for task runner sidecar containers (e.g. 200m, 500m) | `string` | `"200m"` | no |
 | <a name="input_n8n_task_runner_memory_limit"></a> [n8n\_task\_runner\_memory\_limit](#input\_n8n\_task\_runner\_memory\_limit) | Memory limit for task runner sidecar containers (e.g. 1Gi, 2Gi) | `string` | `"1Gi"` | no |
 | <a name="input_n8n_task_runner_memory_request"></a> [n8n\_task\_runner\_memory\_request](#input\_n8n\_task\_runner\_memory\_request) | Memory request for task runner sidecar containers (e.g. 512Mi, 1Gi) | `string` | `"512Mi"` | no |
 | <a name="input_n8n_task_runner_python_enabled"></a> [n8n\_task\_runner\_python\_enabled](#input\_n8n\_task\_runner\_python\_enabled) | Enable the native Python runner (beta). Required for Python code execution in workflows. | `bool` | `true` | no |
+| <a name="input_n8n_task_runner_request_timeout"></a> [n8n\_task\_runner\_request\_timeout](#input\_n8n\_task\_runner\_request\_timeout) | Seconds n8n waits for a task runner to accept a Code node task. Wired to the N8N\_RUNNERS\_TASK\_REQUEST\_TIMEOUT env var on the main pod. Increase if Code nodes fail with 'task request timed out' under high concurrency (many parallel Code nodes competing for the single runner sidecar). | `number` | `300` | no |
 | <a name="input_n8n_task_runners_enabled"></a> [n8n\_task\_runners\_enabled](#input\_n8n\_task\_runners\_enabled) | Enable task runner sidecars for isolated JavaScript and Python code execution | `bool` | `true` | no |
 | <a name="input_n8n_termination_grace_period"></a> [n8n\_termination\_grace\_period](#input\_n8n\_termination\_grace\_period) | Seconds Kubernetes waits after SIGTERM before force-killing pods. MINIMUM — do not lower below 60. Workers need time to finish in-flight executions before being terminated. | `number` | `60` | no |
 | <a name="input_n8n_timezone"></a> [n8n\_timezone](#input\_n8n\_timezone) | Timezone for n8n (e.g. UTC, America/New\_York, Europe/London) | `string` | `"UTC"` | no |
