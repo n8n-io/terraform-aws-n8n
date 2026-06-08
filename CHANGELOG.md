@@ -7,6 +7,17 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+### Added
+
+- `n8n_reinstall_missing_packages` input variable: sets
+  `N8N_REINSTALL_MISSING_PACKAGES` on all n8n pods so workers reinstall
+  UI-installed community packages after being rescheduled onto a fresh
+  filesystem. Defaults to false (env var omitted).
+- `n8n_community_packages_prevent_loading` input variable: sets
+  `N8N_COMMUNITY_PACKAGES_PREVENT_LOADING` on all n8n pods to stop installed
+  community packages from loading at runtime. Defaults to false (env var
+  omitted).
+
 ## [0.1.0] - 2026-06-04
 
 Initial release on the Terraform Registry as `n8n-io/n8n/aws`.
