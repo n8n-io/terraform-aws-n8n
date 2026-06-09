@@ -561,7 +561,7 @@ variable "n8n_webhook_hpa_cpu_threshold" {
 # ── Observability ─────────────────────────────────────────────────────────────
 
 variable "n8n_metrics_enabled" {
-  description = "Enable n8n's built-in Prometheus metrics endpoint. When true, the module appends N8N_METRICS=true to the main pod's extraEnv, which makes n8n expose /metrics on its HTTP port (5678) — the same port and service the chart already publishes for the UI/API. The n8n Helm chart at the currently pinned version (see n8n_chart_version) exposes no top-level metrics / serviceMonitor block of its own, so this toggle is intentionally env-var-only. Scrape configuration (Prometheus scrape annotations or a ServiceMonitor CR) is left to the caller's monitoring stack. Defaults to false; when false the env var is omitted entirely so n8n's own defaults apply."
+  description = "Enable n8n's built-in Prometheus metrics endpoint. When true, the module appends N8N_METRICS=true to the n8n Helm release's config.extraEnv, which the chart applies to every n8n container (main, worker, webhook processor). n8n exposes /metrics on its existing HTTP port (5678) — the same port and service the chart already publishes for the UI/API. The n8n Helm chart at the currently pinned version (see n8n_chart_version) exposes no top-level metrics / serviceMonitor block of its own, so this toggle is intentionally env-var-only. Scrape configuration (Prometheus scrape annotations or a ServiceMonitor CR) is left to the caller's monitoring stack — in practice the main pod's Service is the meaningful scrape target. Defaults to false; when false the env var is omitted entirely so n8n's own defaults apply."
   type        = bool
   default     = false
 }
@@ -578,6 +578,95 @@ variable "n8n_community_packages_prevent_loading" {
   description = "Prevent installed community packages from being loaded at runtime. Maps to N8N_COMMUNITY_PACKAGES_PREVENT_LOADING. When true, n8n leaves the community-packages management surface in place but skips loading the package code, which is useful for locking an instance down without uninstalling. Leave false (the default) for community nodes to load and execute. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies."
   type        = bool
   default     = false
+}
+
+# OpenTelemetry tracing
+# Wired to N8N_OTEL_* env vars on the n8n Helm release's config.extraEnv block,
+# which the chart applies to every n8n container (main, worker, webhook
+# processor). This matches the n8n OpenTelemetry docs' queue-mode requirement:
+# https://docs.n8n.io/hosting/logging-monitoring/opentelemetry/
+#
+# The collector / Jaeger receiver itself is intentionally out of scope for this
+# module — deploy it via a separate Terraform module (or directly) and point
+# n8n_otel_exporter_otlp_endpoint at it.
+#
+# When n8n_otel_enabled = false (the default), no N8N_OTEL_* env vars are
+# emitted at all and the OpenTelemetry SDK is not loaded. The individual tuning
+# variables (endpoint, headers, service name, sample rate, span inclusion,
+# outbound injection, production-only filtering) default to null — when an
+# individual value is null the corresponding env var is omitted entirely so
+# n8n's own default applies. Only set the values you actually need to override.
+
+variable "n8n_otel_enabled" {
+  description = "Master switch for n8n's OpenTelemetry workflow + node tracing. When true, the module sets N8N_OTEL_ENABLED=true on all n8n containers (main, worker, webhook processor) via the Helm release's config.extraEnv block. When false (the default), no OpenTelemetry env vars are emitted and the SDK is not loaded. The OpenTelemetry collector / Jaeger receiver is out of scope for this module — deploy it separately and point n8n_otel_exporter_otlp_endpoint at it. See https://docs.n8n.io/hosting/logging-monitoring/opentelemetry/ for the underlying n8n contract."
+  type        = bool
+  default     = false
+}
+
+variable "n8n_otel_exporter_otlp_endpoint" {
+  description = "Base URL of the OTLP HTTP endpoint to export traces to (e.g. http://otel-collector.observability.svc.cluster.local:4318 for an in-cluster collector). When set, maps to N8N_OTEL_EXPORTER_OTLP_ENDPOINT. n8n appends /v1/traces to this value internally, so point at the base URL, not the traces path. Leave null to use n8n's default (http://localhost:4318), which only works if a sidecar collector is colocated in each n8n pod (this module does not deploy one). Ignored when n8n_otel_enabled = false."
+  type        = string
+  default     = null
+
+  # Null-safe ternary (see n8n_otel_traces_sample_rate for the Terraform 1.9.x
+  # short-circuit rationale): only validate the scheme when a value is set.
+  validation {
+    condition = var.n8n_otel_exporter_otlp_endpoint == null ? true : (
+      startswith(var.n8n_otel_exporter_otlp_endpoint, "http://") ||
+      startswith(var.n8n_otel_exporter_otlp_endpoint, "https://")
+    )
+    error_message = "n8n_otel_exporter_otlp_endpoint must be a base URL starting with http:// or https:// (n8n appends /v1/traces itself), or null to use n8n's default."
+  }
+}
+
+variable "n8n_otel_exporter_otlp_headers" {
+  description = "Comma-separated list of key=value pairs sent as HTTP headers with each OTLP request (e.g. 'authorization=Bearer <token>,x-tenant=acme'). Use this for collector authentication or multi-tenant routing. Maps to N8N_OTEL_EXPORTER_OTLP_HEADERS. Leave null to send no extra headers. Marked sensitive so the value is redacted from CLI and plan output, but note it is still injected as a literal env var: it is persisted in plaintext in Terraform state and visible in the pod environment (kubectl describe / printenv). The chart's config.extraEnv does not support secretKeyRef, so restrict access to state and the n8n namespace accordingly. Ignored when n8n_otel_enabled = false."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "n8n_otel_exporter_service_name" {
+  description = "Value of the service.name resource attribute on exported spans. Maps to N8N_OTEL_EXPORTER_SERVICE_NAME. Leave null to use n8n's default ('n8n'). Set this to differentiate multiple n8n deployments sending traces to the same collector (e.g. 'n8n-prod', 'n8n-staging'). Ignored when n8n_otel_enabled = false."
+  type        = string
+  default     = null
+}
+
+variable "n8n_otel_traces_sample_rate" {
+  description = "Fraction of traces to export, between 0 and 1 inclusive. Maps to N8N_OTEL_TRACES_SAMPLE_RATE. n8n uses a trace-ID-ratio sampler, so the same trace ID is either fully sampled or fully dropped across all spans. Leave null to use n8n's default (1.0 — every trace exported). Lower for high-volume installs where the collector or backend can't handle every workflow execution as a trace. Ignored when n8n_otel_enabled = false."
+  type        = number
+  default     = null
+
+  # Use a ternary rather than `null || numeric_op` here: Terraform 1.9.x
+  # eagerly evaluates both sides of the logical OR during validation, so the
+  # `null >= 0` branch errors with 'argument must not be null.' even when
+  # the variable is null. Ternaries DO short-circuit, so wrapping the numeric
+  # comparison in `var == null ? true : (...)` keeps the null path entirely
+  # off the numeric-op branch.
+  validation {
+    condition = var.n8n_otel_traces_sample_rate == null ? true : (
+      var.n8n_otel_traces_sample_rate >= 0 && var.n8n_otel_traces_sample_rate <= 1
+    )
+    error_message = "n8n_otel_traces_sample_rate must be between 0 and 1 inclusive, or null to use n8n's default."
+  }
+}
+
+variable "n8n_otel_traces_include_node_spans" {
+  description = "Whether to emit a node.execute span for each node execution. Maps to N8N_OTEL_TRACES_INCLUDE_NODE_SPANS. Leave null to use n8n's default (true — one span per node per execution). Set to false to export workflow-level spans only — a common volume-reduction lever for workflows with many small nodes. Ignored when n8n_otel_enabled = false."
+  type        = bool
+  default     = null
+}
+
+variable "n8n_otel_traces_inject_outbound" {
+  description = "Whether n8n's HTTP-helper-based nodes (HTTP Request and similar) inject W3C traceparent / tracestate headers into outbound requests. Maps to N8N_OTEL_TRACES_INJECT_OUTBOUND. Leave null to use n8n's default (true — propagate context to downstream services). Set to false when calling external systems that misbehave on unexpected headers, or when you don't want trace context leaving your boundary. Ignored when n8n_otel_enabled = false."
+  type        = bool
+  default     = null
+}
+
+variable "n8n_otel_traces_production_only" {
+  description = "Whether to export traces for production workflow executions only. Maps to N8N_OTEL_TRACES_PRODUCTION_ONLY. Leave null to use n8n's default (true — only production executions are traced). Set to false to also trace manual/test executions run from the editor, which helps while developing instrumentation but is noisy in production. Ignored when n8n_otel_enabled = false."
+  type        = bool
+  default     = null
 }
 
 # ── KEDA: worker pods ─────────────────────────────────────────────────────────

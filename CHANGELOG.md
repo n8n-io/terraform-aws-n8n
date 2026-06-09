@@ -17,6 +17,15 @@ this project adheres to the stability contract in
   `N8N_COMMUNITY_PACKAGES_PREVENT_LOADING` on all n8n pods to stop installed
   community packages from loading at runtime. Defaults to false (env var
   omitted).
+- OpenTelemetry tracing toggles: `n8n_otel_enabled` (master switch, default
+  off) plus null-default tuning inputs `n8n_otel_exporter_otlp_endpoint`,
+  `n8n_otel_exporter_otlp_headers` (sensitive), `n8n_otel_exporter_service_name`,
+  `n8n_otel_traces_sample_rate` (validated 0–1), `n8n_otel_traces_include_node_spans`,
+  `n8n_otel_traces_inject_outbound`, and `n8n_otel_traces_production_only`. Wired
+  to the `N8N_OTEL_*` env vars on the Helm release's `config.extraEnv` so they
+  apply to every n8n container (main, worker, webhook processor). A `check` block
+  warns at plan time when a tuning var is set while `n8n_otel_enabled = false`.
+  When disabled (the default) no `N8N_OTEL_*` env vars are emitted.
 
 ## [0.1.0] - 2026-06-04
 
