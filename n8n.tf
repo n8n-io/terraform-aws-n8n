@@ -346,7 +346,11 @@ resource "helm_release" "n8n" {
           length(var.n8n_log_streaming_destinations) > 0 ? [
             { name = "N8N_LOG_STREAMING_DESTINATIONS", value = jsonencode(var.n8n_log_streaming_destinations) },
           ] : [],
-        ) : []
+        ) : [],
+
+        # Caller-supplied escape hatch, appended last. Validated against
+        # local.n8n_managed_env_names so it cannot shadow a module-managed var.
+        var.n8n_extra_env
       )
     }
 

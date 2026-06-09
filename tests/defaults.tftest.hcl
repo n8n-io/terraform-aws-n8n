@@ -819,3 +819,122 @@ run "log_streaming_full_opt_in_plans_cleanly" {
     error_message = "Full opt-in path (master on + destinations set) must remain plan-able."
   }
 }
+
+# ── n8n_extra_env ────────────────────────────────────────────────────────────
+# Asserted at the variable-contract level: defaults, accepted shape, and the
+# three validation guards (non-empty name, no duplicates, no collision with
+# module-managed env vars). End-to-end wiring into config.extraEnv can't be
+# checked here: helm_release.values depends on kubernetes_namespace (unknown at
+# plan time), and command = apply under the mock providers fails ARN validation
+# across IAM/RDS. Verify the wiring with a real terraform plan.
+
+run "extra_env_defaults_to_empty" {
+  command = plan
+
+  assert {
+    condition     = length(var.n8n_extra_env) == 0
+    error_message = "n8n_extra_env must default to an empty list."
+  }
+}
+
+run "extra_env_accepts_valid_entries" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_DEFAULT_LOCALE", value = "de" },
+      { name = "N8N_PAYLOAD_SIZE_MAX", value = "32" },
+    ]
+  }
+
+  assert {
+    condition     = length(var.n8n_extra_env) == 2
+    error_message = "n8n_extra_env should accept a list of {name, value} objects."
+  }
+
+  assert {
+    condition     = var.n8n_extra_env[0].name == "N8N_DEFAULT_LOCALE"
+    error_message = "n8n_extra_env entry name should propagate correctly."
+  }
+
+  assert {
+    condition     = var.n8n_extra_env[0].value == "de"
+    error_message = "n8n_extra_env entry value should propagate correctly."
+  }
+}
+
+run "extra_env_rejects_empty_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "", value = "x" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_env_rejects_duplicate_names" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_DEFAULT_LOCALE", value = "de" },
+      { name = "N8N_DEFAULT_LOCALE", value = "en" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_env_rejects_module_managed_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_LOG_LEVEL", value = "debug" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# Regression guards: env vars the module started managing after this input was
+# first written (templates/personalization, OTEL, log streaming) must also be
+# rejected by the escape hatch — keep local.n8n_managed_env_names in sync.
+run "extra_env_rejects_feature_toggle_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_PERSONALIZATION_ENABLED", value = "false" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_env_rejects_otel_managed_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_OTEL_ENABLED", value = "false" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_env_rejects_log_streaming_managed_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_LOG_STREAMING_MANAGED_BY_ENV", value = "true" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}

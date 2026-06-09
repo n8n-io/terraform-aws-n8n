@@ -41,6 +41,12 @@ this project adheres to the stability contract in
   Streaming UI becomes read-only. A `check` block warns at plan time when destinations
   are set while the master switch is off. When disabled (the default) no
   `N8N_LOG_STREAMING_*` env vars are emitted.
+- `n8n_extra_env` input variable: accepts a list of `{name, value}` objects appended
+  to the Helm chart's `config.extraEnv` after all module-managed env vars, letting
+  callers inject arbitrary n8n environment variables without forking the module.
+  Validated at plan time to reject empty names, duplicate names, and any name the
+  module already manages (e.g. `N8N_LOG_LEVEL`, `WEBHOOK_URL`, `N8N_ENCRYPTION_KEY`).
+  Not intended for secrets: values are stored in plaintext in Terraform state.
 
 ## [0.1.0] - 2026-06-04
 
