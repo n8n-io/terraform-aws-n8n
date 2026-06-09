@@ -8,7 +8,7 @@ The module expects a pre-existing VPC. If your parent domain is hosted in Route5
 
 > [!WARNING]
 > **Pre-release Module**
-> The `n8n-terraform-aws` module is currently in pre-release. Breaking changes might be introduced at any time until the first stable release.
+> The `terraform-aws-n8n` module is currently in pre-release. Breaking changes might be introduced at any time until the first stable release.
 
 ## Usage
 
