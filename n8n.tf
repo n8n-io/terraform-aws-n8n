@@ -288,7 +288,41 @@ resource "helm_release" "n8n" {
         ] : [],
         var.n8n_community_packages_prevent_loading ? [
           { name = "N8N_COMMUNITY_PACKAGES_PREVENT_LOADING", value = "true" },
-        ] : []
+        ] : [],
+
+        # n8n OpenTelemetry tracing. config.extraEnv applies to every n8n
+        # container in the multi-main topology (main, worker, webhook
+        # processor), which matches the OTEL docs' queue-mode requirement
+        # (https://docs.n8n.io/hosting/logging-monitoring/opentelemetry/).
+        #
+        # Master switch first; each individual tuning var is null-default and
+        # only emitted when explicitly set, so n8n's own defaults apply
+        # otherwise. When n8n_otel_enabled = false the whole block collapses
+        # to [] and no N8N_OTEL_* env vars are set on the pods.
+        var.n8n_otel_enabled ? concat(
+          [{ name = "N8N_OTEL_ENABLED", value = "true" }],
+          var.n8n_otel_exporter_otlp_endpoint == null ? [] : [
+            { name = "N8N_OTEL_EXPORTER_OTLP_ENDPOINT", value = var.n8n_otel_exporter_otlp_endpoint },
+          ],
+          var.n8n_otel_exporter_otlp_headers == null ? [] : [
+            { name = "N8N_OTEL_EXPORTER_OTLP_HEADERS", value = var.n8n_otel_exporter_otlp_headers },
+          ],
+          var.n8n_otel_exporter_service_name == null ? [] : [
+            { name = "N8N_OTEL_EXPORTER_SERVICE_NAME", value = var.n8n_otel_exporter_service_name },
+          ],
+          var.n8n_otel_traces_sample_rate == null ? [] : [
+            { name = "N8N_OTEL_TRACES_SAMPLE_RATE", value = tostring(var.n8n_otel_traces_sample_rate) },
+          ],
+          var.n8n_otel_traces_include_node_spans == null ? [] : [
+            { name = "N8N_OTEL_TRACES_INCLUDE_NODE_SPANS", value = tostring(var.n8n_otel_traces_include_node_spans) },
+          ],
+          var.n8n_otel_traces_inject_outbound == null ? [] : [
+            { name = "N8N_OTEL_TRACES_INJECT_OUTBOUND", value = tostring(var.n8n_otel_traces_inject_outbound) },
+          ],
+          var.n8n_otel_traces_production_only == null ? [] : [
+            { name = "N8N_OTEL_TRACES_PRODUCTION_ONLY", value = tostring(var.n8n_otel_traces_production_only) },
+          ],
+        ) : []
       )
     }
 
@@ -447,4 +481,31 @@ resource "time_sleep" "wait_for_alb_cleanup" {
   destroy_duration = "60s"
 
   depends_on = [kubernetes_namespace.n8n]
+}
+
+# ── OpenTelemetry diagnostic check ─────────────────────────────────────────
+# Warns at plan time when any n8n_otel_* tuning variable is set while the
+# master toggle n8n_otel_enabled is false. The OTEL wiring above collapses
+# the entire N8N_OTEL_* env-var block to [] when the master is off — silent
+# by design — so without this check a caller who sets, e.g.,
+# n8n_otel_exporter_otlp_endpoint without also flipping n8n_otel_enabled
+# would wonder why no traces are flowing.
+#
+# `check` block (Terraform 1.5+) emits a warning, not an error, so plan and
+# apply still succeed. This is intentional: some callers will legitimately
+# stage tuning config in tfvars before flipping the master switch.
+
+check "otel_tuning_requires_master_switch" {
+  assert {
+    condition = var.n8n_otel_enabled || (
+      var.n8n_otel_exporter_otlp_endpoint == null &&
+      var.n8n_otel_exporter_otlp_headers == null &&
+      var.n8n_otel_exporter_service_name == null &&
+      var.n8n_otel_traces_sample_rate == null &&
+      var.n8n_otel_traces_include_node_spans == null &&
+      var.n8n_otel_traces_inject_outbound == null &&
+      var.n8n_otel_traces_production_only == null
+    )
+    error_message = "One or more n8n_otel_* tuning variables are set, but n8n_otel_enabled is false — the tuning values will be ignored and no N8N_OTEL_* env vars will be set on the n8n pods. Set n8n_otel_enabled = true to apply them, or clear the tuning variables to silence this warning."
+  }
 }

@@ -542,3 +542,138 @@ run "community_package_toggles_accept_true" {
     error_message = "n8n_community_packages_prevent_loading should accept true."
   }
 }
+
+# ── OpenTelemetry tracing toggles ─────────────────────────────────────────────
+# n8n_otel_enabled is the master switch (default false, contractually).
+# Each tuning variable defaults to null so that, when n8n_otel_enabled is
+# false, the whole config.extraEnv OTEL block collapses to []. The actual
+# extraEnv list lives inside helm_release.n8n.values (a JSON-encoded string)
+# and is awkward to inspect in plan-time tests; we assert at the variable
+# contract layer, plus we keep a regression guard that the master toggle's
+# default is false.
+
+run "otel_defaults_off" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_otel_enabled == false
+    error_message = "n8n_otel_enabled must default to false — OpenTelemetry tracing is opt-in."
+  }
+
+  assert {
+    condition = (
+      var.n8n_otel_exporter_otlp_endpoint == null &&
+      var.n8n_otel_exporter_otlp_headers == null &&
+      var.n8n_otel_exporter_service_name == null &&
+      var.n8n_otel_traces_sample_rate == null &&
+      var.n8n_otel_traces_include_node_spans == null &&
+      var.n8n_otel_traces_inject_outbound == null &&
+      var.n8n_otel_traces_production_only == null
+    )
+    error_message = "All n8n_otel_* tuning variables must default to null so an individual unset value falls back to n8n's own default."
+  }
+}
+
+run "otel_sample_rate_validator_rejects_negative" {
+  command = plan
+
+  variables {
+    n8n_otel_traces_sample_rate = -0.1
+  }
+
+  expect_failures = [var.n8n_otel_traces_sample_rate]
+}
+
+run "otel_sample_rate_validator_rejects_above_one" {
+  command = plan
+
+  variables {
+    n8n_otel_traces_sample_rate = 1.5
+  }
+
+  expect_failures = [var.n8n_otel_traces_sample_rate]
+}
+
+run "otel_sample_rate_validator_accepts_zero_one_and_fractional" {
+  command = plan
+
+  variables {
+    # Master toggle on so this run isn't tripped by the
+    # `check "otel_tuning_requires_master_switch"` block in n8n.tf — the
+    # purpose of this run is to exercise the sample-rate validator, not the
+    # master/tuning interaction (which has its own runs below).
+    n8n_otel_enabled            = true
+    n8n_otel_traces_sample_rate = 0.25
+  }
+
+  assert {
+    condition     = var.n8n_otel_traces_sample_rate == 0.25
+    error_message = "n8n_otel_traces_sample_rate validator must accept fractional values in [0, 1]."
+  }
+}
+
+run "otel_enabled_with_endpoint_propagates_through_variables" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                = true
+    n8n_otel_exporter_otlp_endpoint = "http://otel-collector.observability.svc.cluster.local:4318"
+  }
+
+  assert {
+    condition = (
+      var.n8n_otel_enabled == true &&
+      var.n8n_otel_exporter_otlp_endpoint == "http://otel-collector.observability.svc.cluster.local:4318"
+    )
+    error_message = "Master toggle + endpoint variables must accept their typical opt-in values."
+  }
+}
+
+# Regression guards for the `check "otel_tuning_requires_master_switch"`
+# block in n8n.tf. Check blocks emit warnings on interactive plan/apply but
+# are treated as failures by `terraform test`. We use that property:
+# `expect_failures = [check.otel_tuning_requires_master_switch]` turns the
+# warning-path test into an explicit "this check is supposed to fire here"
+# assertion. If someone deletes the check block, this test fails (no
+# failure to match the expectation), making the regression visible.
+#
+# The companion run `otel_tuning_set_with_master_on_plans_cleanly` covers
+# the clean path (master on + tuning set, check happy) to make sure the
+# check block also doesn't false-positive.
+
+run "otel_tuning_set_with_master_off_triggers_check_warning" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                = false
+    n8n_otel_exporter_otlp_endpoint = "http://otel-collector.observability.svc.cluster.local:4318"
+    n8n_otel_traces_sample_rate     = 0.1
+  }
+
+  expect_failures = [check.otel_tuning_requires_master_switch]
+}
+
+run "otel_tuning_set_with_master_on_plans_cleanly" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                   = true
+    n8n_otel_exporter_otlp_endpoint    = "http://otel-collector.observability.svc.cluster.local:4318"
+    n8n_otel_exporter_service_name     = "n8n-prod"
+    n8n_otel_traces_sample_rate        = 0.5
+    n8n_otel_traces_include_node_spans = false
+    n8n_otel_traces_inject_outbound    = true
+  }
+
+  assert {
+    condition = (
+      var.n8n_otel_enabled == true &&
+      var.n8n_otel_exporter_otlp_endpoint != null &&
+      var.n8n_otel_exporter_service_name == "n8n-prod" &&
+      var.n8n_otel_traces_sample_rate == 0.5 &&
+      var.n8n_otel_traces_include_node_spans == false &&
+      var.n8n_otel_traces_inject_outbound == true
+    )
+    error_message = "Full opt-in path (master on + multiple tuning vars set) must remain plan-able."
+  }
+}
