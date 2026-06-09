@@ -290,6 +290,16 @@ resource "helm_release" "n8n" {
           { name = "N8N_COMMUNITY_PACKAGES_PREVENT_LOADING", value = "true" },
         ] : [],
 
+        # n8n feature toggles: templates and personalization. Only set the env
+        # var when disabled (false) to override n8n's defaults. When enabled
+        # (true), the env var is omitted so n8n's defaults apply.
+        !var.n8n_templates_enabled ? [
+          { name = "N8N_TEMPLATES_DISABLED", value = "true" },
+        ] : [],
+        !var.n8n_personalization_enabled ? [
+          { name = "N8N_PERSONALIZATION_DISABLED", value = "true" },
+        ] : [],
+
         # n8n OpenTelemetry tracing. config.extraEnv applies to every n8n
         # container in the multi-main topology (main, worker, webhook
         # processor), which matches the OTEL docs' queue-mode requirement
