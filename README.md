@@ -4,7 +4,11 @@ Terraform module for deploying [n8n](https://n8n.io) on AWS.
 
 Deploys the production-grade multi-main setup: multiple n8n main instances, dedicated worker pods, external PostgreSQL (RDS), Redis (ElastiCache), and S3 for shared file storage. An **n8n Enterprise license is required**.
 
-The module expects a pre-existing VPC. If your parent domain is hosted in Route53, pass `route53_zone_id` and the module will issue the ACM certificate and create the DNS alias record itself — a single `terraform apply` brings up n8n end to end with no manual DNS steps. If your DNS is elsewhere, pass a pre-validated `certificate_arn` instead.
+The module expects a pre-existing VPC. If your parent domain is hosted in Route 53, pass `route53_zone_id` and the module issues the ACM certificate and creates the DNS alias record itself. A single `terraform apply` brings up n8n end to end with no manual DNS steps. If your DNS is elsewhere, pass a pre-validated `certificate_arn` instead.
+
+> **Pre-release module**
+>
+> The `terraform-aws-n8n` module is in pre-release. Expect breaking changes at any time before the first stable release.
 
 ## Usage
 
