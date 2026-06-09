@@ -677,3 +677,43 @@ run "otel_tuning_set_with_master_on_plans_cleanly" {
     error_message = "Full opt-in path (master on + multiple tuning vars set) must remain plan-able."
   }
 }
+
+# ── n8n feature toggles (templates and personalization) ───────────────────────
+# Both toggles default to true (feature enabled, no env var set). When disabled
+# (false), they inject N8N_TEMPLATES_DISABLED or N8N_PERSONALIZATION_DISABLED.
+# The Helm values blob is unknown at plan time under the mock provider, so we
+# assert at the variable contract level; that the entries land in config.extraEnv
+# is verified by a real terraform plan from the Terraform Cloud workspace.
+
+run "feature_toggles_default_enabled" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_templates_enabled == true
+    error_message = "n8n_templates_enabled must default to true to preserve current behavior."
+  }
+
+  assert {
+    condition     = var.n8n_personalization_enabled == true
+    error_message = "n8n_personalization_enabled must default to true to preserve current behavior."
+  }
+}
+
+run "feature_toggles_accept_false" {
+  command = plan
+
+  variables {
+    n8n_templates_enabled       = false
+    n8n_personalization_enabled = false
+  }
+
+  assert {
+    condition     = var.n8n_templates_enabled == false
+    error_message = "n8n_templates_enabled should accept false to disable workflow templates."
+  }
+
+  assert {
+    condition     = var.n8n_personalization_enabled == false
+    error_message = "n8n_personalization_enabled should accept false to disable personalization."
+  }
+}

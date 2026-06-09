@@ -26,6 +26,13 @@ this project adheres to the stability contract in
   apply to every n8n container (main, worker, webhook processor). A `check` block
   warns at plan time when a tuning var is set while `n8n_otel_enabled = false`.
   When disabled (the default) no `N8N_OTEL_*` env vars are emitted.
+- `n8n_templates_enabled` input variable: defaults to true. When false, sets
+  `N8N_TEMPLATES_DISABLED=true` on all n8n pods to disable workflow templates
+  and template suggestions for deployments that enforce consistent workflows.
+- `n8n_personalization_enabled` input variable: defaults to true. When false,
+  sets `N8N_PERSONALIZATION_DISABLED=true` on all n8n pods to disable
+  personalization features (custom shortcuts, UI preferences) for deployments
+  that enforce consistent UX.
 
 ## [0.1.0] - 2026-06-04
 
