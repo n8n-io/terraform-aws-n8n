@@ -131,6 +131,32 @@ Concretely, in this repo:
 When you add a feature, add an `assert` for it in the relevant `.tftest.hcl`
 file. Use `command = plan` unless you specifically need apply semantics.
 
+#### Known mock provider limitations
+
+- **`helm_release.values` is unknown at plan time.** The `values` argument is
+  a locally-computed `yamlencode()` block, but because it belongs to a
+  resource that depends on `kubernetes_namespace` (whose attributes are
+  `(known after apply)` under the mock provider), the whole resource —
+  including its inputs — is deferred. You cannot assert on Helm values
+  content in `command = plan` tests.
+- **`command = apply` under mocks fails ARN validation.** The AWS mock
+  provider generates random strings for computed attributes. Resources that
+  consume an ARN as an input (`aws_iam_role_policy_attachment.policy_arn`,
+  `aws_eks_cluster.role_arn`, `aws_db_instance.kms_key_id`, etc.) will
+  reject the mock-generated values with "invalid ARN" errors at apply time.
+  Wiring these up with `override_resource` blocks for every IAM resource is
+  disproportionate boilerplate.
+
+**Recommended pattern** when end-to-end wiring cannot be tested under mocks:
+
+1. Write `command = plan` assertions at the variable contract level (default
+   value, type acceptance, validator rejection).
+2. Add a comment in the test file explaining *why* the wiring cannot be
+   asserted and *how* to verify it manually (e.g. "run a real `terraform
+   plan` from the Terraform Cloud workspace").
+3. Do not reach for `command = apply` to work around plan-time unknowns —
+   the ARN validation failures produce worse noise than the coverage gap.
+
 ### 3. Naming conventions
 
 This module follows the [Terraform module
@@ -218,10 +244,20 @@ populated `terraform.tfvars` — but **never apply from CI** in this repo.
 ### When adding a new input
 
 1. Add it to `variables.tf` with `description`, `type`, sensible `default`
-   (if any), and a `validation` block.
+   (if any), and a `validation` block when it adds meaningful guardrails.
+   Prefer adding validation for new inputs, but align with existing patterns in
+   `variables.tf` and avoid redundant checks.
 2. Surface it on the resource(s) that consume it.
-3. If it's a structural change, add an `assert` in `tests/defaults.tftest.hcl`.
-4. Re-run `terraform-docs` to refresh the `README.md` reference table.
+3. Add an `assert` in `tests/defaults.tftest.hcl` (and the relevant example
+   test file if the variable is exercised by an example). See *Known mock
+   provider limitations* below for guidance when end-to-end wiring cannot be
+   tested under mocks.
+4. Update `CHANGELOG.md` — add a bullet under `## [Unreleased] / ### Added`.
+5. Re-run `terraform-docs .` to refresh the `README.md` reference table.
+   **This step is CI-gated** — the `docs` job runs `terraform-docs
+   --output-check .` and will fail the PR if the README is stale.
+6. Run the full local loop (`terraform fmt -recursive`, `terraform validate`,
+   `terraform test`) and confirm all tests pass **before committing**.
 
 ### When adding a new resource
 
@@ -247,6 +283,12 @@ populated `terraform.tfvars` — but **never apply from CI** in this repo.
 - Don't hand-edit the `<!-- BEGIN_TF_DOCS -->` block in `README.md`.
 - Don't widen `soft_fail` or silence lint rules without a comment explaining
   why and a follow-up TODO.
+- Don't add inline lint-suppression comments (`<!-- markdownlint-disable -->`,
+  `# tflint-ignore`, `# checkov:skip`) as a first response to a lint
+  warning. Prefer fixing the root cause or updating the relevant config file
+  (`.markdownlint.json`, `.tflint.hcl`). Inline suppressions are acceptable
+  only for genuine false positives that cannot be resolved at the config
+  level, and must include a comment explaining why.
 
 ## References
 
