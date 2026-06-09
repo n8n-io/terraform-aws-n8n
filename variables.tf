@@ -567,13 +567,13 @@ variable "n8n_metrics_enabled" {
 }
 
 variable "n8n_templates_enabled" {
-  description = "Enable n8n's workflow templates and template suggestions. When false, sets N8N_TEMPLATES_DISABLED on all n8n pods (main, worker, webhook processor) via config.extraEnv. Defaults to true to preserve current behavior. Set to false to enforce consistent workflows and reduce cognitive load."
+  description = "Enable n8n's workflow templates and template suggestions. When false, sets N8N_TEMPLATES_ENABLED=false on all n8n pods (main, worker, webhook processor) via config.extraEnv. Defaults to true to preserve current behavior. Set to false to enforce consistent workflows and reduce cognitive load."
   type        = bool
   default     = true
 }
 
 variable "n8n_personalization_enabled" {
-  description = "Enable n8n's personalization features (custom shortcuts, UI preferences, etc.). When false, sets N8N_PERSONALIZATION_DISABLED on all n8n pods (main, worker, webhook processor) via config.extraEnv. Defaults to true to preserve current behavior. Set to false to enforce consistent UX and reduce cognitive load."
+  description = "Enable n8n's personalization features (custom shortcuts, UI preferences, etc.). When false, sets N8N_PERSONALIZATION_ENABLED=false on all n8n pods (main, worker, webhook processor) via config.extraEnv. Defaults to true to preserve current behavior. Set to false to enforce consistent UX and reduce cognitive load."
   type        = bool
   default     = true
 }

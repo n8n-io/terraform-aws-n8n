@@ -294,10 +294,10 @@ resource "helm_release" "n8n" {
         # var when disabled (false) to override n8n's defaults. When enabled
         # (true), the env var is omitted so n8n's defaults apply.
         !var.n8n_templates_enabled ? [
-          { name = "N8N_TEMPLATES_DISABLED", value = "true" },
+          { name = "N8N_TEMPLATES_ENABLED", value = "false" },
         ] : [],
         !var.n8n_personalization_enabled ? [
-          { name = "N8N_PERSONALIZATION_DISABLED", value = "true" },
+          { name = "N8N_PERSONALIZATION_ENABLED", value = "false" },
         ] : [],
 
         # n8n OpenTelemetry tracing. config.extraEnv applies to every n8n
