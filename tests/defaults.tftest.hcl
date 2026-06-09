@@ -502,3 +502,43 @@ run "log_output_accepts_console_and_file_combination" {
     error_message = "n8n_log_output validator should accept comma-separated console,file."
   }
 }
+
+# ── Community packages ───────────────────────────────────────────────────────
+# Both toggles map straight to n8n env vars and default to false so the env var
+# is omitted (n8n's own default applies). The Helm values blob is unknown at
+# plan time under the mock provider, so we assert at the variable contract
+# level; that the entries land in config.extraEnv is verified by a real
+# terraform plan from the Terraform Cloud workspace.
+
+run "community_package_toggles_default_false" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_reinstall_missing_packages == false
+    error_message = "n8n_reinstall_missing_packages must default to false so n8n's own default applies."
+  }
+
+  assert {
+    condition     = var.n8n_community_packages_prevent_loading == false
+    error_message = "n8n_community_packages_prevent_loading must default to false so n8n's own default applies."
+  }
+}
+
+run "community_package_toggles_accept_true" {
+  command = plan
+
+  variables {
+    n8n_reinstall_missing_packages         = true
+    n8n_community_packages_prevent_loading = true
+  }
+
+  assert {
+    condition     = var.n8n_reinstall_missing_packages == true
+    error_message = "n8n_reinstall_missing_packages should accept true."
+  }
+
+  assert {
+    condition     = var.n8n_community_packages_prevent_loading == true
+    error_message = "n8n_community_packages_prevent_loading should accept true."
+  }
+}

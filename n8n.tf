@@ -276,6 +276,18 @@ resource "helm_release" "n8n" {
         # process metrics, etc). Scrape config is the caller's job.
         var.n8n_metrics_enabled ? [
           { name = "N8N_METRICS", value = "true" },
+        ] : [],
+        # Community-package handling. Both map straight to the n8n env vars and
+        # default to n8n's own behavior (env var omitted), so only an explicit
+        # opt-in changes anything. N8N_REINSTALL_MISSING_PACKAGES is what makes
+        # workers reinstall UI-installed community nodes after they are
+        # rescheduled onto a fresh, empty filesystem — without it those nodes
+        # load on main but fail on workers in queue mode.
+        var.n8n_reinstall_missing_packages ? [
+          { name = "N8N_REINSTALL_MISSING_PACKAGES", value = "true" },
+        ] : [],
+        var.n8n_community_packages_prevent_loading ? [
+          { name = "N8N_COMMUNITY_PACKAGES_PREVENT_LOADING", value = "true" },
         ] : []
       )
     }

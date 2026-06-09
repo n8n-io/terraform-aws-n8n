@@ -566,6 +566,20 @@ variable "n8n_metrics_enabled" {
   default     = false
 }
 
+# ── Community packages ────────────────────────────────────────────────────────
+
+variable "n8n_reinstall_missing_packages" {
+  description = "Reinstall community packages that are recorded in the database but missing from a pod's local filesystem at startup. Maps to N8N_REINSTALL_MISSING_PACKAGES. n8n stores installed community packages on the pod's filesystem, which is ephemeral in EKS, so a rescheduled or newly scaled-up worker comes up without them and nodes installed via the UI fail to load on that pod. Enabling this makes every pod (main, worker, and webhook-processor) reinstall the recorded packages on boot, which is what lets community nodes work reliably in queue mode. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies."
+  type        = bool
+  default     = false
+}
+
+variable "n8n_community_packages_prevent_loading" {
+  description = "Prevent installed community packages from being loaded at runtime. Maps to N8N_COMMUNITY_PACKAGES_PREVENT_LOADING. When true, n8n leaves the community-packages management surface in place but skips loading the package code, which is useful for locking an instance down without uninstalling. Leave false (the default) for community nodes to load and execute. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies."
+  type        = bool
+  default     = false
+}
+
 # ── KEDA: worker pods ─────────────────────────────────────────────────────────
 
 variable "n8n_worker_keda_min_replicas" {
