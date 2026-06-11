@@ -30,9 +30,9 @@ this project adheres to the stability contract in
   `N8N_TEMPLATES_ENABLED=false` on all n8n pods to disable workflow templates
   and template suggestions for deployments that enforce consistent workflows.
 - `n8n_personalization_enabled` input variable: defaults to true. When false,
-  sets `N8N_PERSONALIZATION_ENABLED=false` on all n8n pods to disable
-  personalization features (custom shortcuts, UI preferences) for deployments
-  that enforce consistent UX.
+  sets `N8N_PERSONALIZATION_ENABLED=false` on all n8n pods to skip n8n's
+  personalization survey questions and tailored content/recommendations,
+  e.g. on shared or ephemeral instances.
 
 ## [0.1.0] - 2026-06-04
 

@@ -680,7 +680,7 @@ run "otel_tuning_set_with_master_on_plans_cleanly" {
 
 # ── n8n feature toggles (templates and personalization) ───────────────────────
 # Both toggles default to true (feature enabled, no env var set). When disabled
-# (false), they inject N8N_TEMPLATES_DISABLED or N8N_PERSONALIZATION_DISABLED.
+# (false), they inject N8N_TEMPLATES_ENABLED=false or N8N_PERSONALIZATION_ENABLED=false.
 # The Helm values blob is unknown at plan time under the mock provider, so we
 # assert at the variable contract level; that the entries land in config.extraEnv
 # is verified by a real terraform plan from the Terraform Cloud workspace.
