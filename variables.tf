@@ -681,6 +681,48 @@ variable "n8n_otel_traces_production_only" {
   default     = null
 }
 
+# Log streaming (n8n Enterprise)
+# Declaratively provisions log streaming destinations from environment
+# variables using n8n's settings-env-vars activation pattern (n8n >= 2.19.0):
+# https://docs.n8n.io/hosting/configuration/settings-env-vars/
+#
+# When n8n_log_streaming_managed_by_env = true, n8n reapplies the destinations
+# from N8N_LOG_STREAMING_DESTINATIONS on every startup and locks the Log
+# Streaming UI read-only. When false (the default), n8n ignores the env vars
+# entirely and destinations are managed in the UI as usual. The feature itself
+# is gated by the n8n Enterprise license (var.n8n_license_key) — the license
+# must include the log streaming entitlement.
+
+variable "n8n_log_streaming_managed_by_env" {
+  description = "Manage n8n's Enterprise log streaming destinations from environment variables instead of the UI. Maps to N8N_LOG_STREAMING_MANAGED_BY_ENV. When true, n8n applies n8n_log_streaming_destinations on every startup and locks the Log Streaming UI controls read-only. When false (the default), no log streaming env vars are emitted and destinations stay UI-managed; flipping back to false keeps the last applied destinations but restores UI write access. Requires n8n >= 2.19.0 and an Enterprise license that includes log streaming. See https://docs.n8n.io/log-streaming/ for the underlying n8n contract."
+  type        = bool
+  default     = false
+}
+
+variable "n8n_log_streaming_destinations" {
+  description = "List of log streaming destination objects, JSON-encoded into N8N_LOG_STREAMING_DESTINATIONS. Each entry must set type to webhook, syslog, or sentry, plus the type-specific fields documented at https://docs.n8n.io/log-streaming/#configure-using-environment-variables (common fields: label, enabled, subscribedEvents, anonymizeAuditMessages, circuitBreaker). Typed as any because the three destination shapes differ structurally. Marked sensitive because webhook headers and Sentry DSNs typically carry credentials — note the value is still injected as a literal env var: it is persisted in plaintext in Terraform state and visible in the pod environment (kubectl describe / printenv). Ignored when n8n_log_streaming_managed_by_env = false."
+  type        = any
+  default     = []
+  nullable    = false
+  sensitive   = true
+
+  validation {
+    condition     = can([for d in var.n8n_log_streaming_destinations : d]) && !can(tostring(var.n8n_log_streaming_destinations))
+    error_message = "n8n_log_streaming_destinations must be a list of destination objects (not a string — the module JSON-encodes it for you)."
+  }
+
+  validation {
+    # Guarded with can() so a non-list value fails this validation cleanly
+    # (via the list-shape validation above) instead of hard-erroring the
+    # `for` expression during evaluation.
+    condition = can([for d in var.n8n_log_streaming_destinations : d]) ? alltrue([
+      for d in var.n8n_log_streaming_destinations :
+      contains(["webhook", "syslog", "sentry"], try(d.type, "missing"))
+    ]) : false
+    error_message = "Each n8n_log_streaming_destinations entry must be an object with type set to one of: webhook, syslog, sentry."
+  }
+}
+
 # ── KEDA: worker pods ─────────────────────────────────────────────────────────
 
 variable "n8n_worker_keda_min_replicas" {

@@ -332,6 +332,20 @@ resource "helm_release" "n8n" {
           var.n8n_otel_traces_production_only == null ? [] : [
             { name = "N8N_OTEL_TRACES_PRODUCTION_ONLY", value = tostring(var.n8n_otel_traces_production_only) },
           ],
+        ) : [],
+
+        # n8n Enterprise log streaming, managed declaratively via env vars
+        # (settings-env-vars activation pattern, n8n >= 2.19.0). When the
+        # master switch is on, n8n reapplies the destinations on every startup
+        # and locks the Log Streaming UI read-only. The destinations list is
+        # JSON-encoded — n8n expects a JSON array in
+        # N8N_LOG_STREAMING_DESTINATIONS. When the master switch is off the
+        # block collapses to [] and destinations stay UI-managed.
+        var.n8n_log_streaming_managed_by_env ? concat(
+          [{ name = "N8N_LOG_STREAMING_MANAGED_BY_ENV", value = "true" }],
+          length(var.n8n_log_streaming_destinations) > 0 ? [
+            { name = "N8N_LOG_STREAMING_DESTINATIONS", value = jsonencode(var.n8n_log_streaming_destinations) },
+          ] : [],
         ) : []
       )
     }
@@ -517,5 +531,18 @@ check "otel_tuning_requires_master_switch" {
       var.n8n_otel_traces_production_only == null
     )
     error_message = "One or more n8n_otel_* tuning variables are set, but n8n_otel_enabled is false — the tuning values will be ignored and no N8N_OTEL_* env vars will be set on the n8n pods. Set n8n_otel_enabled = true to apply them, or clear the tuning variables to silence this warning."
+  }
+}
+
+# Same warning pattern for log streaming: destinations without the master
+# switch are silently ignored by the wiring above (the env-var block collapses
+# to []), so surface that at plan time as a non-blocking warning.
+
+check "log_streaming_destinations_require_managed_by_env" {
+  assert {
+    condition = var.n8n_log_streaming_managed_by_env || (
+      length(var.n8n_log_streaming_destinations) == 0
+    )
+    error_message = "n8n_log_streaming_destinations is set, but n8n_log_streaming_managed_by_env is false — the destinations will be ignored and no N8N_LOG_STREAMING_* env vars will be set on the n8n pods. Set n8n_log_streaming_managed_by_env = true to apply them, or clear the destinations to silence this warning."
   }
 }

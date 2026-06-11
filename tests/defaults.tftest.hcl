@@ -717,3 +717,105 @@ run "feature_toggles_accept_false" {
     error_message = "n8n_personalization_enabled should accept false to disable personalization."
   }
 }
+
+# ── Log streaming (Enterprise, managed via env vars) ──────────────────────────
+# n8n_log_streaming_managed_by_env is the master switch (default false). The
+# destinations list is typed `any` (webhook/syslog/sentry shapes differ) and is
+# JSON-encoded into N8N_LOG_STREAMING_DESTINATIONS only when the master switch
+# is on. The Helm values blob is unknown at plan time under the mock provider,
+# so we assert at the variable contract level; the wiring into config.extraEnv
+# is verified by a real terraform plan.
+
+run "log_streaming_defaults_off" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_log_streaming_managed_by_env == false
+    error_message = "n8n_log_streaming_managed_by_env must default to false — env-managed log streaming is opt-in."
+  }
+
+  assert {
+    condition     = length(var.n8n_log_streaming_destinations) == 0
+    error_message = "n8n_log_streaming_destinations must default to an empty list."
+  }
+}
+
+run "log_streaming_rejects_invalid_destination_type" {
+  command = plan
+
+  variables {
+    n8n_log_streaming_managed_by_env = true
+    n8n_log_streaming_destinations = [
+      { type = "kafka", label = "not-a-real-destination" },
+    ]
+  }
+
+  expect_failures = [var.n8n_log_streaming_destinations]
+}
+
+run "log_streaming_rejects_string_instead_of_list" {
+  command = plan
+
+  variables {
+    n8n_log_streaming_managed_by_env = true
+    n8n_log_streaming_destinations   = "[{\"type\":\"webhook\"}]"
+  }
+
+  expect_failures = [var.n8n_log_streaming_destinations]
+}
+
+run "log_streaming_accepts_mixed_destinations" {
+  command = plan
+
+  variables {
+    n8n_log_streaming_managed_by_env = true
+    n8n_log_streaming_destinations = [
+      {
+        type             = "webhook"
+        label            = "Audit"
+        enabled          = true
+        subscribedEvents = ["n8n.audit", "n8n.workflow"]
+        url              = "https://hooks.example.com/n8n"
+        method           = "POST"
+      },
+      {
+        type  = "syslog"
+        label = "SIEM"
+      },
+    ]
+  }
+
+  assert {
+    condition     = length(var.n8n_log_streaming_destinations) == 2
+    error_message = "n8n_log_streaming_destinations should accept a heterogeneous list of webhook/syslog/sentry objects."
+  }
+}
+
+run "log_streaming_destinations_with_master_off_triggers_check_warning" {
+  command = plan
+
+  variables {
+    n8n_log_streaming_managed_by_env = false
+    n8n_log_streaming_destinations = [
+      { type = "webhook", url = "https://hooks.example.com/n8n" },
+    ]
+  }
+
+  expect_failures = [check.log_streaming_destinations_require_managed_by_env]
+}
+
+run "log_streaming_full_opt_in_plans_cleanly" {
+  command = plan
+
+  variables {
+    n8n_log_streaming_managed_by_env = true
+    n8n_log_streaming_destinations = [
+      { type = "sentry", label = "Errors" },
+    ]
+  }
+
+  assert {
+    condition     = var.n8n_log_streaming_managed_by_env == true
+    error_message = "Full opt-in path (master on + destinations set) must remain plan-able."
+  }
+}
