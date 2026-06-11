@@ -33,6 +33,14 @@ this project adheres to the stability contract in
   sets `N8N_PERSONALIZATION_ENABLED=false` on all n8n pods to skip n8n's
   personalization survey questions and tailored content/recommendations,
   e.g. on shared or ephemeral instances.
+- Log streaming (Enterprise) managed via env vars: `n8n_log_streaming_managed_by_env`
+  (master switch, default off) and `n8n_log_streaming_destinations` (sensitive list of
+  webhook/syslog/sentry destination objects, JSON-encoded into
+  `N8N_LOG_STREAMING_DESTINATIONS`). Uses n8n's settings-env-vars activation pattern
+  (requires n8n >= 2.19.0): destinations are reapplied on every startup and the Log
+  Streaming UI becomes read-only. A `check` block warns at plan time when destinations
+  are set while the master switch is off. When disabled (the default) no
+  `N8N_LOG_STREAMING_*` env vars are emitted.
 
 ## [0.1.0] - 2026-06-04
 
