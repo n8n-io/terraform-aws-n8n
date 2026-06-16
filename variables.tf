@@ -724,7 +724,7 @@ variable "n8n_log_streaming_destinations" {
 }
 
 variable "n8n_extra_env" {
-  description = "Additional environment variables to inject into all n8n pods (main, worker, and webhook-processor) via the Helm chart's config.extraEnv list. Each entry is an object with name and value string attributes, appended after the module's own managed env vars. Names the module already manages (e.g. n8n_log_level maps to N8N_LOG_LEVEL, WEBHOOK_URL, N8N_ENCRYPTION_KEY) are rejected at plan time: use the dedicated module inputs for those. Do not pass secrets here, because values render into the Helm release and are stored in plaintext in Terraform state; use n8n credentials or a Kubernetes secret instead. Example: [{name = \"N8N_DEFAULT_LOCALE\", value = \"de\"}]."
+  description = "Additional environment variables to inject into all n8n pods (main, worker, and webhook-processor) via the Helm chart's config.extraEnv list. Each entry is an object with name and value string attributes. config.extraEnv is appended last in every container's env list, so by Kubernetes' last-wins rule any name here overrides the chart's value for that name. To prevent silently breaking the deployment, connection, identity, storage, license, and topology variables the module manages are rejected at plan time: any name starting with DB_, QUEUE_, N8N_RUNNERS_, N8N_EXTERNAL_STORAGE_S3_, N8N_MULTI_MAIN_, or AWS_, plus names like N8N_ENCRYPTION_KEY, N8N_LICENSE_ACTIVATION_KEY, N8N_HOST, WEBHOOK_URL, and EXECUTIONS_MODE. Use the dedicated module inputs for those. Do not put secret values here, because they render into the Helm release and are stored in plaintext in Terraform state; instead pass a *_FILE companion (e.g. a name ending in _FILE) pointing at a mounted Kubernetes secret, or use n8n credentials. Example: [{name = \"N8N_DEFAULT_LOCALE\", value = \"de\"}]."
   type = list(object({
     name  = string
     value = string
@@ -743,11 +743,13 @@ variable "n8n_extra_env" {
   }
 
   validation {
-    condition = length(setintersection(
-      [for e in var.n8n_extra_env : e.name],
-      local.n8n_managed_env_names
-    )) == 0
-    error_message = "n8n_extra_env must not set module-managed variables (${join(", ", local.n8n_managed_env_names)}). Use the dedicated module inputs (e.g. n8n_log_level, n8n_metrics_enabled) instead."
+    condition = alltrue([
+      for e in var.n8n_extra_env : !(
+        contains(local.n8n_managed_env_names, e.name) ||
+        anytrue([for p in local.n8n_managed_env_prefixes : startswith(e.name, p)])
+      )
+    ])
+    error_message = "n8n_extra_env must not set module-managed variables. Reserved: any name starting with one of ${join(", ", local.n8n_managed_env_prefixes)} (connection/queue/runner/storage/topology/AWS families), plus the exact names ${join(", ", local.n8n_managed_env_names)}. config.extraEnv is appended last and would otherwise silently override these (Kubernetes last-wins). Use the dedicated module inputs (e.g. n8n_log_level, n8n_metrics_enabled) instead."
   }
 }
 

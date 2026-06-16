@@ -938,3 +938,73 @@ run "extra_env_rejects_log_streaming_managed_name" {
 
   expect_failures = [var.n8n_extra_env]
 }
+
+# Prefix-family guards: connection, license, and AWS-credential vars the chart
+# renders from module values must be rejected, because config.extraEnv is
+# appended last and Kubernetes resolves duplicate env names last-wins — an
+# override here would silently repoint the DB, disable Enterprise, or hijack
+# storage credentials.
+run "extra_env_rejects_db_connection_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "DB_POSTGRESDB_HOST", value = "evil.example.com" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_env_rejects_queue_connection_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "QUEUE_BULL_REDIS_HOST", value = "evil.example.com" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_env_rejects_license_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_LICENSE_ACTIVATION_KEY", value = "stolen-key" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_env_rejects_aws_credentials_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "AWS_ACCESS_KEY_ID", value = "AKIAEXAMPLE" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# A genuinely non-managed var that happens to be timezone-related stays allowed:
+# the chart sets TZ (blocked) but not GENERIC_TIMEZONE, so callers can set it.
+run "extra_env_accepts_generic_timezone" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "GENERIC_TIMEZONE", value = "Europe/Berlin" },
+    ]
+  }
+
+  assert {
+    condition     = var.n8n_extra_env[0].name == "GENERIC_TIMEZONE"
+    error_message = "GENERIC_TIMEZONE is not module-managed and should be accepted."
+  }
+}

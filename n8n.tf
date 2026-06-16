@@ -348,8 +348,11 @@ resource "helm_release" "n8n" {
           ] : [],
         ) : [],
 
-        # Caller-supplied escape hatch, appended last. Validated against
-        # local.n8n_managed_env_names so it cannot shadow a module-managed var.
+        # Caller-supplied escape hatch, appended last. Kubernetes resolves
+        # duplicate env names last-wins, so this would override anything above
+        # it; var.n8n_extra_env is validated against local.n8n_managed_env_names
+        # and local.n8n_managed_env_prefixes (variables.tf) so it cannot shadow a
+        # module- or chart-managed connection/identity/storage/license var.
         var.n8n_extra_env
       )
     }
