@@ -42,6 +42,17 @@ this project adheres to the stability contract in
   are set while the master switch is off. When disabled (the default) no
   `N8N_LOG_STREAMING_*` env vars are emitted.
 
+### Changed
+
+- **AWS provider requirement bumped to `~> 6.0`** (was `~> 5.0`). No module
+  resource required a configuration change: the module surface uses none of the
+  attributes removed in AWS provider 6.0, and `terraform validate` passes
+  against 6.x. Upgrade note: AWS provider 6.0 adds a per-resource `region`
+  attribute, so existing v0.1.x deployments should run
+  `terraform plan -refresh-only` followed by `terraform apply -refresh-only` to
+  settle state before applying further changes. Callers who must remain on AWS
+  provider 5.x should pin this module to `~> 0.1`.
+
 ## [0.1.0] - 2026-06-04
 
 Initial release on the Terraform Registry as `n8n-io/n8n/aws`.

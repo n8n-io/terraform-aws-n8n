@@ -77,11 +77,13 @@ This contract goes away at 1.0.0 in favor of standard SemVer.
 
 ### Compatibility
 
-v0.1.0 ships against specific provider majors. Notably:
+This module ships against specific provider majors. Notably:
 
-- **AWS provider:** `~> 5.0`. Callers who already pin `aws ~> 6.0` in
-  their root module will hit a constraint conflict at `terraform init`.
-  A bump to `~> 6.0` is tracked for v0.2.0.
+- **AWS provider:** `~> 6.0`. Upgrading from a v0.1.x deployment (which
+  pinned `aws ~> 5.0`) requires a one-time `terraform plan -refresh-only`
+  followed by `terraform apply -refresh-only` to settle AWS provider 6.0's
+  per-resource `region` attribute into state before applying other changes.
+  Callers who must stay on AWS provider 5.x should pin this module to `~> 0.1`.
 - **Helm provider:** `~> 2.12`. A bump to `~> 3.0` is tracked for v0.2.0.
 - **Kubernetes provider:** `~> 2.0`.
 - **Terraform CLI:** `>= 1.9`.
@@ -294,7 +296,7 @@ keeps the last applied destinations but restores UI write access.
 | Name | Version |
 | ---- | ------- |
 | <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.9 |
-| <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 5.0 |
+| <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.0 |
 | <a name="requirement_helm"></a> [helm](#requirement\_helm) | ~> 2.12 |
 | <a name="requirement_kubernetes"></a> [kubernetes](#requirement\_kubernetes) | ~> 2.0 |
 | <a name="requirement_random"></a> [random](#requirement\_random) | ~> 3.0 |
@@ -304,7 +306,7 @@ keeps the last applied destinations but restores UI write access.
 
 | Name | Version |
 | ---- | ------- |
-| <a name="provider_aws"></a> [aws](#provider\_aws) | ~> 5.0 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | ~> 6.0 |
 | <a name="provider_helm"></a> [helm](#provider\_helm) | ~> 2.12 |
 | <a name="provider_kubernetes"></a> [kubernetes](#provider\_kubernetes) | ~> 2.0 |
 | <a name="provider_random"></a> [random](#provider\_random) | ~> 3.0 |
