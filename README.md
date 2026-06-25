@@ -10,6 +10,12 @@ The module expects a pre-existing VPC. If your parent domain is hosted in Route 
 >
 > The `terraform-aws-n8n` module is in pre-release. Expect breaking changes at any time before the first stable release.
 
+## Architecture
+
+![n8n on AWS architecture: users and webhook apps reach an Application Load Balancer that fronts an EKS cluster running separate main, webhook-processor, and worker pods, with RDS PostgreSQL, ElastiCache Redis, and S3 as managed backing services](docs/images/architecture.png)
+
+Users and inbound webhooks hit an Application Load Balancer (managed by the AWS Load Balancer Controller) that fronts the EKS cluster. Inside the cluster the n8n Helm chart runs three separate deployments: main instance pods (leader election, UI/editor, REST API), webhook processor pods for inbound triggers, and worker pods that run job executions and scale on Redis queue depth via KEDA. State lives in managed services outside the cluster: RDS PostgreSQL for workflow state, ElastiCache Redis for leader election and the worker queue, and S3 for binary data. ACM issues the TLS certificate for the ALB.
+
 ## Usage
 
 ```hcl
