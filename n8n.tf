@@ -346,7 +346,14 @@ resource "helm_release" "n8n" {
           length(var.n8n_log_streaming_destinations) > 0 ? [
             { name = "N8N_LOG_STREAMING_DESTINATIONS", value = jsonencode(var.n8n_log_streaming_destinations) },
           ] : [],
-        ) : []
+        ) : [],
+
+        # Caller-supplied escape hatch, appended last. Kubernetes resolves
+        # duplicate env names last-wins, so this would override anything above
+        # it; var.n8n_extra_env is validated against local.n8n_managed_env_names
+        # and local.n8n_managed_env_prefixes (variables.tf) so it cannot shadow a
+        # module- or chart-managed connection/identity/storage/license var.
+        var.n8n_extra_env
       )
     }
 

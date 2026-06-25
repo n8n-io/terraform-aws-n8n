@@ -41,6 +41,18 @@ this project adheres to the stability contract in
   Streaming UI becomes read-only. A `check` block warns at plan time when destinations
   are set while the master switch is off. When disabled (the default) no
   `N8N_LOG_STREAMING_*` env vars are emitted.
+- `n8n_extra_env` input variable: accepts a list of `{name, value}` objects appended
+  to the Helm chart's `config.extraEnv` after all module-managed env vars, letting
+  callers inject arbitrary n8n environment variables without forking the module.
+  Validated at plan time to reject empty or whitespace-padded names, duplicate
+  names, and any connection/identity/storage/license/topology variable the
+  module or chart manages: names starting with `DB_`, `QUEUE_`, `N8N_RUNNERS_`,
+  `N8N_EXTERNAL_STORAGE_S3_`, `N8N_MULTI_MAIN_`, or `AWS_`, plus exact names like
+  `N8N_ENCRYPTION_KEY`, `N8N_LICENSE_ACTIVATION_KEY`, `WEBHOOK_URL`, and
+  `EXECUTIONS_MODE`. `config.extraEnv` is appended last, so without this guard a
+  caller could silently override those (Kubernetes last-wins) and break the
+  deployment. Not intended for secrets: values are stored in plaintext in
+  Terraform state; pass a `*_FILE` companion pointing at a mounted secret instead.
 
 ### Changed
 
