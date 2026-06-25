@@ -16,9 +16,9 @@ open /Users/<you>/Library/Caches/helm/repository/<repo>-index.yaml: no such file
 
 **Cause**
 
-The `hashicorp/helm` Terraform provider (v2.x) embeds Helm SDK v3 and reuses the local Helm CLI's repository cache (`$HELM_REPOSITORY_CACHE`). When the system Helm CLI is **Helm 4** (released 2025), the cache layout differs slightly from the v3 SDK's expectations and the SDK fails to find the index files even though the chart URL is hard-coded in the `helm_release` block.
+The `hashicorp/helm` Terraform provider embeds the Helm SDK v3 and reuses the local Helm CLI's repository cache (`$HELM_REPOSITORY_CACHE`). This is still true on the `~> 3.0` provider line this module pins: provider 3.x is a Plugin Framework rewrite, but it continues to vendor `helm.sh/helm/v3` (v3.18.5 as of provider v3.2.0), so the embedded SDK is unchanged from the 2.x era. When the system Helm CLI is **Helm 4** (released 2025), the cache layout differs slightly from the v3 SDK's expectations and the SDK fails to find the index files even though the chart URL is hard-coded in the `helm_release` block.
 
-This is environmental, not a module bug — but anyone running Helm 4 on macOS will see it.
+This is environmental, not a module bug — but anyone running Helm 4 on macOS will see it. The workaround below is unchanged under provider 3.x. (Note: if the repository cache is already populated — for example from earlier `helm repo add`/`helm repo update` runs — the apply succeeds without intervention; the failure only appears against an empty or Helm-4-only cache.)
 
 **Fix**
 

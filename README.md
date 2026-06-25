@@ -77,18 +77,22 @@ This contract goes away at 1.0.0 in favor of standard SemVer.
 
 ### Compatibility
 
-v0.1.0 ships against specific provider majors. Notably:
+This module ships against specific provider majors. Notably:
 
-- **AWS provider:** `~> 5.0`. Callers who already pin `aws ~> 6.0` in
-  their root module will hit a constraint conflict at `terraform init`.
-  A bump to `~> 6.0` is tracked for v0.2.0.
-- **Helm provider:** `~> 2.12`. A bump to `~> 3.0` is tracked for v0.2.0.
+- **AWS provider:** `~> 6.0`. Upgrading from a v0.1.x deployment (which
+  pinned `aws ~> 5.0`) requires a one-time `terraform plan -refresh-only`
+  followed by `terraform apply -refresh-only` to settle AWS provider 6.0's
+  per-resource `region` attribute into state before applying other changes.
+  Callers who must stay on AWS provider 5.x should pin this module to `~> 0.1`.
+- **Helm provider:** `~> 3.0`. The 3.x release is a Plugin Framework
+  rewrite; `helm_release` drift detection is stricter, so the first
+  `terraform plan` after upgrading from v0.1.x may show in-place diffs on
+  existing releases. Callers who must stay on Helm provider 2.x should pin
+  this module to `~> 0.1`.
 - **Kubernetes provider:** `~> 2.0`.
 - **Terraform CLI:** `>= 1.9`.
-- **n8n Helm chart:** validated against `1.4.0` (the current default).
-  Newer chart versions can be selected via `n8n_chart_version` but are
-  not part of the v0.1.0 test matrix; a default bump is tracked for
-  v0.2.0.
+- **n8n Helm chart:** default `1.10.0`. Other chart versions can be
+  selected via `n8n_chart_version`.
 - **EKS:** validated on Kubernetes `1.35`.
 - **PostgreSQL:** validated on RDS `16.9`.
 
@@ -294,8 +298,8 @@ keeps the last applied destinations but restores UI write access.
 | Name | Version |
 | ---- | ------- |
 | <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.9 |
-| <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 5.0 |
-| <a name="requirement_helm"></a> [helm](#requirement\_helm) | ~> 2.12 |
+| <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.0 |
+| <a name="requirement_helm"></a> [helm](#requirement\_helm) | ~> 3.0 |
 | <a name="requirement_kubernetes"></a> [kubernetes](#requirement\_kubernetes) | ~> 2.0 |
 | <a name="requirement_random"></a> [random](#requirement\_random) | ~> 3.0 |
 | <a name="requirement_time"></a> [time](#requirement\_time) | ~> 0.12 |
@@ -304,8 +308,8 @@ keeps the last applied destinations but restores UI write access.
 
 | Name | Version |
 | ---- | ------- |
-| <a name="provider_aws"></a> [aws](#provider\_aws) | ~> 5.0 |
-| <a name="provider_helm"></a> [helm](#provider\_helm) | ~> 2.12 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | ~> 6.0 |
+| <a name="provider_helm"></a> [helm](#provider\_helm) | ~> 3.0 |
 | <a name="provider_kubernetes"></a> [kubernetes](#provider\_kubernetes) | ~> 2.0 |
 | <a name="provider_random"></a> [random](#provider\_random) | ~> 3.0 |
 | <a name="provider_time"></a> [time](#provider\_time) | ~> 0.12 |
@@ -392,7 +396,7 @@ No modules.
 | <a name="input_db_postgresdb_ssl_enabled"></a> [db\_postgresdb\_ssl\_enabled](#input\_db\_postgresdb\_ssl\_enabled) | Whether n8n connects to the database over SSL. Set to true (the default) for direct connections to RDS or Aurora — they use the AWS CA which Node.js doesn't trust by default, so the connection still negotiates SSL but skips certificate verification. Set to false when n8n connects to an in-cluster connection pooler (e.g. PgBouncer) that handles SSL on its upstream leg — the pod-to-pod traffic stays inside the cluster network. | `bool` | `true` | no |
 | <a name="input_db_storage_encrypted"></a> [db\_storage\_encrypted](#input\_db\_storage\_encrypted) | When true (the default), encrypt the RDS instance's storage, Performance Insights data, and the postgresql CloudWatch log group with a module-created Customer Managed KMS Key (aws\_kms\_key.db). Clears Checkov findings CKV\_AWS\_16, CKV\_AWS\_354, and CKV\_AWS\_158. Flipping this from false to true on an existing RDS instance forces a replacement — AWS does not support enabling storage encryption in place, so the upgrade path is snapshot → restore into a new encrypted instance. Set to false in your tfvars to preserve current behavior on pre-existing unencrypted deployments. The CMK rotates annually and uses a 7-day deletion window (AWS minimum). Ignored when create\_database = false. | `bool` | `true` | no |
 | <a name="input_kubernetes_version"></a> [kubernetes\_version](#input\_kubernetes\_version) | Kubernetes version for the EKS cluster | `string` | `"1.35"` | no |
-| <a name="input_n8n_chart_version"></a> [n8n\_chart\_version](#input\_n8n\_chart\_version) | n8n Helm chart version to deploy | `string` | `"1.4.0"` | no |
+| <a name="input_n8n_chart_version"></a> [n8n\_chart\_version](#input\_n8n\_chart\_version) | n8n Helm chart version to deploy | `string` | `"1.10.0"` | no |
 | <a name="input_n8n_community_packages_prevent_loading"></a> [n8n\_community\_packages\_prevent\_loading](#input\_n8n\_community\_packages\_prevent\_loading) | Prevent installed community packages from being loaded at runtime. Maps to N8N\_COMMUNITY\_PACKAGES\_PREVENT\_LOADING. When true, n8n leaves the community-packages management surface in place but skips loading the package code, which is useful for locking an instance down without uninstalling. Leave false (the default) for community nodes to load and execute. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies. | `bool` | `false` | no |
 | <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate\_arn. | `string` | n/a | yes |
 | <a name="input_n8n_execution_concurrency_limit"></a> [n8n\_execution\_concurrency\_limit](#input\_n8n\_execution\_concurrency\_limit) | Maximum concurrent production executions (-1 to disable) | `number` | `100` | no |

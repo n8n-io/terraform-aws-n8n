@@ -19,23 +19,23 @@ resource "helm_release" "lbc" {
   atomic          = true
   cleanup_on_fail = true
 
-  set {
-    name  = "clusterName"
-    value = aws_eks_cluster.n8n.name
-  }
-
-  set {
-    name  = "vpcId"
-    value = local.vpc_id
-  }
-
-  # Prevent the LBC validating webhook from blocking Ingress deletions when
-  # LBC pods are unhealthy during destroy. With failurePolicy=Ignore, the
-  # webhook is best-effort — if LBC can't respond, the API server proceeds.
-  set {
-    name  = "webhookConfig.failurePolicy"
-    value = "Ignore"
-  }
+  set = [
+    {
+      name  = "clusterName"
+      value = aws_eks_cluster.n8n.name
+    },
+    {
+      name  = "vpcId"
+      value = local.vpc_id
+    },
+    # Prevent the LBC validating webhook from blocking Ingress deletions when
+    # LBC pods are unhealthy during destroy. With failurePolicy=Ignore, the
+    # webhook is best-effort — if LBC can't respond, the API server proceeds.
+    {
+      name  = "webhookConfig.failurePolicy"
+      value = "Ignore"
+    },
+  ]
 
   depends_on = [
     aws_eks_node_group.n8n,
@@ -61,20 +61,20 @@ resource "helm_release" "cluster_autoscaler" {
   atomic          = true
   cleanup_on_fail = true
 
-  set {
-    name  = "autoDiscovery.clusterName"
-    value = aws_eks_cluster.n8n.name
-  }
-
-  set {
-    name  = "awsRegion"
-    value = local.aws_region
-  }
-
-  set {
-    name  = "rbac.serviceAccount.name"
-    value = "cluster-autoscaler"
-  }
+  set = [
+    {
+      name  = "autoDiscovery.clusterName"
+      value = aws_eks_cluster.n8n.name
+    },
+    {
+      name  = "awsRegion"
+      value = local.aws_region
+    },
+    {
+      name  = "rbac.serviceAccount.name"
+      value = "cluster-autoscaler"
+    },
+  ]
 
   depends_on = [
     aws_eks_node_group.n8n,
@@ -105,15 +105,16 @@ resource "helm_release" "metrics_server" {
   atomic          = true
   cleanup_on_fail = true
 
-  set {
-    name  = "args[0]"
-    value = "--kubelet-insecure-tls"
-  }
-
-  set {
-    name  = "args[1]"
-    value = "--kubelet-preferred-address-types=InternalIP"
-  }
+  set = [
+    {
+      name  = "args[0]"
+      value = "--kubelet-insecure-tls"
+    },
+    {
+      name  = "args[1]"
+      value = "--kubelet-preferred-address-types=InternalIP"
+    },
+  ]
 
   depends_on = [aws_eks_node_group.n8n]
 }

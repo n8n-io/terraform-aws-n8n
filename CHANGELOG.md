@@ -42,6 +42,30 @@ this project adheres to the stability contract in
   are set while the master switch is off. When disabled (the default) no
   `N8N_LOG_STREAMING_*` env vars are emitted.
 
+### Changed
+
+- **AWS provider requirement bumped to `~> 6.0`** (was `~> 5.0`). No module
+  resource required a configuration change: the module surface uses none of the
+  attributes removed in AWS provider 6.0, and `terraform validate` passes
+  against 6.x. Upgrade note: AWS provider 6.0 adds a per-resource `region`
+  attribute, so existing v0.1.x deployments should run
+  `terraform plan -refresh-only` followed by `terraform apply -refresh-only` to
+  settle state before applying further changes. Callers who must remain on AWS
+  provider 5.x should pin this module to `~> 0.1`.
+- **Helm provider requirement bumped to `~> 3.0`** (was `~> 2.12`). Helm
+  provider 3.0 is a Plugin Framework rewrite. The `set` blocks on the bundled
+  controller releases (AWS Load Balancer Controller, Cluster Autoscaler,
+  metrics-server) were converted to the new `set = [...]` list syntax, and the
+  example `provider "helm"` blocks now use the `kubernetes = { ... }` object
+  form. Upgrade note: drift detection is stricter in 3.x, so the first
+  `terraform plan` after upgrading may show in-place diffs on existing
+  `helm_release` resources. Callers who must remain on Helm provider 2.x should
+  pin this module to `~> 0.1`.
+- **Default `n8n_chart_version` bumped to `1.10.0`** (was `1.4.0`). Applying
+  this default change cycles the n8n pods. Pin `n8n_chart_version` to stay on a
+  specific chart release. Validated by a real apply of examples/small plus the
+  post-deploy smoke test.
+
 ## [0.1.0] - 2026-06-04
 
 Initial release on the Terraform Registry as `n8n-io/n8n/aws`.
