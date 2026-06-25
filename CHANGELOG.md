@@ -44,9 +44,9 @@ this project adheres to the stability contract in
 - `n8n_extra_env` input variable: accepts a list of `{name, value}` objects appended
   to the Helm chart's `config.extraEnv` after all module-managed env vars, letting
   callers inject arbitrary n8n environment variables without forking the module.
-  Validated at plan time to reject empty names, duplicate names, and any
-  connection/identity/storage/license/topology variable the module or chart
-  manages: names starting with `DB_`, `QUEUE_`, `N8N_RUNNERS_`,
+  Validated at plan time to reject empty or whitespace-padded names, duplicate
+  names, and any connection/identity/storage/license/topology variable the
+  module or chart manages: names starting with `DB_`, `QUEUE_`, `N8N_RUNNERS_`,
   `N8N_EXTERNAL_STORAGE_S3_`, `N8N_MULTI_MAIN_`, or `AWS_`, plus exact names like
   `N8N_ENCRYPTION_KEY`, `N8N_LICENSE_ACTIVATION_KEY`, `WEBHOOK_URL`, and
   `EXECUTIONS_MODE`. `config.extraEnv` is appended last, so without this guard a

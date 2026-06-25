@@ -875,6 +875,21 @@ run "extra_env_rejects_empty_name" {
   expect_failures = [var.n8n_extra_env]
 }
 
+# Whitespace-padded names must be rejected: otherwise a name like " DB_HOST"
+# would pass the duplicate and module-managed guards (which match on the raw
+# string) while Kubernetes renders it as a distinct, ignored env var.
+run "extra_env_rejects_whitespace_padded_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = " DB_POSTGRESDB_HOST", value = "evil.example.com" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
 run "extra_env_rejects_duplicate_names" {
   command = plan
 
