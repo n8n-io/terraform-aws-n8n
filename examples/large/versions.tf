@@ -12,7 +12,7 @@ terraform {
     }
     helm = {
       source  = "hashicorp/helm"
-      version = "~> 2.12"
+      version = "~> 3.0"
     }
     # random is declared at the example level (not just inherited from the
     # module) because aurora.tf uses random_password.aurora directly to
