@@ -61,6 +61,10 @@ this project adheres to the stability contract in
   `terraform plan` after upgrading may show in-place diffs on existing
   `helm_release` resources. Callers who must remain on Helm provider 2.x should
   pin this module to `~> 0.1`.
+- **Default `n8n_chart_version` bumped to `1.10.0`** (was `1.4.0`). Applying
+  this default change cycles the n8n pods. Pin `n8n_chart_version` to stay on a
+  specific chart release. Validated by a real apply of examples/small plus the
+  post-deploy smoke test.
 
 ## [0.1.0] - 2026-06-04
 

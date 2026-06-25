@@ -179,7 +179,7 @@ variable "node_max" {
 variable "n8n_chart_version" {
   description = "n8n Helm chart version to deploy"
   type        = string
-  default     = "1.4.0"
+  default     = "1.10.0"
 }
 
 variable "n8n_helm_timeout" {
