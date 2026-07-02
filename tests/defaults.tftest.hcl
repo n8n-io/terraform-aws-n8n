@@ -1134,3 +1134,27 @@ run "image_tag_rejects_whitespace_padded_value" {
 
   expect_failures = [var.n8n_image_tag]
 }
+
+run "image_tag_accepts_leading_underscore" {
+  command = plan
+
+  variables {
+    n8n_image_tag = "_1.2.3"
+  }
+
+  assert {
+    condition     = var.n8n_image_tag == "_1.2.3"
+    error_message = "n8n_image_tag should accept a leading underscore — valid per Docker tag spec."
+  }
+}
+
+run "image_tag_rejects_overlong_tag" {
+  command = plan
+
+  variables {
+    # 129 characters — one over the Docker limit of 128
+    n8n_image_tag = "a${join("", [for i in range(128) : "b"])}"
+  }
+
+  expect_failures = [var.n8n_image_tag]
+}
