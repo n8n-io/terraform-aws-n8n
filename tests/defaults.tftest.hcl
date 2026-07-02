@@ -1092,3 +1092,35 @@ run "extra_env_accepts_generic_timezone" {
     error_message = "GENERIC_TIMEZONE is not module-managed and should be accepted."
   }
 }
+
+run "image_tag_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_image_tag == null
+    error_message = "n8n_image_tag should default to null so the chart's own stable tag applies by default."
+  }
+}
+
+run "image_tag_when_set_flows_through" {
+  command = plan
+
+  variables {
+    n8n_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_tag == "2.27.4"
+    error_message = "n8n_image_tag should be passed through when explicitly set."
+  }
+}
+
+run "image_tag_rejects_empty_string" {
+  command = plan
+
+  variables {
+    n8n_image_tag = ""
+  }
+
+  expect_failures = [var.n8n_image_tag]
+}
