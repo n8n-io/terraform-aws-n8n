@@ -118,5 +118,3 @@ resource "helm_release" "metrics_server" {
 
   depends_on = [aws_eks_node_group.n8n]
 }
-
-# Note: No EBS CSI addon — multi-main n8n is stateless (RDS + S3 replace the PVC).

@@ -525,8 +525,44 @@ fi
 fi  # end multi-main checks
 
 # ══════════════════════════════════════════════════════════════════════════════
-# COMMON CHECKS (HTTP, API, Workflow execution)
+# COMMON CHECKS (Storage, HTTP, API, Workflow execution)
 # ══════════════════════════════════════════════════════════════════════════════
+
+# ── Cluster storage: EBS CSI + default StorageClass ───────────────────────────
+# Would have caught issue #22: a cluster with no CSI driver and no default
+# StorageClass leaves every unqualified PVC Pending forever.
+
+header "Cluster Storage"
+
+default_sc=$(kubectl get storageclass \
+  -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}' \
+  2>/dev/null || echo "")
+
+if [[ "$default_sc" == "gp3" ]]; then
+  pass "Default StorageClass is gp3"
+elif [[ -n "$default_sc" ]]; then
+  warn "Default StorageClass is '$default_sc' (expected gp3)"
+else
+  fail "No default StorageClass, PVCs without storageClassName will stay Pending"
+fi
+
+gp3_provisioner=$(kubectl get storageclass gp3 \
+  -o jsonpath='{.provisioner}' 2>/dev/null || echo "")
+if [[ "$gp3_provisioner" == "ebs.csi.aws.com" ]]; then
+  pass "gp3 StorageClass uses the EBS CSI provisioner"
+else
+  fail "gp3 StorageClass provisioner is '${gp3_provisioner:-missing}' (expected ebs.csi.aws.com)"
+fi
+
+# grep -c (not -q): -q exits at the first match, kubectl takes a SIGPIPE on
+# the remaining lines, and pipefail turns that into a false failure.
+running_csi_pods=$(kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-ebs-csi-driver \
+  --no-headers 2>/dev/null | grep -c "Running" || true)
+if [[ "${running_csi_pods:-0}" -gt 0 ]]; then
+  pass "EBS CSI driver pods are running in kube-system ($running_csi_pods pods)"
+else
+  fail "No running EBS CSI driver pods in kube-system"
+fi
 
 # ── HTTP health check ─────────────────────────────────────────────────────────
 

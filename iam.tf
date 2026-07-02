@@ -372,3 +372,27 @@ resource "aws_eks_pod_identity_association" "cluster_autoscaler" {
 
   depends_on = [aws_eks_addon.pod_identity_agent]
 }
+
+# ── EBS CSI driver IAM ────────────────────────────────────────────────────────
+# EKS Pod Identity binds this role to the CSI controller's ServiceAccount via
+# the pod_identity_association block on aws_eks_addon.ebs_csi (storage.tf).
+
+resource "aws_iam_role" "ebs_csi" {
+  name = "${local.cluster_name}-ebs-csi-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "pods.eks.amazonaws.com" }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+    }]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi" {
+  role       = aws_iam_role.ebs_csi.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
