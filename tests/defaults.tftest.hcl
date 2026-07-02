@@ -1124,3 +1124,13 @@ run "image_tag_rejects_empty_string" {
 
   expect_failures = [var.n8n_image_tag]
 }
+
+run "image_tag_rejects_whitespace_padded_value" {
+  command = plan
+
+  variables {
+    n8n_image_tag = " 1.2.3 "
+  }
+
+  expect_failures = [var.n8n_image_tag]
+}

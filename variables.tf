@@ -188,8 +188,8 @@ variable "n8n_image_tag" {
   default     = null
 
   validation {
-    condition     = var.n8n_image_tag == null ? true : length(trimspace(var.n8n_image_tag)) > 0
-    error_message = "n8n_image_tag must be a non-empty string when set (e.g. \"1.2.3\"); set to null to use the chart's default (stable)."
+    condition     = var.n8n_image_tag == null ? true : can(regex("^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$", var.n8n_image_tag))
+    error_message = "n8n_image_tag must be a non-empty string with no whitespace, containing only alphanumeric characters, dots, underscores, and hyphens (e.g. \"1.2.3\", \"latest\", \"1.2.3-alpine\"). Set to null to use the chart's default (stable)."
   }
 }
 
