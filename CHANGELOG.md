@@ -53,6 +53,16 @@ this project adheres to the stability contract in
   caller could silently override those (Kubernetes last-wins) and break the
   deployment. Not intended for secrets: values are stored in plaintext in
   Terraform state; pass a `*_FILE` companion pointing at a mounted secret instead.
+- EBS CSI driver (EKS managed addon) and a default encrypted `gp3` StorageClass
+  (`storage.tf`), so PersistentVolumeClaims without an explicit `storageClassName`
+  bind out of the box instead of staying `Pending` forever
+  ([#22](https://github.com/n8n-io/terraform-aws-n8n/issues/22)). The CSI
+  controller authenticates via EKS Pod Identity (no IRSA/OIDC), scoped to the
+  AWS-managed `AmazonEBSCSIDriverPolicy`; volumes are encrypted with the default
+  `aws/ebs` key. Additive for existing deployments: the next apply installs the
+  addon and the StorageClass without cycling any n8n pods. The EKS-created legacy
+  `gp2` class is left untouched (not Terraform-managed, carries no default
+  annotation on current EKS). Decision record: solutions-catalog ADR-0041.
 
 ### Changed
 

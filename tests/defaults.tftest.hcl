@@ -390,6 +390,75 @@ run "pod_identity_bindings_use_correct_service_accounts" {
   }
 }
 
+# EBS CSI addon + default gp3 StorageClass (issue #22, solutions-catalog
+# ADR-0041). All inputs here are static, so plan-time assertions work under
+# the mocked providers; only the Pod Identity role_arn is mock-unknown, so we
+# assert the service account and the role's static trust policy instead.
+run "ebs_csi_and_default_storage_class" {
+  command = plan
+
+  assert {
+    condition     = aws_eks_addon.ebs_csi.addon_name == "aws-ebs-csi-driver"
+    error_message = "EBS CSI managed addon must be installed, without it no PVC can bind (issue #22)"
+  }
+
+  assert {
+    # pod_identity_association is a set of objects, so it cannot be indexed.
+    condition     = anytrue([for a in aws_eks_addon.ebs_csi.pod_identity_association : a.service_account == "ebs-csi-controller-sa"])
+    error_message = "EBS CSI addon must bind Pod Identity to the ebs-csi-controller-sa SA"
+  }
+
+  assert {
+    condition     = strcontains(aws_iam_role.ebs_csi.assume_role_policy, "pods.eks.amazonaws.com")
+    error_message = "EBS CSI role must trust pods.eks.amazonaws.com (Pod Identity, not IRSA)"
+  }
+
+  assert {
+    condition     = aws_iam_role_policy_attachment.ebs_csi.policy_arn == "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+    error_message = "EBS CSI role must attach the AWS-managed AmazonEBSCSIDriverPolicy"
+  }
+
+  assert {
+    condition     = kubernetes_storage_class_v1.gp3.metadata[0].name == "gp3"
+    error_message = "Default StorageClass must be named gp3"
+  }
+
+  assert {
+    condition     = kubernetes_storage_class_v1.gp3.metadata[0].annotations["storageclass.kubernetes.io/is-default-class"] == "true"
+    error_message = "gp3 StorageClass must carry the default-class annotation so unqualified PVCs bind"
+  }
+
+  assert {
+    condition     = kubernetes_storage_class_v1.gp3.storage_provisioner == "ebs.csi.aws.com"
+    error_message = "gp3 StorageClass must use the EBS CSI provisioner, not the removed in-tree one"
+  }
+
+  assert {
+    condition     = kubernetes_storage_class_v1.gp3.volume_binding_mode == "WaitForFirstConsumer"
+    error_message = "gp3 StorageClass must use WaitForFirstConsumer so volumes land in the consumer pod's AZ"
+  }
+
+  assert {
+    condition     = kubernetes_storage_class_v1.gp3.reclaim_policy == "Delete"
+    error_message = "gp3 StorageClass must use the Delete reclaim policy to limit orphaned EBS volumes"
+  }
+
+  assert {
+    condition     = kubernetes_storage_class_v1.gp3.allow_volume_expansion == true
+    error_message = "gp3 StorageClass must allow volume expansion"
+  }
+
+  assert {
+    condition     = kubernetes_storage_class_v1.gp3.parameters["type"] == "gp3"
+    error_message = "gp3 StorageClass must provision gp3 volumes"
+  }
+
+  assert {
+    condition     = kubernetes_storage_class_v1.gp3.parameters["encrypted"] == "true"
+    error_message = "gp3 StorageClass must encrypt volumes at rest"
+  }
+}
+
 run "keda_installed_in_multi" {
   command = plan
 

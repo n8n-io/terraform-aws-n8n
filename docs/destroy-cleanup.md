@@ -236,7 +236,7 @@ done
 
 **Symptom:** EBS volumes tagged with the cluster name remain after destroy.
 
-**Cause:** PVCs that were not deleted before the node group was removed leave orphaned EBS volumes.
+**Cause:** PVCs that were not deleted before the node group was removed leave orphaned EBS volumes. The module ships a default `gp3` StorageClass (`storage.tf`), so stateful workloads deployed beside n8n create EBS volumes; delete their PVCs before running `terraform destroy`.
 
 **Fix:**
 
