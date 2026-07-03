@@ -1102,16 +1102,23 @@ run "image_tag_defaults_to_null" {
   }
 }
 
-run "image_tag_when_set_flows_through" {
+run "image_tag_accepts_concrete_version" {
   command = plan
 
+  # Asserts at the variable contract level only — helm_release.values is
+  # unknown at plan time under the mock provider (it depends on
+  # kubernetes_namespace, which is "(known after apply)"), so the merge()
+  # wiring of image.tag into the Helm values cannot be verified here.
+  # To verify end-to-end: run `terraform plan` from examples/small/ with
+  # n8n_image_tag = "2.27.4" and confirm `image.tag` appears in the
+  # helm_release.n8n plan output.
   variables {
     n8n_image_tag = "2.27.4"
   }
 
   assert {
     condition     = var.n8n_image_tag == "2.27.4"
-    error_message = "n8n_image_tag should be passed through when explicitly set."
+    error_message = "n8n_image_tag should accept a concrete version string."
   }
 }
 

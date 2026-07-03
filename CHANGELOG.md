@@ -41,6 +41,14 @@ this project adheres to the stability contract in
   Streaming UI becomes read-only. A `check` block warns at plan time when destinations
   are set while the master switch is off. When disabled (the default) no
   `N8N_LOG_STREAMING_*` env vars are emitted.
+- `n8n_image_tag` input variable: optional string (default `null`) that pins the n8n
+  application image to a specific version (e.g. `"1.2.3"`). When `null`, the Helm
+  chart's own default applies — currently the floating `stable` tag — so existing
+  deployments see no change. Validated at plan time against Docker tag rules
+  (`^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$`) to catch malformed or whitespace-padded
+  values before deployment. Pinning a concrete version is recommended for production
+  to avoid crossing major-version boundaries (e.g. n8n 2.0 breaking changes) on an
+  unplanned pod reschedule.
 - `n8n_extra_env` input variable: accepts a list of `{name, value}` objects appended
   to the Helm chart's `config.extraEnv` after all module-managed env vars, letting
   callers inject arbitrary n8n environment variables without forking the module.

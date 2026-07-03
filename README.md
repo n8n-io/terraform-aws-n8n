@@ -102,6 +102,7 @@ This module ships against specific provider majors. Notably:
 - **Terraform CLI:** `>= 1.9`.
 - **n8n Helm chart:** default `1.10.0`. Other chart versions can be
   selected via `n8n_chart_version`.
+- **n8n application image:** defaults to the chart's floating `stable` tag; production deployments should pin a  specific version via `n8n_image_tag` (e.g. `"1.2.3"`) to avoid crossing major-version boundaries on an unplanned pod reschedule.
 - **EKS:** validated on Kubernetes `1.35`.
 - **PostgreSQL:** validated on RDS `16.9`.
 
