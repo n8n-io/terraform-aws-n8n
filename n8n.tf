@@ -71,7 +71,7 @@ resource "helm_release" "n8n" {
   atomic          = true
   cleanup_on_fail = true
 
-  values = [yamlencode({
+  values = [yamlencode(merge({
     license = {
       enabled       = true
       activationKey = var.n8n_license_key
@@ -415,7 +415,11 @@ resource "helm_release" "n8n" {
       enabled      = true
       minAvailable = 1
     }
-  })]
+    },
+    # Pin the app image only when the caller asks for it; otherwise the chart
+    # default (floating `stable`) applies untouched.
+    var.n8n_image_tag != null ? { image = { tag = var.n8n_image_tag } } : {},
+  ))]
 
   depends_on = [
     helm_release.lbc,

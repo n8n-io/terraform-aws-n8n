@@ -1092,3 +1092,76 @@ run "extra_env_accepts_generic_timezone" {
     error_message = "GENERIC_TIMEZONE is not module-managed and should be accepted."
   }
 }
+
+run "image_tag_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_image_tag == null
+    error_message = "n8n_image_tag should default to null so the chart's own stable tag applies by default."
+  }
+}
+
+run "image_tag_accepts_concrete_version" {
+  command = plan
+
+  # Asserts at the variable contract level only — helm_release.values is
+  # unknown at plan time under the mock provider (it depends on
+  # kubernetes_namespace, which is "(known after apply)"), so the merge()
+  # wiring of image.tag into the Helm values cannot be verified here.
+  # To verify end-to-end: run `terraform plan` from examples/small/ with
+  # n8n_image_tag = "2.27.4" and confirm `image.tag` appears in the
+  # helm_release.n8n plan output.
+  variables {
+    n8n_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_tag == "2.27.4"
+    error_message = "n8n_image_tag should accept a concrete version string."
+  }
+}
+
+run "image_tag_rejects_empty_string" {
+  command = plan
+
+  variables {
+    n8n_image_tag = ""
+  }
+
+  expect_failures = [var.n8n_image_tag]
+}
+
+run "image_tag_rejects_whitespace_padded_value" {
+  command = plan
+
+  variables {
+    n8n_image_tag = " 1.2.3 "
+  }
+
+  expect_failures = [var.n8n_image_tag]
+}
+
+run "image_tag_accepts_leading_underscore" {
+  command = plan
+
+  variables {
+    n8n_image_tag = "_1.2.3"
+  }
+
+  assert {
+    condition     = var.n8n_image_tag == "_1.2.3"
+    error_message = "n8n_image_tag should accept a leading underscore — valid per Docker tag spec."
+  }
+}
+
+run "image_tag_rejects_overlong_tag" {
+  command = plan
+
+  variables {
+    # 129 characters — one over the Docker limit of 128
+    n8n_image_tag = "a${join("", [for i in range(128) : "b"])}"
+  }
+
+  expect_failures = [var.n8n_image_tag]
+}
