@@ -9,8 +9,8 @@ this project adheres to the stability contract in
 
 Minor release per the [stability contract](./README.md#stability--versioning):
 the AWS and Helm provider floor bumps below are breaking for callers pinned
-to the previous majors. Pin this module to `~> 0.1` to stay on the old
-providers, or retype your constraint to `~> 0.2` and read the upgrade notes
+to the previous majors. Pin this module to `~> 0.1.0` to stay on the old
+providers, or retype your constraint to `~> 0.2.0` and read the upgrade notes
 under **Changed**.
 
 ### Added
@@ -87,7 +87,7 @@ under **Changed**.
   attribute, so existing v0.1.x deployments should run
   `terraform plan -refresh-only` followed by `terraform apply -refresh-only` to
   settle state before applying further changes. Callers who must remain on AWS
-  provider 5.x should pin this module to `~> 0.1`.
+  provider 5.x should pin this module to `~> 0.1.0`.
 - **Helm provider requirement bumped to `~> 3.0`** (was `~> 2.12`). Helm
   provider 3.0 is a Plugin Framework rewrite. The `set` blocks on the bundled
   controller releases (AWS Load Balancer Controller, Cluster Autoscaler,
@@ -96,7 +96,7 @@ under **Changed**.
   form. Upgrade note: drift detection is stricter in 3.x, so the first
   `terraform plan` after upgrading may show in-place diffs on existing
   `helm_release` resources. Callers who must remain on Helm provider 2.x should
-  pin this module to `~> 0.1`.
+  pin this module to `~> 0.1.0`.
 - **Default `n8n_chart_version` bumped to `1.10.0`** (was `1.4.0`). Applying
   this default change cycles the n8n pods. Pin `n8n_chart_version` to stay on a
   specific chart release. Validated by a real apply of examples/small plus the
