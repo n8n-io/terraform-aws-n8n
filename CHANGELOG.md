@@ -5,7 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to the stability contract in
 [README.md → Stability & versioning](./README.md#stability--versioning).
 
-## [Unreleased]
+## [0.2.0] - 2026-07-15
+
+Minor release per the [stability contract](./README.md#stability--versioning):
+the AWS and Helm provider floor bumps below are breaking for callers pinned
+to the previous majors. Pin this module to `~> 0.1.0` to stay on the old
+providers, or retype your constraint to `~> 0.2.0` and read the upgrade notes
+under **Changed**.
 
 ### Added
 
@@ -81,7 +87,7 @@ this project adheres to the stability contract in
   attribute, so existing v0.1.x deployments should run
   `terraform plan -refresh-only` followed by `terraform apply -refresh-only` to
   settle state before applying further changes. Callers who must remain on AWS
-  provider 5.x should pin this module to `~> 0.1`.
+  provider 5.x should pin this module to `~> 0.1.0`.
 - **Helm provider requirement bumped to `~> 3.0`** (was `~> 2.12`). Helm
   provider 3.0 is a Plugin Framework rewrite. The `set` blocks on the bundled
   controller releases (AWS Load Balancer Controller, Cluster Autoscaler,
@@ -90,11 +96,32 @@ this project adheres to the stability contract in
   form. Upgrade note: drift detection is stricter in 3.x, so the first
   `terraform plan` after upgrading may show in-place diffs on existing
   `helm_release` resources. Callers who must remain on Helm provider 2.x should
-  pin this module to `~> 0.1`.
+  pin this module to `~> 0.1.0`.
 - **Default `n8n_chart_version` bumped to `1.10.0`** (was `1.4.0`). Applying
   this default change cycles the n8n pods. Pin `n8n_chart_version` to stay on a
   specific chart release. Validated by a real apply of examples/small plus the
   post-deploy smoke test.
+
+### Compatibility
+
+- **AWS provider:** `~> 6.0` (see upgrade note under **Changed**).
+- **Helm provider:** `~> 3.0` (see upgrade note under **Changed**).
+- **Kubernetes provider:** `~> 2.0`.
+- **Terraform CLI:** `>= 1.9`.
+- **n8n Helm chart:** validated against `1.10.0` (the current default) via a
+  real apply of `examples/small` plus the post-deploy smoke test. Newer chart
+  versions can be selected via `n8n_chart_version` but are not part of the
+  v0.2.0 test matrix.
+- **Kubernetes:** validated on EKS 1.35.
+- **PostgreSQL:** validated on RDS `16.9`.
+
+### Known limitations
+
+- Checkov still runs in `soft_fail` mode; findings are surfaced but do not
+  block CI. The curated suppressions and flip to hard-fail announced in
+  v0.1.0 are deferred to a later release.
+- See [README.md → Out of scope](./README.md#out-of-scope) for what this
+  release explicitly does not cover.
 
 ## [0.1.0] - 2026-06-04
 
@@ -158,5 +185,6 @@ Initial release on the Terraform Registry as `n8n-io/n8n/aws`.
   block CI. Curated suppressions and a flip to hard-fail are tracked
   for v0.2.0.
 
-[Unreleased]: https://github.com/n8n-io/terraform-aws-n8n/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/n8n-io/terraform-aws-n8n/releases/tag/v0.1.0
+[Unreleased]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.1.0...0.2.0
+[0.1.0]: https://github.com/n8n-io/terraform-aws-n8n/releases/tag/0.1.0

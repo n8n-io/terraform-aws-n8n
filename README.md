@@ -24,7 +24,7 @@ PersistentVolumeClaims from workloads deployed beside n8n bind out of the box
 ```hcl
 module "n8n" {
   source  = "n8n-io/n8n/aws"
-  version = "~> 0.1"
+  version = "~> 0.2.0"
 
   aws_region      = "us-east-1"
   cluster_name    = "n8n-cluster"
@@ -77,10 +77,12 @@ bug-fix changes.
 | `0.MINOR.PATCH` → `0.MINOR.PATCH+1` | Bug fixes, new optional inputs, new outputs, new resources whose absence wouldn't affect existing callers. No removed or renamed inputs/outputs. No changed defaults that move infra. No changed resource addresses. |
 | `0.MINOR` → `0.MINOR+1` | Anything else, including removed inputs, renamed inputs, default changes that force resource replacement, refactored resource addresses, and bumped provider version floors. Each such change is called out in [`CHANGELOG.md`](./CHANGELOG.md) with an upgrade note. |
 
-Pin with `version = "~> 0.1"` to auto-receive 0.1.x patches without
-accidentally crossing a 0.1 → 0.2 boundary. To upgrade across minor
-lines, retype the constraint (`version = "~> 0.2"`) and read the
-release notes.
+Pin with `version = "~> 0.2.0"` to auto-receive 0.2.x patches without
+accidentally crossing a 0.2 → 0.3 boundary. Note the three-component
+constraint: `~> 0.2.0` resolves to `>= 0.2.0, < 0.3.0`, whereas the
+two-component `~> 0.2` would resolve to `>= 0.2, < 1.0` and let you cross
+minor boundaries unintentionally. To upgrade across minor lines, retype
+the constraint (e.g. `version = "~> 0.3.0"`) and read the release notes.
 
 This contract goes away at 1.0.0 in favor of standard SemVer.
 
@@ -92,12 +94,12 @@ This module ships against specific provider majors. Notably:
   pinned `aws ~> 5.0`) requires a one-time `terraform plan -refresh-only`
   followed by `terraform apply -refresh-only` to settle AWS provider 6.0's
   per-resource `region` attribute into state before applying other changes.
-  Callers who must stay on AWS provider 5.x should pin this module to `~> 0.1`.
+  Callers who must stay on AWS provider 5.x should pin this module to `~> 0.1.0`.
 - **Helm provider:** `~> 3.0`. The 3.x release is a Plugin Framework
   rewrite; `helm_release` drift detection is stricter, so the first
   `terraform plan` after upgrading from v0.1.x may show in-place diffs on
   existing releases. Callers who must stay on Helm provider 2.x should pin
-  this module to `~> 0.1`.
+  this module to `~> 0.1.0`.
 - **Kubernetes provider:** `~> 2.0`.
 - **Terraform CLI:** `>= 1.9`.
 - **n8n Helm chart:** default `1.10.0`. Other chart versions can be
@@ -108,7 +110,7 @@ This module ships against specific provider majors. Notably:
 
 ## Out of scope
 
-v0.1.0 intentionally does not cover the following. Each item is
+v0.2.0 intentionally does not cover the following. Each item is
 documented here so that issues filed against them can be triaged
 quickly; several are candidates for future minor releases (see
 [`ROADMAP.md`](./ROADMAP.md)).
