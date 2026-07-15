@@ -108,7 +108,7 @@ This module ships against specific provider majors. Notably:
 
 ## Out of scope
 
-v0.1.0 intentionally does not cover the following. Each item is
+v0.2.0 intentionally does not cover the following. Each item is
 documented here so that issues filed against them can be triaged
 quickly; several are candidates for future minor releases (see
 [`ROADMAP.md`](./ROADMAP.md)).

@@ -5,7 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to the stability contract in
 [README.md → Stability & versioning](./README.md#stability--versioning).
 
-## [Unreleased]
+## [0.2.0] - 2026-07-15
+
+Minor release per the [stability contract](./README.md#stability--versioning):
+the AWS and Helm provider floor bumps below are breaking for callers pinned
+to the previous majors. Pin this module to `~> 0.1` to stay on the old
+providers, or retype your constraint to `~> 0.2` and read the upgrade notes
+under **Changed**.
 
 ### Added
 
@@ -96,6 +102,27 @@ this project adheres to the stability contract in
   specific chart release. Validated by a real apply of examples/small plus the
   post-deploy smoke test.
 
+### Compatibility
+
+- **AWS provider:** `~> 6.0` (see upgrade note under **Changed**).
+- **Helm provider:** `~> 3.0` (see upgrade note under **Changed**).
+- **Kubernetes provider:** `~> 2.0`.
+- **Terraform CLI:** `>= 1.9`.
+- **n8n Helm chart:** validated against `1.10.0` (the current default) via a
+  real apply of `examples/small` plus the post-deploy smoke test. Newer chart
+  versions can be selected via `n8n_chart_version` but are not part of the
+  v0.2.0 test matrix.
+- **Kubernetes:** validated on EKS 1.35.
+- **PostgreSQL:** validated on RDS `16.9`.
+
+### Known limitations
+
+- Checkov still runs in `soft_fail` mode; findings are surfaced but do not
+  block CI. The curated suppressions and flip to hard-fail announced in
+  v0.1.0 are deferred to a later release.
+- See [README.md → Out of scope](./README.md#out-of-scope) for what this
+  release explicitly does not cover.
+
 ## [0.1.0] - 2026-06-04
 
 Initial release on the Terraform Registry as `n8n-io/n8n/aws`.
@@ -158,5 +185,6 @@ Initial release on the Terraform Registry as `n8n-io/n8n/aws`.
   block CI. Curated suppressions and a flip to hard-fail are tracked
   for v0.2.0.
 
-[Unreleased]: https://github.com/n8n-io/terraform-aws-n8n/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/n8n-io/terraform-aws-n8n/releases/tag/v0.1.0
+[Unreleased]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.1.0...0.2.0
+[0.1.0]: https://github.com/n8n-io/terraform-aws-n8n/releases/tag/0.1.0
