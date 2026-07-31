@@ -63,6 +63,8 @@ module "n8n" {
   n8n_license_key = var.n8n_license_key
   n8n_image_tag   = var.n8n_image_tag
 
+  n8n_additional_domains = var.n8n_additional_domains
+
   # ── Compute ──────────────────────────────────────────────────────────────────
   # m6i.2xlarge: 8 vCPU, 32 GB. 5 nodes = 40 vCPU / 160 GB cluster.
   # Floor of 5 prevents cold-start scheduling delays during traffic spikes.

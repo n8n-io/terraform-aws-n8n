@@ -457,35 +457,42 @@ resource "kubernetes_ingress_v1" "n8n" {
   spec {
     ingress_class_name = "alb"
 
-    rule {
-      host = local.n8n_domain
-      http {
-        # Webhook, form, waiting and MCP traffic must reach the dedicated
-        # webhook processors, because the mains serve none of it. Declared before the
-        # catch-all so the more specific prefixes win.
-        dynamic "path" {
-          for_each = local.n8n_webhook_path_prefixes
+    # One rule per hostname the certificate covers. With no additional domains
+    # this renders exactly the single rule it always did, so existing
+    # deployments see no diff.
+    dynamic "rule" {
+      for_each = local.acm_domain_names
 
-          content {
-            path      = path.value
-            path_type = "Prefix"
-            backend {
-              service {
-                name = local.n8n_webhook_service_name
-                port { number = local.n8n_service_port }
+      content {
+        host = rule.value
+        http {
+          # Webhook, form, waiting and MCP traffic must reach the dedicated
+          # webhook processors, because the mains serve none of it. Declared before the
+          # catch-all so the more specific prefixes win.
+          dynamic "path" {
+            for_each = local.n8n_webhook_path_prefixes
+
+            content {
+              path      = path.value
+              path_type = "Prefix"
+              backend {
+                service {
+                  name = local.n8n_webhook_service_name
+                  port { number = local.n8n_service_port }
+                }
               }
             }
           }
-        }
 
-        # Editor UI and REST API.
-        path {
-          path      = "/"
-          path_type = "Prefix"
-          backend {
-            service {
-              name = local.n8n_service_name
-              port { number = local.n8n_service_port }
+          # Editor UI and REST API.
+          path {
+            path      = "/"
+            path_type = "Prefix"
+            backend {
+              service {
+                name = local.n8n_service_name
+                port { number = local.n8n_service_port }
+              }
             }
           }
         }

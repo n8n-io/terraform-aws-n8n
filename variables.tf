@@ -34,6 +34,34 @@ variable "n8n_domain" {
   }
 }
 
+variable "n8n_additional_domains" {
+  description = "Extra fully-qualified hostnames n8n should answer on, beyond n8n_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53_zone_id set); with a caller-supplied certificate_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n_domain stays canonical: it is what n8n advertises as WEBHOOK_URL and N8N_HOST. Every name must live in the hosted zone given by route53_zone_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for d in var.n8n_additional_domains : can(regex("^[a-zA-Z0-9][a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$", d))])
+    error_message = "Every entry must be a valid fully qualified domain name (e.g. hooks.example.com)."
+  }
+
+  validation {
+    condition     = !contains(var.n8n_additional_domains, var.n8n_domain)
+    error_message = "n8n_domain must not be repeated in n8n_additional_domains; it is always included on the certificate."
+  }
+
+  validation {
+    condition     = length(distinct(var.n8n_additional_domains)) == length(var.n8n_additional_domains)
+    error_message = "n8n_additional_domains must not contain duplicates."
+  }
+
+  # ACM's default quota is 10 names per certificate, the primary domain
+  # included, so 9 is the most that can be added here.
+  validation {
+    condition     = length(var.n8n_additional_domains) <= 9
+    error_message = "At most 9 additional domains are supported (ACM allows 10 names per certificate including n8n_domain)."
+  }
+}
+
 variable "vpc_id" {
   description = "ID of the VPC n8n will deploy into. Must contain both public and private subnets with the EKS/ALB subnet tags applied."
   type        = string

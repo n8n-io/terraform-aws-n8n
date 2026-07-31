@@ -8,13 +8,18 @@
 #   (from the module root — requires terraform >= 1.7)
 
 mock_provider "aws" {
-  # The mock provider invents values for most computed attributes, but leaves
-  # a computed set-of-object unknown at plan time. domain_validation_options is
-  # one, and aws_route53_record.cert_validation's for_each derives its keys
-  # from it, so without a concrete default here Terraform rejects the plan of
-  # any run that sets route53_zone_id before a single assertion can execute.
-  # This resource has count = 0 unless route53_zone_id is set, so supplying the
-  # default costs the other runs nothing.
+  # The mock provider invents values for most computed attributes but leaves a
+  # computed set-of-object unknown at plan time. domain_validation_options is
+  # one, and aws_route53_record.cert_validation derives its for_each keys from
+  # local.acm_domain_names but its values from this attribute, so without a
+  # concrete default here any run that sets route53_zone_id fails to plan.
+  #
+  # One entry, matching the single n8n_domain every run in this file uses. That
+  # is what makes the check block in dns.tf meaningful here: it compares the
+  # number of validation records against the number of names on the
+  # certificate, so the mock has to mirror the configured domain set exactly.
+  # Multi-domain runs live in additional-domains.tftest.hcl, which declares its
+  # own mock with one entry per name.
   mock_resource "aws_acm_certificate" {
     defaults = {
       domain_validation_options = [{

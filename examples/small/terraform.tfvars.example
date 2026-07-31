@@ -23,3 +23,9 @@ n8n_license_key = "your-enterprise-license-key-here"
 #   Environment = "production"
 #   Owner       = "platform-team"
 # }
+
+# Extra hostnames n8n should answer on, beyond n8n_domain. Each one is added to
+# the module-issued certificate as a subject alternative name, gets its own
+# Route 53 validation and alias records, and is routed by the Ingress. n8n_domain
+# stays canonical: it is what n8n advertises as its webhook URL.
+# n8n_additional_domains = ["hooks.n8n.example.com"]

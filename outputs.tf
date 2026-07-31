@@ -1,5 +1,10 @@
 # ── App DNS ───────────────────────────────────────────────────────────────────
 
+output "certificate_arn" {
+  description = "ARN of the ACM certificate n8n is served with. When route53_zone_id is set this is the module-issued certificate, already validated, covering n8n_domain plus every entry in n8n_additional_domains. When certificate_arn is supplied instead, it is echoed back unchanged. A caller owning its own Ingress resources (create_ingress = false) attaches this to their alb.ingress.kubernetes.io/certificate-arn annotation, which lets the module issue and validate a multi-name certificate on their behalf rather than the caller hand-rolling one. Sourced from aws_acm_certificate_validation, so consuming it orders the caller's resources after validation completes."
+  value       = local.certificate_arn
+}
+
 output "alb_hostname" {
   description = "ALB hostname of the module-managed Ingress. When route53_zone_id is set, the module already creates the alias record, so this output is informational. When certificate_arn is used, create a CNAME: your domain → this value. Null when create_ingress = false, since the caller then owns the load balancers."
   value = var.create_ingress ? try(

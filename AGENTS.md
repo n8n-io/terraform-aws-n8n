@@ -131,6 +131,13 @@ Concretely, in this repo:
   `mock_provider` for `aws`, `kubernetes`, `helm`, `random`, and `time`, and
   `override_data` for `aws_caller_identity` / IAM policy documents. This means
   the suite runs **without AWS credentials** and is safe to run in CI.
+- `tests/additional-domains.tftest.hcl` is separate for one reason:
+  `mock_provider` is file-scoped, and a mocked value can only hold one shape per
+  file. Its mocked `domain_validation_options` describes a three-name
+  certificate, while `defaults.tftest.hcl` describes a single-name one. Put a
+  run in its own file when it needs a different mocked shape rather than
+  widening the shared mock, which silently weakens every other run that reads
+  the same attribute.
 - Each example has its own `tests/defaults.tftest.hcl` (`small`, `medium`,
   `large`, `cloudflare`, `godaddy`, `split-ingress`) that exercises the example end-to-end with
   the same mocking strategy, catching wiring mistakes between the module and a

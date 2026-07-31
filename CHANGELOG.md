@@ -129,19 +129,82 @@ this project adheres to the stability contract in
   the module's inline `ingress` block and gets stripped on every plan; this
   input is the supported way to allow a corporate network, VPN pool, or peered
   VPC.
+- `n8n_additional_domains` input (`list(string)`, default `[]`) for serving n8n
+  on more than one hostname. Each entry is added to the module-issued ACM
+  certificate as a subject alternative name, gets its own Route 53 validation
+  record and alias A-record, and gets its own Ingress rule so the ALB actually
+  routes it. Every host carries the full path set, webhook prefixes included, so
+  an additional hostname is not editor-only. `n8n_domain` stays canonical: it is
+  what n8n advertises as `WEBHOOK_URL` and `N8N_HOST`.
+
+  Validated for malformed hostnames, duplicates, repetition of `n8n_domain`, and
+  the ACM quota of 10 names per certificate. Two `check` blocks cover the cases
+  validation cannot: setting additional domains alongside a caller-supplied
+  `certificate_arn`, where the module cannot add names to a certificate it did
+  not issue and TLS fails with a name mismatch, and setting them alongside
+  `create_ingress = false`, where the names reach the certificate but the module
+  writes no Ingress rules or alias records for them. Both plan cleanly and fail
+  only at runtime, which is what made them worth a warning.
+
+  A `precondition` on `aws_acm_certificate_validation` catches the worst version
+  of this: a certificate name with no Route 53 validation record. That does not
+  fail a plan, it makes the apply hang until the validation times out, tens of
+  minutes later, reporting a resource that is not the cause. A precondition
+  rather than a `check` because `domain_validation_options` is computed, so the
+  comparison is unknown at plan; a precondition defers quietly and then fails
+  fast at apply, before the wait begins.
+
+  Surfaced in the `small` and `medium` examples, which use the Route 53 path.
+  Not applicable to `cloudflare` or `godaddy`, which issue their own
+  certificates through a non-AWS DNS provider.
+- `certificate_arn` output exposing the ACM certificate n8n is served with: the
+  module-issued and validated one when `route53_zone_id` is set, or the
+  caller-supplied ARN echoed back. This is what makes
+  `n8n_additional_domains` useful to a caller that owns its own Ingress
+  resources. It is sourced from `aws_acm_certificate_validation`, so consuming
+  it orders the caller's resources after validation completes.
+
+  `examples/split-ingress` now uses it. That example needs one certificate
+  covering two hostnames and previously hand-rolled the whole thing: the
+  certificate, a validation-record loop keyed off a statically known domain set,
+  and the validation resource, all duplicating what the module now does. It sets
+  `route53_zone_id` and `n8n_additional_domains` instead and attaches
+  `module.n8n.certificate_arn` to both Ingresses, cutting `dns.tf` from 103
+  lines to 67. The alias records stay in the example, because there are two
+  ALBs and each hostname points at a different one.
+
+  Consequently `n8n_additional_domains` with `create_ingress = false` is a
+  supported pattern rather than a suspicious one, and emits no warning: the
+  certificate still covers every name and every name still gets a validation
+  record, while routing and DNS remain the caller's, which is what
+  `create_ingress = false` means.
+
+  `subject_alternative_names` is passed as `null` rather than `[]` when the list
+  is empty, so deployments predating this input see no diff on what is a
+  ForceNew attribute. The additional alias records live in a separate resource
+  from `aws_route53_record.n8n_alias` deliberately: converting that resource
+  from `count` to `for_each` would move it from `[0]` to `["<domain>"]`, and a
+  `moved` block cannot express that because its addresses must be static, so
+  every existing deployment would destroy and recreate its alias record.
+
 ### Changed
 
-- `aws_route53_record.cert_validation` keys its `for_each` off `var.n8n_domain`
-  instead of the certificate's computed `domain_validation_options`. The
-  certificate carries a single domain and no SANs, so the key is identical and
-  there is no state churn: verified on a live 0.2.0 deployment, where the
-  existing record refreshed in place with no move and no replacement. The
-  change is for testability rather than correctness, since the real AWS
-  provider populates `domain_validation_options` with known keys at plan time,
-  but the mock provider leaves the whole attribute unknown, which made every
-  test that sets `route53_zone_id` unplannable. That was why the Route 53 path
-  had no coverage at all; both directions of the `create_ingress` alias gate
-  are now asserted.
+- `aws_route53_record.cert_validation` keys its `for_each` off
+  `local.acm_domain_names` instead of the certificate's computed
+  `domain_validation_options`, and selects each record's values by matching
+  `domain_name` rather than assuming a single validation option. For a
+  deployment with no additional domains the key is unchanged and there is no
+  state churn: verified on a live 0.2.0 deployment, where the existing record
+  refreshed in place with no move and no replacement.
+
+  The original motivation was testability rather than correctness, since the
+  real AWS provider populates `domain_validation_options` with known keys at
+  plan time while the mock provider leaves the whole attribute unknown, which
+  made every test that sets `route53_zone_id` unplannable. That was why the
+  Route 53 path had no coverage at all; both directions of the `create_ingress`
+  alias gate are now asserted. Sourcing the keys from `local.acm_domain_names`
+  is also what makes `n8n_additional_domains` work, since the record set and the
+  certificate's name list now come from the same place and cannot drift.
 
 ## [0.2.0] - 2026-07-15
 

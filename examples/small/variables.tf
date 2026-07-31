@@ -42,6 +42,12 @@ variable "n8n_image_tag" {
   }
 }
 
+variable "n8n_additional_domains" {
+  description = "Extra hostnames n8n should answer on, beyond n8n_domain. Each is added to the module-issued ACM certificate as a subject alternative name, given a Route 53 validation record and alias A-record, and routed by the module's Ingress. Leave empty for a single hostname."
+  type        = list(string)
+  default     = []
+}
+
 variable "tags" {
   description = "Additional AWS tags to apply to every resource this example creates."
   type        = map(string)

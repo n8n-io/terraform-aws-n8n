@@ -6,14 +6,20 @@ locals {
   # Aliases for inputs so the rest of the module can reference them uniformly.
   # Formerly sourced from the sibling prerequisites workspace via
   # data.terraform_remote_state.
-  aws_region      = var.aws_region
-  cluster_name    = var.cluster_name
-  n8n_domain      = var.n8n_domain
-  vpc_id          = var.vpc_id
-  private_subnets = var.private_subnets
-  public_subnets  = var.public_subnets
-  vpc_cidr_block  = var.vpc_cidr_block
-  certificate_arn = var.route53_zone_id != null ? aws_acm_certificate_validation.n8n[0].certificate_arn : var.certificate_arn
+  aws_region   = var.aws_region
+  cluster_name = var.cluster_name
+  n8n_domain   = var.n8n_domain
+
+  # Every hostname n8n answers on, primary first. Single source of truth for the
+  # ACM certificate's name list, the Route 53 validation records, the alias
+  # records, and the Ingress host rules, so those four cannot drift apart.
+  # n8n_domain stays first and canonical: it is what n8n advertises.
+  acm_domain_names = distinct(concat([var.n8n_domain], var.n8n_additional_domains))
+  vpc_id           = var.vpc_id
+  private_subnets  = var.private_subnets
+  public_subnets   = var.public_subnets
+  vpc_cidr_block   = var.vpc_cidr_block
+  certificate_arn  = var.route53_zone_id != null ? aws_acm_certificate_validation.n8n[0].certificate_arn : var.certificate_arn
 
   # Service coordinates the Helm chart creates. Named here so the module-managed
   # Ingress and the outputs a bring-your-own Ingress consumes cannot drift apart.
