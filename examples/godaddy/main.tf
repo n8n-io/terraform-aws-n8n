@@ -63,6 +63,7 @@ module "n8n" {
   certificate_arn = aws_acm_certificate_validation.n8n.certificate_arn
 
   n8n_license_key = var.n8n_license_key
+  n8n_image_tag   = var.n8n_image_tag
 
   tags = local.common_tags
 

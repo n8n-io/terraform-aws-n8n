@@ -71,6 +71,7 @@ module "n8n" {
   certificate_arn = var.certificate_arn
 
   n8n_license_key = var.n8n_license_key
+  n8n_image_tag   = var.n8n_image_tag
 
   # ── External database (Aurora) via PgBouncer ──────────────────────────────────
   # Aurora is created in aurora.tf, PgBouncer in pgbouncer.tf. n8n connects to

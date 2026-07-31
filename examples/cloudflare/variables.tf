@@ -37,6 +37,12 @@ variable "n8n_license_key" {
   sensitive   = true
 }
 
+variable "n8n_image_tag" {
+  description = "n8n application image tag to deploy (e.g. \"2.33.1\"). Leave null to use the Helm chart's floating `stable` tag. Pin a concrete version when the n8n version is part of what you are testing."
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   description = "Additional AWS tags to apply to all resources this example creates. Merged on top of the built-in ManagedBy/Project tags."
   type        = map(string)

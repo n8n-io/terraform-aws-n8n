@@ -65,6 +65,7 @@ module "n8n" {
   route53_zone_id = var.route53_zone_id
 
   n8n_license_key = var.n8n_license_key
+  n8n_image_tag   = var.n8n_image_tag
 
   tags = local.common_tags
 

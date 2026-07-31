@@ -43,6 +43,12 @@ variable "n8n_license_key" {
   sensitive   = true
 }
 
+variable "n8n_image_tag" {
+  description = "n8n application image tag to deploy (e.g. \"2.33.1\"). Leave null to use the Helm chart's floating `stable` tag. Pin a concrete version when the n8n version is part of what you are testing."
+  type        = string
+  default     = null
+}
+
 variable "aurora_instance_class" {
   description = "Aurora PostgreSQL instance class for both the writer and reader. db.r6g.8xlarge (32 vCPU, 256 GB) is validated for this example's target throughput of ~50–60+M executions/day. Scale down for lower throughput targets or Reserved Instance pricing."
   type        = string
