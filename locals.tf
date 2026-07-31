@@ -15,6 +15,64 @@ locals {
   vpc_cidr_block  = var.vpc_cidr_block
   certificate_arn = var.route53_zone_id != null ? aws_acm_certificate_validation.n8n[0].certificate_arn : var.certificate_arn
 
+  # Service coordinates the Helm chart creates. Named here so the module-managed
+  # Ingress and the outputs a bring-your-own Ingress consumes cannot drift apart.
+  n8n_service_name         = "n8n-main"
+  n8n_webhook_service_name = "n8n-webhook-processor"
+  n8n_service_port         = 5678
+
+  # Path prefixes that must reach the webhook processors rather than the mains.
+  #
+  # The module runs the chart with disableProductionWebhooksOnMainProcess = true,
+  # which in n8n disables exactly these five endpoint families on the main pods
+  # (packages/cli/src/abstract-server.ts, where the `if (this.webhooksEnabled)` block
+  # registers handlers for form, webhook, form-waiting, webhook-waiting and mcp).
+  # Any of them left routed to n8n-main returns 404: waiting webhooks never
+  # resume, Form Trigger nodes break, and MCP server triggers are unreachable.
+  #
+  # The first four mirror charts/n8n/templates/ingress-webhook.yaml in
+  # n8n-io/n8n-hosting, the upstream reference for this split. /mcp is not in
+  # that template: the chart omits it even though n8n registers the live MCP
+  # handler in the same block disableProductionWebhooksOnMainProcess disables,
+  # so a chart-only deployment leaves /mcp pointed at pods that cannot serve it.
+  # Trailing slashes are omitted (the chart writes "/webhook/"): under pathType Prefix the AWS Load Balancer Controller
+  # expands "/webhook" to match both the bare prefix and "/webhook/*", so the
+  # slashless form is a superset and cannot regress a bare-prefix request.
+  #
+  # The Slack and Telegram human-in-the-loop callbacks use fixed paths under
+  # /webhook-waiting, so they are already covered by that prefix.
+  n8n_webhook_path_prefixes = [
+    "/webhook",
+    "/webhook-waiting",
+    "/form",
+    "/form-waiting",
+    "/mcp",
+  ]
+
+  # Annotations on the module-managed Ingress. Callers override any of these,
+  # and add controller features the module has no opinion on (WAF ACL, SSL
+  # policy, subnet pinning, access logs, ALB group sharing), through
+  # var.ingress_annotations. Last write wins.
+  ingress_default_annotations = {
+    "kubernetes.io/ingress.class"               = "alb"
+    "alb.ingress.kubernetes.io/scheme"          = var.ingress_scheme
+    "alb.ingress.kubernetes.io/target-type"     = "ip"
+    "alb.ingress.kubernetes.io/certificate-arn" = local.certificate_arn
+    "alb.ingress.kubernetes.io/listen-ports"    = jsonencode([{ HTTP = 80 }, { HTTPS = 443 }])
+    "alb.ingress.kubernetes.io/ssl-redirect"    = "443"
+
+    "alb.ingress.kubernetes.io/load-balancer-attributes" = "idle_timeout.timeout_seconds=300"
+
+    # Session stickiness pins each browser to the same main pod for 3 hours.
+    # Without it, WebSocket connections break as the ALB round-robins between
+    # main pods. Overriding this key drops that guarantee.
+    "alb.ingress.kubernetes.io/target-group-attributes" = "stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=10800,deregistration_delay.timeout_seconds=30"
+
+    "alb.ingress.kubernetes.io/healthcheck-path" = "/healthz"
+  }
+
+  ingress_annotations = merge(local.ingress_default_annotations, var.ingress_annotations)
+
   common_tags = merge(
     {
       ManagedBy = "terraform"

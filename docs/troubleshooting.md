@@ -81,6 +81,113 @@ sudo killall -HUP mDNSResponder
 
 Or wait for the negative cache to age out (typically 5–15 minutes). To avoid the issue entirely, use a fresh subdomain per deployment.
 
+## Webhooks return HTTP 200 with an HTML body and never execute
+
+**Symptom**
+
+A production webhook, Form Trigger, Wait-node resumption, or MCP Server Trigger URL returns `200` and a chunk of HTML instead of running the workflow. Nothing appears in the executions list. The caller logs a success, so the failure is silent on both ends.
+
+Most often seen on `/webhook-waiting`, `/form`, `/form-waiting`, and `/mcp`, while plain `/webhook` works.
+
+**Cause**
+
+The request reached the **main** pods rather than the webhook processors. This module runs the chart with `disableProductionWebhooksOnMainProcess = true`, which disables five endpoint families on the mains: `/webhook`, `/webhook-waiting`, `/form`, `/form-waiting`, and `/mcp`. When one of those paths hits a main pod, no handler is registered, so the request falls through to the editor's single-page-app handler, which answers `200` with the editor HTML.
+
+Two ways to end up here:
+
+- **Module version `0.2.0` or earlier**, where the built-in Ingress routed only `/webhook` and the other four fell through to the catch-all. Upgrade; all five are routed now.
+- **A bring-your-own Ingress** (`create_ingress = false`) whose catch-all rule precedes or replaces the webhook prefixes. This bites the internal ALB of a two-ALB split especially easily, because it is natural to give it only a `/` rule.
+
+**Fix**
+
+Route every prefix in `n8n_webhook_path_prefixes` to `n8n_webhook_service_name`, declared **before** any catch-all, on *every* Ingress that fronts n8n, internal ones included. Iterate the output rather than hardcoding:
+
+```hcl
+dynamic "path" {
+  for_each = module.n8n.n8n_webhook_path_prefixes
+  content {
+    path      = path.value
+    path_type = "Prefix"
+    backend {
+      service {
+        name = module.n8n.n8n_webhook_service_name
+        port { number = module.n8n.n8n_service_port }
+      }
+    }
+  }
+}
+```
+
+To confirm which pods are actually behind a listener, compare the target group members with the pod IPs:
+
+```bash
+aws elbv2 describe-target-health --target-group-arn <arn> \
+  --query 'TargetHealthDescriptions[].Target.Id' --output text
+kubectl get pods -n n8n -o custom-columns='NAME:.metadata.name,IP:.status.podIP' --no-headers
+```
+
+A correctly routed webhook prefix returns `application/json` from n8n (for example `404 {"code":404,"message":"The requested webhook ... is not registered."}`), never `text/html`. The content type is the quickest discriminator.
+
+See [examples/split-ingress](../examples/split-ingress/) for a worked two-ALB configuration.
+
+## MCP Server Trigger returns `404 Session not found` intermittently
+
+**Symptom**
+
+An MCP client connects, initialises successfully, then a share of follow-up requests fail with `404 Session not found`. Retrying sometimes works. The failure rate is roughly `1 - 1/N` for `N` webhook processor replicas, so about half the requests with the default 2.
+
+**Cause**
+
+n8n keeps each MCP session's live transport in the memory of the replica that handled the `initialize` call. Redis stores only a session validity marker, not the transport itself, so a request landing on any other replica passes validation and then finds no transport to hand it to.
+
+The ALB's `lb_cookie` stickiness does not help: MCP clients are generally not browsers and do not return the cookie.
+
+**Fix**
+
+Pin the webhook processors to a single replica:
+
+```hcl
+n8n_webhook_hpa_min_replicas = 1
+n8n_webhook_hpa_max_replicas = 1
+```
+
+This costs webhook throughput and HA, so apply it only when MCP matters more. `examples/split-ingress` exposes it as `mcp_single_replica`.
+
+The alternative is a dedicated single-replica webhook Deployment serving `/mcp` alone, with the main pool left scaled for throughput. That needs `create_ingress = false` and Kubernetes resources you manage yourself.
+
+Tracked in [issue #54](https://github.com/n8n-io/terraform-aws-n8n/issues/54). A durable fix belongs upstream in n8n, by routing a session to its owning replica or making the transport reconstructible from Redis.
+
+## Caller-owned Ingress fails with `namespaces "n8n" not found`
+
+**Symptom**
+
+On the first `terraform apply` with `create_ingress = false`, your own `kubernetes_ingress_v1` (or any other namespaced resource) fails:
+
+```
+Error: Failed to create Ingress 'n8n/my-ingress' because: namespaces "n8n" not found
+```
+
+A re-apply then succeeds, because the namespace exists by that point.
+
+**Cause**
+
+Your resource had no dependency edge to the namespace, so Terraform scheduled it concurrently with the module rather than after it. In module versions where `output "namespace"` returned `var.namespace`, the output was a plan-time constant and consuming it created no ordering at all.
+
+**Fix**
+
+Upgrade: `namespace` is now sourced from `kubernetes_namespace.n8n`, so consuming it orders your resources implicitly.
+
+Also add an explicit dependency on the whole module for anything an ALB registers targets for:
+
+```hcl
+resource "kubernetes_ingress_v1" "mine" {
+  # ...
+  depends_on = [module.n8n]
+}
+```
+
+The namespace edge alone is not sufficient. With `wait_for_load_balancer = true`, the Ingress can otherwise be created before the Helm release has produced the Services, leaving the load balancer controller with nothing to register.
+
 ## `terraform destroy` hangs on namespace or finalizers
 
 See [destroy-cleanup.md](./destroy-cleanup.md).

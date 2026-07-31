@@ -43,6 +43,12 @@ Two **DNS-variant examples** at `small` sizing,
 [`examples/godaddy/`](./examples/godaddy/), only swap the DNS provider for
 cert validation and the alias record.
 
+A **topology-variant example** at `small` sizing,
+[`examples/split-ingress/`](./examples/split-ingress/), sets
+`create_ingress = false` and brings its own pair of Ingresses: an
+internet-facing ALB serving only the webhook path prefixes (optionally behind a
+WAF) and an internal ALB serving the editor UI and REST API.
+
 ### Architecture at a glance
 
 ```
@@ -76,6 +82,7 @@ expected by the Terraform Registry:
 | `examples/large/`                 | Scaled-up reference architecture for ~50–60M+ exec/day (adds Aurora, PgBouncer, dual-NAT-GW HA, and VPC CNI tuning; Route 53, includes the VPC). |
 | `examples/cloudflare/`            | DNS-variant of `small` using Cloudflare DNS, including the VPC. |
 | `examples/godaddy/`               | DNS-variant of `small` using GoDaddy DNS, including the VPC.    |
+| `examples/split-ingress/`         | Topology-variant of `small`: `create_ingress = false` with a public webhook ALB and an internal admin ALB (Route 53, includes the VPC). |
 | `tests/*.tftest.hcl`              | `terraform test` plan-time tests with mocked providers.     |
 | `tests/scripts/smoke-test.sh`     | Post-`apply` smoke test for live deployments.               |
 | `docs/`                           | Long-form supplementary docs (troubleshooting, post-deploy, cleanup). |
@@ -109,7 +116,8 @@ Concretely, in this repo:
 - **`terraform fmt -check -recursive`** — canonical formatting.
 - **`terraform validate`** against the module root *and* every example
   (`examples/small/`, `examples/medium/`, `examples/large/`,
-  `examples/cloudflare/`, `examples/godaddy/`) via the CI matrix.
+  `examples/cloudflare/`, `examples/godaddy/`, `examples/split-ingress/`) via
+  the CI matrix.
 - **`tflint`** against the module root and every example, with the AWS
   ruleset initialized via `tflint --init`.
 - **`checkov`** (`bridgecrewio/checkov-action@v12`) against the Terraform
@@ -124,7 +132,7 @@ Concretely, in this repo:
   `override_data` for `aws_caller_identity` / IAM policy documents. This means
   the suite runs **without AWS credentials** and is safe to run in CI.
 - Each example has its own `tests/defaults.tftest.hcl` (`small`, `medium`,
-  `large`, `cloudflare`, `godaddy`) that exercises the example end-to-end with
+  `large`, `cloudflare`, `godaddy`, `split-ingress`) that exercises the example end-to-end with
   the same mocking strategy, catching wiring mistakes between the module and a
   realistic caller.
 - `tests/scripts/smoke-test.sh` is the **integration / post-apply** check used
@@ -149,6 +157,43 @@ file. Use `command = plan` unless you specifically need apply semantics.
   reject the mock-generated values with "invalid ARN" errors at apply time.
   Wiring these up with `override_resource` blocks for every IAM resource is
   disproportionate boilerplate.
+- **Mocks do not enforce dependency ordering or server-side preconditions.**
+  The mock `kubernetes` provider will happily "create" a namespaced resource
+  whose namespace does not exist, so a missing dependency edge passes every
+  plan-time assert and then fails on a real apply with
+  `namespaces "n8n" not found`. This is not hypothetical: `output "namespace"`
+  once returned `var.namespace`, a plan-time constant, which left callers'
+  `kubernetes_*` resources with no edge to `kubernetes_namespace.n8n`. The full
+  suite was green and the first live apply failed. Whenever an output is
+  intended to order a caller's resources, return the **resource attribute**
+  rather than the variable, and treat "did the graph actually serialise these"
+  as a question only a live apply answers.
+
+#### `check` conditions must short-circuit on Terraform 1.9
+
+`required_version` is `>= 1.9` and CI pins `TF_VERSION: 1.9.8`, the floor.
+Terraform 1.10 added short-circuit evaluation for `&&` and `||`; **1.9 does
+not have it**. In 1.9 both operands are evaluated, so `known_true || unknown`
+is *unknown*, and a `check` block whose condition is unknown at plan fails
+`terraform test` with "Check block assertion known after apply".
+
+This bites specifically on the guard shape these diagnostic checks use, where
+the left side is a toggle and the right side reads inputs a caller may wire
+from a resource attribute:
+
+```hcl
+# Breaks on 1.9.8 when var.db_password comes from random_password.
+condition = !var.create_database || (var.db_host == null && var.db_password == null)
+
+# Correct: the conditional only evaluates the branch it takes.
+condition = var.create_database ? (var.db_host == null && var.db_password == null) : true
+```
+
+Always write guard-style `check` conditions as `guard ? body : true`, never
+`!guard || body`, and nest rather than chaining `||` inside the body. A local
+Terraform newer than 1.9 will short-circuit and pass, so **this class of bug
+is invisible locally and only fails in CI**. `examples/large` is the canary,
+it wires `db_password` from `random_password.aurora.result`.
 
 **Recommended pattern** when end-to-end wiring cannot be tested under mocks:
 
@@ -239,6 +284,7 @@ cd examples/medium     && terraform init -backend=false && terraform validate &&
 cd examples/large      && terraform init -backend=false && terraform validate && terraform test -verbose && tflint --init && tflint --format compact && terraform-docs --output-check .
 cd examples/cloudflare && terraform init -backend=false && terraform validate && terraform test -verbose && tflint --init && tflint --format compact && terraform-docs --output-check .
 cd examples/godaddy    && terraform init -backend=false && terraform validate && terraform test -verbose && tflint --init && tflint --format compact && terraform-docs --output-check .
+cd examples/split-ingress && terraform init -backend=false && terraform validate && terraform test -verbose && tflint --init && tflint --format compact && terraform-docs --output-check .
 ```
 
 A real deployment uses `terraform apply` from `examples/small/` with a

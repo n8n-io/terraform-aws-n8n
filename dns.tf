@@ -9,6 +9,12 @@
 
 locals {
   dns_automated = var.route53_zone_id != null
+
+  # The alias A-record points at the ALB the module's own Ingress provisions.
+  # With create_ingress = false there is no such ALB to look up, so the record
+  # is the caller's to create. The ACM certificate above is still issued, and
+  # remains useful for the caller's own Ingresses.
+  dns_alias_managed = local.dns_automated && var.create_ingress
 }
 
 # ── ACM certificate ────────────────────────────────────────────────────────────
@@ -29,18 +35,18 @@ resource "aws_acm_certificate" "n8n" {
 # ── Route53 validation + alias record ─────────────────────────────────────────
 
 resource "aws_route53_record" "cert_validation" {
-  for_each = local.dns_automated ? {
-    for o in aws_acm_certificate.n8n[0].domain_validation_options : o.domain_name => {
-      name   = o.resource_record_name
-      type   = o.resource_record_type
-      record = o.resource_record_value
-    }
-  } : {}
+  # Keyed off var.n8n_domain, not the certificate's own domain_validation_options.
+  # The certificate carries a single domain_name and no SANs, so the key is
+  # identical either way, but for_each keys have to be known at plan time and
+  # domain_validation_options is computed. Deriving the key from the input keeps
+  # this plannable on a fresh apply; the record values below stay computed,
+  # which for_each permits.
+  for_each = local.dns_automated ? toset([var.n8n_domain]) : toset([])
 
   zone_id         = var.route53_zone_id
-  name            = each.value.name
-  type            = each.value.type
-  records         = [each.value.record]
+  name            = one(aws_acm_certificate.n8n[0].domain_validation_options).resource_record_name
+  type            = one(aws_acm_certificate.n8n[0].domain_validation_options).resource_record_type
+  records         = [one(aws_acm_certificate.n8n[0].domain_validation_options).resource_record_value]
   ttl             = 60
   allow_overwrite = true
 }
@@ -53,7 +59,7 @@ resource "aws_acm_certificate_validation" "n8n" {
 }
 
 resource "aws_route53_record" "n8n_alias" {
-  count = local.dns_automated ? 1 : 0
+  count = local.dns_alias_managed ? 1 : 0
 
   zone_id = var.route53_zone_id
   name    = var.n8n_domain
@@ -76,7 +82,7 @@ resource "aws_route53_record" "n8n_alias" {
 # exists before this data source evaluates.
 
 data "aws_lb" "n8n" {
-  count = local.dns_automated ? 1 : 0
+  count = local.dns_alias_managed ? 1 : 0
 
   tags = {
     "elbv2.k8s.aws/cluster" = local.cluster_name

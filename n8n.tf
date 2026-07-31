@@ -432,24 +432,26 @@ resource "helm_release" "n8n" {
 }
 
 # ── Ingress ───────────────────────────────────────────────────────────────────
-# Session stickiness pins each browser to the same main pod for 3 hours.
-# Without this, WebSocket connections break as the ALB round-robins between pods.
+# A single ALB fronting both Services: the webhook path prefixes go to the
+# webhook processors, everything else to the mains. Annotations come from
+# local.ingress_annotations (module defaults overlaid with var.ingress_annotations)
+# and the routed prefixes from local.n8n_webhook_path_prefixes. See locals.tf
+# for why each is what it is.
+#
+# Skipped when create_ingress = false. The caller then owns routing entirely
+# (e.g. a public internet-facing ALB for the webhook prefixes plus a separate
+# internal, VPN-only ALB for the admin UI). The module still creates the
+# Services the caller's Ingresses point at: n8n-main and n8n-webhook-processor,
+# both :5678. Those coordinates, and the webhook prefix list, are exposed as
+# outputs so a caller-built Ingress cannot drift from what n8n actually serves.
 
 resource "kubernetes_ingress_v1" "n8n" {
+  count = var.create_ingress ? 1 : 0
+
   metadata {
-    name      = "n8n-ingress"
-    namespace = kubernetes_namespace.n8n.metadata[0].name
-    annotations = {
-      "kubernetes.io/ingress.class"                        = "alb"
-      "alb.ingress.kubernetes.io/scheme"                   = "internet-facing"
-      "alb.ingress.kubernetes.io/target-type"              = "ip"
-      "alb.ingress.kubernetes.io/certificate-arn"          = local.certificate_arn
-      "alb.ingress.kubernetes.io/listen-ports"             = jsonencode([{ HTTP = 80 }, { HTTPS = 443 }])
-      "alb.ingress.kubernetes.io/ssl-redirect"             = "443"
-      "alb.ingress.kubernetes.io/load-balancer-attributes" = "idle_timeout.timeout_seconds=300"
-      "alb.ingress.kubernetes.io/target-group-attributes"  = "stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=10800,deregistration_delay.timeout_seconds=30"
-      "alb.ingress.kubernetes.io/healthcheck-path"         = "/healthz"
-    }
+    name        = "n8n-ingress"
+    namespace   = kubernetes_namespace.n8n.metadata[0].name
+    annotations = local.ingress_annotations
   }
 
   spec {
@@ -458,25 +460,32 @@ resource "kubernetes_ingress_v1" "n8n" {
     rule {
       host = local.n8n_domain
       http {
-        # Webhook traffic must go to the dedicated webhook-processor.
-        # Production webhooks are disabled on main pods (disableProductionWebhooksOnMainProcess=true).
-        path {
-          path      = "/webhook"
-          path_type = "Prefix"
-          backend {
-            service {
-              name = "n8n-webhook-processor"
-              port { number = 5678 }
+        # Webhook, form, waiting and MCP traffic must reach the dedicated
+        # webhook processors, because the mains serve none of it. Declared before the
+        # catch-all so the more specific prefixes win.
+        dynamic "path" {
+          for_each = local.n8n_webhook_path_prefixes
+
+          content {
+            path      = path.value
+            path_type = "Prefix"
+            backend {
+              service {
+                name = local.n8n_webhook_service_name
+                port { number = local.n8n_service_port }
+              }
             }
           }
         }
+
+        # Editor UI and REST API.
         path {
           path      = "/"
           path_type = "Prefix"
           backend {
             service {
-              name = "n8n-main"
-              port { number = 5678 }
+              name = local.n8n_service_name
+              port { number = local.n8n_service_port }
             }
           }
         }
@@ -486,9 +495,17 @@ resource "kubernetes_ingress_v1" "n8n" {
 
   wait_for_load_balancer = true
 
+  # delete is generous because tearing an Ingress down is a two-step dance with
+  # the AWS Load Balancer Controller and ELBv2, not a single API call. LBC
+  # deletes the ALB, then its target groups, but ELBv2 keeps reporting a target
+  # group as "in use by a listener or a rule" for several minutes after the load
+  # balancer is already gone. LBC retries and holds the ingress.k8s.aws/resources
+  # finalizer until it succeeds. Observed taking ~9 minutes on a live teardown,
+  # so a 5m timeout fails the destroy and leaves the Ingress stuck mid-deletion,
+  # needing manual recovery. See docs/destroy-cleanup.md.
   timeouts {
     create = "10m"
-    delete = "5m"
+    delete = "20m"
   }
 
   depends_on = [
@@ -516,6 +533,74 @@ resource "time_sleep" "wait_for_alb_cleanup" {
   destroy_duration = "60s"
 
   depends_on = [kubernetes_namespace.n8n]
+}
+
+# ── Ingress scheme conflict check ──────────────────────────────────────────
+# ingress_annotations is merged over the module defaults, so a scheme set there
+# silently wins over var.ingress_scheme. Getting that backwards is the one
+# override with a security consequence: an admin UI expected to be internal
+# ends up internet-facing, or vice versa. Warn rather than let it pass
+# unremarked. A `check` block emits a warning without failing plan or apply:
+# specifying the annotation directly stays legitimate as long as it is
+# deliberate, and callers who set only ingress_annotations (never touching
+# ingress_scheme) are not forced to migrate.
+
+check "ingress_scheme_not_overridden_by_annotations" {
+  assert {
+    condition = !contains(keys(var.ingress_annotations), "alb.ingress.kubernetes.io/scheme")
+    error_message = join("", [
+      "ingress_annotations sets alb.ingress.kubernetes.io/scheme, which overrides var.ingress_scheme ",
+      "(currently \"${var.ingress_scheme}\"). The ALB will use the annotation value. ",
+      "Set the scheme through var.ingress_scheme instead: it is validated and drives the module's own DNS wiring.",
+    ])
+  }
+}
+
+# ── Ingress tuning without a module-managed Ingress ────────────────────────
+# ingress_scheme and ingress_annotations only reach an Ingress this module
+# creates. With create_ingress = false they are inert, and silence would leave
+# a caller believing an internal scheme or a WAF association had taken effect
+# when their own Ingress carries neither.
+
+check "ingress_tuning_requires_module_managed_ingress" {
+  assert {
+    condition = var.create_ingress ? true : (
+      var.ingress_scheme == "internet-facing" &&
+      length(var.ingress_annotations) == 0
+    )
+    error_message = join("", [
+      "ingress_scheme or ingress_annotations is set while create_ingress = false, so neither is applied ",
+      "to anything. With create_ingress = false you own the Ingress resources; put the scheme and ",
+      "annotations on your own Ingress instead.",
+    ])
+  }
+}
+
+# ── Session stickiness override check ──────────────────────────────────────
+# target-group-attributes is the one module default whose replacement has a
+# non-obvious cost. It carries the lb_cookie stickiness that pins a browser to
+# a single main pod; drop it and the ALB round-robins, which breaks the editor's
+# WebSocket connection in a way that looks like a flaky network rather than a
+# config change. Warn only when the key is overridden *without* re-enabling
+# stickiness, so a deliberate override that keeps it stays quiet.
+
+check "ingress_annotations_preserve_session_stickiness" {
+  assert {
+    condition = var.create_ingress ? (
+      contains(
+        keys(var.ingress_annotations), "alb.ingress.kubernetes.io/target-group-attributes"
+        ) ? strcontains(
+        lookup(var.ingress_annotations, "alb.ingress.kubernetes.io/target-group-attributes", ""),
+        "stickiness.enabled=true"
+      ) : true
+    ) : true
+    error_message = join("", [
+      "ingress_annotations overrides alb.ingress.kubernetes.io/target-group-attributes without ",
+      "stickiness.enabled=true. The module default pins each browser to one main pod for 3 hours; ",
+      "without it the ALB round-robins and editor WebSocket connections drop. Re-include ",
+      "stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=10800 unless you mean to disable it.",
+    ])
+  }
 }
 
 # ── OpenTelemetry diagnostic check ─────────────────────────────────────────

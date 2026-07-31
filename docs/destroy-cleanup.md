@@ -62,6 +62,58 @@ kubectl get ingress -n "$NS" -o name | while read ing; do
 done
 ```
 
+### Ingress deletion hangs on `ResourceInUse` for a target group
+
+**Symptom:** `terraform destroy` fails with `Error: Ingress (n8n/n8n-webhook-public) still exists`
+after waiting out the delete timeout. The Ingress has a `deletionTimestamp` but still
+holds the `ingress.k8s.aws/resources` finalizer, and LBC logs repeat:
+
+```
+failed to delete targetGroup: ... ResourceInUse: Target group '...' is currently
+in use by a listener or a rule
+```
+
+**Cause:** Not a finalizer bug, and not the webhook problem above. LBC tears an
+Ingress down in two steps: delete the ALB, then delete its target groups. ELBv2
+keeps reporting a target group as in use for **several minutes after the load
+balancer is already gone**, so the second step fails and LBC retries, holding the
+finalizer. Confirmed by checking that no ALB exists while a direct
+`aws elbv2 delete-target-group` still returns `ResourceInUse`. Observed taking
+roughly 9 minutes on a live teardown, and more likely when several stacks are
+destroyed against the same account at once.
+
+**Do not strip the finalizer first.** That is the fix for the webhook case above,
+but here it removes the only thing still trying to delete the target group, and
+leaves it orphaned. Check for orphans with:
+
+```bash
+aws elbv2 describe-target-groups \
+  --query "TargetGroups[?length(LoadBalancerArns)==\`0\`].TargetGroupName" --output table
+```
+
+**Fix:** Wait for ELBv2 to release it, then let LBC finish.
+
+```bash
+# 1. Poll until the target group can actually be deleted.
+TG=<target-group-arn-from-the-LBC-error>
+until aws elbv2 delete-target-group --target-group-arn "$TG" 2>/dev/null; do
+  aws elbv2 describe-target-groups --target-group-arns "$TG" >/dev/null 2>&1 || break
+  sleep 30
+done
+
+# 2. LBC backs off exponentially after repeated failures, so restart it to force
+#    an immediate reconcile rather than waiting out the backoff.
+kubectl rollout restart deployment/aws-load-balancer-controller -n kube-system
+kubectl rollout status  deployment/aws-load-balancer-controller -n kube-system
+
+# 3. The finalizer clears within a minute; re-run the destroy, which resumes.
+terraform destroy
+```
+
+The module and `examples/split-ingress` set a 20 minute `delete` timeout on their
+Ingress resources so this normally resolves without intervention. The steps above
+are for when it exceeds even that.
+
 ### Namespace stuck in Terminating
 
 **Symptom:** The namespace stays in `Terminating` state for more than 2 minutes.
@@ -144,6 +196,45 @@ for PATTERN in "k8s-*" "eks-cluster-sg-*"; do
   done
 done
 ```
+
+### VPC destroy sits on "Still destroying" for ~10 minutes
+
+**Symptom:** `terraform destroy` does not error. It reports
+`module.vpc.aws_vpc.this[0]: Still destroying... [10m0s elapsed]` and keeps
+going. A VPC normally deletes in seconds, so anything past a minute or two means
+something inside it is holding a reference.
+
+**Cause:** The AWS Load Balancer Controller creates a shared backend security
+group, named `k8s-traffic-<cluster>-<hash>` and described as
+`[k8s] Shared Backend SecurityGroup for LoadBalancer`. It is created by the
+controller, not by Terraform, so it is not in state and `terraform destroy`
+never removes it. LBC normally deletes it once the last Ingress goes, but it can
+be left behind when the Ingress teardown does not complete cleanly, for example
+after the target-group wait above required manual recovery. The VPC then cannot
+be deleted while it exists, and the AWS API expresses that as a long retry
+rather than an immediate `DependencyViolation`.
+
+**Fix:** Find it by tag rather than by name. The tags identify the owning
+cluster exactly, which matters in a shared VPC where a name glob like `k8s-*`
+would also match another cluster's security groups.
+
+```bash
+VPC_ID="<your-vpc-id>"
+CLUSTER="<your-cluster-name>"
+
+aws ec2 describe-security-groups \
+  --region "$REGION" \
+  --filters "Name=vpc-id,Values=$VPC_ID" \
+            "Name=tag:elbv2.k8s.aws/cluster,Values=$CLUSTER" \
+            "Name=tag:elbv2.k8s.aws/resource,Values=backend-sg" \
+  --query "SecurityGroups[*].{Id:GroupId,Name:GroupName}" --output table
+
+# Confirm it is the cluster you are destroying, then delete it.
+aws ec2 delete-security-group --region "$REGION" --group-id "<sg-id>"
+```
+
+The in-flight `terraform destroy` picks this up on its next retry and finishes
+without needing to be restarted.
 
 ### Orphaned ALB blocks IGW/VPC deletion
 

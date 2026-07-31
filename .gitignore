@@ -12,9 +12,17 @@ terraform.tfstate.backup
 *.tfstate.*
 *.terraform.lock.*
 
-# Saved plan files
+# Saved plan files. A plan is a zip containing a full tfstate, so it carries
+# every variable value in plaintext (license keys, DB passwords, the n8n
+# encryption key) regardless of `sensitive = true`. Treat one like state.
+#
+# The extension globs alone are not enough: `terraform plan -out=tfplan` is the
+# form everyone actually types, and it produces a file with no extension at all.
 *.tfplan
 *.plan
+tfplan
+tfplan*
+plan.out
 
 # Local apply / debug output captured during interactive runs
 *.log
