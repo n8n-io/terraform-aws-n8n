@@ -633,7 +633,11 @@ else
     # host outside the VPC or VPN can reach. Distinguish the two cases by what
     # the name resolves to, so a genuine outage still fails loudly.
     n8n_host="${N8N_URL#*://}"; n8n_host="${n8n_host%%/*}"
-    resolved=$(dig +short "$n8n_host" A 2>/dev/null | grep -E '^[0-9]+\.' | head -1)
+    # `|| true`: under `set -euo pipefail`, grep exits 1 when the name does not
+    # resolve, which is itself one of the cases this branch exists to report
+    # (an internal ALB whose record has not propagated to the runner). Without
+    # the guard the pipeline aborts the whole script before the summary prints.
+    resolved=$(dig +short "$n8n_host" A 2>/dev/null | grep -E '^[0-9]+\.' | head -1 || true)
 
     if [[ "$resolved" =~ ^10\. || "$resolved" =~ ^192\.168\. || "$resolved" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. ]]; then
       skip "/healthz — $n8n_host resolves to $resolved (private), so it is unreachable from here by design"
