@@ -43,3 +43,12 @@ run "cluster_name_length_validation_rejects_long_names" {
 
   expect_failures = [var.cluster_name]
 }
+
+# n8n_image_tag is intentionally untested here. Asserting the null default
+# needs a successful full plan, and even an expect_failures rejection run
+# fails: unlike cluster_name, n8n_image_tag does not feed the module's DNS
+# resources, so the dns.tf for_each error described in the NOTE above still
+# surfaces as an unexpected diagnostic alongside the expected validation
+# failure. The variable contract (default, format validation) is covered by
+# tests/defaults.tftest.hcl at the repo root; verify the passthrough manually
+# with a real `terraform plan`.
