@@ -341,19 +341,27 @@ check "external_db_inputs_require_create_database_false" {
 # The instance-shaping inputs only reach aws_db_instance.n8n, which is not
 # created when create_database = false. Tuning them there has no effect on the
 # caller's own database.
+#
+# "Is this input at its default?" is only expressible by repeating the default,
+# since HCL cannot read a variable's default at runtime. KEEP THESE LITERALS IN
+# LOCKSTEP WITH variables.tf: a default bumped there without updating this
+# check makes every create_database = false caller who left the input alone
+# warn spuriously. db_engine_version is deliberately not compared, because its
+# description invites bumping it ("Bump as needed without forking") and it is
+# the one default that changes routinely; the small coverage loss beats a
+# check that goes stale on every engine bump.
 
 check "rds_tuning_requires_module_managed_database" {
   assert {
     condition = var.create_database ? true : (
       var.db_instance_class == "db.t3.small" &&
       var.db_allocated_storage == 50 &&
-      var.db_engine_version == "16.9" &&
       var.db_multi_az &&
       var.db_storage_encrypted &&
       var.db_backup_retention_period == 7
     )
     error_message = join("", [
-      "An RDS sizing or hardening input (db_instance_class, db_allocated_storage, db_engine_version, ",
+      "An RDS sizing or hardening input (db_instance_class, db_allocated_storage, ",
       "db_multi_az, db_storage_encrypted, db_backup_retention_period) is set while ",
       "create_database = false. The module creates no RDS instance in that mode, so none of them apply. ",
       "Configure these on the database you supply via db_host.",

@@ -14,12 +14,22 @@ locals {
   # ACM certificate's name list, the Route 53 validation records, the alias
   # records, and the Ingress host rules, so those four cannot drift apart.
   # n8n_domain stays first and canonical: it is what n8n advertises.
-  acm_domain_names = distinct(concat([var.n8n_domain], var.n8n_additional_domains))
-  vpc_id           = var.vpc_id
-  private_subnets  = var.private_subnets
-  public_subnets   = var.public_subnets
-  vpc_cidr_block   = var.vpc_cidr_block
-  certificate_arn  = var.route53_zone_id != null ? aws_acm_certificate_validation.n8n[0].certificate_arn : var.certificate_arn
+  #
+  # Lowercased because ACM stores certificate names in lowercase: the
+  # validation-record lookups in dns.tf match each name against the
+  # certificate's computed domain_validation_options, and a mixed-case input
+  # would never match, failing the apply with an error that does not name the
+  # cause. Kubernetes also rejects uppercase Ingress hosts. DNS itself is
+  # case-insensitive, so normalizing here changes nothing a caller can observe.
+  acm_domain_names = distinct(concat(
+    [lower(var.n8n_domain)],
+    [for d in var.n8n_additional_domains : lower(d)],
+  ))
+  vpc_id          = var.vpc_id
+  private_subnets = var.private_subnets
+  public_subnets  = var.public_subnets
+  vpc_cidr_block  = var.vpc_cidr_block
+  certificate_arn = var.route53_zone_id != null ? aws_acm_certificate_validation.n8n[0].certificate_arn : var.certificate_arn
 
   # Service coordinates the Helm chart creates. Named here so the module-managed
   # Ingress and the outputs a bring-your-own Ingress consumes cannot drift apart.

@@ -26,8 +26,11 @@ resource "aws_acm_certificate" "n8n" {
   validation_method = "DNS"
 
   # null rather than [] when there are no additional domains, so a deployment
-  # that predates this input sees no diff on a ForceNew attribute.
-  subject_alternative_names = length(var.n8n_additional_domains) > 0 ? var.n8n_additional_domains : null
+  # that predates this input sees no diff on a ForceNew attribute. Lowercased
+  # to match local.acm_domain_names: ACM normalizes names to lowercase anyway,
+  # and sending the caller's casing would leave a permanent diff against what
+  # the API stores.
+  subject_alternative_names = length(var.n8n_additional_domains) > 0 ? [for d in var.n8n_additional_domains : lower(d)] : null
 
   tags = local.common_tags
 
@@ -150,7 +153,9 @@ resource "aws_route53_record" "n8n_alias" {
 # destroy and recreate its alias record. A second resource costs a little
 # duplication and no churn.
 resource "aws_route53_record" "n8n_alias_additional" {
-  for_each = local.dns_alias_managed ? toset(var.n8n_additional_domains) : toset([])
+  # Lowercased to keep the keys aligned with local.acm_domain_names and the
+  # validation records. Route 53 is case-insensitive, so only the key changes.
+  for_each = local.dns_alias_managed ? toset([for d in var.n8n_additional_domains : lower(d)]) : toset([])
 
   zone_id = var.route53_zone_id
   name    = each.value

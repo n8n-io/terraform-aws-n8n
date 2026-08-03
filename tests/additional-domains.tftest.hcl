@@ -147,6 +147,47 @@ run "additional_domains_fan_out_across_cert_dns_and_ingress" {
   }
 }
 
+# ACM stores certificate names in lowercase, so the validation-record lookups
+# in dns.tf match each entry of local.acm_domain_names against a lowercased
+# domain_validation_options. A mixed-case input must therefore be normalized
+# before it becomes a for_each key, an Ingress host, or a certificate name:
+# without lower(), the lookup finds no matching validation option and the
+# apply fails pointing at the record rather than the casing. The mocked
+# domain_validation_options above is all-lowercase, mirroring ACM.
+run "mixed_case_domains_are_normalized_to_lowercase" {
+  command = plan
+
+  variables {
+    certificate_arn        = null
+    route53_zone_id        = "Z0TEST123456789"
+    n8n_additional_domains = ["Hooks.Test.Example.com"]
+  }
+
+  assert {
+    condition     = toset(aws_acm_certificate.n8n[0].subject_alternative_names) == toset(["hooks.test.example.com"])
+    error_message = "Subject alternative names must be lowercased before reaching ACM"
+  }
+
+  assert {
+    condition = toset(keys(aws_route53_record.cert_validation)) == toset([
+      "n8n.test.example.com", "hooks.test.example.com",
+    ])
+    error_message = "Validation records must be keyed by the lowercased names, matching what ACM returns in domain_validation_options"
+  }
+
+  assert {
+    condition = toset(keys(aws_route53_record.n8n_alias_additional)) == toset([
+      "hooks.test.example.com",
+    ])
+    error_message = "Alias records must be keyed by the lowercased names, aligned with the validation records"
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].spec[0].rule[1].host == "hooks.test.example.com"
+    error_message = "Ingress hosts must be lowercased; Kubernetes rejects uppercase hostnames"
+  }
+}
+
 # Guard the empty case on the Route 53 path specifically: subject_alternative_names
 # must be null rather than [], since it is ForceNew and an empty list would show
 # a diff on deployments that predate this input.

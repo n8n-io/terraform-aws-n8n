@@ -138,7 +138,13 @@ this project adheres to the stability contract in
   what n8n advertises as `WEBHOOK_URL` and `N8N_HOST`.
 
   Validated for malformed hostnames, duplicates, repetition of `n8n_domain`, and
-  the ACM quota of 10 names per certificate. Two `check` blocks cover the cases
+  the ACM quota of 10 names per certificate. Names (including `n8n_domain`) are
+  normalized to lowercase before use: ACM stores certificate names in lowercase,
+  so a mixed-case input would never match its own entry in
+  `domain_validation_options` and the apply would fail pointing at the
+  validation record rather than the casing. Kubernetes also rejects uppercase
+  Ingress hosts, and DNS is case-insensitive, so the normalization is not
+  observable by callers. Two `check` blocks cover the cases
   validation cannot: setting additional domains alongside a caller-supplied
   `certificate_arn`, where the module cannot add names to a certificate it did
   not issue and TLS fails with a name mismatch, and setting them alongside

@@ -257,26 +257,46 @@ module "n8n" {
   source = "n8n-io/n8n/aws"
 
   create_ingress = false
+
+  # Two ALBs need two hostnames: a DNS name can alias only one load balancer.
+  # Setting route53_zone_id plus n8n_additional_domains makes the module issue
+  # and validate one certificate covering both, consumed below through the
+  # certificate_arn output. n8n_webhook_url makes n8n hand out webhook URLs on
+  # the public host rather than the internal one.
+  route53_zone_id        = var.route53_zone_id
+  n8n_additional_domains = [var.webhook_domain]
+  n8n_webhook_url        = "https://${var.webhook_domain}"
+
   # ... remaining inputs
 }
 
-# Public ALB: webhooks only.
+# Public ALB: webhooks only, on its own hostname.
 resource "kubernetes_ingress_v1" "webhook" {
   metadata {
     name      = "n8n-webhook-public"
     namespace = module.n8n.namespace
-    annotations = {
-      "alb.ingress.kubernetes.io/scheme"          = "internet-facing"
-      "alb.ingress.kubernetes.io/target-type"     = "ip"
-      "alb.ingress.kubernetes.io/certificate-arn" = var.certificate_arn
-      "alb.ingress.kubernetes.io/wafv2-acl-arn"   = var.waf_acl_arn
-    }
+
+    annotations = merge(
+      {
+        "alb.ingress.kubernetes.io/scheme"      = "internet-facing"
+        "alb.ingress.kubernetes.io/target-type" = "ip"
+
+        # The module-issued, already-validated certificate. It covers
+        # webhook_domain because that name is in n8n_additional_domains.
+        "alb.ingress.kubernetes.io/certificate-arn" = module.n8n.certificate_arn
+      },
+      # Omit the key entirely when there is no WAF: a null annotation value
+      # fails the plan.
+      var.waf_acl_arn == null ? {} : {
+        "alb.ingress.kubernetes.io/wafv2-acl-arn" = var.waf_acl_arn
+      },
+    )
   }
 
   spec {
     ingress_class_name = "alb"
     rule {
-      host = var.n8n_domain
+      host = var.webhook_domain
       http {
         dynamic "path" {
           for_each = module.n8n.n8n_webhook_path_prefixes
@@ -295,11 +315,15 @@ resource "kubernetes_ingress_v1" "webhook" {
       }
     }
   }
+
+  # The namespace output alone orders this after the namespace, but not after
+  # the Helm release that creates the Services the ALB registers targets for.
+  depends_on = [module.n8n]
 }
 
-# Internal ALB: admin UI, VPN-only. Define a second
-# kubernetes_ingress_v1 with scheme = "internal" routing "/" to
-# module.n8n.n8n_service_name on the same port.
+# Internal ALB: admin UI, VPN-only. Define a second kubernetes_ingress_v1
+# with scheme = "internal", on its own hostname (var.n8n_domain), routing "/"
+# to module.n8n.n8n_service_name on the same port.
 #
 # Give that one the webhook prefixes too, ahead of its "/" rule. Otherwise
 # the catch-all sends /webhook to the main pods, which serve none of it, and
@@ -569,7 +593,7 @@ No modules.
 | <a name="input_ingress_annotations"></a> [ingress\_annotations](#input\_ingress\_annotations) | Extra annotations for the module-managed Ingress, merged over the module's defaults (last write wins). Use this for AWS Load Balancer Controller features the module has no opinion on: alb.ingress.kubernetes.io/wafv2-acl-arn, ssl-policy, subnets, security-groups, inbound-cidrs, load-balancer-name, group.name, access log settings. Overriding alb.ingress.kubernetes.io/target-group-attributes drops the session stickiness that keeps WebSocket connections pinned to one main pod; re-include stickiness.enabled=true if you set it. Prefer ingress\_scheme over setting alb.ingress.kubernetes.io/scheme here, because setting both raises a plan-time warning. Ignored when create\_ingress = false. | `map(string)` | `{}` | no |
 | <a name="input_ingress_scheme"></a> [ingress\_scheme](#input\_ingress\_scheme) | ALB scheme for the module-managed Ingress: internet-facing (the default) or internal. Use internal to keep n8n reachable only from within the VPC and any peered/VPN networks. Ignored when create\_ingress = false. An internal scheme makes the Route 53 alias record resolve to private addresses, which is the intended behavior for a private deployment. | `string` | `"internet-facing"` | no |
 | <a name="input_kubernetes_version"></a> [kubernetes\_version](#input\_kubernetes\_version) | Kubernetes version for the EKS cluster | `string` | `"1.35"` | no |
-| <a name="input_n8n_additional_domains"></a> [n8n\_additional\_domains](#input\_n8n\_additional\_domains) | Extra fully-qualified hostnames n8n should answer on, beyond n8n\_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53\_zone\_id set); with a caller-supplied certificate\_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create\_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create\_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate\_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n\_domain stays canonical: it is what n8n advertises as WEBHOOK\_URL and N8N\_HOST. Every name must live in the hosted zone given by route53\_zone\_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns. | `list(string)` | `[]` | no |
+| <a name="input_n8n_additional_domains"></a> [n8n\_additional\_domains](#input\_n8n\_additional\_domains) | Extra fully-qualified hostnames n8n should answer on, beyond n8n\_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53\_zone\_id set); with a caller-supplied certificate\_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create\_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create\_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate\_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n\_domain stays canonical: it is what n8n advertises as WEBHOOK\_URL and N8N\_HOST. Every name must live in the hosted zone given by route53\_zone\_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns. Names are normalized to lowercase before use: ACM and Kubernetes both store them that way, and DNS is case-insensitive. | `list(string)` | `[]` | no |
 | <a name="input_n8n_chart_version"></a> [n8n\_chart\_version](#input\_n8n\_chart\_version) | n8n Helm chart version to deploy | `string` | `"1.10.0"` | no |
 | <a name="input_n8n_community_packages_prevent_loading"></a> [n8n\_community\_packages\_prevent\_loading](#input\_n8n\_community\_packages\_prevent\_loading) | Prevent installed community packages from being loaded at runtime. Maps to N8N\_COMMUNITY\_PACKAGES\_PREVENT\_LOADING. When true, n8n leaves the community-packages management surface in place but skips loading the package code, which is useful for locking an instance down without uninstalling. Leave false (the default) for community nodes to load and execute. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies. | `bool` | `false` | no |
 | <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate\_arn. | `string` | n/a | yes |

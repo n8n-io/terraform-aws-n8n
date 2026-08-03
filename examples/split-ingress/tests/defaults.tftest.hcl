@@ -4,11 +4,12 @@
 #   (from examples/split-ingress/, mocks require terraform >= 1.7)
 #
 # Unlike examples/small and examples/large, this example can run full
-# architecture asserts on the Route53 path. Its cert_validation records use
-# for_each over a statically known set (local.cert_domains, derived from
-# var.n8n_domain and var.webhook_subdomain) and look the unknown values up by
-# key, the idiom examples/cloudflare uses. Only the *values* of
-# domain_validation_options are unknown at plan time, so the plan stays valid.
+# architecture asserts on the Route53 path. The certificate is issued by the
+# module, whose aws_route53_record.cert_validation keys its for_each off
+# local.acm_domain_names (var.n8n_domain plus n8n_additional_domains, both
+# statically known here) and looks the unknown validation values up by key.
+# Only the *values* of domain_validation_options are unknown at plan time, so
+# the plan stays valid.
 
 mock_provider "aws" {
   override_data {

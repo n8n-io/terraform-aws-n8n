@@ -66,11 +66,6 @@ module "vpc" {
 # create_ingress = false hands routing to this example. The module still builds
 # everything the Ingresses point at, and stops managing the Route53 alias record
 # it would otherwise revert on every plan.
-#
-# route53_zone_id is deliberately left unset: this example issues its own
-# certificate (it needs a SAN covering both hostnames, which the module's
-# single-domain certificate cannot provide) and writes both alias records
-# itself. See dns.tf.
 
 module "n8n" {
   source = "../.."
