@@ -83,3 +83,22 @@ run "n8n_domain_must_be_single_label_below_godaddy_domain" {
 
   expect_failures = [var.n8n_domain]
 }
+
+run "n8n_image_tag_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_image_tag == null
+    error_message = "Example must not pin an image tag by default; the module's chart default (stable) should apply."
+  }
+}
+
+run "n8n_image_tag_rejects_whitespace" {
+  command = plan
+
+  variables {
+    n8n_image_tag = " 1.2.3 "
+  }
+
+  expect_failures = [var.n8n_image_tag]
+}

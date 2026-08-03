@@ -61,6 +61,7 @@ module "n8n" {
   route53_zone_id = var.route53_zone_id
 
   n8n_license_key = var.n8n_license_key
+  n8n_image_tag   = var.n8n_image_tag
 
   # ── Compute ──────────────────────────────────────────────────────────────────
   # m6i.2xlarge: 8 vCPU, 32 GB. 5 nodes = 40 vCPU / 160 GB cluster.

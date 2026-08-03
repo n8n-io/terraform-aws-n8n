@@ -5,6 +5,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to the stability contract in
 [README.md → Stability & versioning](./README.md#stability--versioning).
 
+## [Unreleased]
+
+### Added
+
+- All five examples (`small`, `medium`, `large`, `cloudflare`, `godaddy`) now
+  expose the module's `n8n_image_tag` input as a passthrough variable
+  (default `null`, same tag-format validation as the module), so callers can
+  pin the n8n image version without editing the example source.
+
 ## [0.2.0] - 2026-07-15
 
 Minor release per the [stability contract](./README.md#stability--versioning):
