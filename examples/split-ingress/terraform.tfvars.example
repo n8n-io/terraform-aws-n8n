@@ -1,0 +1,47 @@
+# Copy this file to terraform.tfvars and fill in your values.
+
+# Hostname for the n8n editor UI. Served by the INTERNAL ALB: resolves to
+# private addresses, reachable only from inside the VPC or over VPN.
+n8n_domain = "n8n.example.com"
+
+# Route53 hosted zone ID for the parent domain (e.g. example.com). This example
+# issues one ACM certificate covering both hostnames, validates it, and writes
+# both alias A-records here: single terraform apply, no manual DNS steps.
+route53_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# n8n Enterprise license activation key. Get one at https://n8n.io/pricing.
+n8n_license_key = "your-enterprise-license-key-here"
+
+# Label prepended to n8n_domain for the PUBLIC webhook host. The default gives
+# hooks.n8n.example.com, served by the internet-facing ALB.
+# webhook_subdomain = "hooks"
+
+# WAFv2 web ACL for the public webhook ALB. Must be scope = REGIONAL and in the
+# same region. This is the main payoff of splitting the ALBs: rate limits and
+# managed rule groups apply to untrusted traffic only.
+# waf_acl_arn = "arn:aws:wafv2:us-east-1:123456789012:regional/webacl/n8n-webhooks/abc-123"
+
+# Restrict the internal admin ALB further: your VPN pool or bastion range.
+# Empty allows anything that can route to the private subnets.
+# admin_allowed_cidr_blocks = ["10.20.0.0/16"]
+
+# Set true only if you use MCP Server Triggers. Pins webhook processors to one
+# replica so MCP sessions stay on the pod that created them, at the cost of
+# webhook throughput and HA. See the README.
+# mcp_single_replica = false
+
+# AWS region. Change if you're deploying outside us-east-1.
+# aws_region = "eu-west-1"
+
+# EKS cluster name. Keep to 14 characters or fewer: ElastiCache cluster IDs
+# derived from this name are capped at 20 chars, and '-redis' consumes 6.
+# cluster_name = "n8n-cluster"
+
+# Pin a concrete n8n version instead of the chart's floating `stable` tag.
+# n8n_image_tag = "2.33.1"
+
+# Extra AWS tags applied to every resource this example creates.
+# tags = {
+#   Environment = "production"
+#   Owner       = "platform-team"
+# }

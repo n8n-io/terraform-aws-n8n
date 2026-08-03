@@ -67,6 +67,8 @@ module "n8n" {
   n8n_license_key = var.n8n_license_key
   n8n_image_tag   = var.n8n_image_tag
 
+  n8n_additional_domains = var.n8n_additional_domains
+
   tags = local.common_tags
 
   # Explicit module-level dependency ensures the ENTIRE VPC (including NAT

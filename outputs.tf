@@ -1,11 +1,36 @@
 # ── App DNS ───────────────────────────────────────────────────────────────────
 
+output "certificate_arn" {
+  description = "ARN of the ACM certificate n8n is served with. When route53_zone_id is set this is the module-issued certificate, already validated, covering n8n_domain plus every entry in n8n_additional_domains. When certificate_arn is supplied instead, it is echoed back unchanged. A caller owning its own Ingress resources (create_ingress = false) attaches this to their alb.ingress.kubernetes.io/certificate-arn annotation, which lets the module issue and validate a multi-name certificate on their behalf rather than the caller hand-rolling one. Sourced from aws_acm_certificate_validation, so consuming it orders the caller's resources after validation completes."
+  value       = local.certificate_arn
+}
+
 output "alb_hostname" {
-  description = "ALB hostname. When route53_zone_id is set, the module already creates the alias record — this output is informational. When certificate_arn is used, create a CNAME: your domain → this value."
-  value = try(
-    kubernetes_ingress_v1.n8n.status[0].load_balancer[0].ingress[0].hostname,
+  description = "ALB hostname of the module-managed Ingress. When route53_zone_id is set, the module already creates the alias record, so this output is informational. When certificate_arn is used, create a CNAME: your domain → this value. Null when create_ingress = false, since the caller then owns the load balancers."
+  value = var.create_ingress ? try(
+    kubernetes_ingress_v1.n8n[0].status[0].load_balancer[0].ingress[0].hostname,
     "ALB not yet provisioned — run: kubectl get ingress n8n-ingress -n ${var.namespace}"
-  )
+  ) : null
+}
+
+output "n8n_service_name" {
+  description = "Name of the Kubernetes Service fronting the n8n main pods (the editor UI and REST API), on port 5678. Point a bring-your-own Ingress at this when create_ingress = false."
+  value       = local.n8n_service_name
+}
+
+output "n8n_webhook_service_name" {
+  description = "Name of the Kubernetes Service fronting the n8n webhook processors, on port 5678. Production webhooks are disabled on the main pods, so a bring-your-own Ingress must route /webhook here."
+  value       = local.n8n_webhook_service_name
+}
+
+output "n8n_webhook_path_prefixes" {
+  description = "Path prefixes that must be routed to n8n_webhook_service_name rather than n8n_service_name. The main pods run with production webhooks disabled, so every one of these returns 404 if it reaches them: /webhook, /webhook-waiting (also carries the Slack and Telegram human-in-the-loop callbacks), /form, /form-waiting, and /mcp. Route all of them when building your own Ingress with create_ingress = false."
+  value       = local.n8n_webhook_path_prefixes
+}
+
+output "n8n_service_port" {
+  description = "Port both n8n Services listen on. Use with n8n_service_name / n8n_webhook_service_name when building your own Ingress."
+  value       = local.n8n_service_port
 }
 
 output "n8n_url" {
@@ -71,6 +96,13 @@ output "kubectl_config_command" {
 }
 
 output "namespace" {
-  description = "Kubernetes namespace n8n is deployed into"
-  value       = var.namespace
+  description = "Kubernetes namespace n8n is deployed into."
+  # Deliberately sourced from the resource rather than var.namespace. Returning
+  # the variable makes this a plan-time constant, which leaves a caller's own
+  # kubernetes_* resources with no dependency edge to the namespace: Terraform
+  # schedules them concurrently and they fail with `namespaces "n8n" not found`.
+  # That trap is easy to hit on the create_ingress = false path, where the
+  # caller's Ingresses are the first thing to reference this output. Reading the
+  # resource attribute gives every consumer the dependency implicitly.
+  value = kubernetes_namespace.n8n.metadata[0].name
 }

@@ -564,6 +564,51 @@ else
   fail "No running EBS CSI driver pods in kube-system"
 fi
 
+# ── Ingress routing ───────────────────────────────────────────────────────────
+# n8n runs here with disableProductionWebhooksOnMainProcess = true, which
+# disables five endpoint families on the main pods. Every one of them must be
+# routed to the webhook processors or it returns 404 in production: waiting
+# webhooks never resume, Form Trigger nodes break, MCP server triggers are
+# unreachable. Checking the Ingress object directly (rather than curling the
+# paths) keeps this deterministic: it needs no registered workflow, and it
+# distinguishes "wrong backend" from "no workflow with that path".
+
+header "Ingress Routing"
+
+WEBHOOK_PREFIXES=(/webhook /webhook-waiting /form /form-waiting /mcp)
+WEBHOOK_SVC="n8n-webhook-processor"
+
+ingress_paths=$(kubectl get ingress n8n-ingress -n "$NAMESPACE" \
+  -o jsonpath='{range .spec.rules[*].http.paths[*]}{.path}{"="}{.backend.service.name}{"\n"}{end}' \
+  2>/dev/null || true)
+
+if [[ -z "$ingress_paths" ]]; then
+  skip "Ingress routing (no 'n8n-ingress' in namespace '$NAMESPACE')"
+  info "Expected when create_ingress = false: you own the Ingresses."
+  info "Verify your own route all of: ${WEBHOOK_PREFIXES[*]} → $WEBHOOK_SVC"
+else
+  for prefix in "${WEBHOOK_PREFIXES[@]}"; do
+    backend=$(echo "$ingress_paths" | grep -E "^${prefix}/?=" | head -1 | cut -d= -f2)
+
+    if [[ -z "$backend" ]]; then
+      fail "$prefix is not routed, so requests fall through to the main pods and 404"
+    elif [[ "$backend" == "$WEBHOOK_SVC" ]]; then
+      pass "$prefix → $backend"
+    else
+      fail "$prefix → $backend (expected $WEBHOOK_SVC)"
+    fi
+  done
+
+  root_backend=$(echo "$ingress_paths" | grep -E '^/=' | head -1 | cut -d= -f2)
+  if [[ "$root_backend" == "n8n-main" ]]; then
+    pass "/ → $root_backend"
+  elif [[ -n "$root_backend" ]]; then
+    fail "/ → $root_backend (expected n8n-main)"
+  else
+    warn "No catch-all '/' rule on the Ingress, so the editor UI may be unreachable"
+  fi
+fi
+
 # ── HTTP health check ─────────────────────────────────────────────────────────
 
 header "HTTP Health Check"
@@ -571,18 +616,44 @@ header "HTTP Health Check"
 if [[ -z "$N8N_URL" ]]; then
   skip "HTTP health check (N8N_URL not set)"
 else
+  # curl writes 000 to stdout on a connection failure and also exits non-zero.
+  # A `|| echo "000"` here would append a second 000, producing "000000" and
+  # making the "000" branch below unreachable, so swallow the exit code instead.
   healthz_status=$(curl -sk -o /dev/null -w "%{http_code}" \
-    --max-time 10 "${N8N_URL%/}/healthz" || echo "000")
+    --max-time 10 "${N8N_URL%/}/healthz") || true
+  [[ -z "$healthz_status" ]] && healthz_status="000"
 
   if [[ "$healthz_status" == "200" ]]; then
     pass "/healthz returned HTTP $healthz_status"
   elif [[ "$healthz_status" == "000" ]]; then
-    fail "/healthz — connection failed (timeout or DNS error)"
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-      info "On macOS, a recent destroy + re-apply against the same FQDN often"
-      info "leaves mDNSResponder serving the destroy-phase NXDOMAIN for 5-15 min."
-      info "Fix: sudo killall -HUP mDNSResponder"
-      info "Details: docs/troubleshooting.md → 'Smoke test reports HTTP 000'"
+    # An unreachable host is the expected result, not a failure, when the admin
+    # Ingress is internal: examples/split-ingress puts the editor on an
+    # internal-scheme ALB, and the module does the same with
+    # ingress_scheme = "internal". Both resolve to RFC1918 addresses that no
+    # host outside the VPC or VPN can reach. Distinguish the two cases by what
+    # the name resolves to, so a genuine outage still fails loudly.
+    n8n_host="${N8N_URL#*://}"; n8n_host="${n8n_host%%/*}"
+    # `|| true`: under `set -euo pipefail`, grep exits 1 when the name does not
+    # resolve, which is itself one of the cases this branch exists to report
+    # (an internal ALB whose record has not propagated to the runner). Without
+    # the guard the pipeline aborts the whole script before the summary prints.
+    resolved=$(dig +short "$n8n_host" A 2>/dev/null | grep -E '^[0-9]+\.' | head -1 || true)
+
+    if [[ "$resolved" =~ ^10\. || "$resolved" =~ ^192\.168\. || "$resolved" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. ]]; then
+      skip "/healthz — $n8n_host resolves to $resolved (private), so it is unreachable from here by design"
+      info "This is expected for an internal admin Ingress, e.g. examples/split-ingress"
+      info "or ingress_scheme = \"internal\". Re-run from inside the VPC or over the VPN,"
+      info "or check it in-cluster:"
+      info "  kubectl run smoke --rm -i --restart=Never -n $NAMESPACE --image=curlimages/curl:8.5.0 \\"
+      info "    -- curl -sk --resolve $n8n_host:443:$resolved https://$n8n_host/healthz"
+    else
+      fail "/healthz — connection failed (timeout or DNS error)"
+      if [[ "$(uname -s)" == "Darwin" ]]; then
+        info "On macOS, a recent destroy + re-apply against the same FQDN often"
+        info "leaves mDNSResponder serving the destroy-phase NXDOMAIN for 5-15 min."
+        info "Fix: sudo killall -HUP mDNSResponder"
+        info "Details: docs/troubleshooting.md → 'Smoke test reports HTTP 000'"
+      fi
     fi
   else
     fail "/healthz returned HTTP $healthz_status (expected 200)"
@@ -591,8 +662,10 @@ else
   # Verify HTTP → HTTPS redirect
   http_url="${N8N_URL/https:/http:}"
   if [[ "$http_url" != "$N8N_URL" ]]; then
+    # Same trailing-|| trap as the healthz check above: curl already emits 000.
     redirect_status=$(curl -sk -o /dev/null -w "%{http_code}" \
-      --max-time 10 "$http_url" || echo "000")
+      --max-time 10 "$http_url") || true
+    [[ -z "$redirect_status" ]] && redirect_status="000"
     if [[ "$redirect_status" =~ ^30[1-8]$ ]]; then
       pass "HTTP → HTTPS redirect: $redirect_status"
     elif [[ "$redirect_status" == "000" ]]; then

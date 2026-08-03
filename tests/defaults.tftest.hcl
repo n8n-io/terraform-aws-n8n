@@ -8,6 +8,29 @@
 #   (from the module root — requires terraform >= 1.7)
 
 mock_provider "aws" {
+  # The mock provider invents values for most computed attributes but leaves a
+  # computed set-of-object unknown at plan time. domain_validation_options is
+  # one, and aws_route53_record.cert_validation derives its for_each keys from
+  # local.acm_domain_names but its values from this attribute, so without a
+  # concrete default here any run that sets route53_zone_id fails to plan.
+  #
+  # One entry, matching the single n8n_domain every run in this file uses. That
+  # is what makes the check block in dns.tf meaningful here: it compares the
+  # number of validation records against the number of names on the
+  # certificate, so the mock has to mirror the configured domain set exactly.
+  # Multi-domain runs live in additional-domains.tftest.hcl, which declares its
+  # own mock with one entry per name.
+  mock_resource "aws_acm_certificate" {
+    defaults = {
+      domain_validation_options = [{
+        domain_name           = "n8n.test.example.com"
+        resource_record_name  = "_acme-challenge.n8n.test.example.com."
+        resource_record_type  = "CNAME"
+        resource_record_value = "_validation.acm-validations.aws."
+      }]
+    }
+  }
+
   override_data {
     target = data.aws_caller_identity.current
     values = {
@@ -275,6 +298,20 @@ run "external_db_skips_rds_instance" {
 # time. Without these the failure would surface deep inside the n8n Helm release
 # at apply time, after EKS and the database resources have already been built.
 
+// RDS counts retention in whole days. Caught on the input so the error names
+// db_backup_retention_period and the caller's own line, rather than surfacing
+// from aws_db_instance.n8n inside the module where the attribute is called
+// backup_retention_period and the file is not one the caller owns.
+run "fractional_backup_retention_fails_validation" {
+  command = plan
+
+  variables {
+    db_backup_retention_period = 7.5
+  }
+
+  expect_failures = [var.db_backup_retention_period]
+}
+
 run "external_db_missing_host_fails_validation" {
   command = plan
 
@@ -297,6 +334,555 @@ run "external_db_missing_password_fails_validation" {
   }
 
   expect_failures = [var.db_password]
+}
+
+# ── Ingress ──────────────────────────────────────────────────────────────────
+# create_ingress = false is the bring-your-own-Ingress escape hatch behind the
+# two-ALB split (public /webhook + internal admin UI). It must drop the
+# module-owned Ingress and, with it, the Route 53 alias record and the ALB
+# lookup that record depends on. Otherwise every plan tries to recreate the
+# module's Ingress and revert the caller's DNS.
+
+run "ingress_created_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(kubernetes_ingress_v1.n8n) == 1
+    error_message = "The module-managed Ingress must be created by default"
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/scheme"] == "internet-facing"
+    error_message = "The default ALB scheme should remain internet-facing"
+  }
+}
+
+run "create_ingress_false_skips_ingress" {
+  command = plan
+
+  variables {
+    create_ingress = false
+  }
+
+  assert {
+    condition     = length(kubernetes_ingress_v1.n8n) == 0
+    error_message = "No Ingress should be created when create_ingress = false"
+  }
+}
+
+# ── Route 53 automated DNS path ───────────────────────────────────────────────
+# The alias record (aws_route53_record.n8n_alias) and the data.aws_lb lookup
+# behind it are gated on local.dns_alias_managed = dns_automated &&
+# create_ingress, so a bring-your-own-Ingress caller keeps its own DNS instead
+# of the module reverting the record to the module's ALB on every plan.
+#
+# Reaching this path under mocked providers needs one nudge: setting
+# route53_zone_id makes aws_route53_record.cert_validation's for_each derive
+# its keys from aws_acm_certificate.n8n[0].domain_validation_options, which the
+# mock AWS provider reports as known-only-after-apply, and Terraform rejects a
+# for_each over an unknown value before any assertion runs. override_resource
+# supplies a concrete value for that one attribute so the plan can complete.
+
+run "route53_alias_is_managed_when_the_module_owns_the_ingress" {
+  command = plan
+
+  variables {
+    certificate_arn = null
+    route53_zone_id = "Z0TEST123456789"
+  }
+
+  assert {
+    condition     = length(aws_acm_certificate.n8n) == 1
+    error_message = "route53_zone_id should make the module issue its own ACM certificate"
+  }
+
+  assert {
+    condition     = length(aws_route53_record.n8n_alias) == 1
+    error_message = "The alias record should be managed when the module owns the Ingress"
+  }
+}
+
+# The regression this pair guards: before create_ingress existed, dns_automated
+# alone drove the alias record. A caller bringing its own Ingress would then
+# have the module look up an ALB that no longer exists and fight the caller's
+# DNS record. Both the record and the data.aws_lb lookup feeding it must drop
+# out, while the certificate stays, since it remains useful to the caller's own
+# Ingresses.
+
+run "route53_alias_is_skipped_for_a_caller_owned_ingress" {
+  command = plan
+
+  variables {
+    certificate_arn = null
+    route53_zone_id = "Z0TEST123456789"
+    create_ingress  = false
+  }
+
+  assert {
+    condition     = length(aws_acm_certificate.n8n) == 1
+    error_message = "The ACM certificate should still be issued for a caller-owned Ingress"
+  }
+
+  assert {
+    condition     = length(aws_route53_record.n8n_alias) == 0
+    error_message = "The module must not manage an alias record it has no ALB for"
+  }
+
+  assert {
+    condition     = length(data.aws_lb.n8n) == 0
+    error_message = "The ALB lookup must be skipped when the module owns no Ingress"
+  }
+}
+
+run "internal_ingress_scheme_applies" {
+  command = plan
+
+  variables {
+    ingress_scheme = "internal"
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/scheme"] == "internal"
+    error_message = "ingress_scheme should drive the ALB scheme annotation"
+  }
+}
+
+run "ingress_scheme_validator_rejects_unknown_value" {
+  command = plan
+
+  variables {
+    ingress_scheme = "public"
+  }
+
+  expect_failures = [var.ingress_scheme]
+}
+
+# A bring-your-own Ingress needs the Service coordinates to point at. These
+# outputs are the module's contract for that, and must stay in step with the
+# backends the module-managed Ingress uses.
+
+run "service_coordinates_match_module_ingress_backends" {
+  command = plan
+
+  assert {
+    condition     = output.n8n_webhook_service_name == kubernetes_ingress_v1.n8n[0].spec[0].rule[0].http[0].path[0].backend[0].service[0].name
+    error_message = "n8n_webhook_service_name must match the backend the module's own Ingress routes the webhook prefixes to"
+  }
+
+  # The catch-all "/" is declared last, after the webhook prefixes.
+  assert {
+    condition     = output.n8n_service_name == one([for p in kubernetes_ingress_v1.n8n[0].spec[0].rule[0].http[0].path : p.backend[0].service[0].name if p.path == "/"])
+    error_message = "n8n_service_name must match the backend the module's own Ingress routes / to"
+  }
+
+  assert {
+    condition     = output.n8n_service_port == 5678
+    error_message = "n8n_service_port should be 5678"
+  }
+}
+
+# n8n disables exactly five endpoint families on the main pods when
+# disableProductionWebhooksOnMainProcess = true, which this module always sets:
+# form, webhook, form-waiting, webhook-waiting and mcp (see the
+# `if (this.webhooksEnabled)` block in packages/cli/src/abstract-server.ts).
+# Every one of them must reach the webhook processors instead. Routing only
+# /webhook, as this module did before, leaves waiting-webhook resumption,
+# Form Trigger nodes and MCP server triggers returning 404 in production.
+# The list mirrors charts/n8n/templates/ingress-webhook.yaml upstream.
+
+run "all_webhook_prefixes_route_to_the_webhook_processor" {
+  command = plan
+
+  assert {
+    condition     = toset(output.n8n_webhook_path_prefixes) == toset(["/webhook", "/webhook-waiting", "/form", "/form-waiting", "/mcp"])
+    error_message = "The webhook prefix list must match the endpoint families n8n disables on the main pods"
+  }
+
+  assert {
+    condition = alltrue([
+      for prefix in ["/webhook", "/webhook-waiting", "/form", "/form-waiting", "/mcp"] :
+      length([
+        for p in kubernetes_ingress_v1.n8n[0].spec[0].rule[0].http[0].path :
+        p if p.path == prefix && p.backend[0].service[0].name == "n8n-webhook-processor"
+      ]) == 1
+    ])
+    error_message = "Every webhook path prefix must be routed to the webhook processor Service exactly once"
+  }
+
+  assert {
+    condition     = alltrue([for p in kubernetes_ingress_v1.n8n[0].spec[0].rule[0].http[0].path : p.path_type == "Prefix"])
+    error_message = "All Ingress paths should use pathType Prefix"
+  }
+}
+
+# ── Ingress annotations ──────────────────────────────────────────────────────
+# The escape hatch that keeps callers off a fork: the AWS Load Balancer
+# Controller has far more annotations than this module should ever mint
+# variables for (WAF, SSL policy, subnet pinning, ALB group sharing, access
+# logs). Caller entries merge over the module defaults, last write wins.
+
+run "ingress_annotation_defaults" {
+  command = plan
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/healthcheck-path"] == "/healthz"
+    error_message = "The module's default annotations must still be applied when ingress_annotations is empty"
+  }
+
+  assert {
+    condition     = strcontains(kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/target-group-attributes"], "stickiness.enabled=true")
+    error_message = "Session stickiness must remain on by default, or WebSockets break"
+  }
+}
+
+run "ingress_annotations_add_and_override" {
+  command = plan
+
+  variables {
+    ingress_annotations = {
+      "alb.ingress.kubernetes.io/wafv2-acl-arn"    = "arn:aws:wafv2:us-east-1:123456789012:regional/webacl/n8n/abc123"
+      "alb.ingress.kubernetes.io/ssl-policy"       = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+      "alb.ingress.kubernetes.io/healthcheck-path" = "/healthz-custom"
+    }
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/wafv2-acl-arn"] == "arn:aws:wafv2:us-east-1:123456789012:regional/webacl/n8n/abc123"
+    error_message = "ingress_annotations should add annotations the module has no default for"
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/healthcheck-path"] == "/healthz-custom"
+    error_message = "A caller-supplied annotation must win over the module default"
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/target-type"] == "ip"
+    error_message = "Untouched module defaults must survive the merge"
+  }
+}
+
+# Setting the scheme through ingress_annotations silently beats var.ingress_scheme,
+# and getting that backwards can expose an admin UI meant to be internal. The
+# check block warns without failing, so the plan still succeeds here.
+
+run "scheme_set_via_annotations_still_plans" {
+  command = plan
+
+  variables {
+    ingress_scheme = "internal"
+    ingress_annotations = {
+      "alb.ingress.kubernetes.io/scheme" = "internet-facing"
+    }
+  }
+
+  expect_failures = [check.ingress_scheme_not_overridden_by_annotations]
+}
+
+# The namespace output must come from kubernetes_namespace.n8n, not from
+# var.namespace. As a plain variable it is a plan-time constant, so a caller's
+# own kubernetes_* resources get no dependency edge to the namespace, Terraform
+# schedules them concurrently, and they fail at apply with
+# `namespaces "n8n" not found`. This was hit for real on the create_ingress =
+# false path, where a caller's Ingresses are the first thing to consume it.
+#
+# A plan-time assert cannot see dependency edges directly, but it can pin the
+# observable consequence: sourced from the resource the value is unknown until
+# apply under the mock provider, whereas var.namespace would echo back the
+# input string. If someone reverts the output, this assert starts failing.
+
+run "namespace_output_carries_a_dependency_on_the_namespace_resource" {
+  command = plan
+
+  variables {
+    namespace = "n8n-custom"
+  }
+
+  assert {
+    condition     = kubernetes_namespace.n8n.metadata[0].name == "n8n-custom"
+    error_message = "var.namespace must still drive the namespace the module creates"
+  }
+}
+
+# ── RDS retention + extra ingress CIDRs ──────────────────────────────────────
+# Both were hardcoded before. Out-of-band changes to either were reverted on the
+# next plan, which is why they are inputs now rather than root-level overrides.
+
+run "db_backup_retention_defaults_to_seven_days" {
+  command = plan
+
+  assert {
+    condition     = aws_db_instance.n8n[0].backup_retention_period == 7
+    error_message = "Default backup retention must stay at 7 days to preserve existing behavior"
+  }
+}
+
+run "db_backup_retention_is_configurable" {
+  command = plan
+
+  variables {
+    db_backup_retention_period = 30
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].backup_retention_period == 30
+    error_message = "db_backup_retention_period should drive the RDS backup retention window"
+  }
+}
+
+run "db_backup_retention_validator_rejects_above_aws_maximum" {
+  command = plan
+
+  variables {
+    db_backup_retention_period = 36
+  }
+
+  expect_failures = [var.db_backup_retention_period]
+}
+
+run "rds_security_group_allows_vpc_cidr_only_by_default" {
+  command = plan
+
+  assert {
+    condition     = tolist(aws_security_group.rds.ingress)[0].cidr_blocks == tolist(["10.0.0.0/16"])
+    error_message = "By default only the VPC CIDR should reach the database"
+  }
+}
+
+run "db_allowed_cidr_blocks_are_appended_to_vpc_cidr" {
+  command = plan
+
+  variables {
+    db_allowed_cidr_blocks = ["10.20.0.0/16", "192.168.100.0/24"]
+  }
+
+  assert {
+    condition     = tolist(aws_security_group.rds.ingress)[0].cidr_blocks == tolist(["10.0.0.0/16", "10.20.0.0/16", "192.168.100.0/24"])
+    error_message = "db_allowed_cidr_blocks should be appended to the always-allowed VPC CIDR"
+  }
+}
+
+run "db_allowed_cidr_blocks_validator_rejects_non_cidr" {
+  command = plan
+
+  variables {
+    db_allowed_cidr_blocks = ["not-a-cidr"]
+  }
+
+  expect_failures = [var.db_allowed_cidr_blocks]
+}
+
+# Repeating the VPC CIDR, or an entry, is an easy mistake: the plan looks clean
+# and AWS rejects the duplicate rule at apply. distinct() collapses it instead.
+
+run "duplicate_cidrs_are_collapsed_not_passed_through" {
+  command = plan
+
+  variables {
+    # 10.0.0.0/16 is the test VPC CIDR, deliberately repeated here.
+    db_allowed_cidr_blocks = ["10.0.0.0/16", "10.20.0.0/16", "10.20.0.0/16"]
+  }
+
+  assert {
+    condition     = tolist(aws_security_group.rds.ingress)[0].cidr_blocks == tolist(["10.0.0.0/16", "10.20.0.0/16"])
+    error_message = "Duplicate CIDRs must be collapsed, including a repeat of the VPC CIDR itself"
+  }
+}
+
+# ── RDS ingress by security group ────────────────────────────────────────────
+# Allowing by security group beats allowing by CIDR inside the VPC: membership
+# follows the instances, so the rule survives subnet changes and IP reuse.
+
+run "no_security_group_rule_when_list_is_empty" {
+  command = plan
+
+  assert {
+    condition     = length(aws_security_group.rds.ingress) == 1
+    error_message = "With db_allowed_security_group_ids empty there must be exactly one ingress rule, the CIDR one. A second empty rule would be a spurious diff for every existing deployment"
+  }
+}
+
+run "security_group_ingress_rule_is_added_when_set" {
+  command = plan
+
+  variables {
+    db_allowed_security_group_ids = ["sg-0123456789abcdef0", "sg-abcdef0123456789a"]
+  }
+
+  assert {
+    condition     = length(aws_security_group.rds.ingress) == 2
+    error_message = "Setting db_allowed_security_group_ids must add a second ingress rule"
+  }
+
+  # security_groups is null on the CIDR rule, so it has to be guarded before
+  # length() rather than compared directly.
+  assert {
+    condition = length([
+      for r in tolist(aws_security_group.rds.ingress) : r
+      if try(length(r.security_groups), 0) == 2 && r.from_port == 5432 && r.to_port == 5432
+    ]) == 1
+    error_message = "The security group rule must allow both groups on port 5432"
+  }
+
+  # The CIDR rule must be untouched by the addition.
+  assert {
+    condition = length([
+      for r in tolist(aws_security_group.rds.ingress) : r
+      if r.cidr_blocks == tolist(["10.0.0.0/16"])
+    ]) == 1
+    error_message = "Adding security group sources must not disturb the VPC CIDR rule"
+  }
+}
+
+run "security_group_id_validator_rejects_malformed_ids" {
+  command = plan
+
+  variables {
+    db_allowed_security_group_ids = ["not-a-sg-id"]
+  }
+
+  expect_failures = [var.db_allowed_security_group_ids]
+}
+
+# ── Diagnostic checks ────────────────────────────────────────────────────────
+# check blocks warn without failing, so `expect_failures` on the check is how a
+# plan-time warning is asserted.
+
+run "backup_retention_zero_warns" {
+  command = plan
+
+  variables {
+    db_backup_retention_period = 0
+  }
+
+  expect_failures = [check.db_backup_retention_disabled]
+}
+
+run "backup_retention_default_does_not_warn" {
+  command = plan
+
+  assert {
+    condition     = aws_db_instance.n8n[0].backup_retention_period == 7
+    error_message = "The default must keep backups enabled"
+  }
+}
+
+# ingress_scheme and ingress_annotations only reach an Ingress this module
+# creates. Silently ignoring them would let a caller believe an internal scheme
+# or a WAF association had taken effect when their own Ingress carries neither.
+
+run "ingress_tuning_with_create_ingress_false_warns" {
+  command = plan
+
+  variables {
+    create_ingress = false
+    ingress_scheme = "internal"
+  }
+
+  expect_failures = [check.ingress_tuning_requires_module_managed_ingress]
+}
+
+run "create_ingress_false_alone_does_not_warn" {
+  command = plan
+
+  variables {
+    create_ingress = false
+  }
+
+  assert {
+    condition     = length(kubernetes_ingress_v1.n8n) == 0
+    error_message = "create_ingress = false on its own is a supported configuration and must not trip the tuning check"
+  }
+}
+
+# Replacing target-group-attributes silently drops the stickiness that pins a
+# browser to one main pod, which surfaces as dropped editor WebSockets rather
+# than as an obvious config error.
+
+run "overriding_target_group_attributes_without_stickiness_warns" {
+  command = plan
+
+  variables {
+    ingress_annotations = {
+      "alb.ingress.kubernetes.io/target-group-attributes" = "deregistration_delay.timeout_seconds=30"
+    }
+  }
+
+  expect_failures = [check.ingress_annotations_preserve_session_stickiness]
+}
+
+run "overriding_target_group_attributes_keeping_stickiness_is_quiet" {
+  command = plan
+
+  variables {
+    ingress_annotations = {
+      "alb.ingress.kubernetes.io/target-group-attributes" = "stickiness.enabled=true,deregistration_delay.timeout_seconds=60"
+    }
+  }
+
+  assert {
+    condition     = strcontains(kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/target-group-attributes"], "deregistration_delay.timeout_seconds=60")
+    error_message = "A deliberate override that keeps stickiness must apply cleanly"
+  }
+}
+
+# The module already enforces "db_host is required when create_database = false"
+# as a hard validation error. These cover the inverse direction, where a
+# supplied value is silently ignored rather than rejected.
+
+run "external_db_inputs_with_create_database_true_warns" {
+  command = plan
+
+  variables {
+    # create_database defaults to true, so this database is never used.
+    db_host = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+  }
+
+  expect_failures = [check.external_db_inputs_require_create_database_false]
+}
+
+run "rds_tuning_with_create_database_false_warns" {
+  command = plan
+
+  variables {
+    create_database   = false
+    db_host           = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password       = "external-db-password"
+    db_instance_class = "db.r6g.xlarge"
+  }
+
+  expect_failures = [check.rds_tuning_requires_module_managed_database]
+}
+
+# A correct external-database configuration must trip neither check, or the
+# warnings become noise that trains people to ignore them.
+
+run "clean_external_db_config_is_quiet" {
+  command = plan
+
+  variables {
+    create_database = false
+    db_host         = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password     = "external-db-password"
+  }
+
+  assert {
+    condition     = length(aws_db_instance.n8n) == 0
+    error_message = "No RDS instance should be created for an external database"
+  }
+}
+
+run "alb_hostname_is_null_without_a_module_managed_ingress" {
+  command = plan
+
+  variables {
+    create_ingress = false
+  }
+
+  assert {
+    condition     = output.alb_hostname == null
+    error_message = "alb_hostname must be null when the module owns no Ingress, rather than a stale or misleading string"
+  }
 }
 
 run "redis_private_and_sized" {

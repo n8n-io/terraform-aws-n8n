@@ -34,6 +34,34 @@ variable "n8n_domain" {
   }
 }
 
+variable "n8n_additional_domains" {
+  description = "Extra fully-qualified hostnames n8n should answer on, beyond n8n_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53_zone_id set); with a caller-supplied certificate_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n_domain stays canonical: it is what n8n advertises as WEBHOOK_URL and N8N_HOST. Every name must live in the hosted zone given by route53_zone_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns. Names are normalized to lowercase before use: ACM and Kubernetes both store them that way, and DNS is case-insensitive."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for d in var.n8n_additional_domains : can(regex("^[a-zA-Z0-9][a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$", d))])
+    error_message = "Every entry must be a valid fully qualified domain name (e.g. hooks.example.com)."
+  }
+
+  validation {
+    condition     = !contains(var.n8n_additional_domains, var.n8n_domain)
+    error_message = "n8n_domain must not be repeated in n8n_additional_domains; it is always included on the certificate."
+  }
+
+  validation {
+    condition     = length(distinct(var.n8n_additional_domains)) == length(var.n8n_additional_domains)
+    error_message = "n8n_additional_domains must not contain duplicates."
+  }
+
+  # ACM's default quota is 10 names per certificate, the primary domain
+  # included, so 9 is the most that can be added here.
+  validation {
+    condition     = length(var.n8n_additional_domains) <= 9
+    error_message = "At most 9 additional domains are supported (ACM allows 10 names per certificate including n8n_domain)."
+  }
+}
+
 variable "vpc_id" {
   description = "ID of the VPC n8n will deploy into. Must contain both public and private subnets with the EKS/ALB subnet tags applied."
   type        = string
@@ -124,6 +152,31 @@ variable "namespace" {
   description = "Kubernetes namespace to deploy n8n into"
   type        = string
   default     = "n8n"
+}
+
+# ── Ingress ───────────────────────────────────────────────────────────────────
+
+variable "create_ingress" {
+  description = "When true (the default), the module creates the ALB Ingress that fronts n8n: a single internet-facing ALB routing /webhook to the webhook processors and / to the mains. Set to false to bring your own Ingress resources, for example the two-ALB split where an internet-facing ALB serves /webhook and a separate internal (VPN-only) ALB serves the admin UI. When false the module also skips the Route 53 alias A-record and the ALB lookup behind it, since there is no module-owned ALB to point at; the ACM certificate is still issued when route53_zone_id is set. Point your own Ingresses at the module-created Services n8n_service_name and n8n_webhook_service_name, both on port 5678. Kept as a static boolean because count expressions cannot depend on values computed at apply time."
+  type        = bool
+  default     = true
+}
+
+variable "ingress_scheme" {
+  description = "ALB scheme for the module-managed Ingress: internet-facing (the default) or internal. Use internal to keep n8n reachable only from within the VPC and any peered/VPN networks. Ignored when create_ingress = false. An internal scheme makes the Route 53 alias record resolve to private addresses, which is the intended behavior for a private deployment."
+  type        = string
+  default     = "internet-facing"
+
+  validation {
+    condition     = contains(["internet-facing", "internal"], var.ingress_scheme)
+    error_message = "ingress_scheme must be either \"internet-facing\" or \"internal\"."
+  }
+}
+
+variable "ingress_annotations" {
+  description = "Extra annotations for the module-managed Ingress, merged over the module's defaults (last write wins). Use this for AWS Load Balancer Controller features the module has no opinion on: alb.ingress.kubernetes.io/wafv2-acl-arn, ssl-policy, subnets, security-groups, inbound-cidrs, load-balancer-name, group.name, access log settings. Overriding alb.ingress.kubernetes.io/target-group-attributes drops the session stickiness that keeps WebSocket connections pinned to one main pod; re-include stickiness.enabled=true if you set it. Prefer ingress_scheme over setting alb.ingress.kubernetes.io/scheme here, because setting both raises a plan-time warning. Ignored when create_ingress = false."
+  type        = map(string)
+  default     = {}
 }
 
 # ── Nodes ─────────────────────────────────────────────────────────────────────
@@ -461,6 +514,50 @@ variable "db_allocated_storage" {
   validation {
     condition     = var.db_allocated_storage >= 20
     error_message = "RDS allocated storage must be at least 20 GB."
+  }
+}
+
+variable "db_backup_retention_period" {
+  description = "Number of days to retain automated RDS backups. 0 disables automated backups (not recommended, and it also disables point-in-time recovery). AWS allows up to 35 days. Ignored when create_database = false."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.db_backup_retention_period >= 0 && var.db_backup_retention_period <= 35
+    error_message = "db_backup_retention_period must be between 0 and 35 days."
+  }
+
+  # RDS counts retention in whole days. Without this the fractional value
+  # reaches the provider, which does reject it, but blames
+  # aws_db_instance.n8n inside the module: the caller sees a file they do not
+  # own and an attribute name (backup_retention_period) that is not the input
+  # they set. terraform validate does not catch it at all. Failing here names
+  # the variable and the line the caller actually wrote.
+  validation {
+    condition     = var.db_backup_retention_period == floor(var.db_backup_retention_period)
+    error_message = "db_backup_retention_period must be a whole number of days."
+  }
+}
+
+variable "db_allowed_cidr_blocks" {
+  description = "Additional CIDR blocks allowed to reach the module-managed RDS instance on port 5432, appended to the VPC CIDR (which is always allowed so nodes and pods can connect). Use this for a corporate network, VPN pool, or peered VPC rather than attaching a standalone aws_security_group_rule at the root, because a root-level rule is not tracked by the module's inline ingress block and gets stripped on the next plan. Duplicates, including a repeat of the VPC CIDR, are collapsed. With create_database = false the security group is still created and carries these rules, but nothing is attached to it."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for c in var.db_allowed_cidr_blocks : can(cidrnetmask(c))])
+    error_message = "Each entry in db_allowed_cidr_blocks must be a valid IPv4 CIDR block (e.g. 10.20.0.0/16)."
+  }
+}
+
+variable "db_allowed_security_group_ids" {
+  description = "Security group IDs allowed to reach the module-managed RDS instance on port 5432, in addition to the always-allowed VPC CIDR. Preferred over db_allowed_cidr_blocks for sources inside the VPC: membership follows the instances rather than their addresses, so the rule survives subnet changes and IP reuse. Use it for a bastion, a migration runner, or an app tier that already has its own group. No rule is created when the list is empty. With create_database = false the security group is still created and carries this rule, but nothing is attached to it."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for id in var.db_allowed_security_group_ids : can(regex("^sg-[0-9a-f]{8,17}$", id))])
+    error_message = "Each entry in db_allowed_security_group_ids must be a security group ID of the form sg-xxxxxxxx."
   }
 }
 

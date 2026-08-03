@@ -77,13 +77,17 @@ jobs:
         working-directory: examples/large
         run: terraform-docs --output-check .
 
+      - name: terraform-docs --output-check (examples/split-ingress)
+        working-directory: examples/split-ingress
+        run: terraform-docs --output-check .
+
   validate:
     name: terraform validate (${{ matrix.target }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress"]
     steps:
       - uses: actions/checkout@v4
 
@@ -115,7 +119,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress"]
     steps:
       - uses: actions/checkout@v4
 
@@ -137,7 +141,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress"]
     steps:
       - uses: actions/checkout@v4
 

@@ -159,7 +159,7 @@ quickly; several are candidates for future minor releases (see
 
 ## Examples
 
-Five runnable examples ship with the module: three sizing tiers (`small`, `medium`, `large`) on Route 53, plus two DNS-variant examples (`cloudflare`, `godaddy`) at `small` sizing. Sizing decisions for `medium` and `large` are derived from internal load testing.
+Six runnable examples ship with the module: three sizing tiers (`small`, `medium`, `large`) on Route 53, two DNS-variant examples (`cloudflare`, `godaddy`) at `small` sizing, and one topology-variant example (`split-ingress`) at `small` sizing. Sizing decisions for `medium` and `large` are derived from internal load testing.
 
 | Dimension | [small](./examples/small/) (default) | [medium](./examples/medium/) | [large](./examples/large/) |
 |---|---|---|---|
@@ -187,6 +187,180 @@ Five runnable examples ship with the module: three sizing tiers (`small`, `mediu
 | Est. cost / month (1-yr reserved) | ~$285 | ~$1,300 | ~$13,600 |
 
 The DNS-variant examples (`cloudflare`, `godaddy`) are sizing-equivalent to `small` — they only swap the DNS provider for cert validation and the alias record.
+
+[`split-ingress`](./examples/split-ingress/) is also sizing-equivalent to `small`. It swaps the *topology* rather than the DNS provider: `create_ingress = false`, an internet-facing ALB serving only the webhook path prefixes (optionally behind a WAF), and an internal ALB serving the editor UI and REST API. It is the runnable version of the pattern described in the next section.
+
+## Bring your own Ingress (two-ALB split)
+
+> A complete, runnable version of everything in this section, including the
+> certificate, both alias records and a WAF hook, is at
+> [`examples/split-ingress/`](./examples/split-ingress/).
+
+By default the module creates a single internet-facing ALB Ingress that routes
+`/webhook` to the webhook processors and `/` to the mains. Some deployments need
+to split that: a public, internet-facing ALB for `/webhook` so external systems
+can deliver triggers, and a separate **internal** ALB for the editor UI and REST
+API, reachable only over VPN or a peered network, optionally behind a WAF.
+
+Set `create_ingress = false` and the module steps out of routing entirely. It
+still creates everything the Ingresses point at, and it also stops managing the
+Route 53 alias A-record and the `data.aws_lb` lookup behind it, so your own DNS
+records are no longer reverted on the next `terraform plan`. The ACM certificate
+is still issued when `route53_zone_id` is set, and remains usable by your own
+Ingresses.
+
+Route to the Services the module exposes as outputs:
+
+| Output | Value | Serves |
+| --- | --- | --- |
+| `n8n_service_name` | `n8n-main` | Editor UI, REST API |
+| `n8n_webhook_service_name` | `n8n-webhook-processor` | Webhooks, forms, waiting resumptions, MCP |
+| `n8n_webhook_path_prefixes` | see below | The prefixes that must reach the processors |
+| `n8n_service_port` | `5678` | Both |
+
+### Route every webhook prefix, not just `/webhook`
+
+The module runs the chart with `disableProductionWebhooksOnMainProcess = true`,
+which disables **five** endpoint families on the main pods, not one. Each
+returns 404 if it reaches `n8n-main`:
+
+| Prefix | Breaks if misrouted |
+| --- | --- |
+| `/webhook` | Production webhook triggers |
+| `/webhook-waiting` | Wait-node resumption, Slack and Telegram human-in-the-loop callbacks |
+| `/form` | Form Trigger nodes |
+| `/form-waiting` | Multi-page and waiting forms |
+| `/mcp` | MCP server triggers |
+
+`n8n_webhook_path_prefixes` returns this list so your Ingress stays in step with
+the module as n8n adds endpoints. Iterate over it rather than hardcoding, and
+declare the prefixes **before** any catch-all `/` rule.
+
+> **Known limitation: MCP Server Triggers and multiple webhook replicas.**
+> Routing `/mcp` is necessary but not sufficient. n8n holds each MCP session's
+> live transport in the memory of the replica that handled the `initialize`
+> call; Redis stores only a validity marker, not the transport. A follow-up
+> request that lands on a different webhook replica therefore passes session
+> validation and then returns `404 Session not found`. The module runs two
+> webhook processors by default (`n8n_webhook_hpa_min_replicas`), and the ALB's
+> `lb_cookie` stickiness only helps clients that return cookies, which MCP
+> clients generally do not. Until n8n can route a session to its owning replica,
+> MCP is reliable only against a single webhook replica. Options: set
+> `n8n_webhook_hpa_min_replicas` and `n8n_webhook_hpa_max_replicas` to 1
+> (this costs you webhook throughput and HA), or use `create_ingress = false`
+> and route `/mcp` to a dedicated single-replica Deployment you manage.
+> Tracked in [issue #54](https://github.com/n8n-io/terraform-aws-n8n/issues/54), with symptoms and workarounds in
+> [docs/troubleshooting.md](./docs/troubleshooting.md#mcp-server-trigger-returns-404-session-not-found-intermittently).
+
+```hcl
+module "n8n" {
+  source = "n8n-io/n8n/aws"
+
+  create_ingress = false
+
+  # Two ALBs need two hostnames: a DNS name can alias only one load balancer.
+  # Setting route53_zone_id plus n8n_additional_domains makes the module issue
+  # and validate one certificate covering both, consumed below through the
+  # certificate_arn output. n8n_webhook_url makes n8n hand out webhook URLs on
+  # the public host rather than the internal one.
+  route53_zone_id        = var.route53_zone_id
+  n8n_additional_domains = [var.webhook_domain]
+  n8n_webhook_url        = "https://${var.webhook_domain}"
+
+  # ... remaining inputs
+}
+
+# Public ALB: webhooks only, on its own hostname.
+resource "kubernetes_ingress_v1" "webhook" {
+  metadata {
+    name      = "n8n-webhook-public"
+    namespace = module.n8n.namespace
+
+    annotations = merge(
+      {
+        "alb.ingress.kubernetes.io/scheme"      = "internet-facing"
+        "alb.ingress.kubernetes.io/target-type" = "ip"
+
+        # The module-issued, already-validated certificate. It covers
+        # webhook_domain because that name is in n8n_additional_domains.
+        "alb.ingress.kubernetes.io/certificate-arn" = module.n8n.certificate_arn
+      },
+      # Omit the key entirely when there is no WAF: a null annotation value
+      # fails the plan.
+      var.waf_acl_arn == null ? {} : {
+        "alb.ingress.kubernetes.io/wafv2-acl-arn" = var.waf_acl_arn
+      },
+    )
+  }
+
+  spec {
+    ingress_class_name = "alb"
+    rule {
+      host = var.webhook_domain
+      http {
+        dynamic "path" {
+          for_each = module.n8n.n8n_webhook_path_prefixes
+
+          content {
+            path      = path.value
+            path_type = "Prefix"
+            backend {
+              service {
+                name = module.n8n.n8n_webhook_service_name
+                port { number = module.n8n.n8n_service_port }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  # The namespace output alone orders this after the namespace, but not after
+  # the Helm release that creates the Services the ALB registers targets for.
+  depends_on = [module.n8n]
+}
+
+# Internal ALB: admin UI, VPN-only. Define a second kubernetes_ingress_v1
+# with scheme = "internal", on its own hostname (var.n8n_domain), routing "/"
+# to module.n8n.n8n_service_name on the same port.
+#
+# Give that one the webhook prefixes too, ahead of its "/" rule. Otherwise
+# the catch-all sends /webhook to the main pods, which serve none of it, and
+# the request falls through to the editor's SPA handler and returns 200 with
+# an HTML body: an in-VPC caller reads that as success while nothing ran.
+```
+
+## Customizing the module-managed Ingress
+
+Before reaching for `create_ingress = false`, check whether the two narrower
+inputs cover you. They keep the module's single-apply DNS wiring intact:
+
+- **`ingress_scheme`**: `internet-facing` (default) or `internal`. Use this
+  when the whole deployment should be private rather than split in two.
+- **`ingress_annotations`**: a `map(string)` merged over the module's defaults
+  (last write wins). This is the escape hatch for any AWS Load Balancer
+  Controller feature the module has no opinion on, so you never need a fork to
+  set one annotation:
+
+  ```hcl
+  ingress_annotations = {
+    "alb.ingress.kubernetes.io/wafv2-acl-arn" = aws_wafv2_web_acl.n8n.arn
+    "alb.ingress.kubernetes.io/ssl-policy"    = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+    "alb.ingress.kubernetes.io/inbound-cidrs" = "203.0.113.0/24"
+  }
+  ```
+
+Two caveats:
+
+- Overriding `alb.ingress.kubernetes.io/target-group-attributes` drops the
+  session stickiness that pins a browser to one main pod for 3 hours. Without
+  it, WebSocket connections break as the ALB round-robins. Re-include
+  `stickiness.enabled=true` if you set that key.
+- Set the scheme through `ingress_scheme`, not through `ingress_annotations`.
+  Doing both raises a plan-time warning, because the annotation silently wins
+  and the failure mode is an admin UI that is public when you meant it to be
+  internal.
 
 ## KMS key after `terraform destroy`
 
@@ -371,6 +545,7 @@ No modules.
 | [aws_kms_key.db](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key) | resource |
 | [aws_route53_record.cert_validation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_record) | resource |
 | [aws_route53_record.n8n_alias](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_record) | resource |
+| [aws_route53_record.n8n_alias_additional](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_record) | resource |
 | [aws_s3_bucket.n8n](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket) | resource |
 | [aws_s3_bucket_public_access_block.n8n](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_public_access_block) | resource |
 | [aws_security_group.rds](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group) | resource |
@@ -402,7 +577,11 @@ No modules.
 | <a name="input_certificate_arn"></a> [certificate\_arn](#input\_certificate\_arn) | ARN of a pre-validated ACM certificate for n8n\_domain. Use this for Cloudflare, GoDaddy, or any DNS provider other than Route53 — the respective examples (examples/cloudflare, examples/godaddy) issue the certificate and pass its ARN here. Set exactly one of certificate\_arn or route53\_zone\_id. | `string` | `null` | no |
 | <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | Name for the EKS cluster. Keep to 14 characters or fewer — the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. | `string` | `"n8n-cluster"` | no |
 | <a name="input_create_database"></a> [create\_database](#input\_create\_database) | When true (the default), the module creates and manages an Amazon RDS PostgreSQL instance. Set to false to use an external database (e.g. Amazon Aurora created by the caller) — db\_host and db\_password must then be supplied. Kept as a static boolean rather than `db_host == null` because count expressions cannot depend on values computed at apply time. | `bool` | `true` | no |
+| <a name="input_create_ingress"></a> [create\_ingress](#input\_create\_ingress) | When true (the default), the module creates the ALB Ingress that fronts n8n: a single internet-facing ALB routing /webhook to the webhook processors and / to the mains. Set to false to bring your own Ingress resources, for example the two-ALB split where an internet-facing ALB serves /webhook and a separate internal (VPN-only) ALB serves the admin UI. When false the module also skips the Route 53 alias A-record and the ALB lookup behind it, since there is no module-owned ALB to point at; the ACM certificate is still issued when route53\_zone\_id is set. Point your own Ingresses at the module-created Services n8n\_service\_name and n8n\_webhook\_service\_name, both on port 5678. Kept as a static boolean because count expressions cannot depend on values computed at apply time. | `bool` | `true` | no |
 | <a name="input_db_allocated_storage"></a> [db\_allocated\_storage](#input\_db\_allocated\_storage) | Allocated storage for RDS in GB | `number` | `50` | no |
+| <a name="input_db_allowed_cidr_blocks"></a> [db\_allowed\_cidr\_blocks](#input\_db\_allowed\_cidr\_blocks) | Additional CIDR blocks allowed to reach the module-managed RDS instance on port 5432, appended to the VPC CIDR (which is always allowed so nodes and pods can connect). Use this for a corporate network, VPN pool, or peered VPC rather than attaching a standalone aws\_security\_group\_rule at the root, because a root-level rule is not tracked by the module's inline ingress block and gets stripped on the next plan. Duplicates, including a repeat of the VPC CIDR, are collapsed. With create\_database = false the security group is still created and carries these rules, but nothing is attached to it. | `list(string)` | `[]` | no |
+| <a name="input_db_allowed_security_group_ids"></a> [db\_allowed\_security\_group\_ids](#input\_db\_allowed\_security\_group\_ids) | Security group IDs allowed to reach the module-managed RDS instance on port 5432, in addition to the always-allowed VPC CIDR. Preferred over db\_allowed\_cidr\_blocks for sources inside the VPC: membership follows the instances rather than their addresses, so the rule survives subnet changes and IP reuse. Use it for a bastion, a migration runner, or an app tier that already has its own group. No rule is created when the list is empty. With create\_database = false the security group is still created and carries this rule, but nothing is attached to it. | `list(string)` | `[]` | no |
+| <a name="input_db_backup_retention_period"></a> [db\_backup\_retention\_period](#input\_db\_backup\_retention\_period) | Number of days to retain automated RDS backups. 0 disables automated backups (not recommended, and it also disables point-in-time recovery). AWS allows up to 35 days. Ignored when create\_database = false. | `number` | `7` | no |
 | <a name="input_db_engine_version"></a> [db\_engine\_version](#input\_db\_engine\_version) | PostgreSQL engine version for the RDS instance. Must be a version available from `aws rds describe-db-engine-versions --engine postgres` in the target region — RDS deprecates and removes minor versions over time, and supported versions vary by region. Bump as needed without forking. | `string` | `"16.9"` | no |
 | <a name="input_db_host"></a> [db\_host](#input\_db\_host) | External database host. Required when create\_database = false. Ignored otherwise. Use this to pass in an Amazon Aurora cluster endpoint or any external PostgreSQL host. | `string` | `null` | no |
 | <a name="input_db_instance_class"></a> [db\_instance\_class](#input\_db\_instance\_class) | RDS instance class (db.t3.small ~$25/month, db.t3.medium for higher load) | `string` | `"db.t3.small"` | no |
@@ -411,7 +590,10 @@ No modules.
 | <a name="input_db_postgresdb_pool_size"></a> [db\_postgresdb\_pool\_size](#input\_db\_postgresdb\_pool\_size) | Number of TypeORM connection pool slots per n8n pod. Each pod holds this many persistent PostgreSQL connections. Rule of thumb: pool\_size >= worker\_concurrency / 4. With PgBouncer in transaction mode a lower value (5) is sufficient; without PgBouncer use a value matching concurrency (10-20). | `number` | `10` | no |
 | <a name="input_db_postgresdb_ssl_enabled"></a> [db\_postgresdb\_ssl\_enabled](#input\_db\_postgresdb\_ssl\_enabled) | Whether n8n connects to the database over SSL. Set to true (the default) for direct connections to RDS or Aurora — they use the AWS CA which Node.js doesn't trust by default, so the connection still negotiates SSL but skips certificate verification. Set to false when n8n connects to an in-cluster connection pooler (e.g. PgBouncer) that handles SSL on its upstream leg — the pod-to-pod traffic stays inside the cluster network. | `bool` | `true` | no |
 | <a name="input_db_storage_encrypted"></a> [db\_storage\_encrypted](#input\_db\_storage\_encrypted) | When true (the default), encrypt the RDS instance's storage, Performance Insights data, and the postgresql CloudWatch log group with a module-created Customer Managed KMS Key (aws\_kms\_key.db). Clears Checkov findings CKV\_AWS\_16, CKV\_AWS\_354, and CKV\_AWS\_158. Flipping this from false to true on an existing RDS instance forces a replacement — AWS does not support enabling storage encryption in place, so the upgrade path is snapshot → restore into a new encrypted instance. Set to false in your tfvars to preserve current behavior on pre-existing unencrypted deployments. The CMK rotates annually and uses a 7-day deletion window (AWS minimum). Ignored when create\_database = false. | `bool` | `true` | no |
+| <a name="input_ingress_annotations"></a> [ingress\_annotations](#input\_ingress\_annotations) | Extra annotations for the module-managed Ingress, merged over the module's defaults (last write wins). Use this for AWS Load Balancer Controller features the module has no opinion on: alb.ingress.kubernetes.io/wafv2-acl-arn, ssl-policy, subnets, security-groups, inbound-cidrs, load-balancer-name, group.name, access log settings. Overriding alb.ingress.kubernetes.io/target-group-attributes drops the session stickiness that keeps WebSocket connections pinned to one main pod; re-include stickiness.enabled=true if you set it. Prefer ingress\_scheme over setting alb.ingress.kubernetes.io/scheme here, because setting both raises a plan-time warning. Ignored when create\_ingress = false. | `map(string)` | `{}` | no |
+| <a name="input_ingress_scheme"></a> [ingress\_scheme](#input\_ingress\_scheme) | ALB scheme for the module-managed Ingress: internet-facing (the default) or internal. Use internal to keep n8n reachable only from within the VPC and any peered/VPN networks. Ignored when create\_ingress = false. An internal scheme makes the Route 53 alias record resolve to private addresses, which is the intended behavior for a private deployment. | `string` | `"internet-facing"` | no |
 | <a name="input_kubernetes_version"></a> [kubernetes\_version](#input\_kubernetes\_version) | Kubernetes version for the EKS cluster | `string` | `"1.35"` | no |
+| <a name="input_n8n_additional_domains"></a> [n8n\_additional\_domains](#input\_n8n\_additional\_domains) | Extra fully-qualified hostnames n8n should answer on, beyond n8n\_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53\_zone\_id set); with a caller-supplied certificate\_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create\_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create\_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate\_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n\_domain stays canonical: it is what n8n advertises as WEBHOOK\_URL and N8N\_HOST. Every name must live in the hosted zone given by route53\_zone\_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns. Names are normalized to lowercase before use: ACM and Kubernetes both store them that way, and DNS is case-insensitive. | `list(string)` | `[]` | no |
 | <a name="input_n8n_chart_version"></a> [n8n\_chart\_version](#input\_n8n\_chart\_version) | n8n Helm chart version to deploy | `string` | `"1.10.0"` | no |
 | <a name="input_n8n_community_packages_prevent_loading"></a> [n8n\_community\_packages\_prevent\_loading](#input\_n8n\_community\_packages\_prevent\_loading) | Prevent installed community packages from being loaded at runtime. Maps to N8N\_COMMUNITY\_PACKAGES\_PREVENT\_LOADING. When true, n8n leaves the community-packages management surface in place but skips loading the package code, which is useful for locking an instance down without uninstalling. Leave false (the default) for community nodes to load and execute. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies. | `bool` | `false` | no |
 | <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate\_arn. | `string` | n/a | yes |
@@ -491,16 +673,21 @@ No modules.
 
 | Name | Description |
 | ---- | ----------- |
-| <a name="output_alb_hostname"></a> [alb\_hostname](#output\_alb\_hostname) | ALB hostname. When route53\_zone\_id is set, the module already creates the alias record — this output is informational. When certificate\_arn is used, create a CNAME: your domain → this value. |
+| <a name="output_alb_hostname"></a> [alb\_hostname](#output\_alb\_hostname) | ALB hostname of the module-managed Ingress. When route53\_zone\_id is set, the module already creates the alias record, so this output is informational. When certificate\_arn is used, create a CNAME: your domain → this value. Null when create\_ingress = false, since the caller then owns the load balancers. |
 | <a name="output_aws_region"></a> [aws\_region](#output\_aws\_region) | AWS region |
+| <a name="output_certificate_arn"></a> [certificate\_arn](#output\_certificate\_arn) | ARN of the ACM certificate n8n is served with. When route53\_zone\_id is set this is the module-issued certificate, already validated, covering n8n\_domain plus every entry in n8n\_additional\_domains. When certificate\_arn is supplied instead, it is echoed back unchanged. A caller owning its own Ingress resources (create\_ingress = false) attaches this to their alb.ingress.kubernetes.io/certificate-arn annotation, which lets the module issue and validate a multi-name certificate on their behalf rather than the caller hand-rolling one. Sourced from aws\_acm\_certificate\_validation, so consuming it orders the caller's resources after validation completes. |
 | <a name="output_cluster_certificate_authority_data"></a> [cluster\_certificate\_authority\_data](#output\_cluster\_certificate\_authority\_data) | Base64-encoded EKS cluster CA certificate — pass to kubernetes/helm providers as cluster\_ca\_certificate (after base64decode). |
 | <a name="output_cluster_endpoint"></a> [cluster\_endpoint](#output\_cluster\_endpoint) | EKS cluster API endpoint — pass to the kubernetes/helm providers as host. |
 | <a name="output_cluster_name"></a> [cluster\_name](#output\_cluster\_name) | EKS cluster name |
 | <a name="output_db_password"></a> [db\_password](#output\_db\_password) | Database password — module-managed when create\_database = true, or the value of var.db\_password when using an external database. Retrieve with: terraform output -raw db\_password |
 | <a name="output_kubectl_config_command"></a> [kubectl\_config\_command](#output\_kubectl\_config\_command) | Command to configure kubectl for this cluster |
 | <a name="output_n8n_encryption_key"></a> [n8n\_encryption\_key](#output\_n8n\_encryption\_key) | n8n encryption key — back this up in a password manager. Losing it makes all stored credentials unreadable. |
+| <a name="output_n8n_service_name"></a> [n8n\_service\_name](#output\_n8n\_service\_name) | Name of the Kubernetes Service fronting the n8n main pods (the editor UI and REST API), on port 5678. Point a bring-your-own Ingress at this when create\_ingress = false. |
+| <a name="output_n8n_service_port"></a> [n8n\_service\_port](#output\_n8n\_service\_port) | Port both n8n Services listen on. Use with n8n\_service\_name / n8n\_webhook\_service\_name when building your own Ingress. |
 | <a name="output_n8n_url"></a> [n8n\_url](#output\_n8n\_url) | URL to access n8n once DNS propagates |
-| <a name="output_namespace"></a> [namespace](#output\_namespace) | Kubernetes namespace n8n is deployed into |
+| <a name="output_n8n_webhook_path_prefixes"></a> [n8n\_webhook\_path\_prefixes](#output\_n8n\_webhook\_path\_prefixes) | Path prefixes that must be routed to n8n\_webhook\_service\_name rather than n8n\_service\_name. The main pods run with production webhooks disabled, so every one of these returns 404 if it reaches them: /webhook, /webhook-waiting (also carries the Slack and Telegram human-in-the-loop callbacks), /form, /form-waiting, and /mcp. Route all of them when building your own Ingress with create\_ingress = false. |
+| <a name="output_n8n_webhook_service_name"></a> [n8n\_webhook\_service\_name](#output\_n8n\_webhook\_service\_name) | Name of the Kubernetes Service fronting the n8n webhook processors, on port 5678. Production webhooks are disabled on the main pods, so a bring-your-own Ingress must route /webhook here. |
+| <a name="output_namespace"></a> [namespace](#output\_namespace) | Kubernetes namespace n8n is deployed into. |
 | <a name="output_rds_endpoint"></a> [rds\_endpoint](#output\_rds\_endpoint) | Database endpoint — module-managed RDS when create\_database = true, or the value of var.db\_host when using an external database (e.g. Aurora). |
 | <a name="output_redis_endpoint"></a> [redis\_endpoint](#output\_redis\_endpoint) | ElastiCache Redis endpoint |
 | <a name="output_s3_bucket_name"></a> [s3\_bucket\_name](#output\_s3\_bucket\_name) | S3 bucket used for n8n binary storage |

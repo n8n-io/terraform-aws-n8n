@@ -100,7 +100,38 @@ resource "aws_security_group" "rds" {
     from_port   = 5432
     to_port     = 5432
     protocol    = "tcp"
-    cidr_blocks = [local.vpc_cidr_block]
+    # The VPC CIDR is always allowed so nodes and pods can reach the database.
+    # db_allowed_cidr_blocks appends ranges outside the VPC (corporate network,
+    # VPN pool, peered VPC). Keeping them inline rather than expecting the
+    # caller to attach a standalone aws_security_group_rule at the root means
+    # they survive `terraform plan` instead of being stripped on every run.
+    #
+    # distinct() because passing the VPC CIDR again, or repeating an entry, is
+    # an easy mistake that AWS would reject as a duplicate rule at apply time
+    # while the plan looked clean. The intent behind a repeated CIDR is
+    # unambiguous, so collapsing it beats failing on it.
+    cidr_blocks = distinct(concat([local.vpc_cidr_block], var.db_allowed_cidr_blocks))
+  }
+
+  # Allowing by security group is preferable to allowing by CIDR for anything
+  # inside the VPC: membership follows the instances rather than their
+  # addresses, so it keeps working through subnet changes and IP reuse. Use it
+  # for a bastion, a migration runner, or an app tier that already has its own
+  # group. CIDR blocks remain the right tool for ranges AWS cannot resolve to a
+  # security group, such as a corporate network reached over VPN.
+  #
+  # Declared as a dynamic block so the rule does not exist at all when the list
+  # is empty, which keeps this a no-op diff for deployments that never set it.
+  dynamic "ingress" {
+    for_each = length(var.db_allowed_security_group_ids) > 0 ? [1] : []
+
+    content {
+      description     = "PostgreSQL from allowed security groups"
+      from_port       = 5432
+      to_port         = 5432
+      protocol        = "tcp"
+      security_groups = distinct(var.db_allowed_security_group_ids)
+    }
   }
 
   egress {
@@ -118,14 +149,6 @@ resource "aws_security_group" "rds" {
 # different AZs for Multi-AZ support.
 # Skipped when create_database = false — the caller manages its own subnet
 # group (e.g. for an Aurora cluster created in the example folder).
-
-# Migrates state from pre-create_database releases of this module where this
-# resource was unconditional. Existing applies upgrade in place rather than
-# planning a destroy+recreate.
-moved {
-  from = aws_db_subnet_group.n8n
-  to   = aws_db_subnet_group.n8n[0]
-}
 
 resource "aws_db_subnet_group" "n8n" {
   count = var.create_database ? 1 : 0
@@ -191,14 +214,6 @@ resource "aws_cloudwatch_log_group" "rds_postgresql" {
 # database (e.g. Amazon Aurora). n8n.tf uses db_host / db_password directly
 # in that case.
 
-# Migrates state from pre-create_database releases of this module where this
-# resource was unconditional. Existing applies upgrade in place rather than
-# planning a destroy+recreate (which would drop the database).
-moved {
-  from = aws_db_instance.n8n
-  to   = aws_db_instance.n8n[0]
-}
-
 resource "aws_db_instance" "n8n" {
   # checkov:skip=CKV_AWS_293:Deletion protection is intentionally left at the provider default (false) so `terraform destroy` works cleanly during evaluation and example teardown. Flip to `true` for production. See examples/*/README.md → "Production considerations" for the full set of teardown-friendly defaults to review before promoting any example to production.
   count = var.create_database ? 1 : 0
@@ -217,7 +232,7 @@ resource "aws_db_instance" "n8n" {
   vpc_security_group_ids  = [aws_security_group.rds.id]
   publicly_accessible     = false
   multi_az                = var.db_multi_az
-  backup_retention_period = 7
+  backup_retention_period = var.db_backup_retention_period
 
   # Hardening defaults. Each maps to a Checkov finding that would otherwise
   # ride on `soft_fail = true` in CI. iam_database_authentication_enabled and
@@ -273,4 +288,83 @@ resource "aws_db_instance" "n8n" {
   }
 
   tags = merge(local.common_tags, { Name = "n8n-postgres-${local.cluster_name}" })
+}
+
+# ── Backup retention diagnostic check ──────────────────────────────────────
+# 0 is a legitimate value AWS accepts, and the validation on
+# db_backup_retention_period allows it deliberately: some evaluation and
+# ephemeral-environment deployments genuinely do not want backups. It is worth
+# saying out loud, though, because setting it to 0 also disables point-in-time
+# recovery, which is not obvious from the variable name and is discovered at
+# the worst possible moment.
+
+check "db_backup_retention_disabled" {
+  assert {
+    condition = var.create_database ? var.db_backup_retention_period > 0 : true
+    error_message = join("", [
+      "db_backup_retention_period is 0, which disables automated RDS backups and, with them, ",
+      "point-in-time recovery for n8n's database. Intentional for ephemeral environments; set it to ",
+      "at least 1 (the module default is 7) for anything holding real workflows or credentials.",
+    ])
+  }
+}
+
+# ── External-database diagnostic checks ────────────────────────────────────
+# A cross-variable input mistake has two directions, and only one of them is a
+# hard error. "X is required when Y" fails the plan outright, and the module
+# already enforces it: db_host and db_password are required when
+# create_database = false. The inverse, "X is ignored when Y", plans and applies
+# cleanly while quietly discarding what the caller asked for. These checks cover
+# that second direction, so a value that will have no effect is surfaced instead
+# of swallowed.
+#
+# This one matters most. create_database defaults to true, so a caller who sets
+# db_host expecting the module to use their database gets a module-managed RDS
+# instance instead, and n8n connects to that. Both databases exist, the apply
+# succeeds, and the workflows land somewhere the caller is not looking. Warn
+# rather than fail, because staging db_host in tfvars ahead of the cutover is a
+# legitimate thing to do.
+
+check "external_db_inputs_require_create_database_false" {
+  assert {
+    condition = var.create_database ? (
+      var.db_host == null && var.db_password == null
+    ) : true
+    error_message = join("", [
+      "db_host or db_password is set while create_database = true, so both are ignored: the module ",
+      "creates its own RDS instance and points n8n at that, not at the database you supplied. Set ",
+      "create_database = false to use an external database.",
+    ])
+  }
+}
+
+# The instance-shaping inputs only reach aws_db_instance.n8n, which is not
+# created when create_database = false. Tuning them there has no effect on the
+# caller's own database.
+#
+# "Is this input at its default?" is only expressible by repeating the default,
+# since HCL cannot read a variable's default at runtime. KEEP THESE LITERALS IN
+# LOCKSTEP WITH variables.tf: a default bumped there without updating this
+# check makes every create_database = false caller who left the input alone
+# warn spuriously. db_engine_version is deliberately not compared, because its
+# description invites bumping it ("Bump as needed without forking") and it is
+# the one default that changes routinely; the small coverage loss beats a
+# check that goes stale on every engine bump.
+
+check "rds_tuning_requires_module_managed_database" {
+  assert {
+    condition = var.create_database ? true : (
+      var.db_instance_class == "db.t3.small" &&
+      var.db_allocated_storage == 50 &&
+      var.db_multi_az &&
+      var.db_storage_encrypted &&
+      var.db_backup_retention_period == 7
+    )
+    error_message = join("", [
+      "An RDS sizing or hardening input (db_instance_class, db_allocated_storage, ",
+      "db_multi_az, db_storage_encrypted, db_backup_retention_period) is set while ",
+      "create_database = false. The module creates no RDS instance in that mode, so none of them apply. ",
+      "Configure these on the database you supply via db_host.",
+    ])
+  }
 }
