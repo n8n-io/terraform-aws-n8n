@@ -600,10 +600,18 @@ resource "time_sleep" "wait_for_alb_cleanup" {
 # specifying the annotation directly stays legitimate as long as it is
 # deliberate, and callers who set only ingress_annotations (never touching
 # ingress_scheme) are not forced to migrate.
+#
+# Gated on var.create_ingress for the same reason as the ALB source-restriction
+# checks below: the override it describes happens on the Ingress this module
+# creates, so with create_ingress = false there is no module-managed ALB to take
+# the annotation value and ingress_tuning_requires_module_managed_ingress
+# already covers that mode accurately.
 
 check "ingress_scheme_not_overridden_by_annotations" {
   assert {
-    condition = !contains(keys(var.ingress_annotations), "alb.ingress.kubernetes.io/scheme")
+    condition = var.create_ingress ? !contains(
+      keys(var.ingress_annotations), "alb.ingress.kubernetes.io/scheme"
+    ) : true
     error_message = join("", [
       "ingress_annotations sets alb.ingress.kubernetes.io/scheme, which overrides var.ingress_scheme ",
       "(currently \"${var.ingress_scheme}\"). The ALB will use the annotation value. ",
