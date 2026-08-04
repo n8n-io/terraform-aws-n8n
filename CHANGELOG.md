@@ -35,10 +35,13 @@ this project adheres to the stability contract in
   changes are the added path prefixes and the alias record re-reading its ALB
   target. No other resource planned a replacement across the upgrade.
 
-  This resolves the routing half of
-  [#54](https://github.com/n8n-io/terraform-aws-n8n/issues/54); the MCP session
-  affinity half remains open and is now documented as a known limitation in
-  README.md.
+  This resolves [#54](https://github.com/n8n-io/terraform-aws-n8n/issues/54).
+  The MCP session affinity concern reported alongside the routing gap does not
+  apply to any n8n version this module deploys: n8n stores MCP session IDs in
+  Redis ([n8n#25147](https://github.com/n8n-io/n8n/pull/25147)) and any webhook
+  replica can serve any session. The stale known-limitation notes were removed
+  from README.md and docs/troubleshooting.md, and the split-ingress example's
+  `mcp_single_replica` workaround variable was removed with them.
 
 - `db_allowed_cidr_blocks` is now de-duplicated against the always-allowed VPC
   CIDR. Passing the VPC CIDR explicitly, or repeating an entry, previously

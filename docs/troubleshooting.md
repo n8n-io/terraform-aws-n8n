@@ -130,33 +130,6 @@ A correctly routed webhook prefix returns `application/json` from n8n (for examp
 
 See [examples/split-ingress](../examples/split-ingress/) for a worked two-ALB configuration.
 
-## MCP Server Trigger returns `404 Session not found` intermittently
-
-**Symptom**
-
-An MCP client connects, initialises successfully, then a share of follow-up requests fail with `404 Session not found`. Retrying sometimes works. The failure rate is roughly `1 - 1/N` for `N` webhook processor replicas, so about half the requests with the default 2.
-
-**Cause**
-
-n8n keeps each MCP session's live transport in the memory of the replica that handled the `initialize` call. Redis stores only a session validity marker, not the transport itself, so a request landing on any other replica passes validation and then finds no transport to hand it to.
-
-The ALB's `lb_cookie` stickiness does not help: MCP clients are generally not browsers and do not return the cookie.
-
-**Fix**
-
-Pin the webhook processors to a single replica:
-
-```hcl
-n8n_webhook_hpa_min_replicas = 1
-n8n_webhook_hpa_max_replicas = 1
-```
-
-This costs webhook throughput and HA, so apply it only when MCP matters more. `examples/split-ingress` exposes it as `mcp_single_replica`.
-
-The alternative is a dedicated single-replica webhook Deployment serving `/mcp` alone, with the main pool left scaled for throughput. That needs `create_ingress = false` and Kubernetes resources you manage yourself.
-
-Tracked in [issue #54](https://github.com/n8n-io/terraform-aws-n8n/issues/54). A durable fix belongs upstream in n8n, by routing a session to its owning replica or making the transport reconstructible from Redis.
-
 ## Caller-owned Ingress fails with `namespaces "n8n" not found`
 
 **Symptom**
