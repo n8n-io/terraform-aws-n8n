@@ -126,6 +126,82 @@ this project adheres to the stability contract in
 
 ### Added
 
+- `n8n_image_repository` input (default `null`) points the Helm release at a
+  custom n8n application image instead of the chart's
+  `docker.n8n.io/n8nio/n8n`. The motivating case is community packages: n8n
+  installs them onto the pod's ephemeral filesystem, so keeping UI-installed
+  nodes across reschedules currently means
+  `n8n_reinstall_missing_packages = true`, an npm install on every pod boot that
+  a large dependency tree turns into a CPU- and memory-heavy rollout
+  ([issue #52](https://github.com/n8n-io/terraform-aws-n8n/issues/52)). Baking
+  the packages into the image removes boot-time installs entirely. Repository
+  and tag stay separate inputs, merged into the Helm values key by key, so
+  setting one leaves the other on the chart default; a tag or digest inlined
+  into the repository is rejected at plan time, since the chart appends the tag
+  itself. See
+  [issue #53](https://github.com/n8n-io/terraform-aws-n8n/issues/53) and
+  README → Custom n8n images.
+
+  Note that the pinned chart exposes no `imagePullSecrets` and the module adds
+  none, so the image must be pullable by the node group's IAM role (ECR in the
+  same account is, via the `AmazonEC2ContainerRegistryReadOnly` policy the
+  module already attaches) or be public.
+- `n8n_task_runner_image_tag` input (default `null`) pins the tag of the task
+  runner sidecar image (`n8nio/runners`). The chart derives that tag from the
+  n8n application image's tag, which breaks as soon as the application tag is
+  not a published n8n version: with `n8n_image_tag = "2.27.4-mypackages"` the
+  sidecar resolves to `n8nio/runners:2.27.4-mypackages`, which does not exist,
+  and every main and worker pod stays in `ImagePullBackOff`. Task runners are
+  enabled by default, so a custom image is effectively unusable without this.
+  Leave it `null` to keep the chart's inheritance.
+- `n8n_custom_extensions_path` input (default `null`) maps to
+  `N8N_CUSTOM_EXTENSIONS` on all three pod types, which is what makes nodes
+  baked into a custom image load at all. A plain `npm install` into the image's
+  `node_modules` does not: n8n dropped global `node_modules` loading in 1.0 (v10
+  migration guide), and `packages/cli/src/load-nodes-and-credentials.ts` scans
+  only `n8n-nodes-base`, `@n8n/n8n-nodes-langchain`, and the custom directories
+  at startup. Without this input, `n8n_image_repository` alone gets a custom
+  image onto the pods but leaves its nodes invisible.
+
+  Two validations encode failure modes found in the n8n `2.34.0` loader and the
+  pinned chart. A path under `/home/node/.n8n` is rejected: the chart mounts a
+  volume there on the main deployment only, and the module leaves
+  `persistence.enabled` at the chart default, so an `emptyDir` hides whatever
+  the image baked in on mains while workers and webhook processors still see it.
+  A path containing `;` is rejected: n8n splits the variable on it, and since
+  every custom directory is registered under the same `CUSTOM` key with each
+  overwriting the last, extra directories are silently dropped rather than
+  merged. A fourth `check` block warns when the path is set without
+  `n8n_image_repository`, since nothing else in the module puts files there.
+
+  Known limitation, documented rather than fixed: nodes loaded this way are
+  registered as `CUSTOM.<node>` instead of `<npm-package>.<node>`, because
+  `postProcessLoaders` qualifies every type with the loader's package name and
+  the custom loader's is the literal `CUSTOM`. Workflows built against a
+  UI-installed copy of the same package will not resolve, so this suits new
+  deployments rather than migrating an instance already using community nodes.
+- Three plan-time `check` blocks for custom-image configurations that are
+  accepted but almost certainly not intended: `n8n_image_repository` without
+  `n8n_image_tag` (the chart appends its own `stable`, which private registries
+  rarely publish), a custom repository and tag with task runners enabled but no
+  `n8n_task_runner_image_tag` (the ImagePullBackOff case above), and
+  `n8n_task_runner_image_tag` set while `n8n_task_runners_enabled = false`
+  (silently inert). All warn rather than fail, since none can be decided with
+  certainty from the inputs alone. Pinning only `n8n_image_tag`, the common
+  case, trips none of them.
+- `n8n_community_packages_registry` input (default `null`) maps to
+  `N8N_COMMUNITY_PACKAGES_REGISTRY`, so community packages can be installed
+  from a private npm mirror rather than `registry.npmjs.org`, which helps when
+  egress to public npm is blocked or packages are vendored internally. When
+  `null` the env var is omitted entirely and n8n's own default applies. n8n
+  gates this behind an Enterprise license, which this module already requires.
+
+  Upgrade note: the env var name is now reserved. An existing `n8n_extra_env`
+  entry named `N8N_COMMUNITY_PACKAGES_REGISTRY` is rejected at plan time and
+  must move to the new input. The companion
+  `N8N_COMMUNITY_PACKAGES_AUTH_TOKEN` is deliberately left unmanaged (it is a
+  credential, and `config.extraEnv` renders into the Helm release and Terraform
+  state in plaintext) and stays settable through `n8n_extra_env`.
 - Plan-time warning when the autoscaler ceilings, the per-pod CPU requests, and
   the node group are out of step. `scaling.tf` models the CPU arithmetic and the
   `autoscaling_maxima_fit_node_group_capacity` check reports the numbers when the
@@ -386,6 +462,12 @@ this project adheres to the stability contract in
   expose the module's `n8n_image_tag` input as a passthrough variable
   (default `null`, same tag-format validation as the module), so callers can
   pin the n8n image version without editing the example source.
+- All six examples also expose `n8n_image_repository` and
+  `n8n_task_runner_image_tag` as passthrough variables (default `null`, same
+  validation as the module), so a custom image can be deployed from an example
+  without editing its source. The three image inputs travel together: a custom
+  repository normally comes with a custom tag, and a custom tag normally needs
+  the runner tag pinned.
 - `db_allowed_security_group_ids` input allows sources to reach RDS by security
   group rather than by address. Preferred over `db_allowed_cidr_blocks` inside
   the VPC, since membership follows the instances and the rule survives subnet

@@ -48,6 +48,22 @@ variable "n8n_license_key" {
   sensitive   = true
 }
 
+variable "n8n_image_repository" {
+  description = "Container image repository for the n8n application, without a tag (e.g. \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n\"). Leave null to use the Helm chart's own repository (docker.n8n.io/n8nio/n8n). Set this to run a custom image, for example one with community packages baked in so they are not reinstalled on every pod boot. The image must be pullable by the node group's IAM role (ECR in the same account is) or be public, and n8n_task_runner_image_tag usually has to be set alongside it."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.n8n_image_repository == null ? true : can(regex("^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,254}$", var.n8n_image_repository))
+    error_message = "n8n_image_repository must be a non-empty image repository reference with no whitespace, containing only alphanumeric characters, dots, underscores, hyphens, slashes, and a colon for a registry port (e.g. \"myregistry.example.com/n8n\"). Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
+  }
+
+  validation {
+    condition     = var.n8n_image_repository == null ? true : !can(regex(":", reverse(split("/", var.n8n_image_repository))[0]))
+    error_message = "n8n_image_repository must not include a tag or digest, because the chart appends the tag itself. Pass the version via n8n_image_tag instead."
+  }
+}
+
 variable "n8n_image_tag" {
   description = "n8n application image tag to deploy (e.g. \"2.27.4\"). Leave null to use the Helm chart's floating `stable` tag. Pin a concrete version for reproducible upgrades and to avoid crossing major-version boundaries on an unplanned pod reschedule."
   type        = string
@@ -59,6 +75,14 @@ variable "n8n_image_tag" {
   }
 }
 
+variable "n8n_task_runner_image_tag" {
+  description = "Image tag for the task runner sidecar (`n8nio/runners`). Leave null to inherit the n8n application image's tag, which is correct as long as that tag is a published n8n version. Set it to the underlying n8n version when running a custom image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar image cannot be pulled and every main and worker pod stays in ImagePullBackOff."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.n8n_task_runner_image_tag == null ? true : can(regex("^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$", var.n8n_task_runner_image_tag))
+    error_message = "n8n_task_runner_image_tag must be a non-empty string with no whitespace, containing only alphanumeric characters, dots, underscores, and hyphens (e.g. \"2.27.4\"). Set to null to inherit the n8n application image's tag."
 variable "n8n_execution_data_storage_mode" {
   description = "Where n8n stores the data of each new execution. Passed to the module's n8n_execution_data_storage_mode. \"database\" keeps execution data in PostgreSQL; \"s3\" offloads it to the S3 bucket the module already creates for binary data. This example runs the module's default database (db.t3.small on 50 GB of gp2, a 150 IOPS baseline), which has the least room of any sizing this module ships to absorb execution-data growth, so reaching for this is often cheaper than resizing the database. Requires n8n >= 2.27 (pin n8n_image_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is not the same one binary data offload uses. There is no backfill: existing executions stay readable where they were written. Read the execution data section of the root README before enabling it, in particular the durability trade-off and the S3 lifecycle constraint."
   type        = string

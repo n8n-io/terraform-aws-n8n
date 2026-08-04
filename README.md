@@ -111,7 +111,7 @@ This module ships against specific provider majors. Notably:
 - **Terraform CLI:** `>= 1.9`.
 - **n8n Helm chart:** default `1.10.0`. Other chart versions can be
   selected via `n8n_chart_version`.
-- **n8n application image:** defaults to the chart's floating `stable` tag; production deployments should pin a  specific version via `n8n_image_tag` (e.g. `"1.2.3"`) to avoid crossing major-version boundaries on an unplanned pod reschedule.
+- **n8n application image:** defaults to the chart's `docker.n8n.io/n8nio/n8n` repository on the floating `stable` tag; production deployments should pin a  specific version via `n8n_image_tag` (e.g. `"1.2.3"`) to avoid crossing major-version boundaries on an unplanned pod reschedule. `n8n_image_repository` points the release at a custom image (see [Custom n8n images](#custom-n8n-images)).
 - **EKS:** validated on Kubernetes `1.35`.
 - **PostgreSQL:** validated on RDS `16.9`.
 
@@ -140,12 +140,16 @@ quickly; several are candidates for future minor releases (see
   validated. Endpoint differences (e.g. EKS Pod Identity GA dates per
   region) may break things.
 
-- **Air-gapped / private-image deployments.** The module pulls images
-  from public registries: the n8n chart from `ghcr.io/n8n-io`, plus
-  KEDA / Cluster Autoscaler / AWS Load Balancer Controller /
-  metrics-server charts from their respective upstreams. Replacing
-  all of these with ECR mirrors is possible but the module exposes
-  no inputs for image-registry overrides today.
+- **Air-gapped deployments.** `n8n_image_repository` moves the n8n
+  application image to a registry you control, but everything else
+  still comes from public registries: the n8n chart itself from
+  `ghcr.io/n8n-io`, the task runner sidecar image, and the KEDA /
+  Cluster Autoscaler / AWS Load Balancer Controller / metrics-server
+  charts and images from their respective upstreams. There is also no
+  `imagePullSecrets` input, so a private registry has to be reachable
+  with the node group's IAM identity (ECR in the same account is).
+  Mirroring the whole set into ECR is possible, but the module exposes
+  no inputs for it today.
 
 - **Backup/DR automation beyond RDS snapshots.** The module enables
   RDS automated backups (defaulting to RDS's own defaults). It does
@@ -448,6 +452,19 @@ rather than removing it immediately. Two operational consequences:
   `aws kms cancel-key-deletion --key-id <key-id>` and import it back into
   state with `terraform import aws_kms_key.db[0] <key-id>`.
 
+## Custom n8n images
+
+`n8n_image_repository` points the Helm release at an image you build, instead
+of the chart's `docker.n8n.io/n8nio/n8n`. Typical reasons: an internal base
+image, extra system dependencies your workflows shell out to, or
+**community packages** baked in. That last one is the motivating case: n8n
+installs community packages onto the pod's filesystem, which is ephemeral in
+EKS, so the only way to keep UI-installed nodes working across reschedules is
+`n8n_reinstall_missing_packages = true`, an npm install on every pod boot. A
+package with a large dependency tree makes every rollout CPU and memory heavy
+([#52](https://github.com/n8n-io/terraform-aws-n8n/issues/52)).
+
+Deploying a custom image is the easy half:
 ## Execution data in S3 (Enterprise)
 
 The module always stores n8n's **binary** data in S3. From **n8n 2.27** the
@@ -460,6 +477,171 @@ the queue-mode topology this module deploys:
 module "n8n" {
   # ...other inputs...
 
+  n8n_image_repository = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n"
+  n8n_image_tag        = "2.27.4-mypackages"
+
+  # The chart derives the task runner sidecar's tag from the app image's tag,
+  # and no n8nio/runners:2.27.4-mypackages exists. Pin the n8n version the
+  # custom image is built from, or main and worker pods land in
+  # ImagePullBackOff.
+  n8n_task_runner_image_tag = "2.27.4"
+
+  # Not needed any more: the packages are in the image.
+  n8n_reinstall_missing_packages = false
+}
+```
+
+Three things to know about the inputs:
+
+- **Repository and tag are separate inputs.** The chart renders
+  `{{ .Values.image.repository }}:{{ .Values.image.tag }}`, so a tag or digest
+  inlined into `n8n_image_repository` is rejected at plan time. Setting the
+  repository without a tag is accepted but warns: the chart then appends its
+  own `stable`, which most private registries do not publish.
+- **`n8n_task_runner_image_tag` is usually required alongside a custom tag.**
+  Task runners are enabled by default (`n8n_task_runners_enabled = true`) and
+  the sidecar image is `n8nio/runners`, tagged from `image.tag` unless
+  overridden. Only skip the override when your tag happens to be a published
+  n8n version. A plan-time warning fires when it looks like you forgot.
+- **Pull access comes from the node group.** The pinned chart exposes no
+  `imagePullSecrets`, and the module does not add one, so the image must be
+  pullable by the node group's IAM role (ECR in the same account works with
+  the `AmazonEC2ContainerRegistryReadOnly` policy the module already
+  attaches), or be public.
+
+Keep the custom image's n8n version in step with what you would otherwise pin
+via `n8n_image_tag`: it is now your responsibility to rebuild for n8n upgrades
+and security patches.
+
+### Getting baked-in nodes to actually load
+
+Putting the packages in the image is not enough, and the natural instinct is
+wrong: **a plain `npm install` into the image's `node_modules` does not load.**
+n8n dropped that in 1.0 ("n8n will no longer load custom nodes from its global
+`node_modules` directory", [v10 migration
+guide](https://docs.n8n.io/changelog/v10-migration-guide/)), and the loader
+confirms it: `packages/cli/src/load-nodes-and-credentials.ts` scans only
+`n8n-nodes-base`, `@n8n/n8n-nodes-langchain`, and the custom directories at
+startup. Community packages are loaded separately, per row in the
+`installed_packages` table, from `~/.n8n/nodes/node_modules`.
+
+`n8n_custom_extensions_path` is the supported route. It sets
+`N8N_CUSTOM_EXTENSIONS` on all three pod types, pointing n8n at a directory your
+image populated:
+
+```dockerfile
+FROM docker.n8n.io/n8nio/n8n:2.27.4
+USER root
+RUN mkdir -p /opt/n8n-nodes && cd /opt/n8n-nodes && \
+    npm install --omit=dev n8n-nodes-example@1.4.0
+USER node
+```
+
+```hcl
+  n8n_image_repository       = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n"
+  n8n_image_tag              = "2.27.4-mypackages"
+  n8n_task_runner_image_tag  = "2.27.4"
+  n8n_custom_extensions_path = "/opt/n8n-nodes"
+```
+
+The path must sit **outside `/home/node/.n8n`**, and the module rejects anything
+under it at plan time. The chart mounts a volume there on the *main* deployment
+only (`emptyDir`, since the module leaves `persistence.enabled` at the chart
+default), so an image that baked nodes into `~/.n8n/custom` or `~/.n8n/nodes`
+would have them hidden on mains while workers and webhook processors still see
+them: workflows that execute fine but cannot be opened in the editor. That also
+rules out the alternative of baking into `~/.n8n/nodes/node_modules` to satisfy
+existing `installed_packages` rows.
+
+Two limits worth knowing before you commit to this:
+
+- **Node types are renamed.** The custom directory loader registers everything
+  under the package name `CUSTOM` (`postProcessLoaders` builds every type as
+  `${packageName}.${type}`, and `CustomDirectoryLoader.packageName` is the
+  literal `CUSTOM`). A node that was `n8n-nodes-example.myNode` when installed
+  from npm becomes `CUSTOM.myNode`, so **existing workflows built on the
+  UI-installed copy will not resolve**. There is no alias or remap facility in
+  n8n to bridge the two names, so migrating an instance that already has
+  community packages in use means rewriting node types.
+
+  Precisely what a stale workflow does, since the failure is deferred and
+  therefore easy to miss:
+
+  - Node lookup is keyed on the package name (`loaders[packageName]` in
+    `getNode`), so `n8n-nodes-example.myNode` asks for a loader that no longer
+    exists and raises `Unrecognized node type: n8n-nodes-example.myNode`.
+  - The workflow still opens and saves. `Workflow`'s constructor deliberately
+    skips unknown types rather than throwing, so nothing fails at load; the
+    editor just shows *"'<type>' is an unknown node type"*. The error arrives
+    only when that node executes.
+  - The `installed_packages` rows live in Postgres, not on the pod, so they
+    survive the switch to a baked image. At startup `checkForMissingPackages`
+    compares them against the loaded types, the `CUSTOM.*` names do not match,
+    and the old package is flagged `failedLoading` in the Community Nodes
+    screen even though the same nodes are present under `CUSTOM.*`.
+  - **Do not pair this with `n8n_reinstall_missing_packages = true`.** Those
+    same rows make every pod npm-install the packages again at boot, which is
+    the rollout cost baking them in was meant to remove, and you end up with
+    both copies loaded under different names. Leave it at its `false` default
+    when you bake.
+- **One directory only.** n8n accepts a `;`-separated list, but every custom
+  directory is registered under the same `CUSTOM` key and each overwrites the
+  last, so all but the final directory are silently dropped. The module exposes
+  a single path and rejects a semicolon rather than let you lose nodes to it.
+  Install everything into one directory.
+
+After applying, verify it worked with
+[`tests/scripts/verify-custom-image.sh`](tests/scripts/README.md#custom-image-verification).
+Baked nodes that fail to load do not make the deployment unhealthy, so nothing
+else surfaces the problem: the script checks that n8n actually loaded them, that
+it loaded them on workers as well as mains, and reports the `CUSTOM.*` names it
+found.
+
+If the goal is a reproducible node inventory rather than avoiding boot-time
+installs, n8n's own `N8N_COMMUNITY_PACKAGES_MANAGED_BY_ENV` +
+`N8N_COMMUNITY_PACKAGES` reconciles a declared package list on every startup and
+locks the UI read-only. It keeps real package names, still installs at boot, and
+is settable today through `n8n_extra_env`.
+
+This was run end to end on a throwaway EKS deployment of `examples/small`
+(chart `1.10.0`, n8n `2.33.1`), building the image above with a real community
+package and applying the four inputs together. What that confirmed:
+
+- The baked node loads. n8n's own generated type list on the main pod contained
+  `CUSTOM.textManipulation`, and `N8N_CUSTOM_EXTENSIONS` was present on the
+  main, worker and webhook-processor pods.
+- The rename is real, not theoretical. `n8n-nodes-text-manipulation` registered
+  as `CUSTOM.textManipulation`, exactly as the loader source predicts.
+- `/home/node/.n8n` really is shadowed, and only on mains. A marker file baked
+  into the image at that path was missing on the main pods and present on
+  workers and webhook processors, while a marker at `/opt/n8n-nodes` in the same
+  image was visible everywhere.
+- A same-account ECR repository needs no `imagePullSecrets`: the node group
+  role's `AmazonEC2ContainerRegistryReadOnly` is enough.
+- A path set with no custom image really is silent. Pods stayed `Running` with
+  no restarts, loaded zero `CUSTOM.*` types, and logged nothing about the
+  missing directory, which is why the module warns about it at plan time.
+- The node runs, not just loads. A workflow using the baked node executed
+  successfully through both a manual run and a production webhook, and the
+  worker pod logged picking the job up, so main and workers resolve the same
+  custom type.
+
+If a custom image is more than you want to maintain, `n8n_community_packages_registry`
+points community-package installs at a private npm mirror instead
+(`N8N_COMMUNITY_PACKAGES_REGISTRY`), which helps when egress to
+`registry.npmjs.org` is blocked or packages are vendored internally. It still
+installs at boot, so it does not solve the rollout cost either. **Check your
+license entitlement first:** n8n throws `FeatureNotLicensedError` for any
+registry other than `registry.npmjs.org` unless the instance is entitled to
+`COMMUNITY_NODES_CUSTOM_REGISTRY`, so on an instance without it this input
+breaks community-package installs rather than redirecting them. That the value
+is honoured at all was confirmed live by A/B: with the input pointed at an
+unreachable host the install failed with `Failed to execute npm registry
+request`, and with the input removed the same package installed from the
+default registry. A mirror
+requiring authentication also needs `N8N_COMMUNITY_PACKAGES_AUTH_TOKEN`, which
+the module does not manage; pass it through `n8n_extra_env`, noting that those
+values are stored in plaintext in the Helm release and Terraform state.
   n8n_execution_data_storage_mode = "s3"   # default: "database"
   n8n_image_tag                   = "2.27.4"
 }
@@ -825,6 +1007,8 @@ No modules.
 | <a name="input_n8n_additional_domains"></a> [n8n\_additional\_domains](#input\_n8n\_additional\_domains) | Extra fully-qualified hostnames n8n should answer on, beyond n8n\_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53\_zone\_id set); with a caller-supplied certificate\_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create\_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create\_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate\_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n\_domain stays canonical: it is what n8n advertises as WEBHOOK\_URL and N8N\_HOST. Every name must live in the hosted zone given by route53\_zone\_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns. Names are normalized to lowercase before use: ACM and Kubernetes both store them that way, and DNS is case-insensitive. | `list(string)` | `[]` | no |
 | <a name="input_n8n_chart_version"></a> [n8n\_chart\_version](#input\_n8n\_chart\_version) | n8n Helm chart version to deploy | `string` | `"1.10.0"` | no |
 | <a name="input_n8n_community_packages_prevent_loading"></a> [n8n\_community\_packages\_prevent\_loading](#input\_n8n\_community\_packages\_prevent\_loading) | Prevent installed community packages from being loaded at runtime. Maps to N8N\_COMMUNITY\_PACKAGES\_PREVENT\_LOADING. When true, n8n leaves the community-packages management surface in place but skips loading the package code, which is useful for locking an instance down without uninstalling. Leave false (the default) for community nodes to load and execute. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies. | `bool` | `false` | no |
+| <a name="input_n8n_community_packages_registry"></a> [n8n\_community\_packages\_registry](#input\_n8n\_community\_packages\_registry) | npm registry community packages are installed from (e.g. https://npm.internal.example.com). Maps to N8N\_COMMUNITY\_PACKAGES\_REGISTRY, which n8n gates behind a specific licensed feature rather than a license key alone: any value other than https://registry.npmjs.org makes installs throw FeatureNotLicensedError unless the instance is entitled to COMMUNITY\_NODES\_CUSTOM\_REGISTRY (`getNpmRegistry` in community-packages.service.ts). Confirm that entitlement before setting this, since an unentitled instance breaks community-package installs instead of falling back to the public registry. Point this at a private mirror to install community nodes from an internal registry instead of the public npm one, e.g. when egress to registry.npmjs.org is blocked or packages are vendored. n8n defaults to https://registry.npmjs.org; when this is null (the default) the env var is omitted entirely so n8n's own default applies. A mirror that requires authentication also needs N8N\_COMMUNITY\_PACKAGES\_AUTH\_TOKEN, which this module does not manage; pass it via n8n\_extra\_env, keeping in mind that n8n\_extra\_env values are stored in plaintext in the Helm release and Terraform state. Baking packages into a custom image via n8n\_image\_repository avoids registry access at pod start entirely. | `string` | `null` | no |
+| <a name="input_n8n_custom_extensions_path"></a> [n8n\_custom\_extensions\_path](#input\_n8n\_custom\_extensions\_path) | Absolute path inside the n8n container that n8n scans for custom nodes at startup (e.g. "/opt/n8n-nodes"). Maps to N8N\_CUSTOM\_EXTENSIONS, and is set on every pod type (main, worker, webhook processor). This is the supported way to ship nodes baked into a custom image: since n8n 1.0 the loader no longer picks up nodes from the image's global node\_modules, so a plain npm install into the image is never seen (n8n v10 migration guide, and packages/cli/src/load-nodes-and-credentials.ts). Requires n8n\_image\_repository, because nothing else puts files at this path: the module exposes no extraVolumeMounts. The path must be outside /home/node/.n8n, which the chart mounts over on main pods (see the validation below). Two caveats that no Terraform input can fix. First, nodes loaded this way are registered under the package name CUSTOM, so a node whose type was n8n-nodes-example.myNode when installed from npm becomes CUSTOM.myNode, and existing workflows referencing the npm-qualified type will not resolve. Second, only one directory is exposed even though n8n accepts a semicolon-separated list, because every custom directory is registered under the same CUSTOM key and each one overwrites the last, so all but the final directory are silently dropped. Leave null (the default) to omit the env var entirely. | `string` | `null` | no |
 | <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate\_arn. | `string` | n/a | yes |
 | <a name="input_n8n_execution_concurrency_limit"></a> [n8n\_execution\_concurrency\_limit](#input\_n8n\_execution\_concurrency\_limit) | Maximum concurrent production executions (-1 to disable) | `number` | `100` | no |
 | <a name="input_n8n_execution_data_storage_mode"></a> [n8n\_execution\_data\_storage\_mode](#input\_n8n\_execution\_data\_storage\_mode) | Where n8n stores the data of each new execution. Maps to N8N\_EXECUTION\_DATA\_STORAGE\_MODE. "database" (the default) keeps execution data in PostgreSQL, matching n8n's own default, and emits no env var. "s3" offloads it to the module's S3 bucket, reusing the same bucket and N8N\_EXTERNAL\_STORAGE\_S3\_* connection that binary data mode already uses, so no extra bucket, IAM policy, or credentials are needed. Execution-data writes are usually the dominant write load on the n8n database at volume, so s3 is the main lever for relieving RDS pressure. Requires n8n >= 2.27 (pin n8n\_image\_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is a different entitlement from the feat:binaryDataS3 one the always-on binary data offload uses: n8n refuses to start in s3 mode without it. There is no backfill: existing executions stay readable where they were written, and only new executions go to S3, under workflows/{workflowId}/executions/{executionId}/execution\_data/bundle.json. n8n prunes those objects itself as part of the executions hard-delete path (see n8n\_pruning\_max\_age / n8n\_pruning\_max\_count), so do NOT add an S3 lifecycle rule that can reach execution\_data/ objects (see the S3 lifecycle section in the README). Note the durability trade-off: RDS gets automated backups and point-in-time recovery (db\_backup\_retention\_period, default 7 days) while the bucket has no versioning, no backups, and force\_destroy = true, so in s3 mode a terraform destroy takes execution history with it. See the durability section in the README. "filesystem" is deliberately not accepted: pod filesystems are ephemeral and unshared in this module's queue-mode topology, so execution data written there would be lost on reschedule and invisible to the other pods. See https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/use-external-storage. | `string` | `"database"` | no |
@@ -832,6 +1016,7 @@ No modules.
 | <a name="input_n8n_execution_timeout_max"></a> [n8n\_execution\_timeout\_max](#input\_n8n\_execution\_timeout\_max) | Maximum execution timeout users can configure in seconds | `number` | `7200` | no |
 | <a name="input_n8n_extra_env"></a> [n8n\_extra\_env](#input\_n8n\_extra\_env) | Additional environment variables to inject into all n8n pods (main, worker, and webhook-processor) via the Helm chart's config.extraEnv list. Each entry is an object with name and value string attributes. config.extraEnv is appended last in every container's env list, so by Kubernetes' last-wins rule any name here overrides the chart's value for that name. To prevent silently breaking the deployment, an entry is rejected at plan time when its name collides with a connection, identity, storage, license, or topology variable the module manages: any name starting with DB\_, QUEUE\_, N8N\_RUNNERS\_, N8N\_EXTERNAL\_STORAGE\_S3\_, N8N\_MULTI\_MAIN\_, or AWS\_, plus names like N8N\_ENCRYPTION\_KEY, N8N\_LICENSE\_ACTIVATION\_KEY, N8N\_HOST, WEBHOOK\_URL, and EXECUTIONS\_MODE. Use the dedicated module inputs for those. Do not put secret values here, because they render into the Helm release and are stored in plaintext in Terraform state; instead pass a *\_FILE companion (e.g. a name ending in \_FILE) pointing at a mounted Kubernetes secret, or use n8n credentials. Example: [{name = "N8N\_DEFAULT\_LOCALE", value = "de"}]. | <pre>list(object({<br/>    name  = string<br/>    value = string<br/>  }))</pre> | `[]` | no |
 | <a name="input_n8n_helm_timeout"></a> [n8n\_helm\_timeout](#input\_n8n\_helm\_timeout) | Seconds Terraform waits for the n8n Helm release to converge. Increase for large deployments where rolling out 50+ pods (workers + webhook processors + main) exceeds the default. 600s is fine for the default/medium examples; large deployments at 250+ pods need ~1800s. | `number` | `600` | no |
+| <a name="input_n8n_image_repository"></a> [n8n\_image\_repository](#input\_n8n\_image\_repository) | Container image repository for the n8n application, without a tag (e.g. "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n"). When it is null (the default), the Helm chart's own repository applies (currently `docker.n8n.io/n8nio/n8n`). Point this at a custom image built from the n8n base image to bake community packages into the image itself, which removes the boot-time npm install that n8n\_reinstall\_missing\_packages performs on every pod start. Set the tag through n8n\_image\_tag, not here. Two constraints come with a custom image: the pinned chart exposes no imagePullSecrets, so the image must be pullable by the node group's IAM role (ECR in the same account works out of the box) or from a public registry; and when the tag is not a published n8n version, also set n8n\_task\_runner\_image\_tag, because the chart derives the task runner sidecar's tag from this image's tag. | `string` | `null` | no |
 | <a name="input_n8n_image_tag"></a> [n8n\_image\_tag](#input\_n8n\_image\_tag) | n8n application image tag to deploy (e.g. "2.27.4"). When it is null (the default), the Helm chart's own default applies — currently the floating `stable` tag, which resolves to whatever n8n version is latest at the time each pod starts. Pin this to a concrete version for reproducible, incremental upgrades and to avoid crossing major-version boundaries (e.g. the n8n 2.0 breaking changes) on an unplanned pod reschedule. See https://docs.n8n.io/2-0-breaking-changes/ for the n8n 2.x migration guide. | `string` | `null` | no |
 | <a name="input_n8n_license_detach_floating_on_shutdown"></a> [n8n\_license\_detach\_floating\_on\_shutdown](#input\_n8n\_license\_detach\_floating\_on\_shutdown) | Whether n8n main pods detach their floating license entitlement on shutdown. Maps to N8N\_LICENSE\_DETACH\_FLOATING\_ON\_SHUTDOWN. n8n's upstream default is true, which is safe for a single main but breaks multi-main (n8n\_main\_hpa\_min\_replicas > 1, the module default): the leader main detaches on shutdown and zeroes the shared floating cert in the database, so any fresh main pod that starts as a follower reads the zeroed cert, fails the init-time license gate, and crash-loops — which can push a Helm release with atomic = true into a stuck pending-rollback state (see docs/troubleshooting.md and https://github.com/n8n-io/terraform-aws-n8n/issues/49). The module defaults this to false, overriding n8n's own default, because all mains share the same device fingerprint: a single floating seat is reused across restarts and nothing leaks. Set to true only to restore n8n's upstream behavior, and only for single-main deployments. | `bool` | `false` | no |
 | <a name="input_n8n_license_key"></a> [n8n\_license\_key](#input\_n8n\_license\_key) | n8n Enterprise license activation key. Get one at https://n8n.io/pricing | `string` | n/a | yes |
@@ -863,6 +1048,7 @@ No modules.
 | <a name="input_n8n_task_runner_auto_shutdown_timeout"></a> [n8n\_task\_runner\_auto\_shutdown\_timeout](#input\_n8n\_task\_runner\_auto\_shutdown\_timeout) | Seconds of inactivity before the runner process shuts down. Set to 0 to disable. | `number` | `15` | no |
 | <a name="input_n8n_task_runner_cpu_limit"></a> [n8n\_task\_runner\_cpu\_limit](#input\_n8n\_task\_runner\_cpu\_limit) | CPU limit for task runner sidecar containers (e.g. 1, 2000m) | `string` | `"1"` | no |
 | <a name="input_n8n_task_runner_cpu_request"></a> [n8n\_task\_runner\_cpu\_request](#input\_n8n\_task\_runner\_cpu\_request) | CPU request for task runner sidecar containers (e.g. 200m, 500m) | `string` | `"200m"` | no |
+| <a name="input_n8n_task_runner_image_tag"></a> [n8n\_task\_runner\_image\_tag](#input\_n8n\_task\_runner\_image\_tag) | Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n\_image\_tag = "2.27.4-mypackages" together with n8n\_task\_runner\_image\_tag = "2.27.4"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every main and worker pod stays in ImagePullBackOff. Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n\_task\_runners\_enabled = false. | `string` | `null` | no |
 | <a name="input_n8n_task_runner_memory_limit"></a> [n8n\_task\_runner\_memory\_limit](#input\_n8n\_task\_runner\_memory\_limit) | Memory limit for task runner sidecar containers (e.g. 1Gi, 2Gi) | `string` | `"1Gi"` | no |
 | <a name="input_n8n_task_runner_memory_request"></a> [n8n\_task\_runner\_memory\_request](#input\_n8n\_task\_runner\_memory\_request) | Memory request for task runner sidecar containers (e.g. 512Mi, 1Gi) | `string` | `"512Mi"` | no |
 | <a name="input_n8n_task_runner_python_enabled"></a> [n8n\_task\_runner\_python\_enabled](#input\_n8n\_task\_runner\_python\_enabled) | Enable the native Python runner (beta). Required for Python code execution in workflows. | `bool` | `true` | no |

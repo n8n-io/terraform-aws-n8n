@@ -103,6 +103,42 @@ run "n8n_image_tag_rejects_whitespace" {
   expect_failures = [var.n8n_image_tag]
 }
 
+run "n8n_image_repository_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_image_repository == null
+    error_message = "Example must not pin an image repository by default; the module's chart default (docker.n8n.io/n8nio/n8n) should apply."
+  }
+}
+
+run "n8n_image_repository_rejects_inline_tag" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/n8n:2.27.4"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "n8n_task_runner_image_tag_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_task_runner_image_tag == null
+    error_message = "Example must not pin a task runner image tag by default; the chart should keep inheriting the n8n application image's tag."
+  }
+}
+
+run "n8n_task_runner_image_tag_rejects_whitespace" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_tag = " 2.27.4 "
+  }
+
+  expect_failures = [var.n8n_task_runner_image_tag]
 run "execution_data_storage_mode_defaults_to_database" {
   command = plan
 

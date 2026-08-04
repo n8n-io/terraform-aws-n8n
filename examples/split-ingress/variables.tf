@@ -42,10 +42,37 @@ variable "n8n_license_key" {
   sensitive   = true
 }
 
+variable "n8n_image_repository" {
+  description = "Container image repository for the n8n application, without a tag (e.g. \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n\"). Leave null to use the Helm chart's own repository (docker.n8n.io/n8nio/n8n). Set this to run a custom image, for example one with community packages baked in so they are not reinstalled on every pod boot. The image must be pullable by the node group's IAM role (ECR in the same account is) or be public, and n8n_task_runner_image_tag usually has to be set alongside it."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.n8n_image_repository == null ? true : can(regex("^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,254}$", var.n8n_image_repository))
+    error_message = "n8n_image_repository must be a non-empty image repository reference with no whitespace, containing only alphanumeric characters, dots, underscores, hyphens, slashes, and a colon for a registry port (e.g. \"myregistry.example.com/n8n\"). Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
+  }
+
+  validation {
+    condition     = var.n8n_image_repository == null ? true : !can(regex(":", reverse(split("/", var.n8n_image_repository))[0]))
+    error_message = "n8n_image_repository must not include a tag or digest, because the chart appends the tag itself. Pass the version via n8n_image_tag instead."
+  }
+}
+
 variable "n8n_image_tag" {
   description = "n8n application image tag to deploy (e.g. \"2.33.1\"). Leave null to use the Helm chart's floating `stable` tag. Pin a concrete version when the n8n version is part of what you are testing."
   type        = string
   default     = null
+}
+
+variable "n8n_task_runner_image_tag" {
+  description = "Image tag for the task runner sidecar (`n8nio/runners`). Leave null to inherit the n8n application image's tag, which is correct as long as that tag is a published n8n version. Set it to the underlying n8n version when running a custom image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar image cannot be pulled and every main and worker pod stays in ImagePullBackOff."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.n8n_task_runner_image_tag == null ? true : can(regex("^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$", var.n8n_task_runner_image_tag))
+    error_message = "n8n_task_runner_image_tag must be a non-empty string with no whitespace, containing only alphanumeric characters, dots, underscores, and hyphens (e.g. \"2.27.4\"). Set to null to inherit the n8n application image's tag."
+  }
 }
 
 variable "waf_acl_arn" {

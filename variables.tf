@@ -302,6 +302,26 @@ variable "n8n_image_tag" {
   }
 }
 
+variable "n8n_image_repository" {
+  description = "Container image repository for the n8n application, without a tag (e.g. \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n\"). When it is null (the default), the Helm chart's own repository applies (currently `docker.n8n.io/n8nio/n8n`). Point this at a custom image built from the n8n base image to bake community packages into the image itself, which removes the boot-time npm install that n8n_reinstall_missing_packages performs on every pod start. Set the tag through n8n_image_tag, not here. Two constraints come with a custom image: the pinned chart exposes no imagePullSecrets, so the image must be pullable by the node group's IAM role (ECR in the same account works out of the box) or from a public registry; and when the tag is not a published n8n version, also set n8n_task_runner_image_tag, because the chart derives the task runner sidecar's tag from this image's tag."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.n8n_image_repository == null ? true : can(regex("^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,254}$", var.n8n_image_repository))
+    error_message = "n8n_image_repository must be a non-empty image repository reference with no whitespace, containing only alphanumeric characters, dots, underscores, hyphens, slashes, and a colon for a registry port (e.g. \"myregistry.example.com/n8n\", \"registry.internal:5000/n8n\"). Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
+  }
+
+  validation {
+    # The chart renders `image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"`,
+    # so a tag or digest carried in the repository string would render an
+    # unpullable reference like "myrepo/n8n:1.2.3:stable". Catch it at plan time
+    # and point at the right input instead of failing at pod start.
+    condition     = var.n8n_image_repository == null ? true : !can(regex(":", reverse(split("/", var.n8n_image_repository))[0]))
+    error_message = "n8n_image_repository must not include a tag or digest, because the chart appends the tag itself. Pass the version via n8n_image_tag instead (e.g. n8n_image_repository = \"myregistry.example.com/n8n\", n8n_image_tag = \"2.27.4\")."
+  }
+}
+
 variable "n8n_helm_timeout" {
   description = "Seconds Terraform waits for the n8n Helm release to converge. Increase for large deployments where rolling out 50+ pods (workers + webhook processors + main) exceeds the default. 600s is fine for the default/medium examples; large deployments at 250+ pods need ~1800s."
   type        = number
@@ -501,6 +521,17 @@ variable "n8n_task_runners_enabled" {
   type        = bool
   default     = true
   nullable    = false
+}
+
+variable "n8n_task_runner_image_tag" {
+  description = "Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every main and worker pod stays in ImagePullBackOff. Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n_task_runners_enabled = false."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.n8n_task_runner_image_tag == null ? true : can(regex("^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$", var.n8n_task_runner_image_tag))
+    error_message = "n8n_task_runner_image_tag must be a non-empty string with no whitespace, containing only alphanumeric characters, dots, underscores, and hyphens (e.g. \"2.27.4\"). Set to null to inherit the n8n application image's tag."
+  }
 }
 
 variable "n8n_task_runner_cpu_request" {
@@ -786,6 +817,47 @@ variable "n8n_reinstall_missing_packages" {
   description = "Reinstall community packages that are recorded in the database but missing from a pod's local filesystem at startup. Maps to N8N_REINSTALL_MISSING_PACKAGES. n8n stores installed community packages on the pod's filesystem, which is ephemeral in EKS, so a rescheduled or newly scaled-up worker comes up without them and nodes installed via the UI fail to load on that pod. Enabling this makes every pod (main, worker, and webhook-processor) reinstall the recorded packages on boot, which is what lets community nodes work reliably in queue mode. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies. When true, size the webhook processor above this module's defaults: every pod runs npm installs at boot and n8n rebroadcasts installs to all pods via pubsub, so a rolling restart makes every webhook pod install repeatedly at once. Against low CPU/memory this causes CPU-based HPA thrash and OOMKilled crash loops; see n8n_webhook_cpu_request, n8n_webhook_memory_limit, and docs/troubleshooting.md."
   type        = bool
   default     = false
+}
+
+variable "n8n_community_packages_registry" {
+  description = "npm registry community packages are installed from (e.g. https://npm.internal.example.com). Maps to N8N_COMMUNITY_PACKAGES_REGISTRY, which n8n gates behind a specific licensed feature rather than a license key alone: any value other than https://registry.npmjs.org makes installs throw FeatureNotLicensedError unless the instance is entitled to COMMUNITY_NODES_CUSTOM_REGISTRY (`getNpmRegistry` in community-packages.service.ts). Confirm that entitlement before setting this, since an unentitled instance breaks community-package installs instead of falling back to the public registry. Point this at a private mirror to install community nodes from an internal registry instead of the public npm one, e.g. when egress to registry.npmjs.org is blocked or packages are vendored. n8n defaults to https://registry.npmjs.org; when this is null (the default) the env var is omitted entirely so n8n's own default applies. A mirror that requires authentication also needs N8N_COMMUNITY_PACKAGES_AUTH_TOKEN, which this module does not manage; pass it via n8n_extra_env, keeping in mind that n8n_extra_env values are stored in plaintext in the Helm release and Terraform state. Baking packages into a custom image via n8n_image_repository avoids registry access at pod start entirely."
+  type        = string
+  default     = null
+
+  validation {
+    condition = var.n8n_community_packages_registry == null ? true : (
+      (startswith(var.n8n_community_packages_registry, "http://") ||
+      startswith(var.n8n_community_packages_registry, "https://")) &&
+      var.n8n_community_packages_registry == trimspace(var.n8n_community_packages_registry)
+    )
+    error_message = "n8n_community_packages_registry must be a registry URL starting with http:// or https:// and free of surrounding whitespace (e.g. https://npm.internal.example.com), or null to use n8n's default (https://registry.npmjs.org)."
+  }
+}
+
+variable "n8n_custom_extensions_path" {
+  description = "Absolute path inside the n8n container that n8n scans for custom nodes at startup (e.g. \"/opt/n8n-nodes\"). Maps to N8N_CUSTOM_EXTENSIONS, and is set on every pod type (main, worker, webhook processor). This is the supported way to ship nodes baked into a custom image: since n8n 1.0 the loader no longer picks up nodes from the image's global node_modules, so a plain npm install into the image is never seen (n8n v10 migration guide, and packages/cli/src/load-nodes-and-credentials.ts). Requires n8n_image_repository, because nothing else puts files at this path: the module exposes no extraVolumeMounts. The path must be outside /home/node/.n8n, which the chart mounts over on main pods (see the validation below). Two caveats that no Terraform input can fix. First, nodes loaded this way are registered under the package name CUSTOM, so a node whose type was n8n-nodes-example.myNode when installed from npm becomes CUSTOM.myNode, and existing workflows referencing the npm-qualified type will not resolve. Second, only one directory is exposed even though n8n accepts a semicolon-separated list, because every custom directory is registered under the same CUSTOM key and each one overwrites the last, so all but the final directory are silently dropped. Leave null (the default) to omit the env var entirely."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.n8n_custom_extensions_path == null ? true : can(regex("^/[^[:space:];]*$", var.n8n_custom_extensions_path))
+    error_message = "n8n_custom_extensions_path must be an absolute container path with no whitespace and no semicolon (e.g. \"/opt/n8n-nodes\"). n8n splits N8N_CUSTOM_EXTENSIONS on \";\", so a semicolon here would be parsed as two directories and silently drop all but the last."
+  }
+
+  validation {
+    # The chart mounts the `data` volume at /home/node/.n8n on the main
+    # deployment only (templates/deployment-main.yaml), and the module leaves
+    # persistence.enabled at the chart default, so that volume is an emptyDir.
+    # Anything the image placed under that path is therefore hidden on mains
+    # while still present on workers and webhook processors: the nodes load on
+    # some pod types and not others, which surfaces as workflows that run on a
+    # worker but fail to open in the editor.
+    condition = var.n8n_custom_extensions_path == null ? true : !(
+      var.n8n_custom_extensions_path == "/home/node/.n8n" ||
+      startswith(var.n8n_custom_extensions_path, "/home/node/.n8n/")
+    )
+    error_message = "n8n_custom_extensions_path must not be inside /home/node/.n8n. The chart mounts an emptyDir there on main pods, which hides whatever the image baked in, so the nodes would load on workers and webhook processors but not on mains. Use a path outside it, for example /opt/n8n-nodes."
+  }
 }
 
 variable "n8n_community_packages_prevent_loading" {

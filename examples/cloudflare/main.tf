@@ -62,8 +62,10 @@ module "n8n" {
   vpc_cidr_block  = module.vpc.vpc_cidr_block
   certificate_arn = aws_acm_certificate_validation.n8n.certificate_arn
 
-  n8n_license_key = var.n8n_license_key
-  n8n_image_tag   = var.n8n_image_tag
+  n8n_license_key           = var.n8n_license_key
+  n8n_image_repository      = var.n8n_image_repository
+  n8n_image_tag             = var.n8n_image_tag
+  n8n_task_runner_image_tag = var.n8n_task_runner_image_tag
 
   # ── Execution data ──────────────────────────────────────────────────────────
   # Left at "database" so this example applies without the feat:executionDataS3

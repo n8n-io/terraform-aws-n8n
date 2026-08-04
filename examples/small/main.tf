@@ -64,8 +64,10 @@ module "n8n" {
   vpc_cidr_block  = module.vpc.vpc_cidr_block
   route53_zone_id = var.route53_zone_id
 
-  n8n_license_key = var.n8n_license_key
-  n8n_image_tag   = var.n8n_image_tag
+  n8n_license_key           = var.n8n_license_key
+  n8n_image_repository      = var.n8n_image_repository
+  n8n_image_tag             = var.n8n_image_tag
+  n8n_task_runner_image_tag = var.n8n_task_runner_image_tag
 
   n8n_additional_domains = var.n8n_additional_domains
 

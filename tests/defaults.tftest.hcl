@@ -2276,6 +2276,194 @@ run "image_tag_rejects_overlong_tag" {
   expect_failures = [var.n8n_image_tag]
 }
 
+# ── n8n_image_repository ──────────────────────────────────────────────────────
+# Same coverage shape as n8n_image_tag above, and for the same reason limited to
+# the variable contract: helm_release.values is unknown at plan time under the
+# mock provider, so the merge() of image.repository into the Helm values cannot
+# be asserted here. To verify end-to-end: run `terraform plan` from
+# examples/small/ with n8n_image_repository set and confirm `image.repository`
+# appears in the helm_release.n8n plan output.
+
+run "image_repository_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_image_repository == null
+    error_message = "n8n_image_repository should default to null so the chart's own repository (docker.n8n.io/n8nio/n8n) applies by default."
+  }
+}
+
+run "image_repository_accepts_ecr_reference" {
+  command = plan
+
+  # A complete custom-image config: repository, tag, and the runner tag the
+  # chart cannot derive from a non-version tag. This is the shape the three
+  # custom-image check blocks are all satisfied by, so it must plan clean.
+  variables {
+    n8n_image_repository      = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n"
+    n8n_image_tag             = "2.27.4-mypackages"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n"
+    error_message = "n8n_image_repository should accept a registry-qualified ECR repository."
+  }
+}
+
+run "image_repository_accepts_registry_port" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "registry.internal:5000/n8n/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "registry.internal:5000/n8n/n8n"
+    error_message = "n8n_image_repository should accept a registry host with an explicit port; the colon only appears in the host segment."
+  }
+}
+
+run "image_repository_rejects_empty_string" {
+  command = plan
+
+  variables {
+    n8n_image_repository = ""
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "image_repository_rejects_whitespace_padded_value" {
+  command = plan
+
+  variables {
+    n8n_image_repository = " myregistry.example.com/n8n "
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# The chart renders `{{ .Values.image.repository }}:{{ .Values.image.tag }}`, so
+# an inlined tag would yield "myregistry.example.com/n8n:2.27.4:stable".
+run "image_repository_rejects_inline_tag" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/n8n:2.27.4"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "image_repository_rejects_digest" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/n8n@sha256:0123456789abcdef"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# ── n8n_task_runner_image_tag ─────────────────────────────────────────────────
+# The chart derives the runner sidecar's tag from image.tag, so a custom
+# application-image tag that is not a published n8n version needs this override
+# or main and worker pods land in ImagePullBackOff.
+
+run "task_runner_image_tag_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_task_runner_image_tag == null
+    error_message = "n8n_task_runner_image_tag should default to null so the chart keeps inheriting the n8n application image's tag."
+  }
+}
+
+run "task_runner_image_tag_accepts_concrete_version" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "myregistry.example.com/n8n"
+    n8n_image_tag             = "2.27.4-mypackages"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_task_runner_image_tag == "2.27.4"
+    error_message = "n8n_task_runner_image_tag should accept the underlying n8n version when the app image tag is custom."
+  }
+}
+
+run "task_runner_image_tag_rejects_empty_string" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_tag = ""
+  }
+
+  expect_failures = [var.n8n_task_runner_image_tag]
+}
+
+run "task_runner_image_tag_rejects_whitespace_padded_value" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_tag = " 2.27.4 "
+  }
+
+  expect_failures = [var.n8n_task_runner_image_tag]
+}
+
+# ── Custom image check blocks ─────────────────────────────────────────────────
+# These warn rather than fail, so expect_failures on the check is how a warning
+# is asserted (same pattern as the ingress and RDS tuning checks above).
+
+# A repository with no tag resolves to "<repo>:stable" via the chart default,
+# which a private registry almost never publishes.
+run "custom_image_repository_without_tag_warns" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/n8n"
+  }
+
+  expect_failures = [check.custom_image_repository_needs_an_explicit_tag]
+}
+
+# A custom image tag with task runners enabled and no runner tag is the
+# ImagePullBackOff case: the sidecar inherits a tag that does not exist upstream.
+run "custom_image_without_task_runner_tag_warns" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/n8n"
+    n8n_image_tag        = "2.27.4-mypackages"
+  }
+
+  expect_failures = [check.custom_image_tag_needs_a_task_runner_tag]
+}
+
+run "task_runner_image_tag_without_task_runners_warns" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled  = false
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  expect_failures = [check.task_runner_image_tag_requires_task_runners]
+}
+
+# The chart's own repository with a plain version pin is the common case and
+# must not trip the custom-image checks: no repository override means the runner
+# sidecar's inherited tag is a published n8n version.
+run "chart_repository_with_version_pin_does_not_warn" {
+  command = plan
+
+  variables {
 # ── Autoscaling capacity against the node group ──────────────────────────────
 # The autoscaler ceilings, the per-pod CPU requests, and node_max ×
 # node_instance_type have to be sized together: nothing in Kubernetes couples
@@ -2591,6 +2779,98 @@ run "execution_data_storage_mode_accepts_s3" {
   }
 
   assert {
+    condition     = var.n8n_image_repository == null
+    error_message = "Pinning only n8n_image_tag must stay a clean configuration with no custom-image warnings."
+  }
+}
+
+# ── n8n_custom_extensions_path ────────────────────────────────────────────────
+# The supported way to load nodes baked into a custom image: since n8n 1.0 the
+# loader ignores the image's global node_modules, so N8N_CUSTOM_EXTENSIONS is
+# what makes baked nodes visible.
+
+run "custom_extensions_path_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_custom_extensions_path == null
+    error_message = "n8n_custom_extensions_path should default to null so N8N_CUSTOM_EXTENSIONS is omitted entirely."
+  }
+}
+
+run "custom_extensions_path_accepts_absolute_path" {
+  command = plan
+
+  variables {
+    n8n_image_repository       = "myregistry.example.com/n8n"
+    n8n_image_tag              = "2.27.4-mypackages"
+    n8n_task_runner_image_tag  = "2.27.4"
+    n8n_custom_extensions_path = "/opt/n8n-nodes"
+  }
+
+  assert {
+    condition     = var.n8n_custom_extensions_path == "/opt/n8n-nodes"
+    error_message = "n8n_custom_extensions_path should accept an absolute container path."
+  }
+}
+
+run "custom_extensions_path_rejects_relative_path" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "opt/n8n-nodes"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+# n8n splits N8N_CUSTOM_EXTENSIONS on ";" and registers every custom directory
+# under the same CUSTOM key, so all but the last are silently dropped. Reject
+# the separator rather than let a caller lose nodes to it.
+run "custom_extensions_path_rejects_semicolon_separated_list" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/opt/n8n-nodes;/opt/more-nodes"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+# The chart mounts an emptyDir at /home/node/.n8n on main pods only, so a path
+# under it loads on workers and webhook processors but not on mains.
+run "custom_extensions_path_rejects_the_shadowed_n8n_home" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node/.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+run "custom_extensions_path_rejects_n8n_home_itself" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node/.n8n"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+# Nothing in this module places files at the path without a custom image.
+run "custom_extensions_path_without_custom_image_warns" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/opt/n8n-nodes"
+  }
+
+  expect_failures = [check.custom_extensions_path_requires_a_custom_image]
+}
+
+run "extra_env_rejects_custom_extensions_name" {
     condition     = var.n8n_execution_data_storage_mode == "s3"
     error_message = "n8n_execution_data_storage_mode should accept \"s3\"."
   }
@@ -2675,9 +2955,86 @@ run "extra_env_rejects_execution_data_storage_mode_name" {
 
   variables {
     n8n_extra_env = [
+      { name = "N8N_CUSTOM_EXTENSIONS", value = "/opt/n8n-nodes" },
       { name = "N8N_EXECUTION_DATA_STORAGE_MODE", value = "s3" },
     ]
   }
 
   expect_failures = [var.n8n_extra_env]
+}
+
+# ── n8n_community_packages_registry ───────────────────────────────────────────
+
+run "community_packages_registry_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_community_packages_registry == null
+    error_message = "n8n_community_packages_registry should default to null so the env var is omitted and n8n's own default (https://registry.npmjs.org) applies."
+  }
+}
+
+run "community_packages_registry_accepts_private_mirror" {
+  command = plan
+
+  variables {
+    n8n_community_packages_registry = "https://npm.internal.example.com"
+  }
+
+  assert {
+    condition     = var.n8n_community_packages_registry == "https://npm.internal.example.com"
+    error_message = "n8n_community_packages_registry should accept a private HTTPS mirror URL."
+  }
+}
+
+run "community_packages_registry_rejects_bare_hostname" {
+  command = plan
+
+  variables {
+    n8n_community_packages_registry = "npm.internal.example.com"
+  }
+
+  expect_failures = [var.n8n_community_packages_registry]
+}
+
+run "community_packages_registry_rejects_whitespace_padded_value" {
+  command = plan
+
+  variables {
+    n8n_community_packages_registry = " https://npm.internal.example.com "
+  }
+
+  expect_failures = [var.n8n_community_packages_registry]
+}
+
+# Regression guard: N8N_COMMUNITY_PACKAGES_REGISTRY became module-managed
+# alongside the n8n_community_packages_registry input, so the escape hatch must
+# reject it and send callers to the dedicated input.
+run "extra_env_rejects_community_packages_registry_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_COMMUNITY_PACKAGES_REGISTRY", value = "https://npm.internal.example.com" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# The private-registry auth token stays caller-managed (it is a credential the
+# module deliberately does not render), so it must remain accepted here.
+run "extra_env_accepts_community_packages_auth_token" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_COMMUNITY_PACKAGES_AUTH_TOKEN", value = "npm-token-placeholder" },
+    ]
+  }
+
+  assert {
+    condition     = var.n8n_extra_env[0].name == "N8N_COMMUNITY_PACKAGES_AUTH_TOKEN"
+    error_message = "N8N_COMMUNITY_PACKAGES_AUTH_TOKEN is not module-managed and should stay settable via n8n_extra_env."
+  }
 }
