@@ -368,7 +368,7 @@ cover you. They keep the module's single-apply DNS wiring intact:
   }
   ```
 
-Four caveats:
+Seven caveats:
 
 - Overriding `alb.ingress.kubernetes.io/target-group-attributes` drops the
   session stickiness that pins a browser to one main pod for 3 hours. Without

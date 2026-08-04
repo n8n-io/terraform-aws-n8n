@@ -660,6 +660,15 @@ check "ingress_tuning_requires_module_managed_ingress" {
 # Two ways to ask for a restricted ALB and get an open one instead. Both are
 # warnings rather than plan failures: each combination stays legitimate when it
 # is deliberate, and neither is reachable by a caller who simply upgrades.
+#
+# Both are gated on var.create_ingress, matching
+# ingress_annotations_preserve_session_stickiness below. Every conflict they
+# describe is a conflict on the Ingress this module creates, so with
+# create_ingress = false there is no module-managed ALB for an annotation to win
+# on, and the warning would describe a load balancer that does not exist. That
+# mode already has its own warning in
+# ingress_tuning_requires_module_managed_ingress above, which says the accurate
+# thing: none of these inputs is applied to anything.
 
 # ingress_annotations is merged last (see locals.tf), so an inbound-cidrs or
 # security-group-prefix-lists key there beats the dedicated input. That
@@ -670,8 +679,10 @@ check "ingress_tuning_requires_module_managed_ingress" {
 
 check "alb_source_restrictions_not_overridden_by_annotations" {
   assert {
-    condition = length(var.alb_inbound_cidrs) > 0 ? !contains(
-      keys(var.ingress_annotations), "alb.ingress.kubernetes.io/inbound-cidrs"
+    condition = var.create_ingress ? (
+      length(var.alb_inbound_cidrs) > 0 ? !contains(
+        keys(var.ingress_annotations), "alb.ingress.kubernetes.io/inbound-cidrs"
+      ) : true
     ) : true
     error_message = join("", [
       "alb_inbound_cidrs is set, but ingress_annotations also sets alb.ingress.kubernetes.io/inbound-cidrs, ",
@@ -681,8 +692,10 @@ check "alb_source_restrictions_not_overridden_by_annotations" {
   }
 
   assert {
-    condition = length(var.alb_inbound_prefix_list_ids) > 0 ? !contains(
-      keys(var.ingress_annotations), "alb.ingress.kubernetes.io/security-group-prefix-lists"
+    condition = var.create_ingress ? (
+      length(var.alb_inbound_prefix_list_ids) > 0 ? !contains(
+        keys(var.ingress_annotations), "alb.ingress.kubernetes.io/security-group-prefix-lists"
+      ) : true
     ) : true
     error_message = join("", [
       "alb_inbound_prefix_list_ids is set, but ingress_annotations also sets ",
@@ -726,8 +739,10 @@ check "alb_source_restrictions_require_controller_managed_security_group" {
   assert {
     # concat rather than `||`: check conditions in this module avoid chained
     # boolean operators, which do not short-circuit on Terraform 1.9.
-    condition = length(concat(var.alb_inbound_cidrs, var.alb_inbound_prefix_list_ids)) > 0 ? !contains(
-      keys(var.ingress_annotations), "alb.ingress.kubernetes.io/security-groups"
+    condition = var.create_ingress ? (
+      length(concat(var.alb_inbound_cidrs, var.alb_inbound_prefix_list_ids)) > 0 ? !contains(
+        keys(var.ingress_annotations), "alb.ingress.kubernetes.io/security-groups"
+      ) : true
     ) : true
     error_message = join("", [
       "alb_inbound_cidrs or alb_inbound_prefix_list_ids is set alongside ",
