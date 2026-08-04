@@ -49,14 +49,16 @@ variable "n8n_image_repository" {
   default     = null
 
   validation {
-    # Docker/OCI repository grammar: an optional registry host (recognised by a
-    # dot, a port, or localhost) then lowercase path components. Host segments
-    # may be uppercase, path components may not, matching what Docker accepts.
+    # Docker's own reference grammar (distribution/reference), repository half
+    # only. Host labels may be uppercase and may not end in a hyphen; path
+    # components must be lowercase but may carry doubled separators (my--repo,
+    # my__repo). No label may be empty, which rules out a..b, a trailing slash
+    # and a doubled slash. Verified against docker rather than inferred.
     condition = var.n8n_image_repository == null ? true : (
       length(var.n8n_image_repository) <= 255 &&
-      can(regex("^(?:(?:[A-Za-z0-9][A-Za-z0-9._-]*\\.[A-Za-z0-9._-]*(?::[0-9]+)?|[A-Za-z0-9][A-Za-z0-9._-]*:[0-9]+|localhost(?::[0-9]+)?)/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$", var.n8n_image_repository))
+      can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+(?::[0-9]+)?|[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?:[0-9]+|localhost)/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_image_repository))
     )
-    error_message = "n8n_image_repository must be a bare image repository reference: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n\", \"n8nio/n8n\"). No scheme (\"https://\"), no whitespace, no empty or uppercase path components, and no trailing slash. Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
+    error_message = "n8n_image_repository must be a bare image repository reference that Docker can pull: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n\", \"n8nio/n8n\"). No scheme (\"https://\"), no whitespace, no uppercase path components, and no empty label anywhere, which rules out a trailing slash, a doubled slash, and a doubled dot. Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
   }
 
   validation {

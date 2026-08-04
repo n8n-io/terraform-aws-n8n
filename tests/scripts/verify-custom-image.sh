@@ -173,23 +173,31 @@ pods_for() {
     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true
 }
 
-# The n8n application container within a pod, as opposed to the task runner
-# sidecar. The chart names it after the component (n8n-main, n8n-worker,
-# n8n-webhook-processor); older and forked charts use a bare "n8n". Falling back
-# to the first container is a last resort and only right by declaration order,
-# so it warns: exec'ing into the runner sidecar instead would read the wrong
-# process's environment and report a confident, wrong answer.
+# Container names the chart gives the n8n application process, as opposed to
+# the task runner sidecar. The chart names it after the component; older and
+# forked charts use a bare "n8n".
+known_container() {
+  case "$1" in
+    n8n|n8n-main|n8n-worker|n8n-webhook-processor) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The n8n application container within a pod. Falling back to the first
+# container is a last resort and is only right by declaration order, so
+# section 1 reports it: exec'ing into the runner sidecar instead would read
+# the wrong process's environment and give a confident, wrong answer.
+#
+# This stays silent and writes nothing but the container name to stdout,
+# because every caller runs it as `c=$(container_for "$p")`. A warning printed
+# here would be captured into that variable instead of shown, and the WARN
+# counter would be incremented in the subshell and lost.
 container_for() {
   local p="$1" names n
   names=$(kubectl get pod -n "$NAMESPACE" "$p" -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
   for n in $names; do
-    case "$n" in
-      n8n|n8n-main|n8n-worker|n8n-webhook-processor) echo "$n"; return ;;
-    esac
+    known_container "$n" && { echo "$n"; return; }
   done
-  if [[ -n "$names" ]]; then
-    echo "WARN: no recognised n8n container in $p (containers: $names), using the first" >&2
-  fi
   echo "${names%% *}"
 }
 
@@ -247,6 +255,8 @@ header "Custom image (n8n_image_repository / n8n_image_tag)"
 # Every Running replica, not one per component: a half-finished rollout leaves
 # one worker on the old image while its sibling already has the new one, and
 # sampling a single pod per component is exactly how that stays invisible.
+# This loop reads from a here-string rather than a pipe, so it runs in the
+# current shell and warn() increments the counter the summary prints.
 POD_IMAGES=""
 UNREADABLE=0
 for entry in "${POD_TYPES[@]}"; do
@@ -254,6 +264,11 @@ for entry in "${POD_TYPES[@]}"; do
   while IFS= read -r p; do
     [[ -z "$p" ]] && continue
     c=$(container_for "$p")
+    if [[ -n "$c" ]] && ! known_container "$c"; then
+      warn "No recognised n8n container in $p, falling back to '$c'"
+      info "Every later check execs into this container, so a wrong guess here"
+      info "would read the sidecar's environment and report the wrong answer"
+    fi
     img=$(kubectl get pod -n "$NAMESPACE" "$p" \
           -o jsonpath="{.spec.containers[?(@.name=='$c')].image}" 2>/dev/null || true)
     if [[ -z "$img" ]]; then
@@ -267,17 +282,18 @@ for entry in "${POD_TYPES[@]}"; do
   done <<< "$(pods_for "$comp")"
 done
 
-# A pod whose image could not be read is an unverified pod. Counting only the
-# images that *were* readable would report convergence across the rest and read
-# as a clean pass, which is the same blind spot this section exists to close.
-if [[ "$UNREADABLE" -gt 0 ]]; then
-  fail "$UNREADABLE pod(s) had no readable image, so convergence is unverified"
-  info "Re-run once the rollout settles, or check the container names with"
-  info "kubectl get pods -n $NAMESPACE -o jsonpath='{.items[*].spec.containers[*].name}'"
-fi
-
 UNIQUE_IMAGES=$(values_of "$POD_IMAGES" | sort -u | grep -c . || true)
-if [[ "$UNIQUE_IMAGES" == "1" ]]; then
+
+# A pod whose image could not be read is an unverified pod, so the fleet's
+# convergence is simply unknown and the check reports exactly that. Emitting
+# "all pods run the same image" for the readable subset alongside the failure
+# would report one check as both passed and failed, and the subset agreeing
+# says nothing about the pod that was missed.
+if [[ "$UNREADABLE" -gt 0 ]]; then
+  fail "$UNREADABLE pod(s) had no readable image, so image convergence is unverified"
+  info "Re-run once the rollout settles, or list the container names with"
+  info "kubectl get pods -n $NAMESPACE -o jsonpath='{.items[*].spec.containers[*].name}'"
+elif [[ "$UNIQUE_IMAGES" == "1" ]]; then
   pass "All pods run the same image"
 elif [[ "$UNIQUE_IMAGES" == "0" ]]; then
   fail "No pod images could be read at all"

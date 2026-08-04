@@ -308,20 +308,32 @@ variable "n8n_image_repository" {
   default     = null
 
   validation {
-    # Docker/OCI reference grammar, narrowed to the repository half (no tag or
-    # digest). An optional registry host, recognised the way Docker recognises
-    # one (it contains a dot, carries a port, or is localhost), followed by one
-    # or more path components. Host segments may be uppercase because DNS is
-    # case-insensitive and Docker accepts them; path components may not, and
-    # Docker rejects those outright ("repository name must be lowercase"). A
-    # plain character whitelist accepted "https://reg.example.com/n8n",
-    # "reg:5000:bad/n8n" and "reg.example.com/n8n/", all of which only surface
-    # as ImagePullBackOff after the cluster is up.
+    # Docker's own reference grammar (distribution/reference), narrowed to the
+    # repository half: no tag, no digest. Reading it in pieces, since it is one
+    # long line by necessity (a validation condition cannot reference a local):
+    #
+    #   label = [A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?
+    #   host  = label(.label)+(:port)? | label:port | localhost
+    #   sep   = __ | [._] | -+
+    #   comp  = [a-z0-9]+(sep[a-z0-9]+)*
+    #   ref   = (host/)? comp(/comp)*
+    #
+    # Two asymmetries are deliberate, both verified against docker itself
+    # rather than inferred. Host labels may be uppercase and path components
+    # may not ("repository name (N8N) must be lowercase"). And a path component
+    # may carry doubled separators (my--repo, my__repo, a---b all tag cleanly)
+    # while a host label may not end in a hyphen and no label may be empty
+    # (a..b/n8n and foo-.com/n8n are both rejected by docker).
+    #
+    # The looser character whitelist this replaces accepted
+    # "https://reg.example.com/n8n", "reg:5000:bad/n8n", "reg.example.com/n8n/"
+    # and "reg.example.com//n8n", none of which can be pulled, so they only
+    # surfaced as ImagePullBackOff once the cluster was already up.
     condition = var.n8n_image_repository == null ? true : (
       length(var.n8n_image_repository) <= 255 &&
-      can(regex("^(?:(?:[A-Za-z0-9][A-Za-z0-9._-]*\\.[A-Za-z0-9._-]*(?::[0-9]+)?|[A-Za-z0-9][A-Za-z0-9._-]*:[0-9]+|localhost(?::[0-9]+)?)/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$", var.n8n_image_repository))
+      can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+(?::[0-9]+)?|[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?:[0-9]+|localhost)/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_image_repository))
     )
-    error_message = "n8n_image_repository must be a bare image repository reference: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n\", \"registry.internal:5000/n8n\", \"n8nio/n8n\"). No scheme (\"https://\"), no whitespace, no empty or uppercase path components, and no trailing slash. Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
+    error_message = "n8n_image_repository must be a bare image repository reference that Docker can pull: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n\", \"registry.internal:5000/n8n\", \"n8nio/n8n\"). No scheme (\"https://\"), no whitespace, no uppercase path components, and no empty label anywhere, which rules out a trailing slash, a doubled slash, and a doubled dot. Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
   }
 
   validation {

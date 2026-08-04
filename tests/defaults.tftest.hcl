@@ -2462,6 +2462,75 @@ run "image_repository_accepts_docker_hub_short_form" {
   }
 }
 
+# Docker's path-component separator is `[._] | __ | -+`, so a doubled hyphen or
+# underscore is legal even though a doubled dot is not. An earlier attempt at
+# this validation allowed only a single separator character and rejected these,
+# which is the worse failure: a plan-time rejection blocks a caller outright,
+# with no override, over an image the registry would have served.
+run "image_repository_accepts_doubled_separators" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "myregistry.example.com/my--repo__v2"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "myregistry.example.com/my--repo__v2"
+    error_message = "n8n_image_repository should accept doubled hyphen and underscore separators in a path component, which Docker's name grammar permits."
+  }
+}
+
+# The counterpart to the rule above: a doubled dot is not a legal separator, in
+# a path component or in a host label.
+run "image_repository_rejects_doubled_dot_in_path" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/a..b"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "image_repository_rejects_empty_host_label" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "a..b.example.com/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# A host label may contain hyphens but may not end in one, so an internal
+# doubled hyphen is fine (xn-- punycode relies on it) and a trailing one is not.
+run "image_repository_rejects_host_label_ending_in_hyphen" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "foo-.example.com/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "image_repository_accepts_punycode_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "xn--bcher-kva.example.com/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "xn--bcher-kva.example.com/n8n"
+    error_message = "n8n_image_repository should accept a punycode registry host, whose labels legitimately contain a doubled hyphen."
+  }
+}
+
 # ── n8n_task_runner_image_tag ─────────────────────────────────────────────────
 # The chart derives the runner sidecar's tag from image.tag, so a custom
 # application-image tag that is not a published n8n version needs this override
