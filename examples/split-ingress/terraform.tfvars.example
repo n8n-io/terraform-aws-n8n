@@ -25,11 +25,6 @@ n8n_license_key = "your-enterprise-license-key-here"
 # Empty allows anything that can route to the private subnets.
 # admin_allowed_cidr_blocks = ["10.20.0.0/16"]
 
-# Set true only if you use MCP Server Triggers. Pins webhook processors to one
-# replica so MCP sessions stay on the pod that created them, at the cost of
-# webhook throughput and HA. See the README.
-# mcp_single_replica = false
-
 # AWS region. Change if you're deploying outside us-east-1.
 # aws_region = "eu-west-1"
 
