@@ -75,6 +75,7 @@ These settings live in the module's `database.tf` and `s3.tf` and are not curren
 | Name | Type |
 | ---- | ---- |
 | [aws_availability_zones.available](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/availability_zones) | data source |
+| [aws_eks_cluster_auth.n8n](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/eks_cluster_auth) | data source |
 
 ## Inputs
 
