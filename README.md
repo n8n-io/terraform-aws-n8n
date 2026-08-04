@@ -564,9 +564,10 @@ plan. It is exact for 995 of the 1,150 instance types EC2 currently offers in
 eu-west-1. Bare-metal sizes silence the check entirely, as does a CPU request in
 a form the module cannot parse. Of the remaining deviations, the 1 vCPU families
 and the SMT-disabled and legacy sizes are over-counted, which costs a warning
-rather than raising a false one. Three legacy types are under-counted
-(`c1.xlarge`, `c4.8xlarge`, `d2.8xlarge`), so on those the check can warn a hair
-early at the boundary.
+rather than raising a false one. Three legacy types are under-counted, so on
+those the check can warn early: `c4.8xlarge` and `d2.8xlarge` resolve 11% low,
+which warns a hair early at the boundary, and `c1.xlarge` resolves 4 vCPU
+against a real 8, which warns at about half the node group's real capacity.
 
 ## Reference
 
