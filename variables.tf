@@ -201,7 +201,7 @@ variable "node_instance_type" {
 }
 
 variable "node_desired" {
-  description = "Desired number of worker nodes at startup"
+  description = "Initial number of worker nodes. Only applies at creation: the node group's desired_size ignores changes afterward so the Cluster Autoscaler can own it without fighting plans/applies."
   type        = number
   default     = 3
 
