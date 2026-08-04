@@ -206,17 +206,13 @@ resource "helm_release" "n8n" {
     # Webhook processor HPA is created externally in scaling.tf (chart skips it
     # when keda.enabled = true).
     #
-    # KNOWN GAP when redis_transit_encryption_enabled = true: these triggers
-    # carry neither TLS nor credentials. Observed on a live cluster, the first
-    # thing to break is TLS, not auth — KEDA opens a plaintext connection to the
-    # TLS-only endpoint and hangs (`connection to redis failed: i/o timeout`),
-    # so it never gets far enough to be rejected for missing credentials. The
-    # HPA then reports its metric as <unknown> and workers hold their current
-    # replica count. Nothing crashes, which is what makes it easy to miss.
-    #
-    # Fixing it needs `enableTLS` in this metadata block first, then credentials
-    # via either a TriggerAuthentication CRD or a passwordFromEnv indirection —
-    # see https://github.com/n8n-io/terraform-aws-n8n/issues/66.
+    # When redis_transit_encryption_enabled = true both triggers additionally
+    # carry TLS and an AUTH token, merged in from local.keda_redis_auth_metadata
+    # (see locals.tf for how the token reaches KEDA without being written into
+    # the ScaledObject). Both keys are needed and TLS is the one that has to
+    # land: without it KEDA opens a plaintext connection to a TLS-only endpoint
+    # and hangs on `connection to redis failed: i/o timeout` before it ever
+    # reaches authentication, so credentials alone would look like no fix at all.
     keda = {
       enabled = true
       worker = {
@@ -227,20 +223,20 @@ resource "helm_release" "n8n" {
         triggers = [
           {
             type = "redis"
-            metadata = {
+            metadata = merge({
               address    = "${local.redis_host}:6379"
               listName   = "bull:jobs:wait"
               listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
-            }
+            }, local.keda_redis_auth_metadata)
             authenticationRef = { name = "" }
           },
           {
             type = "redis"
-            metadata = {
+            metadata = merge({
               address    = "${local.redis_host}:6379"
               listName   = "bull:jobs:active"
               listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
-            }
+            }, local.keda_redis_auth_metadata)
             authenticationRef = { name = "" }
           }
         ]

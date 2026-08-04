@@ -105,6 +105,29 @@ locals {
     aws_elasticache_cluster.n8n[0].cache_nodes[0].address
   )
 
+  # Extra KEDA Redis trigger metadata needed once the queue backend enforces TLS
+  # and an AUTH token. Empty on the default path, so the rendered ScaledObject
+  # stays byte-identical to what existing releases already run.
+  #
+  # passwordFromEnv does not carry the token. It names an environment variable,
+  # and KEDA resolves it against the *scale target's* pod spec, specifically
+  # containers[0], since the ScaledObject sets no envSourceContainerName. On the
+  # worker Deployment containers[0] is `n8n-worker` (task-runner is a sidecar
+  # after it), and that is the container the chart already gives
+  # QUEUE_BULL_REDIS_PASSWORD to via secretKeyRef. KEDA follows the secretKeyRef
+  # rather than requiring a literal value, so the token reaches the scaler
+  # without ever appearing in the ScaledObject manifest.
+  #
+  # That resolution needs KEDA to be able to read Secrets outside its own
+  # namespace. The KEDA chart allows it by default (permissions.operator and
+  # permissions.metricServer both have restrict.secret = false); setting
+  # KEDA_RESTRICT_SECRET_ACCESS=true on the operator would break this path.
+  # keda.tf installs the chart without overriding those values.
+  keda_redis_auth_metadata = var.redis_transit_encryption_enabled ? {
+    enableTLS       = "true"
+    passwordFromEnv = "QUEUE_BULL_REDIS_PASSWORD"
+  } : {}
+
   common_tags = merge(
     {
       ManagedBy = "terraform"

@@ -472,24 +472,24 @@ downstream reads the module's internal `redis_host` local and why the
 > `moved` block absorbs the `count` added to the cluster resource. Existing
 > deployments plan `No changes.`
 
-### Known limitation: worker autoscaling
+### Worker autoscaling
 
-KEDA's worker autoscaler cannot reach an encrypted Redis. Its trigger is
-configured with neither TLS nor credentials, so it opens a plaintext connection
-to a TLS-only endpoint and hangs until it times out — the KEDA operator logs
-`connection to redis failed: i/o timeout`, and the generated HPA reports its
-queue-depth metric as `<unknown>`.
+Queue-depth autoscaling keeps working with the flag on. Both worker triggers
+gain `enableTLS` and a reference to the AUTH token, so KEDA reads queue depth
+over the same encrypted, authenticated connection the workers use.
 
-The practical effect: **workers stop scaling on backlog** and hold whatever
-replica count they currently have, bounded by `n8n_worker_keda_min_replicas` and
-`n8n_worker_keda_max_replicas`. Nothing crashes, n8n itself is unaffected, and
-the pods stay healthy — which is exactly what makes this easy to miss.
+The token is not written into the ScaledObject. The trigger carries
+`passwordFromEnv: QUEUE_BULL_REDIS_PASSWORD`, which names an environment
+variable rather than a value; KEDA resolves it against the worker pod's first
+container, following the `secretKeyRef` the chart already sets there. Nothing
+sensitive lands in a manifest, and no `TriggerAuthentication` resource is
+needed.
 
-Until [#66](https://github.com/n8n-io/terraform-aws-n8n/issues/66) lands, this
-flag trades queue-depth autoscaling for encryption and authentication. If your
-workload relies on bursty queue-driven scaling, either stay on the default
-posture or raise `n8n_worker_keda_min_replicas` to cover peak while the flag is
-on.
+This depends on KEDA being allowed to read Secrets outside its own namespace,
+which its chart permits by default. If you install KEDA yourself with
+`KEDA_RESTRICT_SECRET_ACCESS=true`, or set `permissions.operator.restrict.secret`
+or `permissions.metricServer.restrict.secret` to `true`, the token cannot be
+resolved and queue-depth scaling will stall.
 
 ## Log streaming (Enterprise)
 
@@ -725,7 +725,7 @@ No modules.
 | <a name="input_private_subnets"></a> [private\_subnets](#input\_private\_subnets) | IDs of private subnets (one per AZ, minimum two AZs). RDS, ElastiCache, and EKS nodes attach here. | `list(string)` | n/a | yes |
 | <a name="input_public_subnets"></a> [public\_subnets](#input\_public\_subnets) | IDs of public subnets (one per AZ, minimum two AZs). The ALB attaches here. | `list(string)` | n/a | yes |
 | <a name="input_redis_node_type"></a> [redis\_node\_type](#input\_redis\_node\_type) | ElastiCache node type (cache.t3.medium ~$25/month) | `string` | `"cache.t3.medium"` | no |
-| <a name="input_redis_transit_encryption_enabled"></a> [redis\_transit\_encryption\_enabled](#input\_redis\_transit\_encryption\_enabled) | Encrypt the n8n queue backend in transit and require an AUTH token on it. Defaults to false, which is the module's deliberate network-trust posture: Redis sits in private subnets behind a security group that admits only VPC traffic, so isolation is by network boundary rather than by credentials. Set true to add TLS plus a generated AUTH token on top of that boundary — worth doing when queue payloads (workflow execution data) crossing the VPC in cleartext, or an unauthenticated Redis after a network-boundary breach, are risks you need closed. CHANGING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS: AWS exposes the AUTH token only on aws\_elasticache\_replication\_group, so the opt-in path uses that resource while the default path keeps aws\_elasticache\_cluster. Flipping the value destroys one and creates the other, which drops every job queued at that moment — drain workers and pick a maintenance window. KNOWN LIMITATION: KEDA's worker autoscaler has no TLS or credentials on its Redis trigger yet, so while this is true, queue-depth autoscaling stops responding to backlog and workers hold a static count between n8n\_worker\_keda\_min\_replicas and n8n\_worker\_keda\_max\_replicas. Tracked in https://github.com/n8n-io/terraform-aws-n8n/issues/66. | `bool` | `false` | no |
+| <a name="input_redis_transit_encryption_enabled"></a> [redis\_transit\_encryption\_enabled](#input\_redis\_transit\_encryption\_enabled) | Encrypt the n8n queue backend in transit and require an AUTH token on it. Defaults to false, which is the module's deliberate network-trust posture: Redis sits in private subnets behind a security group that admits only VPC traffic, so isolation is by network boundary rather than by credentials. Set true to add TLS plus a generated AUTH token on top of that boundary — worth doing when queue payloads (workflow execution data) crossing the VPC in cleartext, or an unauthenticated Redis after a network-boundary breach, are risks you need closed. CHANGING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS: AWS exposes the AUTH token only on aws\_elasticache\_replication\_group, so the opt-in path uses that resource while the default path keeps aws\_elasticache\_cluster. Flipping the value destroys one and creates the other, which drops every job queued at that moment — drain workers and pick a maintenance window. Worker queue-depth autoscaling is unaffected: KEDA's Redis triggers pick up TLS and the AUTH token alongside the workers themselves. | `bool` | `false` | no |
 | <a name="input_route53_zone_id"></a> [route53\_zone\_id](#input\_route53\_zone\_id) | Route53 hosted zone ID for the parent of n8n\_domain (e.g. the zone for example.com if n8n\_domain = n8n.example.com). When set, the module issues a DNS-validated ACM certificate and creates the alias A-record automatically — single terraform apply, no manual DNS steps. Leave null and pass certificate\_arn instead. Set exactly one of certificate\_arn or route53\_zone\_id. | `string` | `null` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Additional AWS tags to apply to all resources this module creates. Merged on top of the built-in ManagedBy/Project tags. | `map(string)` | `{}` | no |
 | <a name="input_vpc_cidr_block"></a> [vpc\_cidr\_block](#input\_vpc\_cidr\_block) | CIDR block of the VPC — used by the RDS and Redis security groups to allow intra-VPC traffic. | `string` | n/a | yes |

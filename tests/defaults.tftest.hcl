@@ -1041,6 +1041,52 @@ run "redis_auth_token_respects_elasticache_charset" {
   }
 }
 
+# The KEDA triggers live inside helm_release.n8n.values, which is unknown at
+# plan time (it embeds the Redis endpoint). local.keda_redis_auth_metadata is
+# the merged-in fragment that decides what those triggers carry, and it is
+# known from the variable alone, so it is the layer where this is assertable.
+run "keda_triggers_carry_no_auth_metadata_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(local.keda_redis_auth_metadata) == 0
+    error_message = "The default path must add nothing to the KEDA trigger metadata. Any extra key here changes the rendered ScaledObject for every existing caller who never opted in."
+  }
+}
+
+# Both keys matter, and TLS is the one that has to land. Without enableTLS, KEDA
+# opens a plaintext connection to a TLS-only endpoint and hangs on `connection
+# to redis failed: i/o timeout` before authentication is ever attempted, so the
+# credential alone would look like no fix at all. Observed on a live cluster.
+run "keda_triggers_carry_tls_and_auth_when_enabled" {
+  command = plan
+
+  variables {
+    redis_transit_encryption_enabled = true
+  }
+
+  assert {
+    condition     = local.keda_redis_auth_metadata["enableTLS"] == "true"
+    error_message = "KEDA's Redis trigger must enable TLS when the backend is TLS-only, otherwise the metric read hangs until it times out and the HPA reports <unknown>."
+  }
+
+  # passwordFromEnv names an environment variable; KEDA resolves it against the
+  # scale target's first container, following the secretKeyRef the chart sets
+  # there. Pinning the exact env var name matters: a typo resolves to empty and
+  # fails as an auth error at runtime, which no plan can catch.
+  assert {
+    condition     = local.keda_redis_auth_metadata["passwordFromEnv"] == "QUEUE_BULL_REDIS_PASSWORD"
+    error_message = "The KEDA trigger must reference the same env var the chart mounts the AUTH token into (QUEUE_BULL_REDIS_PASSWORD) on the worker container."
+  }
+
+  # The token must reach KEDA by reference only. A literal value here would be
+  # readable by anyone who can get the ScaledObject.
+  assert {
+    condition     = !contains(keys(local.keda_redis_auth_metadata), "password")
+    error_message = "The AUTH token must not be written into trigger metadata as a literal, which puts the credential in a readable ScaledObject manifest."
+  }
+}
+
 run "s3_bucket_is_private" {
   command = plan
 

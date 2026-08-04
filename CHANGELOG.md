@@ -97,17 +97,21 @@ this project adheres to the stability contract in
   single-apply operations in both directions. Found by applying against a live
   cluster; a plan-time test cannot see it.
 
-  **Known limitation:** KEDA's worker autoscaler cannot reach an encrypted
-  Redis. Its trigger carries neither TLS nor credentials, so it opens a
-  plaintext connection to the TLS-only endpoint and hangs — the operator logs
-  `connection to redis failed: i/o timeout` and the generated HPA reports its
-  queue-depth metric as `<unknown>`. Workers then hold their current replica
-  count within `n8n_worker_keda_min_replicas` / `n8n_worker_keda_max_replicas`
-  instead of tracking backlog. n8n itself is unaffected and nothing crashes,
-  which is what makes it easy to miss. Tracked in
-  [#66](https://github.com/n8n-io/terraform-aws-n8n/issues/66); until that
-  lands, treat this flag as trading queue-depth autoscaling for encryption and
-  authentication.
+  **Worker autoscaling follows the flag.** Both KEDA Redis triggers gain
+  `enableTLS` and `passwordFromEnv: QUEUE_BULL_REDIS_PASSWORD` when it is on, so
+  queue-depth scaling keeps working against the encrypted backend. TLS is the
+  half that has to land: without it KEDA opens a plaintext connection to a
+  TLS-only endpoint and hangs on `connection to redis failed: i/o timeout`
+  before authentication is ever attempted, so credentials alone would read as no
+  fix at all. `passwordFromEnv` names an environment variable rather than
+  carrying the token, and KEDA resolves it against the worker pod's first
+  container (`n8n-worker`), which the chart already gives the token to via
+  `secretKeyRef`. So nothing sensitive is written into the ScaledObject and no
+  `TriggerAuthentication` resource is required. This relies on KEDA being
+  permitted to read Secrets outside its own namespace, which its chart allows by
+  default; installing KEDA with `KEDA_RESTRICT_SECRET_ACCESS=true` would stall
+  queue-depth scaling. Resolves
+  [#66](https://github.com/n8n-io/terraform-aws-n8n/issues/66).
 
 - `n8n_license_detach_floating_on_shutdown` input (default `false`) maps to
   `N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN`, overriding n8n's own upstream
