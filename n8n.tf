@@ -323,6 +323,22 @@ resource "helm_release" "n8n" {
           { name = "N8N_COMMUNITY_PACKAGES_PREVENT_LOADING", value = "true" },
         ] : [],
 
+        # Execution-data offload to S3 (n8n >= 2.27, Enterprise). The chart has
+        # no value for this at var.n8n_chart_version (its s3.storage block only
+        # covers *binary* data), so it goes through config.extraEnv, which the
+        # chart applies to every n8n container. That matters: the n8n docs require
+        # N8N_EXECUTION_DATA_STORAGE_MODE on all instances in queue mode,
+        # including workers and webhook processors, not just the mains.
+        #
+        # The connection itself is already in place: this reuses the
+        # N8N_EXTERNAL_STORAGE_S3_* values the chart renders from the s3 block
+        # above and the Pod Identity role from s3.tf, so nothing else is needed.
+        # Emitted only for "s3"; "database" is n8n's own default, so the env var
+        # is omitted entirely there.
+        var.n8n_execution_data_storage_mode == "s3" ? [
+          { name = "N8N_EXECUTION_DATA_STORAGE_MODE", value = "s3" },
+        ] : [],
+
         # n8n feature toggles: templates and personalization. Only set the env
         # var when disabled (false) to override n8n's defaults. When enabled
         # (true), the env var is omitted so n8n's defaults apply.
@@ -685,6 +701,39 @@ check "otel_tuning_requires_master_switch" {
       var.n8n_otel_traces_production_only == null
     )
     error_message = "One or more n8n_otel_* tuning variables are set, but n8n_otel_enabled is false — the tuning values will be ignored and no N8N_OTEL_* env vars will be set on the n8n pods. Set n8n_otel_enabled = true to apply them, or clear the tuning variables to silence this warning."
+  }
+}
+
+# ── Execution-data S3 version check ────────────────────────────────────────
+# N8N_EXECUTION_DATA_STORAGE_MODE only exists from n8n 2.27. On an older image
+# the env var is simply ignored: pods come up healthy, the plan shows the mode
+# applied, and execution data keeps going to PostgreSQL. The failure is entirely
+# silent, which is what makes it worth a plan-time warning.
+#
+# Only a tag shaped like MAJOR.MINOR.<rest> is compared (this covers "2.27.4"
+# and "2.27.4-alpine"); anything else, including null (the chart's floating
+# `stable`) and pre-release or channel tags, is left alone rather than guessed
+# at. Written as nested ternaries because Terraform 1.9 does not short-circuit
+# `&&`/`||` (see AGENTS.md), so the numeric comparisons must sit on a branch
+# that is only taken once the regex has confirmed they are numbers.
+
+check "execution_data_s3_requires_n8n_2_27" {
+  assert {
+    condition = var.n8n_execution_data_storage_mode != "s3" ? true : (
+      var.n8n_image_tag == null ? true : (
+        can(regex("^[0-9]+\\.[0-9]+\\.", var.n8n_image_tag)) ? (
+          tonumber(split(".", var.n8n_image_tag)[0]) > 2 ? true : (
+            tonumber(split(".", var.n8n_image_tag)[0]) == 2 ? tonumber(split(".", var.n8n_image_tag)[1]) >= 27 : false
+          )
+        ) : true
+      )
+    )
+    error_message = join("", [
+      "n8n_execution_data_storage_mode = \"s3\" requires n8n >= 2.27, but n8n_image_tag is pinned to ",
+      "\"${coalesce(var.n8n_image_tag, "null")}\". Older versions ignore N8N_EXECUTION_DATA_STORAGE_MODE ",
+      "entirely: the pods start fine and execution data silently keeps going to PostgreSQL. Pin ",
+      "n8n_image_tag to 2.27.0 or later, or set n8n_execution_data_storage_mode = \"database\".",
+    ])
   }
 }
 

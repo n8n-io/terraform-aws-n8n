@@ -2251,3 +2251,122 @@ run "equal_floor_and_ceiling_is_accepted" {
     error_message = "A floor equal to its ceiling must be accepted as a fixed-size deployment"
   }
 }
+
+# ── n8n_execution_data_storage_mode ──────────────────────────────────────────
+# Execution-data offload to S3 (issue #47). Asserted at the variable contract
+# level: the env var goes into config.extraEnv inside helm_release.n8n.values,
+# which is unknown at plan time under the mock provider (see "Known mock
+# provider limitations" in AGENTS.md). To verify end-to-end, run a real
+# `terraform plan` from examples/small/ with
+# n8n_execution_data_storage_mode = "s3" and confirm
+# N8N_EXECUTION_DATA_STORAGE_MODE=s3 appears in the helm_release.n8n values.
+run "execution_data_storage_mode_defaults_to_database" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_execution_data_storage_mode == "database"
+    error_message = "n8n_execution_data_storage_mode should default to \"database\", matching n8n's own default, so no env var is emitted unless a caller opts in."
+  }
+}
+
+run "execution_data_storage_mode_accepts_s3" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "s3"
+    # Pinned at the floor the feature requires so the version check in n8n.tf
+    # stays quiet for this run.
+    n8n_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_execution_data_storage_mode == "s3"
+    error_message = "n8n_execution_data_storage_mode should accept \"s3\"."
+  }
+}
+
+# filesystem is a valid n8n value but not a valid one here: pod filesystems are
+# ephemeral and unshared in this module's queue-mode topology, so execution data
+# written there is lost on reschedule and invisible to the other pods.
+run "execution_data_storage_mode_rejects_filesystem" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "filesystem"
+  }
+
+  expect_failures = [var.n8n_execution_data_storage_mode]
+}
+
+run "execution_data_storage_mode_rejects_unknown_value" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "postgres"
+  }
+
+  expect_failures = [var.n8n_execution_data_storage_mode]
+}
+
+# The version check only compares tags shaped like MAJOR.MINOR.<rest>, so it
+# warns on 2.26.9 but stays silent on 2.27.0 (exercised by the accepts_s3 run
+# above), on a null tag (the chart's floating `stable`), and on channel tags,
+# both exercised by the runs below.
+run "execution_data_s3_with_pre_2_27_image_tag_triggers_check_warning" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "s3"
+    n8n_image_tag                   = "2.26.9"
+  }
+
+  expect_failures = [check.execution_data_s3_requires_n8n_2_27]
+}
+
+# The chart-default case most callers hit: s3 mode with n8n_image_tag left at
+# null (the floating `stable` tag). There is no version to compare, so the
+# check must stay quiet rather than block the plan.
+run "execution_data_s3_with_null_image_tag_plans_cleanly" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "s3"
+  }
+
+  assert {
+    condition     = var.n8n_image_tag == null
+    error_message = "A null image tag (chart default, floating stable) should be accepted without the version check firing."
+  }
+}
+
+run "execution_data_s3_with_unparseable_image_tag_plans_cleanly" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "s3"
+    # No MAJOR.MINOR.<rest> to compare, so the check leaves channel tags alone
+    # rather than guessing what version they resolve to.
+    n8n_image_tag = "beta"
+  }
+
+  assert {
+    condition     = var.n8n_image_tag == "beta"
+    error_message = "A channel tag should be accepted without the version check firing."
+  }
+}
+
+# Regression guard: N8N_EXECUTION_DATA_STORAGE_MODE became module-managed
+# alongside the input above, so the escape hatch must reject it. An override
+# here would flip execution data onto S3 (or off it) without the input saying
+# so, and on an unlicensed n8n every pod refuses to start in s3 mode.
+run "extra_env_rejects_execution_data_storage_mode_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_EXECUTION_DATA_STORAGE_MODE", value = "s3" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}

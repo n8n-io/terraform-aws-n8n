@@ -368,6 +368,161 @@ rather than removing it immediately. Two operational consequences:
   `aws kms cancel-key-deletion --key-id <key-id>` and import it back into
   state with `terraform import aws_kms_key.db[0] <key-id>`.
 
+## Execution data in S3 (Enterprise)
+
+The module always stores n8n's **binary** data in S3. From **n8n 2.27** the
+**execution** data itself can be offloaded to the same bucket instead of
+PostgreSQL. Execution-data writes are usually the dominant write load on the
+n8n database at volume, so this is the main lever for relieving RDS pressure in
+the queue-mode topology this module deploys:
+
+```hcl
+module "n8n" {
+  # ...other inputs...
+
+  n8n_execution_data_storage_mode = "s3"   # default: "database"
+  n8n_image_tag                   = "2.27.4"
+}
+```
+
+The module sets `N8N_EXECUTION_DATA_STORAGE_MODE=s3` on the Helm release's
+`config.extraEnv`, so it lands on **every** n8n container (main, worker, and
+webhook processor), which is what the
+[n8n external storage docs](https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/use-external-storage)
+require in queue mode. Nothing else has to be wired up: the bucket, the IAM
+policy, the Pod Identity role, and the `N8N_EXTERNAL_STORAGE_S3_*` connection
+already exist for binary data and are reused as-is.
+
+All six examples expose this as a passthrough variable, each left at `"database"`
+so they still run unchanged. Volume rises with the tier, but headroom falls with
+it: everything at `small` sizing (`small`, `cloudflare`, `godaddy`,
+`split-ingress`) runs `db.t3.small` on 50 GB of gp2 with a 150 IOPS baseline,
+where sustained execution-data writes burn burst credits and fill the volume,
+while `large` runs Aurora I/O-Optimized with no IOPS ceiling. So the smallest
+deployments are the ones that feel execution-data growth soonest, and reaching
+for `"s3"` there is often cheaper than resizing the database.
+
+- **Requires n8n >= 2.27.** Pin `n8n_image_tag` accordingly. The chart default
+  is the floating `stable` tag, so leaving it unpinned means the version each
+  pod gets is whatever is latest when it starts.
+- **Requires an Enterprise license** carrying the `feat:executionDataS3`
+  entitlement (the module already requires `n8n_license_key`). Note that this is
+  a **different** entitlement from the `feat:binaryDataS3` one that the module's
+  always-on binary data offload uses, so a license that already puts binary data
+  in S3 does not necessarily cover execution data. Check before flipping the
+  mode, from any running main pod:
+
+  ```bash
+  kubectl -n n8n exec deploy/n8n-main -c n8n-main -- n8n license:info | grep -o 'feat:executionDataS3":[a-z]*'
+  ```
+
+  n8n **refuses to start** in `s3` mode without the entitlement, so a license
+  gap here takes every pod down, not just the feature. Verified against an
+  unlicensed instance, which crash-loops on:
+
+  ```text
+  S3 execution data storage requires a valid license. Either set
+  `N8N_EXECUTION_DATA_STORAGE_MODE` to something else, or upgrade to a license
+  that supports this feature.
+  ```
+
+  The Helm release runs with `atomic = true` and `wait = true`, so that fails
+  the apply and rolls the release back rather than degrading quietly.
+  Entitlements are not visible at plan time, so no `check` block can catch this
+  ahead of the apply.
+
+  In practice you are unlikely to see that specific message first. This module
+  puts **binary** data in S3 unconditionally, and that gate is checked earlier,
+  so an unlicensed deployment fails on `S3 binary data storage requires a valid
+  license` before execution data is ever reached. Either way the symptom is the
+  same: pods do not start.
+
+  One caveat worth knowing before you try to reproduce that: **clearing
+  `n8n_license_key` does not de-license a running deployment.** n8n caches the
+  activation result in the database (`settings.license.cert`) and loads it at
+  startup, so blanking the input applies cleanly, leaves every pod licensed, and
+  keeps writing execution data to S3. The startup gate is therefore reached on a
+  deployment with no cached cert, not on one you de-key after the fact.
+- **No backfill.** Only new executions are written to S3, under
+  `workflows/{workflowId}/executions/{executionId}/execution_data/bundle.json`.
+  n8n records the destination per execution, in `execution_entity.storedAt`
+  (`db` or `s3`), so switching modes is non-destructive in both directions:
+  existing executions stay readable in PostgreSQL, and executions already in S3
+  stay readable after switching back, as long as the bucket stays configured.
+- **The payload leaves the database entirely.** In `s3` mode n8n writes no
+  `execution_data` row at all, rather than a row holding a pointer, so the write
+  it saves is the whole bundle. `execution_entity` still gets its row (status,
+  timings, `jsonSizeBytes`), which is what the executions list reads, so the UI
+  stays responsive without touching S3.
+- **Pruning stays with n8n.** The executions hard-delete path removes the S3
+  bundle together with the database record, driven by the same
+  `n8n_pruning_max_age` / `n8n_pruning_max_count` settings.
+
+### Durability: this weakens the backup posture of execution data
+
+Worth deciding on deliberately, because the two stores are not equivalent:
+
+| | Execution data in `database` | Execution data in `s3` |
+| --- | --- | --- |
+| Backups | RDS automated backups, `db_backup_retention_period` (default **7 days**) | **None.** The module creates no `aws_s3_bucket_versioning` and no replication |
+| Point-in-time recovery | Yes, within the retention window | No |
+| Survives `terraform destroy` | Only via a manual snapshot taken beforehand: the instance sets `skip_final_snapshot = true` and `delete_automated_backups = true` | **No.** `force_destroy = true` on the bucket deletes the objects |
+
+So `s3` mode trades RDS write pressure for execution history that has no
+recovery path: an accidental `terraform destroy`, or a lifecycle rule that
+reaches `execution_data/` (see below), loses it outright. This was already the
+posture for binary attachments; `s3` mode extends it to execution history.
+
+If execution history matters to you, close the gap yourself on the bucket
+exported as the `s3_bucket_name` output: enable versioning, add
+[S3 Versioning + MFA delete](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html)
+or a replication rule, or take periodic copies. Note that versioning interacts
+with `force_destroy` (Terraform must delete every version to drop the bucket)
+and with any lifecycle rule you add, which then needs
+`noncurrent_version_expiration` to keep old versions from accumulating.
+
+### S3 lifecycle rules on the shared bucket
+
+The module creates **no** lifecycle configuration on its bucket. If you add one
+of your own (the bucket name is exported as the `s3_bucket_name` output), read
+this first, because the two data types have **opposite** requirements:
+
+| Data type      | Object keys                                                  | Who prunes                                       |
+| -------------- | ------------------------------------------------------------ | ------------------------------------------------ |
+| Binary data    | `workflows/{wf}/executions/{exec}/binary_data/{fileId}`       | **S3.** n8n delegates it, so a lifecycle rule is the only thing that ever deletes these |
+| Execution data | `workflows/{wf}/executions/{exec}/execution_data/bundle.json` | **n8n.** A lifecycle rule can delete bundles n8n still references |
+
+That split is observed behaviour, not inference. On a live deployment (n8n
+2.33.1, this module's defaults), deleting two executions removed their
+`execution_data/bundle.json` objects straight away and left both
+`binary_data/` objects sitting in the bucket. **Orphaned binary data is the
+normal steady state**, not an edge case, which is what makes a lifecycle rule
+worth having in the first place.
+
+A bucket-wide expiration rule therefore does the right thing for binary data
+and the wrong thing for execution data. **It cannot be narrowed to only binary
+data on a shared bucket:** S3 lifecycle filters match on a literal key
+**prefix** (no wildcards), both key layouts share the same
+`workflows/{wf}/executions/{exec}/` prefix, and the segment that tells them
+apart comes *after* the two variable IDs. n8n tags neither object, so a tag
+filter is not an option either.
+
+So, with `n8n_execution_data_storage_mode = "s3"`, pick deliberately:
+
+- **No lifecycle rule** (safe for execution data). Binary data then accumulates
+  indefinitely and its storage cost grows without bound, so budget for it or
+  reclaim it with an out-of-band job that deletes only `binary_data/` keys.
+- **A lifecycle rule long enough to be harmless.** Set the expiration well
+  beyond the retention n8n itself enforces (`n8n_pruning_max_age`, default 336h
+  / 14 days) so n8n has already hard-deleted an execution before S3 could reach
+  its bundle. This is a bound on the *worst* case, not a guarantee: pruning is
+  also capped by `n8n_pruning_max_count`, and anything that stalls the prune
+  loop widens the window.
+
+With the default `n8n_execution_data_storage_mode = "database"` no
+`execution_data/` objects exist, and a bucket-wide lifecycle rule for binary
+data is unambiguously the right thing to add.
+
 ## Prometheus metrics
 
 Set `n8n_metrics_enabled = true` to expose n8n's built-in Prometheus endpoint.
@@ -590,6 +745,7 @@ No modules.
 | <a name="input_n8n_community_packages_prevent_loading"></a> [n8n\_community\_packages\_prevent\_loading](#input\_n8n\_community\_packages\_prevent\_loading) | Prevent installed community packages from being loaded at runtime. Maps to N8N\_COMMUNITY\_PACKAGES\_PREVENT\_LOADING. When true, n8n leaves the community-packages management surface in place but skips loading the package code, which is useful for locking an instance down without uninstalling. Leave false (the default) for community nodes to load and execute. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies. | `bool` | `false` | no |
 | <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate\_arn. | `string` | n/a | yes |
 | <a name="input_n8n_execution_concurrency_limit"></a> [n8n\_execution\_concurrency\_limit](#input\_n8n\_execution\_concurrency\_limit) | Maximum concurrent production executions (-1 to disable) | `number` | `100` | no |
+| <a name="input_n8n_execution_data_storage_mode"></a> [n8n\_execution\_data\_storage\_mode](#input\_n8n\_execution\_data\_storage\_mode) | Where n8n stores the data of each new execution. Maps to N8N\_EXECUTION\_DATA\_STORAGE\_MODE. "database" (the default) keeps execution data in PostgreSQL, matching n8n's own default, and emits no env var. "s3" offloads it to the module's S3 bucket, reusing the same bucket and N8N\_EXTERNAL\_STORAGE\_S3\_* connection that binary data mode already uses, so no extra bucket, IAM policy, or credentials are needed. Execution-data writes are usually the dominant write load on the n8n database at volume, so s3 is the main lever for relieving RDS pressure. Requires n8n >= 2.27 (pin n8n\_image\_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is a different entitlement from the feat:binaryDataS3 one the always-on binary data offload uses: n8n refuses to start in s3 mode without it. There is no backfill: existing executions stay readable where they were written, and only new executions go to S3, under workflows/{workflowId}/executions/{executionId}/execution\_data/bundle.json. n8n prunes those objects itself as part of the executions hard-delete path (see n8n\_pruning\_max\_age / n8n\_pruning\_max\_count), so do NOT add an S3 lifecycle rule that can reach execution\_data/ objects (see the S3 lifecycle section in the README). Note the durability trade-off: RDS gets automated backups and point-in-time recovery (db\_backup\_retention\_period, default 7 days) while the bucket has no versioning, no backups, and force\_destroy = true, so in s3 mode a terraform destroy takes execution history with it. See the durability section in the README. "filesystem" is deliberately not accepted: pod filesystems are ephemeral and unshared in this module's queue-mode topology, so execution data written there would be lost on reschedule and invisible to the other pods. See https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/use-external-storage. | `string` | `"database"` | no |
 | <a name="input_n8n_execution_timeout"></a> [n8n\_execution\_timeout](#input\_n8n\_execution\_timeout) | Default execution timeout in seconds (-1 to disable) | `number` | `7200` | no |
 | <a name="input_n8n_execution_timeout_max"></a> [n8n\_execution\_timeout\_max](#input\_n8n\_execution\_timeout\_max) | Maximum execution timeout users can configure in seconds | `number` | `7200` | no |
 | <a name="input_n8n_extra_env"></a> [n8n\_extra\_env](#input\_n8n\_extra\_env) | Additional environment variables to inject into all n8n pods (main, worker, and webhook-processor) via the Helm chart's config.extraEnv list. Each entry is an object with name and value string attributes. config.extraEnv is appended last in every container's env list, so by Kubernetes' last-wins rule any name here overrides the chart's value for that name. To prevent silently breaking the deployment, an entry is rejected at plan time when its name collides with a connection, identity, storage, license, or topology variable the module manages: any name starting with DB\_, QUEUE\_, N8N\_RUNNERS\_, N8N\_EXTERNAL\_STORAGE\_S3\_, N8N\_MULTI\_MAIN\_, or AWS\_, plus names like N8N\_ENCRYPTION\_KEY, N8N\_LICENSE\_ACTIVATION\_KEY, N8N\_HOST, WEBHOOK\_URL, and EXECUTIONS\_MODE. Use the dedicated module inputs for those. Do not put secret values here, because they render into the Helm release and are stored in plaintext in Terraform state; instead pass a *\_FILE companion (e.g. a name ending in \_FILE) pointing at a mounted Kubernetes secret, or use n8n credentials. Example: [{name = "N8N\_DEFAULT\_LOCALE", value = "de"}]. | <pre>list(object({<br/>    name  = string<br/>    value = string<br/>  }))</pre> | `[]` | no |
@@ -684,6 +840,6 @@ No modules.
 | <a name="output_namespace"></a> [namespace](#output\_namespace) | Kubernetes namespace n8n is deployed into. |
 | <a name="output_rds_endpoint"></a> [rds\_endpoint](#output\_rds\_endpoint) | Database endpoint — module-managed RDS when create\_database = true, or the value of var.db\_host when using an external database (e.g. Aurora). |
 | <a name="output_redis_endpoint"></a> [redis\_endpoint](#output\_redis\_endpoint) | ElastiCache Redis endpoint |
-| <a name="output_s3_bucket_name"></a> [s3\_bucket\_name](#output\_s3\_bucket\_name) | S3 bucket used for n8n binary storage |
+| <a name="output_s3_bucket_name"></a> [s3\_bucket\_name](#output\_s3\_bucket\_name) | S3 bucket used for n8n binary storage, and for execution data when n8n\_execution\_data\_storage\_mode = "s3". The module attaches no lifecycle configuration: binary data is pruned only by S3 while execution data is pruned by n8n itself, and the two cannot be separated by a prefix filter. Read the S3 lifecycle section of the README before attaching one. |
 <!-- END_TF_DOCS -->
 

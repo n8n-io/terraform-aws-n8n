@@ -69,6 +69,19 @@ module "n8n" {
 
   n8n_additional_domains = var.n8n_additional_domains
 
+  # ── Execution data ──────────────────────────────────────────────────────────
+  # Left at "database" so this example applies without the feat:executionDataS3
+  # entitlement. This sizing sees the least traffic but has the least database
+  # headroom to absorb it: db.t3.small with 50 GB of gp2 and a 150 IOPS
+  # baseline, where sustained execution-data writes burn burst credits and the
+  # volume fills. "s3" moves those payloads out of PostgreSQL entirely, reusing
+  # the bucket and Pod Identity role the module already creates for binary data,
+  # so nothing else changes. Read the execution data section of the root README
+  # first: it needs n8n >= 2.27 and an Enterprise license with that entitlement,
+  # it does not backfill, and it changes the durability posture of execution
+  # history.
+  n8n_execution_data_storage_mode = var.n8n_execution_data_storage_mode
+
   tags = local.common_tags
 
   # Explicit module-level dependency ensures the ENTIRE VPC (including NAT

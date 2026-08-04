@@ -31,11 +31,31 @@ run "cluster_name_length_validation_rejects_long_names" {
   expect_failures = [var.cluster_name]
 }
 
-# n8n_image_tag is intentionally untested here. Asserting the null default
-# needs a successful full plan, and even an expect_failures rejection run
-# fails: unlike cluster_name, n8n_image_tag does not feed the module's DNS
-# resources, so the dns.tf for_each error described in the NOTE in examples/small/tests/defaults.tftest.hcl still
-# surfaces as an unexpected diagnostic alongside the expected validation
-# failure. The variable contract (default, format validation) is covered by
-# tests/defaults.tftest.hcl at the repo root; verify the passthrough manually
-# with a real `terraform plan`.
+run "n8n_image_tag_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_image_tag == null
+    error_message = "Example must not pin an image tag by default; the module's chart default (stable) should apply."
+  }
+}
+
+run "n8n_image_tag_rejects_whitespace" {
+  command = plan
+
+  variables {
+    n8n_image_tag = " 1.2.3 "
+  }
+
+  expect_failures = [var.n8n_image_tag]
+}
+
+run "execution_data_storage_mode_rejects_filesystem" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "filesystem"
+  }
+
+  expect_failures = [var.n8n_execution_data_storage_mode]
+}

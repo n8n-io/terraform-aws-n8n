@@ -65,6 +65,17 @@ module "n8n" {
 
   n8n_additional_domains = var.n8n_additional_domains
 
+  # ── Execution data ────────────────────────────────────────────────────────────
+  # Left at "database" so this example works on any license. At this tier's
+  # volume, execution-data writes are usually the dominant write load on the
+  # database, so "s3" is the first lever to reach for when RDS is the
+  # bottleneck. It reuses the bucket and Pod Identity role the module already
+  # creates for binary data, so nothing else changes. Read the execution data
+  # section of the root README first: it needs n8n >= 2.27 and an Enterprise
+  # license, it does not backfill, and it changes the durability posture of
+  # execution history.
+  n8n_execution_data_storage_mode = var.n8n_execution_data_storage_mode
+
   # ── Compute ──────────────────────────────────────────────────────────────────
   # m6i.2xlarge: 8 vCPU, 32 GB. 5 nodes = 40 vCPU / 160 GB cluster.
   # Floor of 5 prevents cold-start scheduling delays during traffic spikes.
