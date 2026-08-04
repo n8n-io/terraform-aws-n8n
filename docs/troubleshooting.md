@@ -155,7 +155,7 @@ This costs webhook throughput and HA, so apply it only when MCP matters more. `e
 
 The alternative is a dedicated single-replica webhook Deployment serving `/mcp` alone, with the main pool left scaled for throughput. That needs `create_ingress = false` and Kubernetes resources you manage yourself.
 
-Tracked in [issue #54](https://github.com/n8n-io/terraform-aws-n8n/issues/54). A durable fix belongs upstream in n8n, by routing a session to its owning replica or making the transport reconstructible from Redis.
+Tracked in [issue #59](https://github.com/n8n-io/terraform-aws-n8n/issues/59), which also lists what still needs investigating. A durable fix may belong upstream in n8n, by routing a session to its owning replica or making the transport reconstructible from Redis.
 
 ## Caller-owned Ingress fails with `namespaces "n8n" not found`
 

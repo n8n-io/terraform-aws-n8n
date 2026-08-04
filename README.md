@@ -249,7 +249,7 @@ declare the prefixes **before** any catch-all `/` rule.
 > `n8n_webhook_hpa_min_replicas` and `n8n_webhook_hpa_max_replicas` to 1
 > (this costs you webhook throughput and HA), or use `create_ingress = false`
 > and route `/mcp` to a dedicated single-replica Deployment you manage.
-> Tracked in [issue #54](https://github.com/n8n-io/terraform-aws-n8n/issues/54), with symptoms and workarounds in
+> Tracked in [issue #59](https://github.com/n8n-io/terraform-aws-n8n/issues/59), with symptoms and workarounds in
 > [docs/troubleshooting.md](./docs/troubleshooting.md#mcp-server-trigger-returns-404-session-not-found-intermittently).
 
 ```hcl
