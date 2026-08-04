@@ -61,6 +61,20 @@ run "admin_cidr_validation_rejects_non_cidr" {
   expect_failures = [var.admin_allowed_cidr_blocks]
 }
 
+# Host bits pass cidrnetmask and pass LBC's own parser, so without this guard
+# the first thing to reject the range is EC2, when it builds the security group
+# rule, long after the apply reported success. Mirrors the module's
+# alb_inbound_cidrs_rejects_host_bits.
+run "admin_cidr_validation_rejects_host_bits" {
+  command = plan
+
+  variables {
+    admin_allowed_cidr_blocks = ["10.20.0.5/16"]
+  }
+
+  expect_failures = [var.admin_allowed_cidr_blocks]
+}
+
 # ── The split itself ──────────────────────────────────────────────────────────
 # The whole point of this example: two ALBs with opposite schemes, each serving
 # a disjoint slice of traffic.

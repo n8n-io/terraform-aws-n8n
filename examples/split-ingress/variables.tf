@@ -55,13 +55,26 @@ variable "waf_acl_arn" {
 }
 
 variable "admin_allowed_cidr_blocks" {
-  description = "CIDR blocks allowed to reach the internal admin ALB, applied as alb.ingress.kubernetes.io/inbound-cidrs. The ALB is already private, so this is defence in depth: narrow it to your VPN pool or bastion range. Empty (the default) allows any source that can route to the private subnets."
+  description = "IPv4 CIDR blocks allowed to reach the internal admin ALB, applied as alb.ingress.kubernetes.io/inbound-cidrs. The ALB is already private, so this is defence in depth: narrow it to your VPN pool or bastion range. Empty (the default) allows any source that can route to the private subnets. This example owns its Ingresses, so the module's alb_inbound_cidrs input does not apply here; this variable is the equivalent for the Ingress in ingress.tf. It carries one caveat the module's input does not: an IngressClassParams that sets spec.inboundCIDRs replaces this annotation rather than merging with it, and the Ingresses here are classified through spec.ingressClassName, which is the path that loads it. The module-managed Ingress also carries the legacy kubernetes.io/ingress.class annotation and is matched on that instead, so it is immune; these are not. It takes an IngressClassParams that is both populated and referenced from the IngressClass through spec.parameters, neither of which the LBC chart sets up by default, and the object is cluster-scoped and invisible to Terraform. See docs/troubleshooting.md."
   type        = list(string)
   default     = []
 
   validation {
     condition     = alltrue([for c in var.admin_allowed_cidr_blocks : can(cidrnetmask(c))])
-    error_message = "Each entry in admin_allowed_cidr_blocks must be a valid IPv4 CIDR block (e.g. 10.20.0.0/16)."
+    error_message = "Each entry in admin_allowed_cidr_blocks must be a valid IPv4 CIDR block including the prefix length (e.g. 10.20.0.0/16, 192.168.100.7/32)."
+  }
+
+  # Same guard as the module's alb_inbound_cidrs, for the same reason: a CIDR
+  # with host bits set passes cidrnetmask, and LBC's own net.ParseCIDR accepts
+  # it too and forwards the raw string, so EC2 is the first thing to reject it,
+  # when it builds the security group rule. That surfaces as a stuck reconcile
+  # after an apply that looked clean.
+  validation {
+    condition = alltrue([
+      for c in var.admin_allowed_cidr_blocks :
+      can(cidrnetmask(c)) ? c == "${cidrhost(c, 0)}/${split("/", c)[1]}" : true
+    ])
+    error_message = "Each entry in admin_allowed_cidr_blocks must be the network address of its block, with no host bits set (10.20.0.0/16, not 10.20.0.5/16). Use /32 for a single address."
   }
 }
 

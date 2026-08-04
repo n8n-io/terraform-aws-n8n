@@ -211,6 +211,72 @@ this project adheres to the stability contract in
   from clients that only speak TLS 1.0/1.1. Set `alb_ssl_policy` to your
   current effective policy (or to `ELBSecurityPolicy-2016-08` to keep prior
   behavior verbatim) if you need to defer this change.
+- `alb_inbound_cidrs` and `alb_inbound_prefix_list_ids` inputs (both default
+  `[]`) restrict which sources reach the module-managed ALB, rendered into
+  `alb.ingress.kubernetes.io/inbound-cidrs` and
+  `alb.ingress.kubernetes.io/security-group-prefix-lists`. Empty lists omit the
+  annotations entirely, so the AWS Load Balancer Controller default of
+  `0.0.0.0/0` still applies and no existing deployment sees a plan diff. Use
+  them to reach the editor UI and REST API only from known networks (corporate
+  egress ranges, a VPN pool, partner prefixes) while still terminating on a
+  public ALB. This narrows a public ALB and is not equivalent to
+  `ingress_scheme = "internal"`, which moves the ALB off the public internet
+  entirely; the two compose. See
+  [issue #42](https://github.com/n8n-io/terraform-aws-n8n/issues/42).
+
+  The restriction covers the whole ALB rather than individual paths, and the
+  module-managed ALB serves the webhook prefixes alongside the editor UI, so it
+  blocks inbound production webhooks from third-party senders too. Use these
+  inputs when nothing external calls in, or when every sender sits on a known
+  range; to lock down the editor while keeping webhooks public, run the two-ALB
+  topology in `examples/split-ingress` instead. Both inputs are documented with
+  that blast radius spelled out.
+
+  `alb_inbound_cidrs` is IPv4 only, matching the ALB the module builds: it
+  leaves the controller's default `ipv4` address type in place, so an IPv6 rule
+  could never match a client, and a dualstack ALB needs IPv6 subnet CIDRs this
+  module does not create. It also rejects an IPv4 block with host bits set
+  (`203.0.113.5/24`), which Terraform and the controller both accept and EC2
+  rejects when the security group rule is built, well after a clean apply. Three
+  plan-time warnings cover the ways a restriction can silently not exist:
+  setting the same annotation through `ingress_annotations`, which is merged
+  last and still wins; setting `alb.ingress.kubernetes.io/security-groups`,
+  which makes the controller ignore both restrictions because the caller then
+  owns the security group; and setting either input alongside
+  `create_ingress = false`, where the module has no Ingress to annotate.
+
+  A fourth override path gets documentation rather than a warning: an
+  `IngressClassParams` that sets `spec.inboundCIDRs` or `spec.prefixListsIDs`
+  replaces the annotation outright, per field. It cannot reach the
+  module-managed Ingress, which carries the legacy `kubernetes.io/ingress.class`
+  annotation; the controller matches that first and never loads the IngressClass
+  or its params. Caller-owned Ingresses that set only `spec.ingressClassName`,
+  including both in `examples/split-ingress`, are exposed.
+  `docs/troubleshooting.md` gains an entry with the `kubectl` and `aws` commands
+  to diagnose an ALB that answers everyone despite a clean apply, and to verify
+  against the security group the controller owns rather than against the
+  annotation.
+
+  Behaviour above was verified against a live deployment on LBC v3.5.0 rather
+  than from the controller source alone, including that the restriction covers
+  port 80 as well as 443, that CIDRs and prefix lists are a union, that the
+  controller reverts hand-edits to the security group it manages so recovery
+  from a lockout is an apply rather than a console fix, and that a caller-owned
+  `security-groups` annotation leaves the restriction unapplied.
+
+  `alb.ingress.kubernetes.io/inbound-cidrs` set through `ingress_annotations`
+  keeps working and keeps winning: it was the documented way to do this before
+  these inputs existed. Delete the annotation when migrating, or the stale value
+  continues to apply.
+
+  `examples/split-ingress` predates these inputs and restricts its internal
+  admin ALB with its own `admin_allowed_cidr_blocks`, since it owns its
+  Ingresses and the module inputs do not reach them. It now enforces the same
+  no-host-bits guard, which it was missing: it accepted `10.20.0.5/16` and left
+  EC2 to reject the rule after a clean apply. Its exposure to the
+  `IngressClassParams` override is the reverse of the module's, so the
+  troubleshooting entry covers both call sites in one place rather than
+  repeating the explanation per variable.
 
 - `n8n_execution_data_storage_mode` input (default `"database"`, accepts
   `"s3"`) maps to `N8N_EXECUTION_DATA_STORAGE_MODE`, the second S3 offload mode

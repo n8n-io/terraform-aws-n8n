@@ -130,6 +130,72 @@ A correctly routed webhook prefix returns `application/json` from n8n (for examp
 
 See [examples/split-ingress](../examples/split-ingress/) for a worked two-ALB configuration.
 
+## An inbound CIDR restriction applies cleanly but the ALB still answers everyone
+
+**Symptom**
+
+A source restriction is configured, `terraform apply` succeeds with no warning, and the annotation is present on the Ingress. This covers both places the module offers one:
+
+- the module inputs `alb_inbound_cidrs` / `alb_inbound_prefix_list_ids`, on the module-managed Ingress
+- `admin_allowed_cidr_blocks` in `examples/split-ingress`, on that example's caller-owned internal ALB
+
+```bash
+# Ingress name is n8n-ingress for the module-managed one,
+# n8n-admin-internal or n8n-webhook-public in examples/split-ingress.
+kubectl get ingress <name> -n n8n \
+  -o jsonpath='{.metadata.annotations.alb\.ingress\.kubernetes\.io/inbound-cidrs}'
+```
+
+The ALB's security group nevertheless allows `0.0.0.0/0`, or allows a range nobody configured here.
+
+**Cause**
+
+Three possibilities, in the order worth checking. The first two are specific to the module-managed Ingress and are warned about at plan time. The third cannot affect the module-managed Ingress at all, but can affect an Ingress you wrote yourself.
+
+1. **`ingress_annotations` sets `alb.ingress.kubernetes.io/security-groups`.** The controller stops managing the ALB's security group when you supply your own, and ignores both source restrictions: the group keeps whatever rules you gave it. Verified against LBC v3.5.0. The module raises a plan-time warning for this combination; check the plan output for it.
+
+2. **`ingress_annotations` sets the same annotation key.** It is merged last and wins over the dedicated input. Also warned about at plan time.
+
+3. **An `IngressClassParams` is overriding it, on a caller-owned Ingress.** If an `IngressClassParams` is bound to the IngressClass and sets `spec.inboundCIDRs` (or `spec.prefixListsIDs`), the controller uses that and ignores the Ingress annotation. It replaces rather than merges, per field.
+
+    Two preconditions have to hold, and by default neither does:
+
+    - The IngressClass must actually reference the params object through `spec.parameters`. The Helm chart this module installs (`aws-load-balancer-controller` 3.5.0) creates both an `alb` IngressClass and an `alb` `IngressClassParams`, but does not wire them together, and the params object it creates has an empty spec. Filling in the spec alone changes nothing until someone also adds the reference.
+    - The Ingress must be classified through `spec.ingressClassName`. The controller checks the legacy `kubernetes.io/ingress.class` annotation first and returns as soon as it matches, so an Ingress carrying that annotation never has its IngressClass or params loaded.
+
+    **The module-managed Ingress sets `kubernetes.io/ingress.class` (see `locals.tf`), so this cause cannot apply to it.** An `IngressClassParams` can be bound and populated and the module's `alb_inbound_cidrs` still wins. That immunity is incidental rather than designed, and it would disappear if the module ever dropped the legacy annotation, which is why the mechanism is documented here rather than left out.
+
+    Caller-owned Ingresses that set only `spec.ingressClassName`, including both Ingresses in `examples/split-ingress`, do not have that immunity and are the real audience for this cause. All of the above was verified live against LBC v3.5.0, including that the override is a replacement.
+
+    ```bash
+    # Is the params object even bound? Empty output means this cause is ruled out.
+    kubectl get ingressclass alb \
+      -o jsonpath='{.spec.parameters.name}{"\n"}'
+    kubectl get ingressclassparams <name> \
+      -o jsonpath='{.spec.inboundCIDRs}{"\n"}{.spec.prefixListsIDs}{"\n"}'
+    # Is this Ingress classified by the legacy annotation? A value here also rules it out.
+    kubectl get ingress <name> -n n8n \
+      -o jsonpath='{.metadata.annotations.kubernetes\.io/ingress\.class}{"\n"}'
+    ```
+
+    Clear those fields to hand control back to the Ingress annotations, or manage the allow-list there instead and leave the Terraform inputs empty. Splitting it across both is the one arrangement guaranteed to confuse the next person.
+
+**Fix**
+
+Verify against the security group the controller actually owns, rather than against the annotation:
+
+```bash
+ALB_ARN=$(aws elbv2 describe-load-balancers \
+  --query "LoadBalancers[?DNSName=='$(kubectl get ingress n8n-ingress -n n8n \
+    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')'].LoadBalancerArn" --output text)
+aws elbv2 describe-load-balancers --load-balancer-arns "$ALB_ARN" \
+  --query 'LoadBalancers[].SecurityGroups' --output text
+aws ec2 describe-security-groups --group-ids <sg-id> \
+  --query 'SecurityGroups[].IpPermissions[].{From:FromPort,CIDRs:IpRanges[].CidrIp,Prefixes:PrefixListIds[].PrefixListId}'
+```
+
+Note that hand-editing that security group is not a durable fix: the controller reverts it on the next reconcile. Change the Terraform inputs and apply.
+
 ## Caller-owned Ingress fails with `namespaces "n8n" not found`
 
 **Symptom**

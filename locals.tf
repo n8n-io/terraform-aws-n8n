@@ -96,7 +96,39 @@ locals {
     "alb.ingress.kubernetes.io/healthcheck-path" = "/healthz"
   }
 
-  ingress_annotations = merge(local.ingress_default_annotations, var.ingress_annotations)
+  # Source restrictions on the ALB security group LBC creates. Each key is
+  # omitted entirely when its input is empty, so the default keeps LBC's own
+  # default of 0.0.0.0/0 and no existing deployment sees a plan diff.
+  #
+  # Dropping the key is a cleanliness choice, not a safety one. LBC keys its
+  # 0.0.0.0/0 default off the *parsed* CIDR and prefix list sets being empty
+  # rather than off the annotations being absent, so rendering an empty value
+  # would behave identically. Verified live against LBC v3.5.0: an Ingress
+  # carrying inbound-cidrs="" still gets 0.0.0.0/0 on every listen port.
+  #
+  # Both annotations are ignored by LBC when alb.ingress.kubernetes.io/security-groups
+  # is set, because the caller then owns the security group. The check block in
+  # n8n.tf warns about that combination rather than failing: a silently
+  # unrestricted ALB is the failure mode worth surfacing.
+  ingress_source_restriction_annotations = merge(
+    length(var.alb_inbound_cidrs) > 0 ? {
+      "alb.ingress.kubernetes.io/inbound-cidrs" = join(",", var.alb_inbound_cidrs)
+    } : {},
+    length(var.alb_inbound_prefix_list_ids) > 0 ? {
+      "alb.ingress.kubernetes.io/security-group-prefix-lists" = join(",", var.alb_inbound_prefix_list_ids)
+    } : {},
+  )
+
+  # var.ingress_annotations stays last: it is documented as the unconditional
+  # last-write-wins escape hatch, and inbound-cidrs was a documented use of it
+  # before alb_inbound_cidrs existed. Rejecting that key here (the n8n_extra_env
+  # approach) would fail the plan for callers who already locked their ALB down
+  # the only way the module offered. Setting both raises a check warning.
+  ingress_annotations = merge(
+    local.ingress_default_annotations,
+    local.ingress_source_restriction_annotations,
+    var.ingress_annotations,
+  )
 
   common_tags = merge(
     {

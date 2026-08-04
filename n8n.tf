@@ -630,22 +630,111 @@ check "alb_ssl_policy_not_overridden_by_annotations" {
 }
 
 # ── Ingress tuning without a module-managed Ingress ────────────────────────
-# ingress_scheme, alb_ssl_policy and ingress_annotations only reach an Ingress
-# this module creates. With create_ingress = false they are inert, and silence
-# would leave a caller believing an internal scheme, a pinned TLS policy, or a
-# WAF association had taken effect when their own Ingress carries neither.
+# ingress_scheme, alb_ssl_policy, ingress_annotations, and the two ALB
+# source-restriction inputs only reach an Ingress this module creates. With
+# create_ingress = false they are inert, and silence would leave a caller
+# believing an internal scheme, a pinned TLS policy, a WAF association, or a
+# source restriction had taken effect when their own Ingress carries none of
+# it. The source-restriction case is the worst of the five: the caller
+# believes the ALB is reachable only from their VPN range.
 
 check "ingress_tuning_requires_module_managed_ingress" {
   assert {
     condition = var.create_ingress ? true : (
       var.ingress_scheme == "internet-facing" &&
       var.alb_ssl_policy == local.alb_ssl_policy_default &&
-      length(var.ingress_annotations) == 0
+      length(var.ingress_annotations) == 0 &&
+      length(var.alb_inbound_cidrs) == 0 &&
+      length(var.alb_inbound_prefix_list_ids) == 0
     )
     error_message = join("", [
-      "ingress_scheme, alb_ssl_policy or ingress_annotations is set while create_ingress = false, so none of ",
-      "them are applied to anything. With create_ingress = false you own the Ingress resources; put the ",
-      "scheme, TLS policy and annotations on your own Ingress instead.",
+      "ingress_scheme, alb_ssl_policy, ingress_annotations, alb_inbound_cidrs, or alb_inbound_prefix_list_ids ",
+      "is set while create_ingress = false, so none of it is applied to anything. With create_ingress = false ",
+      "you own the Ingress resources; put the scheme, TLS policy, annotations, and source restrictions on ",
+      "your own Ingress instead.",
+    ])
+  }
+}
+
+# ── ALB source restriction conflict checks ─────────────────────────────────
+# Two ways to ask for a restricted ALB and get an open one instead. Both are
+# warnings rather than plan failures: each combination stays legitimate when it
+# is deliberate, and neither is reachable by a caller who simply upgrades.
+
+# ingress_annotations is merged last (see locals.tf), so an inbound-cidrs or
+# security-group-prefix-lists key there beats the dedicated input. That
+# precedence is deliberate: the key was the documented way to restrict the ALB
+# before these inputs existed, so it keeps working. The footgun is the
+# half-finished migration, where the new input is added and the old annotation
+# is left behind, and the ALB stays on the stale range.
+
+check "alb_source_restrictions_not_overridden_by_annotations" {
+  assert {
+    condition = length(var.alb_inbound_cidrs) > 0 ? !contains(
+      keys(var.ingress_annotations), "alb.ingress.kubernetes.io/inbound-cidrs"
+    ) : true
+    error_message = join("", [
+      "alb_inbound_cidrs is set, but ingress_annotations also sets alb.ingress.kubernetes.io/inbound-cidrs, ",
+      "which is merged last and wins. The ALB will use the annotation value and ignore alb_inbound_cidrs ",
+      "entirely. Remove the annotation and keep the values in alb_inbound_cidrs, which is validated.",
+    ])
+  }
+
+  assert {
+    condition = length(var.alb_inbound_prefix_list_ids) > 0 ? !contains(
+      keys(var.ingress_annotations), "alb.ingress.kubernetes.io/security-group-prefix-lists"
+    ) : true
+    error_message = join("", [
+      "alb_inbound_prefix_list_ids is set, but ingress_annotations also sets ",
+      "alb.ingress.kubernetes.io/security-group-prefix-lists, which is merged last and wins. The ALB will ",
+      "use the annotation value and ignore alb_inbound_prefix_list_ids entirely. Remove the annotation and ",
+      "keep the values in alb_inbound_prefix_list_ids, which is validated.",
+    ])
+  }
+}
+
+# A fourth path exists in the controller but cannot reach this Ingress, so it
+# gets neither a check block nor a warning. An IngressClassParams that sets
+# spec.inboundCIDRs or spec.prefixListsIDs does replace the annotation outright,
+# per field, rather than merging with it. Reaching it takes two things that are
+# both false here: the IngressClass has to reference the params object through
+# spec.parameters, which the LBC chart does not set up even though it creates
+# both objects, and the Ingress has to be classified through
+# spec.ingressClassName. This Ingress carries the legacy
+# kubernetes.io/ingress.class annotation as well (locals.tf), and the controller
+# matches that first and returns before it ever loads the IngressClass, so the
+# params object is never consulted for this Ingress.
+#
+# Verified live against LBC v3.5.0: with the params bound and populated, this
+# module's alb_inbound_cidrs still won, and the override only took effect once
+# the legacy annotation was removed by hand. Do not add a check block for it.
+# Beyond the module having no data source for a cluster-scoped object it does not
+# create, and a plan-time cluster read coupling every plan to a live API call,
+# the condition would warn about something that cannot happen here. Caller-owned
+# Ingresses using only spec.ingressClassName, examples/split-ingress included,
+# are exposed; that is documented in docs/troubleshooting.md.
+#
+# The AWS Load Balancer Controller ignores both inbound-cidrs and
+# security-group-prefix-lists when alb.ingress.kubernetes.io/security-groups is
+# specified, because the caller then owns the ALB's security group and the
+# controller stops managing its rules. Nothing in the plan reveals this: the
+# annotations render, the apply succeeds, and the restriction never exists. An
+# operator who believes the editor UI is VPN-only is the one who most needs to
+# hear about it, so warn even though the combination is not an error.
+
+check "alb_source_restrictions_require_controller_managed_security_group" {
+  assert {
+    # concat rather than `||`: check conditions in this module avoid chained
+    # boolean operators, which do not short-circuit on Terraform 1.9.
+    condition = length(concat(var.alb_inbound_cidrs, var.alb_inbound_prefix_list_ids)) > 0 ? !contains(
+      keys(var.ingress_annotations), "alb.ingress.kubernetes.io/security-groups"
+    ) : true
+    error_message = join("", [
+      "alb_inbound_cidrs or alb_inbound_prefix_list_ids is set alongside ",
+      "alb.ingress.kubernetes.io/security-groups in ingress_annotations. The AWS Load Balancer Controller ",
+      "ignores both source restrictions when you supply your own security groups, so the ALB will accept ",
+      "traffic from anywhere those groups allow. Put the source restriction in the security group rules ",
+      "themselves, or drop the security-groups annotation and let the controller manage the group.",
     ])
   }
 }
