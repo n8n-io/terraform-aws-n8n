@@ -236,20 +236,13 @@ returns 404 if it reaches `n8n-main`:
 the module as n8n adds endpoints. Iterate over it rather than hardcoding, and
 declare the prefixes **before** any catch-all `/` rule.
 
-> **Known limitation: MCP Server Triggers and multiple webhook replicas.**
-> Routing `/mcp` is necessary but not sufficient. n8n holds each MCP session's
-> live transport in the memory of the replica that handled the `initialize`
-> call; Redis stores only a validity marker, not the transport. A follow-up
-> request that lands on a different webhook replica therefore passes session
-> validation and then returns `404 Session not found`. The module runs two
-> webhook processors by default (`n8n_webhook_hpa_min_replicas`), and the ALB's
-> `lb_cookie` stickiness only helps clients that return cookies, which MCP
-> clients generally do not. Until n8n can route a session to its owning replica,
-> MCP is reliable only against a single webhook replica. Options: set
-> `n8n_webhook_hpa_min_replicas` and `n8n_webhook_hpa_max_replicas` to 1
-> (this costs you webhook throughput and HA), or use `create_ingress = false`
-> and route `/mcp` to a dedicated single-replica Deployment you manage.
-> Tracked in [issue #54](https://github.com/n8n-io/terraform-aws-n8n/issues/54), with symptoms and workarounds in
+> **Note: MCP Server Triggers on n8n versions older than 2.8.0.** Since n8n
+> 2.8.0 ([n8n#25147](https://github.com/n8n-io/n8n/pull/25147)), MCP session
+> IDs are stored in Redis and any webhook replica can serve any session, so
+> routing `/mcp` to the webhook processors is all the routing MCP needs. If you
+> pin `n8n_image_tag` to a version older than 2.8.0, each session's transport
+> lives in the memory of one replica, and you must also set
+> `n8n_webhook_hpa_min_replicas` and `n8n_webhook_hpa_max_replicas` to 1. See
 > [docs/troubleshooting.md](./docs/troubleshooting.md#mcp-server-trigger-returns-404-session-not-found-intermittently).
 
 ```hcl
