@@ -48,6 +48,11 @@ this project adheres to the stability contract in
   API before fixing.
 
 ### Added
+- Vendored two agent skills from
+  [hashicorp/agent-skills](https://github.com/hashicorp/agent-skills) into
+  `.agents/skills/` via the skills CLI, pinned by `skills-lock.json`:
+  `terraform-style-guide` and `terraform-test`. Coding agents working in this
+  repo pick them up automatically; module consumers are unaffected.
 - All five examples (`small`, `medium`, `large`, `cloudflare`, `godaddy`) now
   expose the module's `n8n_image_tag` input as a passthrough variable
   (default `null`, same tag-format validation as the module), so callers can
