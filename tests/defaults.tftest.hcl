@@ -2531,6 +2531,65 @@ run "image_repository_accepts_punycode_host" {
   }
 }
 
+# Docker's splitDockerDomain treats a first component as a registry host when it
+# contains a dot or a colon, is localhost, *or contains an uppercase letter*.
+# So this is a host named N8NIO, not an illegally-uppercase namespace, and
+# docker pulls it. Reading the lowercase rule as applying to the first component
+# too rejects a reference that works.
+run "image_repository_accepts_uppercase_single_label_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "N8NIO/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "N8NIO/n8n"
+    error_message = "n8n_image_repository should accept an uppercase single-label registry host: Docker promotes any uppercase first component to a host rather than treating it as a path component."
+  }
+}
+
+# The boundary of the rule above. FOO is promoted to a host, which leaves BAR as
+# a path component, and that one really must be lowercase.
+run "image_repository_rejects_uppercase_after_promoted_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "FOO/BAR"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# A registry reachable only over IPv6 is addressed with a bracketed literal.
+run "image_repository_accepts_bracketed_ipv6_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "[2001:db8::1]:5000/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "[2001:db8::1]:5000/n8n"
+    error_message = "n8n_image_repository should accept a bracketed IPv6 registry host, which Docker's reference grammar allows."
+  }
+}
+
+# A zone ID is valid in a URI host but not in a Docker reference.
+run "image_repository_rejects_ipv6_zone_id" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "[fe80::1%25eth0]:5000/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
 # ── n8n_task_runner_image_tag ─────────────────────────────────────────────────
 # The chart derives the runner sidecar's tag from image.tag, so a custom
 # application-image tag that is not a published n8n version needs this override
