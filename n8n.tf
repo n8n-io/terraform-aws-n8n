@@ -267,6 +267,16 @@ resource "helm_release" "n8n" {
           # Without this, Bull detects dropped connections, emits queue errors, and pods crash.
           { name = "QUEUE_BULL_REDIS_KEEP_ALIVE", value = "true" },
           { name = "DB_POSTGRESDB_POOL_SIZE", value = tostring(var.db_postgresdb_pool_size) },
+          # n8n's upstream default (true) makes the leader main detach its floating
+          # license entitlement on shutdown, zeroing the shared cert in the database.
+          # In multi-main (the module default) a fresh main pod then starts as a
+          # follower, never renews on init, reads the zeroed cert, and crash-loops on
+          # the license gate (n8n-io/terraform-aws-n8n#49). All mains share the same
+          # device fingerprint, so keeping this false reuses a single floating seat
+          # across restarts instead of releasing and re-acquiring it. Always emitted
+          # (unlike opt-in toggles) because the module default deliberately overrides
+          # n8n's own default.
+          { name = "N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN", value = tostring(var.n8n_license_detach_floating_on_shutdown) },
         ],
         # n8n exposes Prometheus metrics on /metrics over its HTTP port (5678) when
         # N8N_METRICS is set. The pinned chart version exposes no metrics /

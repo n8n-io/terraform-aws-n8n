@@ -1475,6 +1475,27 @@ run "log_streaming_full_opt_in_plans_cleanly" {
   }
 }
 
+# ── n8n_license_detach_floating_on_shutdown ─────────────────────────────────
+# N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN is asserted at the variable-contract
+# level only: the Helm values blob is unknown at plan time under the mock
+# provider (helm_release depends on kubernetes_namespace, which is "(known
+# after apply)"), so the env var's actual value in config.extraEnv cannot be
+# asserted here. Verify the wiring with a real terraform plan against
+# n8n.tf's base env list.
+
+run "license_detach_floating_on_shutdown_defaults_to_false" {
+  command = plan
+
+  assert {
+    # Regression guard: n8n's upstream default is true, which zeroes the
+    # shared floating license cert on leader shutdown in multi-main
+    # deployments and crash-loops fresh main pods (issue #49). The module
+    # must keep defaulting this to false.
+    condition     = var.n8n_license_detach_floating_on_shutdown == false
+    error_message = "n8n_license_detach_floating_on_shutdown must default to false to prevent multi-main crash-loops (see issue #49)."
+  }
+}
+
 # ── n8n_extra_env ────────────────────────────────────────────────────────────
 # Asserted at the variable-contract level: defaults, accepted shape, and the
 # three validation guards (non-empty name, no duplicates, no collision with
@@ -1656,6 +1677,22 @@ run "extra_env_rejects_aws_credentials_name" {
   variables {
     n8n_extra_env = [
       { name = "AWS_ACCESS_KEY_ID", value = "AKIAEXAMPLE" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# Regression guard: N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN became
+# module-managed alongside the n8n_license_detach_floating_on_shutdown input
+# (issue #49) — an override here would silently re-enable n8n's unsafe
+# upstream default and reintroduce the multi-main crash-loop.
+run "extra_env_rejects_license_detach_floating_on_shutdown_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN", value = "true" },
     ]
   }
 
