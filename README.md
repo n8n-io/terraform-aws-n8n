@@ -508,6 +508,10 @@ remote plan or apply using `exec` wiring fails with `getting credentials:
 exec: executable aws not found`. Token-based wiring above works identically
 in local and remote runs, with no AWS CLI dependency either way.
 
+The token from `aws_eks_cluster_auth` is valid for about 15 minutes and is
+fetched once per run; if a long first apply outlives it, re-run
+`terraform apply` and the second run picks up where the first stopped.
+
 The cluster this module creates defaults to `authentication_mode = "API"`,
 so only the IAM identity that ran `terraform apply` to create the cluster
 can authenticate to it out of the box. If your run identity differs
