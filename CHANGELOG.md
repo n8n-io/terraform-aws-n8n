@@ -193,8 +193,11 @@ this project adheres to the stability contract in
   `N8N_COMMUNITY_PACKAGES_REGISTRY`, so community packages can be installed
   from a private npm mirror rather than `registry.npmjs.org`, which helps when
   egress to public npm is blocked or packages are vendored internally. When
-  `null` the env var is omitted entirely and n8n's own default applies. n8n
-  gates this behind an Enterprise license, which this module already requires.
+  `null` the env var is omitted entirely and n8n's own default applies. Confirm
+  the entitlement before setting this: n8n gates a non-default registry on the
+  `COMMUNITY_NODES_CUSTOM_REGISTRY` feature rather than on holding a license
+  key, so an instance licensed without it has community-package installs throw
+  `FeatureNotLicensedError` instead of falling back to the public registry.
 
   Upgrade note: the env var name is now reserved. An existing `n8n_extra_env`
   entry named `N8N_COMMUNITY_PACKAGES_REGISTRY` is rejected at plan time and

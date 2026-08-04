@@ -308,8 +308,20 @@ variable "n8n_image_repository" {
   default     = null
 
   validation {
-    condition     = var.n8n_image_repository == null ? true : can(regex("^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,254}$", var.n8n_image_repository))
-    error_message = "n8n_image_repository must be a non-empty image repository reference with no whitespace, containing only alphanumeric characters, dots, underscores, hyphens, slashes, and a colon for a registry port (e.g. \"myregistry.example.com/n8n\", \"registry.internal:5000/n8n\"). Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
+    # Docker/OCI reference grammar, narrowed to the repository half (no tag or
+    # digest). An optional registry host, recognised the way Docker recognises
+    # one (it contains a dot, carries a port, or is localhost), followed by one
+    # or more path components. Host segments may be uppercase because DNS is
+    # case-insensitive and Docker accepts them; path components may not, and
+    # Docker rejects those outright ("repository name must be lowercase"). A
+    # plain character whitelist accepted "https://reg.example.com/n8n",
+    # "reg:5000:bad/n8n" and "reg.example.com/n8n/", all of which only surface
+    # as ImagePullBackOff after the cluster is up.
+    condition = var.n8n_image_repository == null ? true : (
+      length(var.n8n_image_repository) <= 255 &&
+      can(regex("^(?:(?:[A-Za-z0-9][A-Za-z0-9._-]*\\.[A-Za-z0-9._-]*(?::[0-9]+)?|[A-Za-z0-9][A-Za-z0-9._-]*:[0-9]+|localhost(?::[0-9]+)?)/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$", var.n8n_image_repository))
+    )
+    error_message = "n8n_image_repository must be a bare image repository reference: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n\", \"registry.internal:5000/n8n\", \"n8nio/n8n\"). No scheme (\"https://\"), no whitespace, no empty or uppercase path components, and no trailing slash. Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
   }
 
   validation {
@@ -825,12 +837,11 @@ variable "n8n_community_packages_registry" {
   default     = null
 
   validation {
-    condition = var.n8n_community_packages_registry == null ? true : (
-      (startswith(var.n8n_community_packages_registry, "http://") ||
-      startswith(var.n8n_community_packages_registry, "https://")) &&
-      var.n8n_community_packages_registry == trimspace(var.n8n_community_packages_registry)
-    )
-    error_message = "n8n_community_packages_registry must be a registry URL starting with http:// or https:// and free of surrounding whitespace (e.g. https://npm.internal.example.com), or null to use n8n's default (https://registry.npmjs.org)."
+    # A scheme check alone accepted a bare "https://", which n8n only rejects
+    # when it first tries to install a package. Require a host, and a numeric
+    # port if one is given, so a truncated value fails at plan instead.
+    condition     = var.n8n_community_packages_registry == null ? true : can(regex("^https?://[A-Za-z0-9._~-]+(:[0-9]+)?(/[^[:space:]]*)?$", var.n8n_community_packages_registry))
+    error_message = "n8n_community_packages_registry must be a registry URL with a host, starting with http:// or https://, with an optional numeric port and path, and no whitespace (e.g. https://npm.internal.example.com, https://npm.internal.example.com:4873/repository/npm-group). Set to null to use n8n's default (https://registry.npmjs.org)."
   }
 }
 

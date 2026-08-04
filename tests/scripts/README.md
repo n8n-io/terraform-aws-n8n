@@ -11,7 +11,7 @@ Two manual verification scripts. Neither runs in CI: both need a live cluster, w
 
 Post-deployment smoke test for `terraform-aws-n8n`. Verifies the multi-main deployment is healthy end to end — pod health, queue mode, KEDA, HTTPS, API, and a full webhook → worker execution.
 
-## What it covers
+### What it covers
 
 | Check | What it verifies |
 |---|---|
@@ -28,7 +28,7 @@ Post-deployment smoke test for `terraform-aws-n8n`. Verifies the multi-main depl
 | Workflow execution (if API key set) | Creates a webhook → set workflow, fires it, confirms success, deletes it |
 | Worker scaling (opt-in) | Queues CPU-burning executions and confirms workers scale up |
 
-## Quick start
+### Quick start
 
 The script reads `namespace`, `n8n_url`, and `kubectl_config_command` automatically from `terraform output`.
 
@@ -45,7 +45,7 @@ The script automatically:
 
 > **Note:** Run the script from the directory that holds `terraform.tfstate` (e.g. `examples/small/`), not from `tests/scripts/`. The script calls `terraform output` against the current working directory by default.
 
-## API key (required for API and execution tests)
+### API key (required for API and execution tests)
 
 The API connectivity and workflow execution checks need an n8n API key. Without one, those checks are skipped with a warning.
 
@@ -67,7 +67,7 @@ cp ../../tests/scripts/.env.example ../../tests/scripts/.env
 ../../tests/scripts/smoke-test.sh
 ```
 
-## Configuration
+### Configuration
 
 All settings can be overridden via environment variables or a `.env` file.
 
@@ -87,7 +87,7 @@ All settings can be overridden via environment variables or a `.env` file.
 
 **Priority:** `.env` values → environment variables → Terraform outputs → built-in defaults.
 
-## Worker scaling test (opt-in)
+### Worker scaling test (opt-in)
 
 The scaling test creates real load and is therefore opt-in:
 
@@ -106,7 +106,7 @@ What it does:
 
 If workers don't scale within the wait window, the script warns and suggests increasing `LOAD_REQUESTS` or `LOAD_JOB_DURATION_SECS`.
 
-## Running against a remote deployment
+### Running against a remote deployment
 
 You can run without local Terraform state — for example against a cluster managed by someone else — by setting everything explicitly:
 
@@ -132,7 +132,7 @@ cd examples/small
 
 | Check | What it verifies |
 |---|---|
-| Image consistency | Every pod type runs the same image, so a half-finished rollout is not mistaken for a loading bug |
+| Image consistency | Every Running pod, every replica, runs the same image, so a half-finished rollout is not mistaken for a loading bug. A pod whose image cannot be read fails rather than being skipped |
 | Task runner sidecar | The runner image resolves and nothing is stuck in `ImagePullBackOff`, the symptom of a custom `n8n_image_tag` with no `n8n_task_runner_image_tag` |
 | Extensions path | `N8N_CUSTOM_EXTENSIONS` is set, and set *identically*, on main, worker, and webhook-processor |
 | Shadowed directory | The path is outside `/home/node/.n8n`, which the chart mounts over on main pods only |
@@ -150,7 +150,7 @@ CUSTOM_NODE_WORKFLOW=./my-node-test.json \
   ../../tests/scripts/verify-custom-image.sh
 ```
 
-The file is a workflow JSON with two requirements: a webhook trigger, which is what routes the execution to a worker instead of the main process, and at least one node whose `type` starts with `CUSTOM.`. The script rewrites the webhook path to a unique value, creates and activates the workflow, fires it, waits for the execution, then deactivates and deletes it.
+The file is a workflow JSON with two requirements: a webhook trigger, which is what routes the execution to a worker instead of the main process, and at least one node whose `type` starts with `CUSTOM.`. The script rewrites the webhook path to a unique value and its method to `POST` (it copies the workflow before sending it, so your file is not modified), creates and activates the workflow, fires it, waits for the execution, then deactivates and deletes it.
 
 ```json
 {

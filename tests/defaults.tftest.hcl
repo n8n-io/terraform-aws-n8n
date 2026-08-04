@@ -2368,6 +2368,100 @@ run "image_repository_rejects_digest" {
   expect_failures = [var.n8n_image_repository]
 }
 
+# A URL is the intuitive thing to paste in, and a character whitelist accepted
+# it: the scheme's own characters are all legal in a repository reference. It
+# then reaches the chart and fails as an unpullable image after the cluster is
+# already up, which is exactly what plan-time validation is for.
+run "image_repository_rejects_scheme_prefix" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "https://myregistry.example.com/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# Only the first segment may carry a port. A second colon is a typo, not a
+# reference the registry could resolve.
+run "image_repository_rejects_multiple_colons" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "registry.internal:5000:bad/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# An empty path component renders as "myregistry.example.com/n8n/:2.27.4" once
+# the chart appends the tag.
+run "image_repository_rejects_trailing_slash" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/n8n/"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "image_repository_rejects_consecutive_slashes" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com//n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# Docker rejects this itself: "repository name (N8N) must be lowercase".
+run "image_repository_rejects_uppercase_path_component" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/N8N"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# The mirror image of the rule above: DNS is case-insensitive and Docker does
+# accept an uppercase registry host, so the validation must not reject one.
+run "image_repository_accepts_uppercase_registry_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "MyRegistry.example.com/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "MyRegistry.example.com/n8n"
+    error_message = "n8n_image_repository should accept an uppercase registry host, which Docker resolves case-insensitively; only path components must be lowercase."
+  }
+}
+
+# Docker Hub short form, where the first segment is a namespace rather than a
+# registry host. It has no dot and no port, so it must satisfy the lowercase
+# path-component rule rather than the host rule.
+run "image_repository_accepts_docker_hub_short_form" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "n8nio/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "n8nio/n8n"
+    error_message = "n8n_image_repository should accept the Docker Hub short form (namespace/repository) with no registry host."
+  }
+}
+
 # ── n8n_task_runner_image_tag ─────────────────────────────────────────────────
 # The chart derives the runner sidecar's tag from image.tag, so a custom
 # application-image tag that is not a published n8n version needs this override
@@ -3005,6 +3099,41 @@ run "community_packages_registry_rejects_whitespace_padded_value" {
   }
 
   expect_failures = [var.n8n_community_packages_registry]
+}
+
+# A scheme check alone passed this, and n8n only surfaces it when a caller
+# first tries to install a package.
+run "community_packages_registry_rejects_scheme_without_host" {
+  command = plan
+
+  variables {
+    n8n_community_packages_registry = "https://"
+  }
+
+  expect_failures = [var.n8n_community_packages_registry]
+}
+
+run "community_packages_registry_rejects_non_numeric_port" {
+  command = plan
+
+  variables {
+    n8n_community_packages_registry = "https://npm.internal.example.com:notaport"
+  }
+
+  expect_failures = [var.n8n_community_packages_registry]
+}
+
+run "community_packages_registry_accepts_port_and_path" {
+  command = plan
+
+  variables {
+    n8n_community_packages_registry = "https://npm.internal.example.com:4873/repository/npm-group"
+  }
+
+  assert {
+    condition     = var.n8n_community_packages_registry == "https://npm.internal.example.com:4873/repository/npm-group"
+    error_message = "n8n_community_packages_registry should accept a mirror URL carrying an explicit port and a repository path, which Nexus and Artifactory both use."
+  }
 }
 
 # Regression guard: N8N_COMMUNITY_PACKAGES_REGISTRY became module-managed

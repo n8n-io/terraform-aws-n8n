@@ -158,21 +158,38 @@ summarize_and_exit() {
   exit 0
 }
 
-# First Running pod for a component label, empty if none.
+# First Running pod for a component label, empty if none. Used to pick a single
+# pod to exec into; checks that must cover the whole fleet use pods_for instead.
 pod_for() {
   kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/component=$1" \
     --field-selector=status.phase=Running \
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true
 }
 
-# The n8n container within a pod. Named containers are not guaranteed across
-# chart versions, so prefer one called "n8n" and fall back to the first.
+# Every Running pod for a component label, newline-delimited.
+pods_for() {
+  kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/component=$1" \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true
+}
+
+# The n8n application container within a pod, as opposed to the task runner
+# sidecar. The chart names it after the component (n8n-main, n8n-worker,
+# n8n-webhook-processor); older and forked charts use a bare "n8n". Falling back
+# to the first container is a last resort and only right by declaration order,
+# so it warns: exec'ing into the runner sidecar instead would read the wrong
+# process's environment and report a confident, wrong answer.
 container_for() {
-  local p="$1" names
+  local p="$1" names n
   names=$(kubectl get pod -n "$NAMESPACE" "$p" -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
   for n in $names; do
-    [[ "$n" == "n8n" ]] && { echo "n8n"; return; }
+    case "$n" in
+      n8n|n8n-main|n8n-worker|n8n-webhook-processor) echo "$n"; return ;;
+    esac
   done
+  if [[ -n "$names" ]]; then
+    echo "WARN: no recognised n8n container in $p (containers: $names), using the first" >&2
+  fi
   echo "${names%% *}"
 }
 
@@ -220,28 +237,52 @@ fi
 
 # ── 1. Image ──────────────────────────────────────────────────────────────────
 #
-# Every pod type must run the same image. A mismatch means a partial rollout,
-# and it is the state in which "works on main, fails on workers" is expected
-# rather than surprising, so it is worth ruling out before anything else.
+# Every Running pod must run the same image. A mismatch means a partial
+# rollout, and it is the state in which "works on main, fails on workers" is
+# expected rather than surprising, so it is worth ruling out before anything
+# else.
 
 header "Custom image (n8n_image_repository / n8n_image_tag)"
 
+# Every Running replica, not one per component: a half-finished rollout leaves
+# one worker on the old image while its sibling already has the new one, and
+# sampling a single pod per component is exactly how that stays invisible.
 POD_IMAGES=""
+UNREADABLE=0
 for entry in "${POD_TYPES[@]}"; do
-  comp="${entry%%:*}"; p="${entry#*:}"
-  c=$(container_for "$p")
-  img=$(kubectl get pod -n "$NAMESPACE" "$p" \
-        -o jsonpath="{.spec.containers[?(@.name=='$c')].image}" 2>/dev/null || true)
-  POD_IMAGES="${POD_IMAGES}${comp}|${img}
+  comp="${entry%%:*}"
+  while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    c=$(container_for "$p")
+    img=$(kubectl get pod -n "$NAMESPACE" "$p" \
+          -o jsonpath="{.spec.containers[?(@.name=='$c')].image}" 2>/dev/null || true)
+    if [[ -z "$img" ]]; then
+      UNREADABLE=$((UNREADABLE + 1))
+      info "$(printf '%-20s %-42s %s' "$comp" "$p" "<unreadable>")"
+      continue
+    fi
+    POD_IMAGES="${POD_IMAGES}${comp}|${img}
 "
-  info "$(printf '%-20s %s' "$comp" "${img:-<unknown>}")"
+    info "$(printf '%-20s %-42s %s' "$comp" "$p" "$img")"
+  done <<< "$(pods_for "$comp")"
 done
+
+# A pod whose image could not be read is an unverified pod. Counting only the
+# images that *were* readable would report convergence across the rest and read
+# as a clean pass, which is the same blind spot this section exists to close.
+if [[ "$UNREADABLE" -gt 0 ]]; then
+  fail "$UNREADABLE pod(s) had no readable image, so convergence is unverified"
+  info "Re-run once the rollout settles, or check the container names with"
+  info "kubectl get pods -n $NAMESPACE -o jsonpath='{.items[*].spec.containers[*].name}'"
+fi
 
 UNIQUE_IMAGES=$(values_of "$POD_IMAGES" | sort -u | grep -c . || true)
 if [[ "$UNIQUE_IMAGES" == "1" ]]; then
-  pass "All pod types run the same image"
+  pass "All pods run the same image"
+elif [[ "$UNIQUE_IMAGES" == "0" ]]; then
+  fail "No pod images could be read at all"
 else
-  fail "Pod types run $UNIQUE_IMAGES different images, so the rollout is not converged"
+  fail "Pods run $UNIQUE_IMAGES different images, so the rollout is not converged"
 fi
 
 DEPLOYED_IMAGE=$(lookup "$POD_IMAGES" main)
@@ -511,7 +552,11 @@ print("CUSTOM " + ("yes" if any(t.startswith("CUSTOM.") for t in types) else "no
 print("WEBHOOK " + ("yes" if any(t.endswith(".webhook") for t in types) else "no"))
 for n in nodes:
     if str(n.get("type", "")).endswith(".webhook"):
+        # httpMethod is forced along with the path: the trigger below is a POST,
+        # and a workflow whose webhook is pinned to GET would fail it with a 404
+        # that reads as a broken deployment rather than a mismatched fixture.
         n.setdefault("parameters", {})["path"] = path
+        n["parameters"]["httpMethod"] = "POST"
         n["webhookId"] = path
 print("PAYLOAD " + json.dumps({
     "name": "__verify-custom-image__",
