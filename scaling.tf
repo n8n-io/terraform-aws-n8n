@@ -306,7 +306,7 @@ locals {
     for name, quantity in {
       request = var.n8n_webhook_cpu_request
       limit   = var.n8n_webhook_cpu_limit
-      } : name => can(regex("^[0-9]+m?$", quantity)) ? (
+      } : name => can(regex("^[0-9]+(\\.[0-9]+)?m?$", quantity)) ? (
       endswith(quantity, "m") ? tonumber(trimsuffix(quantity, "m")) : tonumber(quantity) * 1000
     ) : null
   }
@@ -315,7 +315,7 @@ locals {
     for name, quantity in {
       request = var.n8n_webhook_memory_request
       limit   = var.n8n_webhook_memory_limit
-      } : name => can(regex("^[0-9]+(Mi|Gi)$", quantity)) ? (
+      } : name => can(regex("^[0-9]+(\\.[0-9]+)?(Mi|Gi)$", quantity)) ? (
       endswith(quantity, "Gi") ? tonumber(trimsuffix(quantity, "Gi")) * 1024 : tonumber(trimsuffix(quantity, "Mi"))
     ) : null
   }

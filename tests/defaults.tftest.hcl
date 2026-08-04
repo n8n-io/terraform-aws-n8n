@@ -1292,6 +1292,22 @@ run "webhook_resources_at_reinstall_thresholds_plans_cleanly" {
   }
 }
 
+run "webhook_resources_decimal_cpu_below_threshold_triggers_check_warning" {
+  command = plan
+
+  variables {
+    n8n_reinstall_missing_packages = true
+    # "0.5" (500m, decimal-core form) must parse rather than being treated as
+    # unreadable — an unreadable quantity silently skips the check.
+    n8n_webhook_cpu_request    = "0.5"
+    n8n_webhook_cpu_limit      = "1500m"
+    n8n_webhook_memory_request = "1Gi"
+    n8n_webhook_memory_limit   = "2Gi"
+  }
+
+  expect_failures = [check.webhook_resources_sized_for_reinstall_missing_packages]
+}
+
 # ── OpenTelemetry tracing toggles ─────────────────────────────────────────────
 # n8n_otel_enabled is the master switch (default false, contractually).
 # Each tuning variable defaults to null so that, when n8n_otel_enabled is
