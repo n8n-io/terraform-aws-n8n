@@ -130,35 +130,6 @@ A correctly routed webhook prefix returns `application/json` from n8n (for examp
 
 See [examples/split-ingress](../examples/split-ingress/) for a worked two-ALB configuration.
 
-## MCP Server Trigger returns `404 Session not found` intermittently
-
-Only affects deployments that pin `n8n_image_tag` to an n8n version older than 2.8.0. Current n8n versions handle multiple webhook replicas natively.
-
-**Symptom**
-
-An MCP client connects, initialises successfully, then a share of follow-up requests fail with `404 Session not found`. Retrying sometimes works. The failure rate is roughly `1 - 1/N` for `N` webhook processor replicas, so about half the requests with the default 2.
-
-**Cause**
-
-Before n8n 2.8.0, n8n kept each MCP session's live transport in the memory of the replica that handled the `initialize` call. Redis stored only a session validity marker, not the transport itself, so a request landing on any other replica passed validation and then found no transport to hand it to. The ALB's `lb_cookie` stickiness does not help: MCP clients are generally not browsers and do not return the cookie.
-
-n8n 2.8.0 ([n8n#25147](https://github.com/n8n-io/n8n/pull/25147)) removed the pinning. Session IDs are stored in Redis, a streamable HTTP request landing on a replica that does not hold the session recreates the transport locally, and SSE responses are relayed over Redis pub/sub to the replica holding the open stream.
-
-**Fix**
-
-Upgrade n8n: remove the `n8n_image_tag` pin, or set it to 2.8.0 or later.
-
-If you must stay on an older version, pin the webhook processors to a single replica:
-
-```hcl
-n8n_webhook_hpa_min_replicas = 1
-n8n_webhook_hpa_max_replicas = 1
-```
-
-This costs webhook throughput and HA, so apply it only when MCP matters more. `examples/split-ingress` exposes it as `mcp_single_replica`.
-
-Background in [issue #54](https://github.com/n8n-io/terraform-aws-n8n/issues/54).
-
 ## Caller-owned Ingress fails with `namespaces "n8n" not found`
 
 **Symptom**

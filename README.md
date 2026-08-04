@@ -236,15 +236,6 @@ returns 404 if it reaches `n8n-main`:
 the module as n8n adds endpoints. Iterate over it rather than hardcoding, and
 declare the prefixes **before** any catch-all `/` rule.
 
-> **Note: MCP Server Triggers on n8n versions older than 2.8.0.** Since n8n
-> 2.8.0 ([n8n#25147](https://github.com/n8n-io/n8n/pull/25147)), MCP session
-> IDs are stored in Redis and any webhook replica can serve any session, so
-> routing `/mcp` to the webhook processors is all the routing MCP needs. If you
-> pin `n8n_image_tag` to a version older than 2.8.0, each session's transport
-> lives in the memory of one replica, and you must also set
-> `n8n_webhook_hpa_min_replicas` and `n8n_webhook_hpa_max_replicas` to 1. See
-> [docs/troubleshooting.md](./docs/troubleshooting.md#mcp-server-trigger-returns-404-session-not-found-intermittently).
-
 ```hcl
 module "n8n" {
   source = "n8n-io/n8n/aws"

@@ -11,12 +11,6 @@ locals {
   # can only alias one load balancer. The admin host resolves to the internal
   # ALB, this one to the public ALB.
   webhook_domain = "${var.webhook_subdomain}.${var.n8n_domain}"
-
-  # Hoisted out of the module block so the mapping is assertable at plan time.
-  # The values these feed reach the module as helm_release values, which are
-  # unknown under mock providers, so a test can only reach the decision itself.
-  webhook_hpa_min_replicas = var.mcp_single_replica ? 1 : 2
-  webhook_hpa_max_replicas = var.mcp_single_replica ? 1 : 10
 }
 
 # ── VPC ───────────────────────────────────────────────────────────────────────
@@ -94,14 +88,6 @@ module "n8n" {
 
   n8n_license_key = var.n8n_license_key
   n8n_image_tag   = var.n8n_image_tag
-
-  # MCP Server Triggers keep session state in the memory of the replica that
-  # handled the initialize call, and MCP clients do not return the ALB's
-  # stickiness cookie. More than one replica means a share of requests land on
-  # the wrong pod and get 404 Session not found. Pin to one when MCP matters
-  # more than webhook throughput. See the README.
-  n8n_webhook_hpa_min_replicas = local.webhook_hpa_min_replicas
-  n8n_webhook_hpa_max_replicas = local.webhook_hpa_max_replicas
 
   tags = local.common_tags
 

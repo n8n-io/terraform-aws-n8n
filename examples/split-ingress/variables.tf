@@ -71,12 +71,6 @@ variable "ssl_policy" {
   default     = "ELBSecurityPolicy-TLS13-1-2-2021-06"
 }
 
-variable "mcp_single_replica" {
-  description = "Pin the webhook processors to a single replica so MCP Server Triggers work reliably. n8n holds each MCP session's transport in the memory of the replica that handled the initialize call, and MCP clients do not return the ALB stickiness cookie, so with multiple replicas a share of requests return 404 Session not found. Costs webhook throughput and HA, so leave false unless you are serving MCP. See https://github.com/n8n-io/terraform-aws-n8n/issues/54"
-  type        = bool
-  default     = false
-}
-
 variable "tags" {
   description = "Additional AWS tags to apply to every resource this example creates."
   type        = map(string)

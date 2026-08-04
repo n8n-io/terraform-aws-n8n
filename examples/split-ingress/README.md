@@ -98,12 +98,6 @@ The internal ALB needs the webhook prefixes for a less obvious reason. Without t
 | `admin_allowed_cidr_blocks` | Adds `inbound-cidrs` to the internal ALB. It is already private; narrow it to your VPN pool for defence in depth. |
 | `ssl_policy` | TLS policy on both listeners. Defaults to TLS 1.3 with a 1.2 fallback. |
 
-## MCP Server Triggers
-
-`/mcp` is routed, but routing alone is not enough. n8n keeps each MCP session's live transport in the memory of the replica that handled the `initialize` call, and Redis stores only a validity marker. A follow-up request landing on a different webhook replica passes validation and then returns `404 Session not found`. MCP clients are generally not browsers and do not return the ALB's stickiness cookie, so nothing pins them.
-
-Set `mcp_single_replica = true` to pin the webhook processors to one replica. That makes MCP reliable at the cost of webhook throughput and HA. That is a real trade, so it defaults to `false`. Tracked upstream in [issue #54](https://github.com/n8n-io/terraform-aws-n8n/issues/54); see also [docs/troubleshooting.md](../../docs/troubleshooting.md#mcp-server-trigger-returns-404-session-not-found-intermittently).
-
 ## Verifying the split
 
 ```bash
@@ -191,7 +185,6 @@ See [../small/README.md](../small/README.md#production-considerations) for the f
 | <a name="input_admin_allowed_cidr_blocks"></a> [admin\_allowed\_cidr\_blocks](#input\_admin\_allowed\_cidr\_blocks) | CIDR blocks allowed to reach the internal admin ALB, applied as alb.ingress.kubernetes.io/inbound-cidrs. The ALB is already private, so this is defence in depth: narrow it to your VPN pool or bastion range. Empty (the default) allows any source that can route to the private subnets. | `list(string)` | `[]` | no |
 | <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1). | `string` | `"us-east-1"` | no |
 | <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | Name for the EKS cluster. Keep to 14 characters or fewer, because the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. | `string` | `"n8n-cluster"` | no |
-| <a name="input_mcp_single_replica"></a> [mcp\_single\_replica](#input\_mcp\_single\_replica) | Pin the webhook processors to a single replica so MCP Server Triggers work reliably. n8n holds each MCP session's transport in the memory of the replica that handled the initialize call, and MCP clients do not return the ALB stickiness cookie, so with multiple replicas a share of requests return 404 Session not found. Costs webhook throughput and HA, so leave false unless you are serving MCP. See https://github.com/n8n-io/terraform-aws-n8n/issues/54 | `bool` | `false` | no |
 | <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for the n8n editor UI and REST API (e.g. n8n.example.com). Served by the internal ALB, so it resolves to private addresses and is reachable only from inside the VPC or over VPN. The parent zone must be hosted in Route53. | `string` | n/a | yes |
 | <a name="input_n8n_image_tag"></a> [n8n\_image\_tag](#input\_n8n\_image\_tag) | n8n application image tag to deploy (e.g. "2.33.1"). Leave null to use the Helm chart's floating `stable` tag. Pin a concrete version when the n8n version is part of what you are testing. | `string` | `null` | no |
 | <a name="input_n8n_license_key"></a> [n8n\_license\_key](#input\_n8n\_license\_key) | n8n Enterprise license activation key. Get one at https://n8n.io/pricing | `string` | n/a | yes |
