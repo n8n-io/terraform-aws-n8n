@@ -213,7 +213,7 @@ fails immediately because Helm refuses to act on a release in that state.
 **Cause**
 
 n8n's upstream default for `N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN` is
-`true`. In a multi-main deployment (`n8n_main_replicas > 1`, the module
+`true`. In a multi-main deployment (`n8n_main_hpa_min_replicas > 1`, the module
 default) the elected leader main detaches its floating license entitlement
 when it shuts down, which zeroes the shared floating cert row in the
 database. A fresh main pod starting during the leaderless window comes up as
@@ -232,7 +232,7 @@ Module versions with `n8n_license_detach_floating_on_shutdown` default this
 to `false`, overriding n8n's own default, which prevents the crash-loop from
 recurring. If you are already on a module version with the input, confirm it
 is not overridden to `true` unless you deliberately run a single main
-(`n8n_main_replicas = 1`).
+(`n8n_main_hpa_min_replicas = 1`).
 
 **Recovery from a stuck `pending-rollback` release**
 
