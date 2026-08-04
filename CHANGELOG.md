@@ -48,6 +48,15 @@ this project adheres to the stability contract in
   API before fixing.
 
 ### Added
+- `additional_access_entries` input (`list(string)`, default `[]`) grants
+  extra IAM principals cluster-admin access to the EKS cluster via
+  `aws_eks_access_entry` / `aws_eks_access_policy_association`
+  (`AmazonEKSClusterAdminPolicy`, cluster-scoped). The cluster defaults to
+  `authentication_mode = "API"`, so only the identity that created the
+  cluster can authenticate to it out of the box; an IAM identity used for
+  later applies — for example an HCP Terraform run role — gets `Unauthorized`
+  until it has its own access entry. Each element must be an IAM principal
+  ARN (`arn:aws:iam::...`).
 - All five examples (`small`, `medium`, `large`, `cloudflare`, `godaddy`) now
   expose the module's `n8n_image_tag` input as a passthrough variable
   (default `null`, same tag-format validation as the module), so callers can
@@ -194,6 +203,16 @@ this project adheres to the stability contract in
   every existing deployment would destroy and recreate its alias record.
 
 ### Changed
+
+- All six examples' `providers.tf` now configure the `kubernetes` and `helm`
+  providers with a short-lived token from `data "aws_eks_cluster_auth"`
+  instead of the `exec`/`aws eks get-token` pattern. HCP Terraform's hosted
+  remote-run environment does not ship the AWS CLI, so `exec` wiring failed
+  every remote plan or apply with `getting credentials: exec: executable aws
+  not found` ([#29](https://github.com/n8n-io/terraform-aws-n8n/issues/29)).
+  Token wiring works identically in local and remote runs. See the README
+  Providers section and `additional_access_entries` above for the
+  `authentication_mode = "API"` access-entry note this change surfaced.
 
 - `aws_route53_record.cert_validation` keys its `for_each` off
   `local.acm_domain_names` instead of the certificate's computed
