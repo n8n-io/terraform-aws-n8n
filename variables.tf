@@ -880,3 +880,16 @@ variable "n8n_worker_keda_jobs_per_replica" {
   type        = number
   default     = 5
 }
+
+# ── EKS access entries ────────────────────────────────────────────────────────
+
+variable "additional_access_entries" {
+  description = "IAM principal ARNs (users or roles) to grant cluster-admin access to the EKS cluster, beyond the identity that runs terraform apply. The cluster uses authenticationMode = \"API\" with bootstrap_cluster_creator_admin_permissions, so only the creating principal gets access automatically; every other identity needs its own aws_eks_access_entry. The main use case is HCP Terraform: the run role that applies changes there is not a human's local AWS identity, so without an entry here every subsequent plan/apply from HCP Terraform gets Unauthorized against the Kubernetes API. Each ARN here receives a cluster-scoped access entry plus an AmazonEKSClusterAdminPolicy association."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for a in var.additional_access_entries : startswith(a, "arn:aws:iam::")])
+    error_message = "Every entry in additional_access_entries must be an IAM principal ARN starting with arn:aws:iam:: (e.g. arn:aws:iam::123456789012:role/hcp-terraform)."
+  }
+}

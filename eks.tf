@@ -110,6 +110,35 @@ resource "aws_eks_node_group" "n8n" {
   ]
 }
 
+# ── Additional cluster access entries ────────────────────────────────────────
+# authenticationMode = "API" plus bootstrap_cluster_creator_admin_permissions
+# only grants the principal that ran the creating apply. Any other identity
+# (e.g. an HCP Terraform run role) needs its own access entry to reach the
+# Kubernetes API — this is how additional_access_entries plugs that gap.
+
+resource "aws_eks_access_entry" "additional" {
+  for_each = toset(var.additional_access_entries)
+
+  cluster_name  = aws_eks_cluster.n8n.name
+  principal_arn = each.value
+
+  tags = local.common_tags
+}
+
+resource "aws_eks_access_policy_association" "additional" {
+  for_each = toset(var.additional_access_entries)
+
+  cluster_name  = aws_eks_cluster.n8n.name
+  principal_arn = each.value
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.additional]
+}
+
 # ── EKS Pod Identity Agent ────────────────────────────────────────────────────
 # The agent runs as a DaemonSet and injects AWS credentials into pods whose
 # service accounts are bound via aws_eks_pod_identity_association. This is the

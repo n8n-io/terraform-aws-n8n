@@ -1751,3 +1751,65 @@ run "image_tag_rejects_overlong_tag" {
 
   expect_failures = [var.n8n_image_tag]
 }
+
+# ── Additional EKS access entries ────────────────────────────────────────────
+# authenticationMode = "API" only grants the creating principal admin access;
+# additional_access_entries lets a second identity (e.g. an HCP Terraform run
+# role) reach the cluster too.
+
+run "no_additional_access_entries_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(aws_eks_access_entry.additional) == 0
+    error_message = "With additional_access_entries left at its default, no additional access entries should be created."
+  }
+
+  assert {
+    condition     = length(aws_eks_access_policy_association.additional) == 0
+    error_message = "With additional_access_entries left at its default, no additional access policy associations should be created."
+  }
+}
+
+run "additional_access_entry_gets_cluster_admin" {
+  command = plan
+
+  variables {
+    additional_access_entries = ["arn:aws:iam::123456789012:role/hcp-terraform"]
+  }
+
+  assert {
+    condition     = length(aws_eks_access_entry.additional) == 1
+    error_message = "Each ARN in additional_access_entries should produce exactly one aws_eks_access_entry."
+  }
+
+  assert {
+    condition     = aws_eks_access_entry.additional["arn:aws:iam::123456789012:role/hcp-terraform"].principal_arn == "arn:aws:iam::123456789012:role/hcp-terraform"
+    error_message = "The access entry's principal_arn should match the given ARN."
+  }
+
+  assert {
+    condition     = length(aws_eks_access_policy_association.additional) == 1
+    error_message = "Each ARN in additional_access_entries should produce exactly one aws_eks_access_policy_association."
+  }
+
+  assert {
+    condition     = aws_eks_access_policy_association.additional["arn:aws:iam::123456789012:role/hcp-terraform"].policy_arn == "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+    error_message = "The additional principal should be granted AmazonEKSClusterAdminPolicy."
+  }
+
+  assert {
+    condition     = aws_eks_access_policy_association.additional["arn:aws:iam::123456789012:role/hcp-terraform"].access_scope[0].type == "cluster"
+    error_message = "The additional principal's policy association should be cluster-scoped."
+  }
+}
+
+run "additional_access_entries_validator_rejects_non_iam_arn" {
+  command = plan
+
+  variables {
+    additional_access_entries = ["arn:aws:eks:us-east-1:123456789012:cluster/n8n"]
+  }
+
+  expect_failures = [var.additional_access_entries]
+}
