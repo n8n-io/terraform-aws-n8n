@@ -188,6 +188,80 @@ resource "kubernetes_ingress_v1" "mine" {
 
 The namespace edge alone is not sufficient. With `wait_for_load_balancer = true`, the Ingress can otherwise be created before the Helm release has produced the Services, leaving the load balancer controller with nothing to register.
 
+## Multi-main crash-loops after a rolling restart, Helm stuck in `pending-rollback`
+
+**Symptom**
+
+After a Helm upgrade, a node rotation, or any other rolling restart of the main
+pods, fresh main pods crash-loop. Logs show a license failure at init time,
+typically one of:
+
+- `feat:multipleMainInstances` reported as unavailable/disabled even though
+  the license includes it.
+- A license error surfacing from the S3 binary data feature gate on a pod
+  that never previously had trouble with it.
+- Running `n8n license:info` (or inspecting the license cert row in Postgres)
+  shows `entitlements=0` / an empty cert, even though the license key is
+  correct and was working moments before.
+
+Because the Helm release is deployed with `atomic = true`, the failed
+rollout triggers an automatic rollback, and the rollback itself times out
+waiting for pods that never become ready. The release is left in
+`pending-rollback`, and any further `helm upgrade` or `terraform apply`
+fails immediately because Helm refuses to act on a release in that state.
+
+**Cause**
+
+n8n's upstream default for `N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN` is
+`true`. In a multi-main deployment (`n8n_main_replicas > 1`, the module
+default) the elected leader main detaches its floating license entitlement
+when it shuts down, which zeroes the shared floating cert row in the
+database. A fresh main pod starting during the leaderless window comes up as
+a follower, never renews the license on init, reads the zeroed cert, fails
+the init-time license gate, and crash-loops. Root-caused in
+[issue #49](https://github.com/n8n-io/terraform-aws-n8n/issues/49), observed
+on n8n 2.30.5 and 2.30.6.
+
+All mains share the same device fingerprint, so detaching on shutdown is
+unnecessary: a single floating seat is reused across restarts rather than
+released and re-acquired.
+
+**Fix**
+
+Module versions with `n8n_license_detach_floating_on_shutdown` default this
+to `false`, overriding n8n's own default, which prevents the crash-loop from
+recurring. If you are already on a module version with the input, confirm it
+is not overridden to `true` unless you deliberately run a single main
+(`n8n_main_replicas = 1`).
+
+**Recovery from a stuck `pending-rollback` release**
+
+1. Find the Helm release secret Kubernetes is stuck on:
+
+   ```bash
+   kubectl -n <namespace> get secrets -l owner=helm,name=<release> \
+     --sort-by=.metadata.creationTimestamp
+   ```
+
+2. Delete the newest one (the pending revision), not older successful
+   revisions:
+
+   ```bash
+   kubectl -n <namespace> delete secret sh.helm.release.v1.<release>.v<N>
+   ```
+
+3. Re-apply (`terraform apply` or `helm upgrade`) with
+   `n8n_license_detach_floating_on_shutdown = false` in effect. Helm treats
+   the release as available for a new revision once the pending secret is
+   gone.
+
+4. Optionally force a license renewal on a running main pod once the release
+   is healthy again, to confirm the cert is no longer zeroed:
+
+   ```bash
+   kubectl exec -n <namespace> <main-pod> -c n8n-main -- n8n license:info
+   ```
+
 ## `terraform destroy` hangs on namespace or finalizers
 
 See [destroy-cleanup.md](./destroy-cleanup.md).

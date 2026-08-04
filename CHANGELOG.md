@@ -7,6 +7,20 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+### Added
+
+- `n8n_license_detach_floating_on_shutdown` input (default `false`) maps to
+  `N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN`, overriding n8n's own upstream
+  default of `true`. In multi-main (the module default), the leader main
+  detaching its floating license entitlement on shutdown zeroes the shared
+  cert in the database, so a fresh main pod starting as a follower fails the
+  init-time license gate and crash-loops, pushing an `atomic = true` Helm
+  release into a stuck `pending-rollback` state. All mains share the same
+  device fingerprint, so keeping this `false` safely reuses a single floating
+  seat across restarts. See
+  [issue #49](https://github.com/n8n-io/terraform-aws-n8n/issues/49) and
+  `docs/troubleshooting.md`.
+
 ### Fixed
 
 - The module-managed Ingress routed only `/webhook` to the webhook processors.

@@ -71,6 +71,15 @@ chart-cache/
 
 .claude/
 
+# ── Agent workflow artifacts ──────────────────────────────────────────────────
+
+# Pi agent prompts/skills, OpenSpec planning artifacts, and Ralph session
+# files — local agent tooling, not part of the published module.
+.pi/
+openspec/
+init.sh
+progress.txt
+
 # ── OS and editor noise ───────────────────────────────────────────────────────
 
 .DS_Store
