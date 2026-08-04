@@ -33,3 +33,16 @@ moved {
   from = kubernetes_ingress_v1.n8n
   to   = kubernetes_ingress_v1.n8n[0]
 }
+
+# redis_transit_encryption_enabled. The default (false) path still creates this
+# cluster; the opt-in path creates an aws_elasticache_replication_group instead,
+# that being the only ElastiCache resource AWS lets you attach an auth_token to.
+#
+# Without this block the added count reads as a new address and every existing
+# deployment replaces its Redis on upgrade — including callers who never set the
+# new variable. Losing the queue is not a cosmetic regression: in-flight
+# executions go with it.
+moved {
+  from = aws_elasticache_cluster.n8n
+  to   = aws_elasticache_cluster.n8n[0]
+}

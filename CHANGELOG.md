@@ -52,6 +52,51 @@ this project adheres to the stability contract in
 
 ### Added
 
+- `redis_transit_encryption_enabled` input (default `false`) puts the
+  ElastiCache queue backend behind TLS and an AUTH token. The default preserves
+  the module's network-trust posture — Redis in private subnets behind a
+  VPC-only security group — so callers who leave it alone get no plan diff at
+  all. Callers who want credential-based Redis security flip one switch instead
+  of forking the module. Resolves
+  [#41](https://github.com/n8n-io/terraform-aws-n8n/issues/41).
+
+  The opt-in path uses a **different AWS resource**, which is worth
+  understanding before enabling it. `auth_token` does not exist on
+  `aws_elasticache_cluster`; AWS exposes it only on
+  `aws_elasticache_replication_group`, and further requires transit encryption
+  to be on before AUTH can be enabled at all. So the module now carries both
+  resources, count-gated on the variable and mutually exclusive: the default
+  path keeps the `aws_elasticache_cluster` it has always used, and only the
+  opt-in path creates a replication group (single node, `num_cache_clusters =
+  1`, matching the cluster path's topology and cost). Everything downstream —
+  Helm values, KEDA triggers, the `redis_endpoint` output — reads a shared
+  `local.redis_host` rather than either resource, so the two paths cannot
+  drift.
+
+  **Switching the flag on an existing deployment replaces Redis**, since the
+  two resources are different objects. Every job queued at that moment is lost.
+  Drain workers and pick a maintenance window. Upgrading the module *without*
+  touching the variable does **not** replace anything: a `moved` block in
+  `refactoring.tf` absorbs the `count` added to `aws_elasticache_cluster.n8n`.
+  Verified on a live cluster — a deployment applied on the previous version and
+  then repointed at this one planned `No changes.`
+
+  The generated token respects ElastiCache's constraints (16-128 chars, with
+  `! & # $ ^ < > -` the only permitted non-alphanumerics) and is published two
+  ways: as a Kubernetes secret the chart mounts as `QUEUE_BULL_REDIS_PASSWORD`
+  on main, worker and webhook processor, and as a new sensitive
+  `redis_auth_token` output (`terraform output -raw redis_auth_token`).
+
+  **Known limitation:** KEDA's worker autoscaler does not yet authenticate to
+  Redis. Its trigger carries neither TLS nor credentials, so while this flag is
+  on, queue-depth autoscaling stops responding to backlog and workers hold a
+  static count between `n8n_worker_keda_min_replicas` and
+  `n8n_worker_keda_max_replicas`. Nothing crashes, which is what makes it easy
+  to miss. Tracked in
+  [#66](https://github.com/n8n-io/terraform-aws-n8n/issues/66); until that
+  lands, treat this flag as trading queue-depth autoscaling for encryption and
+  authentication.
+
 - `n8n_license_detach_floating_on_shutdown` input (default `false`) maps to
   `N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN`, overriding n8n's own upstream
   default of `true`. In multi-main (the module default), the leader main

@@ -89,6 +89,22 @@ locals {
 
   ingress_annotations = merge(local.ingress_default_annotations, var.ingress_annotations)
 
+  # Redis endpoint, abstracted over the two mutually exclusive engine resources
+  # in redis.tf (see the comment there for why there are two). Everything that
+  # needs to reach the queue — the Helm values, the KEDA triggers, the
+  # redis_endpoint output — reads this rather than picking a resource, so the
+  # two paths cannot drift apart.
+  #
+  # Branching on the variable rather than try()/coalesce() over both resources:
+  # the variable is known at plan time, so the unselected resource's [0] is
+  # never indexed. try() would also mask a genuine error in the live branch as
+  # a silent fallback to the dead one.
+  redis_host = var.redis_transit_encryption_enabled ? (
+    aws_elasticache_replication_group.n8n[0].primary_endpoint_address
+    ) : (
+    aws_elasticache_cluster.n8n[0].cache_nodes[0].address
+  )
+
   common_tags = merge(
     {
       ManagedBy = "terraform"

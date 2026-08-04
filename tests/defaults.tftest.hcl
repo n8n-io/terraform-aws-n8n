@@ -889,12 +889,12 @@ run "redis_private_and_sized" {
   command = plan
 
   assert {
-    condition     = aws_elasticache_cluster.n8n.engine == "redis"
+    condition     = aws_elasticache_cluster.n8n[0].engine == "redis"
     error_message = "ElastiCache engine should be redis"
   }
 
   assert {
-    condition     = aws_elasticache_cluster.n8n.node_type == "cache.t3.medium"
+    condition     = aws_elasticache_cluster.n8n[0].node_type == "cache.t3.medium"
     error_message = "redis_node_type should default to cache.t3.medium"
   }
 
@@ -911,6 +911,109 @@ run "redis_private_and_sized" {
   assert {
     condition     = one(aws_security_group.redis.ingress).protocol == "tcp"
     error_message = "Redis SG should restrict ingress to TCP"
+  }
+}
+
+# ── Redis transit encryption + AUTH (opt-in) ──────────────────────────────────
+# The default must stay the network-trust posture, and the opt-in path swaps the
+# cache resource wholesale: auth_token exists only on
+# aws_elasticache_replication_group, so aws_elasticache_cluster cannot carry it.
+# These two runs pin both halves of that swap, in both directions.
+
+run "redis_transit_encryption_defaults_off" {
+  command = plan
+
+  assert {
+    condition     = var.redis_transit_encryption_enabled == false
+    error_message = "redis_transit_encryption_enabled must default to false — the network-trust posture is the accepted as-built behaviour and enabling it replaces the cache."
+  }
+
+  assert {
+    condition     = length(aws_elasticache_cluster.n8n) == 1
+    error_message = "The default path must keep the aws_elasticache_cluster resource it has always used, so existing deployments see no replacement."
+  }
+
+  assert {
+    condition     = length(aws_elasticache_replication_group.n8n) == 0
+    error_message = "No replication group should exist on the default path"
+  }
+
+  assert {
+    condition     = length(random_password.redis_auth_token) == 0
+    error_message = "No AUTH token should be generated on the default path — an unconditional random_password would put `1 to add` in the plan of every caller who never opted in."
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n_redis) == 0
+    error_message = "No Redis secret should exist when there is no AUTH token to hold"
+  }
+}
+
+run "redis_transit_encryption_on_swaps_to_replication_group" {
+  command = plan
+
+  variables {
+    redis_transit_encryption_enabled = true
+  }
+
+  assert {
+    condition     = length(aws_elasticache_cluster.n8n) == 0
+    error_message = "The cluster resource cannot carry an auth_token, so the opt-in path must not create one"
+  }
+
+  assert {
+    condition     = length(aws_elasticache_replication_group.n8n) == 1
+    error_message = "The opt-in path must create the replication group, the only ElastiCache resource that accepts an auth_token"
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].transit_encryption_enabled == true
+    error_message = "transit_encryption_enabled must be true — AWS rejects an AUTH token without it"
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].num_cache_clusters == 1
+    error_message = "The opt-in path must stay single-node, matching the cluster path. This variable buys encryption, not a second node and a doubled bill."
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].node_type == "cache.t3.medium"
+    error_message = "redis_node_type should reach the replication group too, not just the cluster"
+  }
+
+  assert {
+    condition     = length(random_password.redis_auth_token) == 1
+    error_message = "An AUTH token must be generated on the opt-in path"
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n_redis) == 1
+    error_message = "The AUTH token must be published as a Kubernetes secret for the chart to mount as QUEUE_BULL_REDIS_PASSWORD"
+  }
+}
+
+# The AUTH token charset is not a free choice: ElastiCache rejects anything
+# outside ! & # $ ^ < > - at create time, and the failure surfaces as an opaque
+# InvalidParameterValue from AWS well into the apply. Asserting the generator's
+# inputs catches a careless edit at plan time instead.
+run "redis_auth_token_respects_elasticache_charset" {
+  command = plan
+
+  variables {
+    redis_transit_encryption_enabled = true
+  }
+
+  assert {
+    condition     = random_password.redis_auth_token[0].override_special == "!&#$^<>-"
+    error_message = "AUTH token special characters must be limited to the set ElastiCache permits (! & # $ ^ < > -)"
+  }
+
+  assert {
+    condition = (
+      random_password.redis_auth_token[0].length >= 16 &&
+      random_password.redis_auth_token[0].length <= 128
+    )
+    error_message = "ElastiCache AUTH tokens must be 16-128 characters"
   }
 }
 

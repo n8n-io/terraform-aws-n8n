@@ -58,6 +58,24 @@ resource "kubernetes_secret" "n8n_db" {
   }
 }
 
+# The ElastiCache AUTH token, on the same shape as the DB secret above. The
+# chart mounts it as QUEUE_BULL_REDIS_PASSWORD on main, worker and webhook
+# processor via redis.passwordSecret (see the Helm values below). Exists only on
+# the opt-in path — there is no token to hold otherwise.
+
+resource "kubernetes_secret" "n8n_redis" {
+  count = var.redis_transit_encryption_enabled ? 1 : 0
+
+  metadata {
+    name      = "n8n-enterprise-redis-secret"
+    namespace = kubernetes_namespace.n8n.metadata[0].name
+  }
+
+  data = {
+    password = random_password.redis_auth_token[0].result
+  }
+}
+
 # ── Helm release ──────────────────────────────────────────────────────────────
 
 resource "helm_release" "n8n" {
@@ -113,13 +131,26 @@ resource "helm_release" "n8n" {
       }
     }
 
-    redis = {
+    # passwordSecret is merged in rather than set inline so the default path
+    # renders exactly the four keys it always has. The chart's default for it is
+    # null and its templates guard on `if and .name .key`, so an omitted key and
+    # an explicit null behave the same — but omitting it keeps the rendered
+    # values byte-identical for existing releases, which is what makes the
+    # upgrade a no-op rather than a Helm diff.
+    redis = merge({
       enabled     = true
       useExternal = true
-      host        = aws_elasticache_cluster.n8n.cache_nodes[0].address
+      host        = local.redis_host
       port        = 6379
-      tls         = false
-    }
+      tls         = var.redis_transit_encryption_enabled
+      },
+      var.redis_transit_encryption_enabled ? {
+        passwordSecret = {
+          name = kubernetes_secret.n8n_redis[0].metadata[0].name
+          key  = "password"
+        }
+      } : {}
+    )
 
     s3 = {
       enabled = true
@@ -174,6 +205,14 @@ resource "helm_release" "n8n" {
     # workers waiting for a task runner). KEDA takes the MAX of both.
     # Webhook processor HPA is created externally in scaling.tf (chart skips it
     # when keda.enabled = true).
+    #
+    # KNOWN GAP when redis_transit_encryption_enabled = true: these triggers
+    # carry neither TLS nor credentials, so against a TLS+AUTH Redis the
+    # queue-depth read fails and workers hold a static count between
+    # minReplicaCount and maxReplicaCount. Nothing crashes, which is what makes
+    # it easy to miss. KEDA takes credentials via a TriggerAuthentication CRD or
+    # a passwordFromEnv indirection, neither of which is wired yet — see
+    # https://github.com/n8n-io/terraform-aws-n8n/issues/66.
     keda = {
       enabled = true
       worker = {
@@ -185,7 +224,7 @@ resource "helm_release" "n8n" {
           {
             type = "redis"
             metadata = {
-              address    = "${aws_elasticache_cluster.n8n.cache_nodes[0].address}:6379"
+              address    = "${local.redis_host}:6379"
               listName   = "bull:jobs:wait"
               listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
             }
@@ -194,7 +233,7 @@ resource "helm_release" "n8n" {
           {
             type = "redis"
             metadata = {
-              address    = "${aws_elasticache_cluster.n8n.cache_nodes[0].address}:6379"
+              address    = "${local.redis_host}:6379"
               listName   = "bull:jobs:active"
               listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
             }
@@ -435,7 +474,10 @@ resource "helm_release" "n8n" {
     helm_release.lbc,
     helm_release.keda,
     aws_db_instance.n8n, # no-op (empty list) when create_database = false
+    # Exactly one of these two is ever non-empty; the other is an empty list and
+    # contributes no edge. See redis.tf.
     aws_elasticache_cluster.n8n,
+    aws_elasticache_replication_group.n8n,
     aws_iam_role_policy_attachment.s3,
     aws_eks_pod_identity_association.s3,
   ]

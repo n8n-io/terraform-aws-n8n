@@ -61,8 +61,14 @@ output "rds_endpoint" {
 }
 
 output "redis_endpoint" {
-  description = "ElastiCache Redis endpoint"
-  value       = aws_elasticache_cluster.n8n.cache_nodes[0].address
+  description = "ElastiCache Redis endpoint — the cache node address when redis_transit_encryption_enabled = false, or the replication group's primary endpoint when true. Reached over TLS and requiring the AUTH token in the latter case."
+  value       = local.redis_host
+}
+
+output "redis_auth_token" {
+  description = "ElastiCache AUTH token when redis_transit_encryption_enabled = true; null otherwise, since the default posture has no credential. Retrieve with: terraform output -raw redis_auth_token"
+  value       = var.redis_transit_encryption_enabled ? random_password.redis_auth_token[0].result : null
+  sensitive   = true
 }
 
 output "s3_bucket_name" {

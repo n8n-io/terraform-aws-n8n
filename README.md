@@ -425,6 +425,67 @@ env vars are emitted and n8n's OpenTelemetry SDK is not loaded.
 `n8n_otel_exporter_otlp_headers` is marked `sensitive` because it typically
 carries collector authentication tokens.
 
+## Redis in-transit encryption and AUTH
+
+By default the module secures its ElastiCache queue backend by **network
+boundary**: Redis sits in private subnets behind a security group that admits
+only VPC traffic, with no TLS and no credentials. That is a defensible posture
+inside a trusted VPC and it is the module's accepted as-built behaviour, but it
+leaves two things open — queue payloads (workflow execution data) cross the VPC
+in cleartext, and anything that reaches the network boundary reaches Redis
+unauthenticated.
+
+Set `redis_transit_encryption_enabled = true` to close both. The module then
+enables TLS in transit, generates an AUTH token, publishes it as a Kubernetes
+secret, and wires `QUEUE_BULL_REDIS_TLS` plus `QUEUE_BULL_REDIS_PASSWORD` onto
+every n8n container. Retrieve the token with:
+
+```console
+$ terraform output -raw redis_auth_token
+```
+
+### It swaps the underlying AWS resource
+
+`auth_token` is not available on `aws_elasticache_cluster` — AWS exposes it only
+on `aws_elasticache_replication_group`, and only when transit encryption is
+already enabled. The module therefore carries both resources, mutually
+exclusive:
+
+| `redis_transit_encryption_enabled` | Resource created |
+| --- | --- |
+| `false` (default) | `aws_elasticache_cluster.n8n[0]` |
+| `true` | `aws_elasticache_replication_group.n8n[0]` |
+
+Both are single-node with the same `redis_node_type`, so enabling the flag does
+not change the topology or the bill. The endpoint shape changes (a cache node
+address becomes a replication group primary endpoint), which is why everything
+downstream reads the module's internal `redis_host` local and why the
+`redis_endpoint` output stays correct either way.
+
+> [!WARNING]
+> **Changing this on an existing deployment replaces Redis.** The two resources
+> are different objects, so flipping the flag destroys one and creates the
+> other, dropping every job queued at that moment. Drain workers and use a
+> maintenance window.
+>
+> Upgrading the module *without* touching this variable replaces nothing — a
+> `moved` block absorbs the `count` added to the cluster resource. Existing
+> deployments plan `No changes.`
+
+### Known limitation: worker autoscaling
+
+KEDA's worker autoscaler does not yet authenticate to Redis. Its trigger carries
+neither TLS nor credentials, so while this flag is on, KEDA cannot read queue
+depth: **workers stop scaling on backlog** and hold a static count between
+`n8n_worker_keda_min_replicas` and `n8n_worker_keda_max_replicas`. Nothing
+crashes and the pods stay healthy, which is what makes this easy to miss.
+
+Until [#66](https://github.com/n8n-io/terraform-aws-n8n/issues/66) lands, this
+flag trades queue-depth autoscaling for encryption and authentication. If your
+workload relies on bursty queue-driven scaling, either stay on the default
+posture or raise `n8n_worker_keda_min_replicas` to cover peak while the flag is
+on.
+
 ## Log streaming (Enterprise)
 
 Set `n8n_log_streaming_managed_by_env = true` to provision n8n's
@@ -512,6 +573,7 @@ No modules.
 | [aws_eks_pod_identity_association.lbc](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
 | [aws_eks_pod_identity_association.s3](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
 | [aws_elasticache_cluster.n8n](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticache_cluster) | resource |
+| [aws_elasticache_replication_group.n8n](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticache_replication_group) | resource |
 | [aws_elasticache_subnet_group.n8n](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticache_subnet_group) | resource |
 | [aws_iam_policy.cluster_autoscaler](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_policy) | resource |
 | [aws_iam_policy.lbc](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_policy) | resource |
@@ -551,9 +613,11 @@ No modules.
 | [kubernetes_namespace.n8n](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/namespace) | resource |
 | [kubernetes_secret.n8n](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/secret) | resource |
 | [kubernetes_secret.n8n_db](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/secret) | resource |
+| [kubernetes_secret.n8n_redis](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/secret) | resource |
 | [kubernetes_storage_class_v1.gp3](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/storage_class_v1) | resource |
 | [random_id.n8n_encryption_key](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/id) | resource |
 | [random_password.db_password](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/password) | resource |
+| [random_password.redis_auth_token](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/password) | resource |
 | [random_password.task_runner_token](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/password) | resource |
 | [time_sleep.wait_for_alb_cleanup](https://registry.terraform.io/providers/hashicorp/time/latest/docs/resources/sleep) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
@@ -656,6 +720,7 @@ No modules.
 | <a name="input_private_subnets"></a> [private\_subnets](#input\_private\_subnets) | IDs of private subnets (one per AZ, minimum two AZs). RDS, ElastiCache, and EKS nodes attach here. | `list(string)` | n/a | yes |
 | <a name="input_public_subnets"></a> [public\_subnets](#input\_public\_subnets) | IDs of public subnets (one per AZ, minimum two AZs). The ALB attaches here. | `list(string)` | n/a | yes |
 | <a name="input_redis_node_type"></a> [redis\_node\_type](#input\_redis\_node\_type) | ElastiCache node type (cache.t3.medium ~$25/month) | `string` | `"cache.t3.medium"` | no |
+| <a name="input_redis_transit_encryption_enabled"></a> [redis\_transit\_encryption\_enabled](#input\_redis\_transit\_encryption\_enabled) | Encrypt the n8n queue backend in transit and require an AUTH token on it. Defaults to false, which is the module's deliberate network-trust posture: Redis sits in private subnets behind a security group that admits only VPC traffic, so isolation is by network boundary rather than by credentials. Set true to add TLS plus a generated AUTH token on top of that boundary — worth doing when queue payloads (workflow execution data) crossing the VPC in cleartext, or an unauthenticated Redis after a network-boundary breach, are risks you need closed. CHANGING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS: AWS exposes the AUTH token only on aws\_elasticache\_replication\_group, so the opt-in path uses that resource while the default path keeps aws\_elasticache\_cluster. Flipping the value destroys one and creates the other, which drops every job queued at that moment — drain workers and pick a maintenance window. KNOWN LIMITATION: KEDA's worker autoscaler has no TLS or credentials on its Redis trigger yet, so while this is true, queue-depth autoscaling stops responding to backlog and workers hold a static count between n8n\_worker\_keda\_min\_replicas and n8n\_worker\_keda\_max\_replicas. Tracked in https://github.com/n8n-io/terraform-aws-n8n/issues/66. | `bool` | `false` | no |
 | <a name="input_route53_zone_id"></a> [route53\_zone\_id](#input\_route53\_zone\_id) | Route53 hosted zone ID for the parent of n8n\_domain (e.g. the zone for example.com if n8n\_domain = n8n.example.com). When set, the module issues a DNS-validated ACM certificate and creates the alias A-record automatically — single terraform apply, no manual DNS steps. Leave null and pass certificate\_arn instead. Set exactly one of certificate\_arn or route53\_zone\_id. | `string` | `null` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Additional AWS tags to apply to all resources this module creates. Merged on top of the built-in ManagedBy/Project tags. | `map(string)` | `{}` | no |
 | <a name="input_vpc_cidr_block"></a> [vpc\_cidr\_block](#input\_vpc\_cidr\_block) | CIDR block of the VPC — used by the RDS and Redis security groups to allow intra-VPC traffic. | `string` | n/a | yes |
@@ -681,7 +746,8 @@ No modules.
 | <a name="output_n8n_webhook_service_name"></a> [n8n\_webhook\_service\_name](#output\_n8n\_webhook\_service\_name) | Name of the Kubernetes Service fronting the n8n webhook processors, on port 5678. Production webhooks are disabled on the main pods, so a bring-your-own Ingress must route /webhook here. |
 | <a name="output_namespace"></a> [namespace](#output\_namespace) | Kubernetes namespace n8n is deployed into. |
 | <a name="output_rds_endpoint"></a> [rds\_endpoint](#output\_rds\_endpoint) | Database endpoint — module-managed RDS when create\_database = true, or the value of var.db\_host when using an external database (e.g. Aurora). |
-| <a name="output_redis_endpoint"></a> [redis\_endpoint](#output\_redis\_endpoint) | ElastiCache Redis endpoint |
+| <a name="output_redis_auth_token"></a> [redis\_auth\_token](#output\_redis\_auth\_token) | ElastiCache AUTH token when redis\_transit\_encryption\_enabled = true; null otherwise, since the default posture has no credential. Retrieve with: terraform output -raw redis\_auth\_token |
+| <a name="output_redis_endpoint"></a> [redis\_endpoint](#output\_redis\_endpoint) | ElastiCache Redis endpoint — the cache node address when redis\_transit\_encryption\_enabled = false, or the replication group's primary endpoint when true. Reached over TLS and requiring the AUTH token in the latter case. |
 | <a name="output_s3_bucket_name"></a> [s3\_bucket\_name](#output\_s3\_bucket\_name) | S3 bucket used for n8n binary storage |
 <!-- END_TF_DOCS -->
 
