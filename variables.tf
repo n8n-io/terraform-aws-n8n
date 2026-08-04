@@ -193,6 +193,7 @@ variable "node_instance_type" {
   description = "EC2 instance type for EKS worker nodes. t3.xlarge (4 vCPU, 16GB) is the recommended minimum for multi-main — the 6 n8n pods (main × 2, worker × 2, webhook × 2) request ~3,600m CPU at minimum replicas, leaving t3.medium nodes with insufficient headroom for HPA to scale."
   type        = string
   default     = "t3.xlarge"
+  nullable    = false
 
   validation {
     condition     = can(regex("^[a-z][a-z0-9]*\\.[a-z0-9]+$", var.node_instance_type))
@@ -223,9 +224,10 @@ variable "node_min" {
 }
 
 variable "node_max" {
-  description = "Maximum number of worker nodes"
+  description = "Maximum number of worker nodes. This is the ceiling the Cluster Autoscaler scales to, so node_max × node_instance_type is the hard cap on schedulable CPU: the autoscaler maxima (n8n_main_hpa_max_replicas, n8n_webhook_hpa_max_replicas, n8n_worker_keda_max_replicas) and the per-pod CPU requests have to fit inside it. The module warns at plan time when they do not; see README.md → \"Sizing autoscaling against node capacity\"."
   type        = number
   default     = 6
+  nullable    = false
 
   validation {
     condition     = var.node_max >= 1
@@ -438,6 +440,7 @@ variable "n8n_task_runners_enabled" {
   description = "Enable task runner sidecars for isolated JavaScript and Python code execution"
   type        = bool
   default     = true
+  nullable    = false
 }
 
 variable "n8n_task_runner_cpu_request" {
@@ -635,15 +638,22 @@ variable "n8n_task_runner_request_timeout" {
 # ── HPA: main pods ────────────────────────────────────────────────────────────
 
 variable "n8n_main_hpa_min_replicas" {
-  description = "Minimum replicas for n8n main pods. HPA will not scale below this."
+  description = "Minimum replicas for n8n main pods. HPA will not scale below this. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back. Keep at 2 or more for availability: mains serve the editor and REST API, and the module's PodDisruptionBudget only guarantees one during a node drain."
   type        = number
   default     = 2
+  nullable    = false
+
+  validation {
+    condition     = var.n8n_main_hpa_min_replicas <= var.n8n_main_hpa_max_replicas
+    error_message = "n8n_main_hpa_min_replicas must not exceed n8n_main_hpa_max_replicas; Kubernetes rejects an HPA whose minReplicas is above its maxReplicas."
+  }
 }
 
 variable "n8n_main_hpa_max_replicas" {
-  description = "Maximum replicas for n8n main pods. HPA will not scale above this."
+  description = "Maximum replicas for n8n main pods. HPA will not scale above this. The default of 6 is sized to the default node group (node_max × node_instance_type): at the default CPU requests, 6 main pods plus their task runner sidecars, the worker ceiling, and the webhook ceiling all fit in what 6 t3.xlarge nodes can schedule. Raise this together with node_max or node_instance_type. An HPA ceiling the node group cannot hold leaves pods Pending with \"Insufficient cpu\" once the Cluster Autoscaler reaches node_max, which also slows rollouts. The module warns at plan time when the three groups are out of step; see README.md → \"Sizing autoscaling against node capacity\"."
   type        = number
-  default     = 20
+  default     = 6
+  nullable    = false
 }
 
 variable "n8n_main_hpa_cpu_threshold" {
@@ -655,15 +665,22 @@ variable "n8n_main_hpa_cpu_threshold" {
 # ── HPA: webhook processor pods ───────────────────────────────────────────────
 
 variable "n8n_webhook_hpa_min_replicas" {
-  description = "Minimum replicas for n8n webhook processor pods. HPA will not scale below this."
+  description = "Minimum replicas for n8n webhook processor pods. HPA will not scale below this. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back. Webhook processors take production webhook traffic, so a warm floor is what keeps a traffic ramp from queueing behind pod startup."
   type        = number
   default     = 2
+  nullable    = false
+
+  validation {
+    condition     = var.n8n_webhook_hpa_min_replicas <= var.n8n_webhook_hpa_max_replicas
+    error_message = "n8n_webhook_hpa_min_replicas must not exceed n8n_webhook_hpa_max_replicas; Kubernetes rejects an HPA whose minReplicas is above its maxReplicas."
+  }
 }
 
 variable "n8n_webhook_hpa_max_replicas" {
-  description = "Maximum replicas for n8n webhook processor pods. HPA will not scale above this."
+  description = "Maximum replicas for n8n webhook processor pods. HPA will not scale above this. The default of 8 is sized to the default node group (node_max × node_instance_type), alongside the main and worker ceilings. Webhook processors are the cheapest pod family to scale (no task runner sidecar, 300m by default), so this is usually the first ceiling to raise once node_max goes up. See n8n_main_hpa_max_replicas and README.md → \"Sizing autoscaling against node capacity\"."
   type        = number
-  default     = 50
+  default     = 8
+  nullable    = false
 }
 
 variable "n8n_webhook_hpa_cpu_threshold" {
@@ -870,15 +887,22 @@ variable "n8n_extra_env" {
 # ── KEDA: worker pods ─────────────────────────────────────────────────────────
 
 variable "n8n_worker_keda_min_replicas" {
-  description = "Minimum worker replicas. KEDA keeps at least this many workers running even when the queue is empty."
+  description = "Minimum worker replicas. KEDA keeps at least this many workers running even when the queue is empty. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back."
   type        = number
   default     = 1
+  nullable    = false
+
+  validation {
+    condition     = var.n8n_worker_keda_min_replicas <= var.n8n_worker_keda_max_replicas
+    error_message = "n8n_worker_keda_min_replicas must not exceed n8n_worker_keda_max_replicas; KEDA rejects a ScaledObject whose minReplicaCount is above its maxReplicaCount."
+  }
 }
 
 variable "n8n_worker_keda_max_replicas" {
-  description = "Maximum worker replicas KEDA may scale to."
+  description = "Maximum worker replicas KEDA may scale to. Workers compete for the same nodes as the main and webhook pods, and each carries a task runner sidecar, so this ceiling counts against the same node group budget as the two HPA maxima. See README.md → \"Sizing autoscaling against node capacity\"."
   type        = number
   default     = 10
+  nullable    = false
 }
 
 variable "n8n_worker_keda_jobs_per_replica" {

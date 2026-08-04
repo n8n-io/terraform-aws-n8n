@@ -175,6 +175,28 @@ file. Use `command = plan` unless you specifically need apply semantics.
   intended to order a caller's resources, return the **resource attribute**
   rather than the variable, and treat "did the graph actually serialise these"
   as a question only a live apply answers.
+- **A `run` block cannot express "argument passed as `null`".** In a `variables`
+  block, `x = null` means *unset*: the variable takes its default and no error is
+  raised. A real caller writing `x = null` in a `module` block is different:
+  null **propagates into the module** rather than falling back to the default,
+  unless the variable declares `nullable = false`. Measured on 1.9.8, one module
+  with `default = 6` invoked three ways: no argument sees `6`; `n = null` on a
+  nullable variable sees `null`; `n = null` on a `nullable = false` variable sees
+  `6`, silently, with no error. Only the middle case can break anything, and it
+  is the only one a `run` block cannot reproduce.
+
+  This is not academic. It is how the `nullable = false` gap on the autoscaling
+  inputs was found (see `scaling.tf`): Terraform evaluates a `check` block's
+  `error_message` alongside its condition rather than lazily on failure, so a
+  propagated null reached the message's interpolations and aborted the plan with
+  `Invalid template interpolation value`, from a block whose entire purpose is
+  to warn *without* failing. `expect_failures` cannot assert it; the attempt
+  fails with "Missing expected failure".
+
+  So: for any input with a default where null is not meaningful, declare
+  `nullable = false` rather than trusting a test to catch it. Null-handling is a
+  question only a real `module` block answers, which means a live plan against a
+  caller configuration rather than the mocked suite.
 
 #### `check` conditions must short-circuit on Terraform 1.9
 

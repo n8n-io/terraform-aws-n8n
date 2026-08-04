@@ -235,6 +235,49 @@ is not overridden to `true` unless you deliberately run a single main
    kubectl exec -n <namespace> <main-pod> -c n8n-main -- n8n license:info
    ```
 
+## Pods stay `Pending` with `Insufficient cpu` and the node group never grows
+
+**Symptom**
+
+Some n8n pods never schedule. `kubectl describe pod` reports:
+
+```
+0/6 nodes are available: 6 Insufficient cpu
+```
+
+The Cluster Autoscaler adds no nodes, and its logs say the node group is already
+at its maximum size. It usually shows up during a rolling update, which stalls
+while the surging ReplicaSet competes for the same exhausted CPU.
+
+**Cause**
+
+An autoscaler ceiling is set above what the node group can ever schedule. The
+HPAs and KEDA scale toward their maxima regardless of whether the nodes exist,
+and the Cluster Autoscaler stops at `node_max`. Confirm with:
+
+```bash
+# What the autoscalers are aiming for
+kubectl -n <namespace> get hpa
+kubectl -n <namespace> get scaledobject
+
+# What the nodes can actually give
+kubectl get nodes -o custom-columns='NODE:.metadata.name,ALLOCATABLE_CPU:.status.allocatable.cpu'
+kubectl describe node <node> | sed -n '/Allocated resources/,/^Events/p'
+```
+
+**Fix**
+
+Size the three coupled input groups together: the autoscaler ceilings, the
+per-pod CPU requests, and `node_instance_type` × `node_max`. See
+[README.md → Sizing autoscaling against node capacity](../README.md#sizing-autoscaling-against-node-capacity)
+for the arithmetic and the per-node rule of thumb.
+
+The module warns about this at plan time, so `terraform plan` will already be
+reporting `Warning: Check block assertion failed` with the two numbers. Module
+versions up to 0.2.0 defaulted `n8n_main_hpa_max_replicas` to `20` and
+`n8n_webhook_hpa_max_replicas` to `50`, neither of which fits the default node
+group; upgrading lowers both to values that do.
+
 ## `terraform destroy` hangs on namespace or finalizers
 
 See [destroy-cleanup.md](./destroy-cleanup.md).

@@ -465,6 +465,105 @@ Terraform state and the pod environment in plaintext — restrict access
 accordingly. Setting `n8n_log_streaming_managed_by_env` back to `false`
 keeps the last applied destinations but restores UI write access.
 
+## Sizing autoscaling against node capacity
+
+Three groups of inputs have to be sized together, and nothing in Kubernetes
+couples them for you:
+
+| Group | Inputs |
+| --- | --- |
+| Autoscaler ceilings | `n8n_main_hpa_max_replicas`, `n8n_webhook_hpa_max_replicas`, `n8n_worker_keda_max_replicas` |
+| Per-pod CPU requests | `n8n_main_cpu_request`, `n8n_webhook_cpu_request`, `n8n_worker_cpu_request`, `n8n_task_runner_cpu_request` |
+| Node group | `node_instance_type`, `node_max` |
+
+Set a ceiling above what the node group can hold and the autoscalers will
+still scale toward it. The pods that do not fit sit `Pending` with
+`Insufficient cpu` while the Cluster Autoscaler is already at `node_max` with
+nothing left to add. Because a surging ReplicaSet competes for the same
+exhausted CPU, this also stretches out rollouts, which is how the problem
+usually surfaces ([#51](https://github.com/n8n-io/terraform-aws-n8n/issues/51)).
+For the symptom side, see
+[docs/troubleshooting.md](docs/troubleshooting.md#pods-stay-pending-with-insufficient-cpu-and-the-node-group-never-grows).
+
+The module warns at plan time when the arithmetic does not work out. Raising the
+main ceiling to 20 and the webhook ceiling to 50 against the default node group,
+for instance, produces:
+
+```
+│ Warning: Check block assertion failed
+│
+│ Autoscaler maxima exceed the CPU the node group can ever schedule. At their
+│ ceilings the n8n pods request 46000m CPU (main 20 × 1200m, worker 10 × 700m,
+│ webhook 50 × 300m), but 6 × t3.xlarge leaves only about 21720m for them
+│ (4 vCPU per node, less kubelet reservations, the aws-node and kube-proxy
+│ DaemonSets, and this module's cluster add-ons). The autoscalers will still
+│ scale toward those maxima, leaving pods Pending with "Insufficient cpu" once
+│ the Cluster Autoscaler reaches node_max. Either lower the maxima, lower the
+│ CPU requests, or raise node_max / node_instance_type.
+```
+
+It is a `check` block, so it never fails a plan or an apply. Staging higher
+ceilings before you raise `node_max` is a legitimate thing to do, and the model
+is an approximation of a real scheduler.
+
+### The arithmetic
+
+**Demand**, when every autoscaler happens to sit at its ceiling at once:
+
+```
+main_max    × (main_cpu_request    + task_runner_cpu_request)
+worker_max  × (worker_cpu_request  + task_runner_cpu_request)
+webhook_max ×  webhook_cpu_request
+```
+
+Task runner sidecars ride on main and worker pods only, so webhook processors
+carry no sidecar cost. Workers are on KEDA rather than an HPA, but they compete
+for the same nodes and count against the same budget.
+
+**Supply** is less than `node_max` × the instance's vCPU count:
+
+- EKS reserves CPU for kubelet and the runtime on a tiered curve: 6% of the
+  first vCPU, 1% of the second, 0.5% of the third and fourth, 0.25% of each
+  beyond. A t3.xlarge reports 3,920m allocatable, not 4,000m.
+- DaemonSets run on every node and claim their requests first: `aws-node` 50m
+  (two containers), `kube-proxy` 100m, and `ebs-csi-node` 30m, so 180m per node.
+- Cluster-wide singletons come off the total once: CoreDNS 200m, metrics-server
+  100m, KEDA's three components 300m, and `ebs-csi-controller` 120m, so 720m.
+
+At the defaults that is 6 × t3.xlarge → about **21,720m** for n8n, against
+**16,600m** requested at the default ceilings. The remainder is deliberate
+headroom for the surge during a rolling update.
+
+### Floors are also the deployment's replica count
+
+The three floors (`n8n_main_hpa_min_replicas`, `n8n_webhook_hpa_min_replicas`,
+`n8n_worker_keda_min_replicas`) do double duty: the module passes each one to the
+chart as that deployment's `spec.replicas`. The chart renders `spec.replicas`
+unconditionally, whether or not an HPA or a KEDA ScaledObject also owns the
+field, so a value below the autoscaler's floor would make every `helm upgrade`
+scale down and then wait for the autoscaler to climb back, which is precisely
+when you want the warm capacity.
+
+Raise a floor when startup latency matters more than idle cost. n8n pods take
+tens of seconds to boot, so a burst that arrives before the autoscaler reacts
+queues behind pod startup. `examples/medium` and `examples/large` raise all three
+floors for that reason.
+
+### Raising the ceilings
+
+Raise `node_max` or `node_instance_type` in the same change. As a rule of
+thumb at the default CPU requests, each t3.xlarge node carries about three
+main pods, five workers, or twelve webhook processors. `examples/medium` and
+`examples/large` show ceilings pinned well above the module defaults against
+node groups sized to match.
+
+The check derives vCPU from the instance size rather than calling the EC2 API,
+so that an undeterminable value can never turn an advisory warning into a failed
+plan. It is exact for 995 of the 1,150 instance types EC2 currently offers in
+eu-west-1. Bare-metal sizes silence the check entirely, as does a CPU request in
+a form the module cannot parse; the remaining deviations are legacy and 1 vCPU
+families that make the check quieter, not noisier.
+
 ## Reference
 
 <!-- The block below is auto-generated by terraform-docs. Run `terraform-docs markdown table --output-file README.md --output-mode inject .` to refresh it. -->
@@ -603,8 +702,8 @@ No modules.
 | <a name="input_n8n_main_cpu_limit"></a> [n8n\_main\_cpu\_limit](#input\_n8n\_main\_cpu\_limit) | CPU limit for n8n main pods (e.g. 2000m, 1000m) | `string` | `"2000m"` | no |
 | <a name="input_n8n_main_cpu_request"></a> [n8n\_main\_cpu\_request](#input\_n8n\_main\_cpu\_request) | CPU request for n8n main pods (e.g. 1000m, 500m) | `string` | `"1000m"` | no |
 | <a name="input_n8n_main_hpa_cpu_threshold"></a> [n8n\_main\_hpa\_cpu\_threshold](#input\_n8n\_main\_hpa\_cpu\_threshold) | Target average CPU utilization (%) that triggers scaling of n8n main pods. | `number` | `60` | no |
-| <a name="input_n8n_main_hpa_max_replicas"></a> [n8n\_main\_hpa\_max\_replicas](#input\_n8n\_main\_hpa\_max\_replicas) | Maximum replicas for n8n main pods. HPA will not scale above this. | `number` | `20` | no |
-| <a name="input_n8n_main_hpa_min_replicas"></a> [n8n\_main\_hpa\_min\_replicas](#input\_n8n\_main\_hpa\_min\_replicas) | Minimum replicas for n8n main pods. HPA will not scale below this. | `number` | `2` | no |
+| <a name="input_n8n_main_hpa_max_replicas"></a> [n8n\_main\_hpa\_max\_replicas](#input\_n8n\_main\_hpa\_max\_replicas) | Maximum replicas for n8n main pods. HPA will not scale above this. The default of 6 is sized to the default node group (node\_max × node\_instance\_type): at the default CPU requests, 6 main pods plus their task runner sidecars, the worker ceiling, and the webhook ceiling all fit in what 6 t3.xlarge nodes can schedule. Raise this together with node\_max or node\_instance\_type. An HPA ceiling the node group cannot hold leaves pods Pending with "Insufficient cpu" once the Cluster Autoscaler reaches node\_max, which also slows rollouts. The module warns at plan time when the three groups are out of step; see README.md → "Sizing autoscaling against node capacity". | `number` | `6` | no |
+| <a name="input_n8n_main_hpa_min_replicas"></a> [n8n\_main\_hpa\_min\_replicas](#input\_n8n\_main\_hpa\_min\_replicas) | Minimum replicas for n8n main pods. HPA will not scale below this. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back. Keep at 2 or more for availability: mains serve the editor and REST API, and the module's PodDisruptionBudget only guarantees one during a node drain. | `number` | `2` | no |
 | <a name="input_n8n_main_memory_limit"></a> [n8n\_main\_memory\_limit](#input\_n8n\_main\_memory\_limit) | Memory limit for n8n main pods (e.g. 4Gi, 2Gi) | `string` | `"4Gi"` | no |
 | <a name="input_n8n_main_memory_request"></a> [n8n\_main\_memory\_request](#input\_n8n\_main\_memory\_request) | Memory request for n8n main pods (e.g. 2Gi, 1Gi) | `string` | `"2Gi"` | no |
 | <a name="input_n8n_metrics_enabled"></a> [n8n\_metrics\_enabled](#input\_n8n\_metrics\_enabled) | Enable n8n's built-in Prometheus metrics endpoint. When true, the module appends N8N\_METRICS=true to the n8n Helm release's config.extraEnv, which the chart applies to every n8n container (main, worker, webhook processor). n8n exposes /metrics on its existing HTTP port (5678) — the same port and service the chart already publishes for the UI/API. The n8n Helm chart at the currently pinned version (see n8n\_chart\_version) exposes no top-level metrics / serviceMonitor block of its own, so this toggle is intentionally env-var-only. Scrape configuration (Prometheus scrape annotations or a ServiceMonitor CR) is left to the caller's monitoring stack — in practice the main pod's Service is the meaningful scrape target. Defaults to false; when false the env var is omitted entirely so n8n's own defaults apply. | `bool` | `false` | no |
@@ -635,8 +734,8 @@ No modules.
 | <a name="input_n8n_webhook_cpu_limit"></a> [n8n\_webhook\_cpu\_limit](#input\_n8n\_webhook\_cpu\_limit) | CPU limit for n8n webhook processor pods (e.g. 800m, 1000m) | `string` | `"800m"` | no |
 | <a name="input_n8n_webhook_cpu_request"></a> [n8n\_webhook\_cpu\_request](#input\_n8n\_webhook\_cpu\_request) | CPU request for n8n webhook processor pods (e.g. 300m, 500m) | `string` | `"300m"` | no |
 | <a name="input_n8n_webhook_hpa_cpu_threshold"></a> [n8n\_webhook\_hpa\_cpu\_threshold](#input\_n8n\_webhook\_hpa\_cpu\_threshold) | Target average CPU utilization (%) that triggers scaling of n8n webhook pods. | `number` | `65` | no |
-| <a name="input_n8n_webhook_hpa_max_replicas"></a> [n8n\_webhook\_hpa\_max\_replicas](#input\_n8n\_webhook\_hpa\_max\_replicas) | Maximum replicas for n8n webhook processor pods. HPA will not scale above this. | `number` | `50` | no |
-| <a name="input_n8n_webhook_hpa_min_replicas"></a> [n8n\_webhook\_hpa\_min\_replicas](#input\_n8n\_webhook\_hpa\_min\_replicas) | Minimum replicas for n8n webhook processor pods. HPA will not scale below this. | `number` | `2` | no |
+| <a name="input_n8n_webhook_hpa_max_replicas"></a> [n8n\_webhook\_hpa\_max\_replicas](#input\_n8n\_webhook\_hpa\_max\_replicas) | Maximum replicas for n8n webhook processor pods. HPA will not scale above this. The default of 8 is sized to the default node group (node\_max × node\_instance\_type), alongside the main and worker ceilings. Webhook processors are the cheapest pod family to scale (no task runner sidecar, 300m by default), so this is usually the first ceiling to raise once node\_max goes up. See n8n\_main\_hpa\_max\_replicas and README.md → "Sizing autoscaling against node capacity". | `number` | `8` | no |
+| <a name="input_n8n_webhook_hpa_min_replicas"></a> [n8n\_webhook\_hpa\_min\_replicas](#input\_n8n\_webhook\_hpa\_min\_replicas) | Minimum replicas for n8n webhook processor pods. HPA will not scale below this. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back. Webhook processors take production webhook traffic, so a warm floor is what keeps a traffic ramp from queueing behind pod startup. | `number` | `2` | no |
 | <a name="input_n8n_webhook_memory_limit"></a> [n8n\_webhook\_memory\_limit](#input\_n8n\_webhook\_memory\_limit) | Memory limit for n8n webhook processor pods (e.g. 1Gi, 2Gi) | `string` | `"1Gi"` | no |
 | <a name="input_n8n_webhook_memory_request"></a> [n8n\_webhook\_memory\_request](#input\_n8n\_webhook\_memory\_request) | Memory request for n8n webhook processor pods (e.g. 512Mi, 1Gi) | `string` | `"512Mi"` | no |
 | <a name="input_n8n_webhook_url"></a> [n8n\_webhook\_url](#input\_n8n\_webhook\_url) | Public HTTPS base URL used for webhook callbacks (e.g. https://webhooks.example.com). Defaults to https://<n8n\_domain> when not set. Override when webhooks are served from a different host than the n8n UI. | `string` | `null` | no |
@@ -644,14 +743,14 @@ No modules.
 | <a name="input_n8n_worker_cpu_limit"></a> [n8n\_worker\_cpu\_limit](#input\_n8n\_worker\_cpu\_limit) | CPU limit for n8n worker pods (e.g. 1000m, 2000m) | `string` | `"1000m"` | no |
 | <a name="input_n8n_worker_cpu_request"></a> [n8n\_worker\_cpu\_request](#input\_n8n\_worker\_cpu\_request) | CPU request for n8n worker pods (e.g. 500m, 1000m) | `string` | `"500m"` | no |
 | <a name="input_n8n_worker_keda_jobs_per_replica"></a> [n8n\_worker\_keda\_jobs\_per\_replica](#input\_n8n\_worker\_keda\_jobs\_per\_replica) | Number of waiting jobs per worker replica used as the KEDA scaling threshold. KEDA targets ceil(queue\_depth / jobs\_per\_replica) replicas. | `number` | `5` | no |
-| <a name="input_n8n_worker_keda_max_replicas"></a> [n8n\_worker\_keda\_max\_replicas](#input\_n8n\_worker\_keda\_max\_replicas) | Maximum worker replicas KEDA may scale to. | `number` | `10` | no |
-| <a name="input_n8n_worker_keda_min_replicas"></a> [n8n\_worker\_keda\_min\_replicas](#input\_n8n\_worker\_keda\_min\_replicas) | Minimum worker replicas. KEDA keeps at least this many workers running even when the queue is empty. | `number` | `1` | no |
+| <a name="input_n8n_worker_keda_max_replicas"></a> [n8n\_worker\_keda\_max\_replicas](#input\_n8n\_worker\_keda\_max\_replicas) | Maximum worker replicas KEDA may scale to. Workers compete for the same nodes as the main and webhook pods, and each carries a task runner sidecar, so this ceiling counts against the same node group budget as the two HPA maxima. See README.md → "Sizing autoscaling against node capacity". | `number` | `10` | no |
+| <a name="input_n8n_worker_keda_min_replicas"></a> [n8n\_worker\_keda\_min\_replicas](#input\_n8n\_worker\_keda\_min\_replicas) | Minimum worker replicas. KEDA keeps at least this many workers running even when the queue is empty. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back. | `number` | `1` | no |
 | <a name="input_n8n_worker_memory_limit"></a> [n8n\_worker\_memory\_limit](#input\_n8n\_worker\_memory\_limit) | Memory limit for n8n worker pods (e.g. 2Gi, 4Gi) | `string` | `"2Gi"` | no |
 | <a name="input_n8n_worker_memory_request"></a> [n8n\_worker\_memory\_request](#input\_n8n\_worker\_memory\_request) | Memory request for n8n worker pods (e.g. 1Gi, 2Gi) | `string` | `"1Gi"` | no |
 | <a name="input_namespace"></a> [namespace](#input\_namespace) | Kubernetes namespace to deploy n8n into | `string` | `"n8n"` | no |
 | <a name="input_node_desired"></a> [node\_desired](#input\_node\_desired) | Initial number of worker nodes. Only applies at creation: the node group's desired\_size ignores changes afterward so the Cluster Autoscaler can own it without fighting plans/applies. | `number` | `3` | no |
 | <a name="input_node_instance_type"></a> [node\_instance\_type](#input\_node\_instance\_type) | EC2 instance type for EKS worker nodes. t3.xlarge (4 vCPU, 16GB) is the recommended minimum for multi-main — the 6 n8n pods (main × 2, worker × 2, webhook × 2) request ~3,600m CPU at minimum replicas, leaving t3.medium nodes with insufficient headroom for HPA to scale. | `string` | `"t3.xlarge"` | no |
-| <a name="input_node_max"></a> [node\_max](#input\_node\_max) | Maximum number of worker nodes | `number` | `6` | no |
+| <a name="input_node_max"></a> [node\_max](#input\_node\_max) | Maximum number of worker nodes. This is the ceiling the Cluster Autoscaler scales to, so node\_max × node\_instance\_type is the hard cap on schedulable CPU: the autoscaler maxima (n8n\_main\_hpa\_max\_replicas, n8n\_webhook\_hpa\_max\_replicas, n8n\_worker\_keda\_max\_replicas) and the per-pod CPU requests have to fit inside it. The module warns at plan time when they do not; see README.md → "Sizing autoscaling against node capacity". | `number` | `6` | no |
 | <a name="input_node_min"></a> [node\_min](#input\_node\_min) | Minimum number of worker nodes | `number` | `3` | no |
 | <a name="input_private_subnets"></a> [private\_subnets](#input\_private\_subnets) | IDs of private subnets (one per AZ, minimum two AZs). RDS, ElastiCache, and EKS nodes attach here. | `list(string)` | n/a | yes |
 | <a name="input_public_subnets"></a> [public\_subnets](#input\_public\_subnets) | IDs of public subnets (one per AZ, minimum two AZs). The ALB attaches here. | `list(string)` | n/a | yes |

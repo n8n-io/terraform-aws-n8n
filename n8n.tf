@@ -77,9 +77,23 @@ resource "helm_release" "n8n" {
       activationKey = var.n8n_license_key
     }
 
+    # ── Deployment replica counts ─────────────────────────────────────────────
+    # Each of the three below is wired to its autoscaler's floor rather than left
+    # at a constant, because the chart renders spec.replicas unconditionally:
+    # deployment-main.yaml uses multiMain.replicas, deployment-worker.yaml uses
+    # queueMode.workerReplicaCount, and deployment-webhook-processor.yaml uses
+    # webhookProcessor.replicaCount, with no regard for whether an HPA or a KEDA
+    # ScaledObject also owns the field.
+    #
+    # A constant here fights the autoscaler on every helm upgrade. Helm writes
+    # spec.replicas back to the constant, the deployment scales down to it, and
+    # the autoscaler then has to scale back up to its floor, which erases the warm
+    # floor at exactly the moment a rollout needs it. Setting each to its floor
+    # makes Helm's write a no-op.
+
     multiMain = {
       enabled  = true
-      replicas = 2
+      replicas = var.n8n_main_hpa_min_replicas
       antiAffinity = {
         type = "preferred"
       }
@@ -87,13 +101,13 @@ resource "helm_release" "n8n" {
 
     queueMode = {
       enabled            = true
-      workerReplicaCount = 2
+      workerReplicaCount = var.n8n_worker_keda_min_replicas
       workerConcurrency  = var.n8n_worker_concurrency
     }
 
     webhookProcessor = {
       enabled                                = true
-      replicaCount                           = 2
+      replicaCount                           = var.n8n_webhook_hpa_min_replicas
       disableProductionWebhooksOnMainProcess = true
     }
 

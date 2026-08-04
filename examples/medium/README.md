@@ -7,7 +7,7 @@ Production-grade n8n for **~5–15M executions per day** (~60–175 req/s averag
 ```
 Route 53 (alias A-record)
     └─► ALB (AWS LBC) ──► EKS (5–15 × m6i.2xlarge)
-                               ├─► n8n main pods (HPA)
+                               ├─► n8n main pods (HPA, min=3 / max=24)
                                ├─► n8n webhook processors (HPA, min=5 / max=50)
                                └─► n8n workers (KEDA, min=5 / max=40)
                                         ├─► RDS PostgreSQL db.m6g.2xlarge (Multi-AZ)
@@ -23,7 +23,8 @@ Route 53 (alias A-record)
 | DB class | db.m6g.2xlarge | Memory-optimized; keeps execution_entity working set in shared_buffers |
 | DB storage | 200 GB gp3 | 3,000 baseline IOPS (vs gp2 burst); no IOPS ceiling at this throughput |
 | Redis | cache.r6g.large | ~4× the memory of cache.t3.medium; comfortable headroom at 175 req/s |
-| Webhook pods | min=5, max=50 | Floor of 5 is warm; 50 ceiling differentiates from the default example's 2/50 floor while keeping the same headroom |
+| Main pods | min=3, max=24 | Mains serve the editor and REST API only, not webhooks or manual executions, so the ceiling tracks concurrent users rather than executions/day; 4× the module default, matching how the worker ceiling scales. Floor of 3 keeps two serving the editor through a node drain |
+| Webhook pods | min=5, max=50 | Floor of 5 is warm; 50 ceiling raises both the floor and the ceiling over the module default of 2/8 |
 | Worker pods | min=5, max=40 | Queue-driven via KEDA; floor ensures fast queue drain at any time |
 | Worker concurrency | 20 | Doubles throughput per pod vs default; pool_size=10 matches |
 | Pruning | 7 days / 500k records | Keeps execution_entity at manageable size without losing debug history |
