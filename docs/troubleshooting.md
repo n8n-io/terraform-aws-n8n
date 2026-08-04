@@ -281,3 +281,62 @@ group; upgrading lowers both to values that do.
 ## `terraform destroy` hangs on namespace or finalizers
 
 See [destroy-cleanup.md](./destroy-cleanup.md).
+
+## Webhook processor HPA thrashes, or pods OOMKill, with `n8n_reinstall_missing_packages = true`
+
+**Symptom**
+
+With `n8n_reinstall_missing_packages = true`, every pod runs npm installs at
+boot, and n8n rebroadcasts installs to all pods via pubsub, so during a
+rolling restart every pod installs repeatedly. Against the webhook
+processor's defaults (`n8n_webhook_cpu_request = "300m"`,
+`n8n_webhook_cpu_limit = "800m"`, `n8n_webhook_memory_limit = "1Gi"`) this
+produces two distinct failure modes:
+
+1. **CPU:** installs burn 800-1000m per pod, 200-300% of the 300m request.
+   The CPU-based `n8n_webhook` HPA (`scaling.tf`) reads that as sustained
+   high utilization and scales up on every rollout: each new pod boots,
+   installs, and broadcasts, keeping utilization above target and feeding
+   back into further scale-up until capacity runs out.
+2. **Memory:** concurrent installs plus the n8n baseline exceed the memory
+   limit. Pods get OOMKilled (exit 137) mid-install, restart, reinstall, and
+   broadcast again — a self-feeding crash loop. Interrupted installs can also
+   leave corrupted package directories behind (`ENOTEMPTY`,
+   `tar: invalid magic`), which persist because the packages directory lives
+   on the pod's ephemeral filesystem.
+
+`terraform plan`/`apply` surfaces a warning for this specific combination via
+the `webhook_resources_sized_for_reinstall_missing_packages` check in
+`scaling.tf`.
+
+**Cause**
+
+`n8n_reinstall_missing_packages` is sized for the general case (occasional
+reinstall of a handful of packages), not for the CPU/memory burst every pod
+produces simultaneously during a rolling restart. The module's webhook
+processor defaults predate that toggle's production cost.
+
+**Fix**
+
+Raise the webhook processor's requests and limits above the module defaults.
+One operator's stable production values, reported in
+[issue #52](https://github.com/n8n-io/terraform-aws-n8n/issues/52):
+
+```hcl
+n8n_webhook_cpu_request    = "800m"
+n8n_webhook_cpu_limit      = "1500m"
+n8n_webhook_memory_request = "1Gi"
+n8n_webhook_memory_limit   = "2Gi"
+```
+
+Optionally also widen `n8n_webhook_hpa_scale_up_stabilization_window_seconds`
+(default `0`, matching the Kubernetes API's own default) so a short boot-time
+CPU spike doesn't immediately trigger a scale-up:
+
+```hcl
+n8n_webhook_hpa_scale_up_stabilization_window_seconds = 300
+```
+
+If pods already have corrupted package directories from an interrupted
+install, a rolling restart after raising the resources above resolves it —
+n8n rewrites the directory from scratch on the next successful install.

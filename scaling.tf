@@ -29,6 +29,32 @@ resource "kubernetes_horizontal_pod_autoscaler_v2" "n8n_webhook" {
         }
       }
     }
+
+    # Scale-down keeps the Kubernetes API's own defaults (300s stabilization).
+    # Only scale-up is exposed: see n8n_webhook_hpa_scale_up_stabilization_window_seconds.
+    # The two policy blocks reproduce the Kubernetes API's own default scale-up
+    # policy verbatim (see "Default Behavior" at
+    # https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)
+    # — the provider schema requires at least one policy block once behavior is
+    # set at all, and this keeps the scale-up ramp unchanged when the
+    # stabilization window is left at its default of 0.
+    behavior {
+      scale_up {
+        stabilization_window_seconds = var.n8n_webhook_hpa_scale_up_stabilization_window_seconds
+
+        policy {
+          type           = "Percent"
+          value          = 100
+          period_seconds = 15
+        }
+
+        policy {
+          type           = "Pods"
+          value          = 4
+          period_seconds = 15
+        }
+      }
+    }
   }
 
   depends_on = [helm_release.n8n]
@@ -251,6 +277,80 @@ check "autoscaling_maxima_fit_node_group_capacity" {
       "maxima, leaving pods Pending with \"Insufficient cpu\" once the Cluster Autoscaler reaches node_max. ",
       "Either lower the maxima, lower the CPU requests, or raise node_max / node_instance_type. ",
       "See README.md → \"Sizing autoscaling against node capacity\".",
+    ])
+  }
+}
+
+# ── Advisory: webhook resources vs. reinstall_missing_packages ────────────────
+# With n8n_reinstall_missing_packages = true, every pod (main, worker, webhook
+# processor) runs npm installs at boot, and n8n rebroadcasts installs to every
+# pod via pubsub, so a rolling restart makes every webhook pod install
+# repeatedly at once. Against the webhook processor's low default resources
+# this produces two production failure modes: CPU spikes read as 200-300% of
+# the request and drive the CPU-based HPA above into a scale-up-on-every-rollout
+# loop, and concurrent installs plus the n8n baseline exceed a 1Gi memory limit,
+# OOMKilling pods mid-install into a reinstall/broadcast crash loop that can
+# leave corrupted package directories behind. See
+# https://github.com/n8n-io/terraform-aws-n8n/issues/52.
+#
+# This only warns: the thresholds below are one operator's stable production
+# values, not a hard requirement, and n8n_reinstall_missing_packages defaults to
+# false, so most callers never hit this. See docs/troubleshooting.md.
+
+locals {
+  # can() turns an unparseable quantity (a caller's typo, or a form this module
+  # doesn't recognize) into "unreadable" rather than a plan-time error — this
+  # check exists to warn, not to validate the quantity syntax. Kubernetes itself
+  # rejects a bad quantity at apply.
+  n8n_webhook_cpu_millis = {
+    for name, quantity in {
+      request = var.n8n_webhook_cpu_request
+      limit   = var.n8n_webhook_cpu_limit
+      } : name => can(regex("^[0-9]+m?$", quantity)) ? (
+      endswith(quantity, "m") ? tonumber(trimsuffix(quantity, "m")) : tonumber(quantity) * 1000
+    ) : null
+  }
+
+  n8n_webhook_memory_mebibytes = {
+    for name, quantity in {
+      request = var.n8n_webhook_memory_request
+      limit   = var.n8n_webhook_memory_limit
+      } : name => can(regex("^[0-9]+(Mi|Gi)$", quantity)) ? (
+      endswith(quantity, "Gi") ? tonumber(trimsuffix(quantity, "Gi")) * 1024 : tonumber(trimsuffix(quantity, "Mi"))
+    ) : null
+  }
+
+  n8n_webhook_resources_readable = alltrue([
+    for v in concat(values(local.n8n_webhook_cpu_millis), values(local.n8n_webhook_memory_mebibytes)) : v != null
+  ])
+
+  # Thresholds are the reporter's own stable production values from
+  # https://github.com/n8n-io/terraform-aws-n8n/issues/52: CPU 800m request /
+  # 1500m limit, memory 1Gi request / 2Gi limit. The module's own defaults
+  # (300m/800m CPU, 512Mi/1Gi memory) sit below all four, which is deliberate:
+  # this check exists because those defaults are the ones that failed.
+  n8n_webhook_resources_sized_for_reinstall = local.n8n_webhook_resources_readable ? (
+    local.n8n_webhook_cpu_millis["request"] >= 800 &&
+    local.n8n_webhook_cpu_millis["limit"] >= 1500 &&
+    local.n8n_webhook_memory_mebibytes["request"] >= 1024 &&
+    local.n8n_webhook_memory_mebibytes["limit"] >= 2048
+  ) : true
+}
+
+check "webhook_resources_sized_for_reinstall_missing_packages" {
+  assert {
+    condition = var.n8n_reinstall_missing_packages ? local.n8n_webhook_resources_sized_for_reinstall : true
+    error_message = join("", [
+      "n8n_reinstall_missing_packages is true, but the webhook processor's CPU/memory requests and limits ",
+      "(currently ${var.n8n_webhook_cpu_request}/${var.n8n_webhook_cpu_limit} CPU, ",
+      "${var.n8n_webhook_memory_request}/${var.n8n_webhook_memory_limit} memory) are below the values known to ",
+      "survive it in production. Every pod reinstalls community packages on boot and n8n rebroadcasts installs ",
+      "to all pods, so a rolling restart makes every webhook pod install repeatedly at once: CPU spikes to ",
+      "200-300% of a low request (driving the CPU-based HPA into a scale-up-on-every-rollout loop), and ",
+      "concurrent installs plus the n8n baseline can exceed a low memory limit and OOMKill pods mid-install into ",
+      "a reinstall/broadcast crash loop. Raise n8n_webhook_cpu_request/limit to at least 800m/1500m and ",
+      "n8n_webhook_memory_request/limit to at least 1Gi/2Gi. See docs/troubleshooting.md and ",
+      "https://github.com/n8n-io/terraform-aws-n8n/issues/52.",
     ])
   }
 }

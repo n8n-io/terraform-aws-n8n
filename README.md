@@ -183,8 +183,7 @@ Six runnable examples ship with the module: three sizing tiers (`small`, `medium
 | DB IOPS ceiling | 150 baseline / 3,000 burst | 3,000 baseline (gp3) | None — I/O-Optimized |
 | PgBouncer | No | No | Yes — 2 replicas |
 | Redis | cache.t3.medium | cache.r6g.large | cache.r6g.large |
-| Main pods min / max | 2 / 6 | 3 / 24 | 6 / 60 |
-| Webhook pods min / max | 2 / 8 | 5 / 50 | 30 / 80 |
+| Webhook pods min / max | 2 / 50 | 5 / 50 | 30 / 80 |
 | Worker pods min / max | 1 / 10 | 5 / 40 | 20 / 160 |
 | Worker concurrency | 10 | 20 | 40 |
 | Execution concurrency limit | 100 | 200 | 2,000 |
@@ -466,109 +465,6 @@ Terraform state and the pod environment in plaintext — restrict access
 accordingly. Setting `n8n_log_streaming_managed_by_env` back to `false`
 keeps the last applied destinations but restores UI write access.
 
-## Sizing autoscaling against node capacity
-
-Three groups of inputs have to be sized together, and nothing in Kubernetes
-couples them for you:
-
-| Group | Inputs |
-| --- | --- |
-| Autoscaler ceilings | `n8n_main_hpa_max_replicas`, `n8n_webhook_hpa_max_replicas`, `n8n_worker_keda_max_replicas` |
-| Per-pod CPU requests | `n8n_main_cpu_request`, `n8n_webhook_cpu_request`, `n8n_worker_cpu_request`, `n8n_task_runner_cpu_request` |
-| Node group | `node_instance_type`, `node_max` |
-
-Set a ceiling above what the node group can hold and the autoscalers will
-still scale toward it. The pods that do not fit sit `Pending` with
-`Insufficient cpu` while the Cluster Autoscaler is already at `node_max` with
-nothing left to add. Because a surging ReplicaSet competes for the same
-exhausted CPU, this also stretches out rollouts, which is how the problem
-usually surfaces ([#51](https://github.com/n8n-io/terraform-aws-n8n/issues/51)).
-For the symptom side, see
-[docs/troubleshooting.md](docs/troubleshooting.md#pods-stay-pending-with-insufficient-cpu-and-the-node-group-never-grows).
-
-The module warns at plan time when the arithmetic does not work out. Raising the
-main ceiling to 20 and the webhook ceiling to 50 against the default node group,
-for instance, produces:
-
-```
-│ Warning: Check block assertion failed
-│
-│ Autoscaler maxima exceed the CPU the node group can ever schedule. At their
-│ ceilings the n8n pods request 46000m CPU (main 20 × 1200m, worker 10 × 700m,
-│ webhook 50 × 300m), but 6 × t3.xlarge leaves only about 21720m for them
-│ (4 vCPU per node, less kubelet reservations, the aws-node and kube-proxy
-│ DaemonSets, and this module's cluster add-ons). The autoscalers will still
-│ scale toward those maxima, leaving pods Pending with "Insufficient cpu" once
-│ the Cluster Autoscaler reaches node_max. Either lower the maxima, lower the
-│ CPU requests, or raise node_max / node_instance_type.
-```
-
-It is a `check` block, so it never fails a plan or an apply. Staging higher
-ceilings before you raise `node_max` is a legitimate thing to do, and the model
-is an approximation of a real scheduler.
-
-### The arithmetic
-
-**Demand**, when every autoscaler happens to sit at its ceiling at once:
-
-```
-main_max    × (main_cpu_request    + task_runner_cpu_request)
-worker_max  × (worker_cpu_request  + task_runner_cpu_request)
-webhook_max ×  webhook_cpu_request
-```
-
-Task runner sidecars ride on main and worker pods only, so webhook processors
-carry no sidecar cost. Workers are on KEDA rather than an HPA, but they compete
-for the same nodes and count against the same budget.
-
-**Supply** is less than `node_max` × the instance's vCPU count:
-
-- EKS reserves CPU for kubelet and the runtime on a tiered curve: 6% of the
-  first vCPU, 1% of the second, 0.5% of the third and fourth, 0.25% of each
-  beyond. A t3.xlarge reports 3,920m allocatable, not 4,000m.
-- DaemonSets run on every node and claim their requests first: `aws-node` 50m
-  (two containers), `kube-proxy` 100m, and `ebs-csi-node` 30m, so 180m per node.
-- Cluster-wide singletons come off the total once: CoreDNS 200m, metrics-server
-  100m, KEDA's three components 300m, and `ebs-csi-controller` 120m, so 720m.
-
-At the defaults that is 6 × t3.xlarge → about **21,720m** for n8n, against
-**16,600m** requested at the default ceilings. The remainder is deliberate
-headroom for the surge during a rolling update.
-
-### Floors are also the deployment's replica count
-
-The three floors (`n8n_main_hpa_min_replicas`, `n8n_webhook_hpa_min_replicas`,
-`n8n_worker_keda_min_replicas`) do double duty: the module passes each one to the
-chart as that deployment's `spec.replicas`. The chart renders `spec.replicas`
-unconditionally, whether or not an HPA or a KEDA ScaledObject also owns the
-field, so a value below the autoscaler's floor would make every `helm upgrade`
-scale down and then wait for the autoscaler to climb back, which is precisely
-when you want the warm capacity.
-
-Raise a floor when startup latency matters more than idle cost. n8n pods take
-tens of seconds to boot, so a burst that arrives before the autoscaler reacts
-queues behind pod startup. `examples/medium` and `examples/large` raise all three
-floors for that reason.
-
-### Raising the ceilings
-
-Raise `node_max` or `node_instance_type` in the same change. As a rule of
-thumb at the default CPU requests, each t3.xlarge node carries about three
-main pods, five workers, or twelve webhook processors. `examples/medium` and
-`examples/large` show ceilings pinned well above the module defaults against
-node groups sized to match.
-
-The check derives vCPU from the instance size rather than calling the EC2 API,
-so that an undeterminable value can never turn an advisory warning into a failed
-plan. It is exact for 995 of the 1,150 instance types EC2 currently offers in
-eu-west-1. Bare-metal sizes silence the check entirely, as does a CPU request in
-a form the module cannot parse. Of the remaining deviations, the 1 vCPU families
-and the SMT-disabled and legacy sizes are over-counted, which costs a warning
-rather than raising a false one. Three legacy types are under-counted, so on
-those the check can warn early: `c4.8xlarge` and `d2.8xlarge` resolve 11% low,
-which warns a hair early at the boundary, and `c1.xlarge` resolves 4 vCPU
-against a real 8, which warns at about half the node group's real capacity.
-
 ## Reference
 
 <!-- The block below is auto-generated by terraform-docs. Run `terraform-docs markdown table --output-file README.md --output-mode inject .` to refresh it. -->
@@ -724,7 +620,7 @@ No modules.
 | <a name="input_n8n_prestop_sleep"></a> [n8n\_prestop\_sleep](#input\_n8n\_prestop\_sleep) | Seconds the preStop hook sleeps before SIGTERM is sent, giving the load balancer time to drain the pod. MINIMUM — do not lower below 10. | `number` | `10` | no |
 | <a name="input_n8n_pruning_max_age"></a> [n8n\_pruning\_max\_age](#input\_n8n\_pruning\_max\_age) | Maximum age of execution records to retain, in hours (336 = 14 days) | `number` | `336` | no |
 | <a name="input_n8n_pruning_max_count"></a> [n8n\_pruning\_max\_count](#input\_n8n\_pruning\_max\_count) | Maximum number of execution records to retain (0 = no limit) | `number` | `10000` | no |
-| <a name="input_n8n_reinstall_missing_packages"></a> [n8n\_reinstall\_missing\_packages](#input\_n8n\_reinstall\_missing\_packages) | Reinstall community packages that are recorded in the database but missing from a pod's local filesystem at startup. Maps to N8N\_REINSTALL\_MISSING\_PACKAGES. n8n stores installed community packages on the pod's filesystem, which is ephemeral in EKS, so a rescheduled or newly scaled-up worker comes up without them and nodes installed via the UI fail to load on that pod. Enabling this makes every pod (main, worker, and webhook-processor) reinstall the recorded packages on boot, which is what lets community nodes work reliably in queue mode. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies. | `bool` | `false` | no |
+| <a name="input_n8n_reinstall_missing_packages"></a> [n8n\_reinstall\_missing\_packages](#input\_n8n\_reinstall\_missing\_packages) | Reinstall community packages that are recorded in the database but missing from a pod's local filesystem at startup. Maps to N8N\_REINSTALL\_MISSING\_PACKAGES. n8n stores installed community packages on the pod's filesystem, which is ephemeral in EKS, so a rescheduled or newly scaled-up worker comes up without them and nodes installed via the UI fail to load on that pod. Enabling this makes every pod (main, worker, and webhook-processor) reinstall the recorded packages on boot, which is what lets community nodes work reliably in queue mode. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies. When true, size the webhook processor above this module's defaults: every pod runs npm installs at boot and n8n rebroadcasts installs to all pods via pubsub, so a rolling restart makes every webhook pod install repeatedly at once. Against low CPU/memory this causes CPU-based HPA thrash and OOMKilled crash loops; see n8n\_webhook\_cpu\_request, n8n\_webhook\_memory\_limit, and docs/troubleshooting.md. | `bool` | `false` | no |
 | <a name="input_n8n_task_runner_auto_shutdown_timeout"></a> [n8n\_task\_runner\_auto\_shutdown\_timeout](#input\_n8n\_task\_runner\_auto\_shutdown\_timeout) | Seconds of inactivity before the runner process shuts down. Set to 0 to disable. | `number` | `15` | no |
 | <a name="input_n8n_task_runner_cpu_limit"></a> [n8n\_task\_runner\_cpu\_limit](#input\_n8n\_task\_runner\_cpu\_limit) | CPU limit for task runner sidecar containers (e.g. 1, 2000m) | `string` | `"1"` | no |
 | <a name="input_n8n_task_runner_cpu_request"></a> [n8n\_task\_runner\_cpu\_request](#input\_n8n\_task\_runner\_cpu\_request) | CPU request for task runner sidecar containers (e.g. 200m, 500m) | `string` | `"200m"` | no |
@@ -736,13 +632,14 @@ No modules.
 | <a name="input_n8n_templates_enabled"></a> [n8n\_templates\_enabled](#input\_n8n\_templates\_enabled) | Enable n8n's workflow templates and template suggestions. Maps to N8N\_TEMPLATES\_ENABLED. When false, sets N8N\_TEMPLATES\_ENABLED=false on all n8n pods (main, worker, webhook processor) via config.extraEnv. Defaults to true, matching n8n's own default — note that explicitly setting true emits no env var (n8n's default already applies). Set to false to hide the templates library, e.g. when enforcing curated internal workflows. | `bool` | `true` | no |
 | <a name="input_n8n_termination_grace_period"></a> [n8n\_termination\_grace\_period](#input\_n8n\_termination\_grace\_period) | Seconds Kubernetes waits after SIGTERM before force-killing pods. MINIMUM — do not lower below 60. Workers need time to finish in-flight executions before being terminated. | `number` | `60` | no |
 | <a name="input_n8n_timezone"></a> [n8n\_timezone](#input\_n8n\_timezone) | Timezone for n8n (e.g. UTC, America/New\_York, Europe/London) | `string` | `"UTC"` | no |
-| <a name="input_n8n_webhook_cpu_limit"></a> [n8n\_webhook\_cpu\_limit](#input\_n8n\_webhook\_cpu\_limit) | CPU limit for n8n webhook processor pods (e.g. 800m, 1000m) | `string` | `"800m"` | no |
-| <a name="input_n8n_webhook_cpu_request"></a> [n8n\_webhook\_cpu\_request](#input\_n8n\_webhook\_cpu\_request) | CPU request for n8n webhook processor pods (e.g. 300m, 500m) | `string` | `"300m"` | no |
+| <a name="input_n8n_webhook_cpu_limit"></a> [n8n\_webhook\_cpu\_limit](#input\_n8n\_webhook\_cpu\_limit) | CPU limit for n8n webhook processor pods (e.g. 800m, 1000m). Raise to at least 1500m when n8n\_reinstall\_missing\_packages = true; see that variable and docs/troubleshooting.md. | `string` | `"800m"` | no |
+| <a name="input_n8n_webhook_cpu_request"></a> [n8n\_webhook\_cpu\_request](#input\_n8n\_webhook\_cpu\_request) | CPU request for n8n webhook processor pods (e.g. 300m, 500m). This default is sized for typical webhook traffic, not for n8n\_reinstall\_missing\_packages = true: a low request against an npm-install CPU spike is what drives the CPU-based HPA into a scale-up-on-every-rollout loop. Raise to at least 800m when that toggle is on; see n8n\_reinstall\_missing\_packages and docs/troubleshooting.md. | `string` | `"300m"` | no |
 | <a name="input_n8n_webhook_hpa_cpu_threshold"></a> [n8n\_webhook\_hpa\_cpu\_threshold](#input\_n8n\_webhook\_hpa\_cpu\_threshold) | Target average CPU utilization (%) that triggers scaling of n8n webhook pods. | `number` | `65` | no |
 | <a name="input_n8n_webhook_hpa_max_replicas"></a> [n8n\_webhook\_hpa\_max\_replicas](#input\_n8n\_webhook\_hpa\_max\_replicas) | Maximum replicas for n8n webhook processor pods. HPA will not scale above this. The default of 8 is sized to the default node group (node\_max × node\_instance\_type), alongside the main and worker ceilings. Webhook processors are the cheapest pod family to scale (no task runner sidecar, 300m by default), so this is usually the first ceiling to raise once node\_max goes up. See n8n\_main\_hpa\_max\_replicas and README.md → "Sizing autoscaling against node capacity". | `number` | `8` | no |
 | <a name="input_n8n_webhook_hpa_min_replicas"></a> [n8n\_webhook\_hpa\_min\_replicas](#input\_n8n\_webhook\_hpa\_min\_replicas) | Minimum replicas for n8n webhook processor pods. HPA will not scale below this. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back. Webhook processors take production webhook traffic, so a warm floor is what keeps a traffic ramp from queueing behind pod startup. | `number` | `2` | no |
-| <a name="input_n8n_webhook_memory_limit"></a> [n8n\_webhook\_memory\_limit](#input\_n8n\_webhook\_memory\_limit) | Memory limit for n8n webhook processor pods (e.g. 1Gi, 2Gi) | `string` | `"1Gi"` | no |
-| <a name="input_n8n_webhook_memory_request"></a> [n8n\_webhook\_memory\_request](#input\_n8n\_webhook\_memory\_request) | Memory request for n8n webhook processor pods (e.g. 512Mi, 1Gi) | `string` | `"512Mi"` | no |
+| <a name="input_n8n_webhook_hpa_scale_up_stabilization_window_seconds"></a> [n8n\_webhook\_hpa\_scale\_up\_stabilization\_window\_seconds](#input\_n8n\_webhook\_hpa\_scale\_up\_stabilization\_window\_seconds) | Seconds the webhook processor HPA looks back before scaling up, via the HPA's behavior.scaleUp.stabilizationWindowSeconds. Kubernetes' own default is 0 (scale up immediately), which this module preserves by default. A short CPU spike right after a pod boots (e.g. from N8N\_REINSTALL\_MISSING\_PACKAGES=true reinstalling community packages, see n8n\_reinstall\_missing\_packages) can read as sustained high utilization and trigger a scale-up that a slightly longer window would absorb. Raise this (e.g. to 300) to require CPU to stay above threshold for that long before adding pods. Must be between 0 and 3600, the range the Kubernetes API enforces. | `number` | `0` | no |
+| <a name="input_n8n_webhook_memory_limit"></a> [n8n\_webhook\_memory\_limit](#input\_n8n\_webhook\_memory\_limit) | Memory limit for n8n webhook processor pods (e.g. 1Gi, 2Gi). This default is too low for n8n\_reinstall\_missing\_packages = true: concurrent npm installs plus the n8n baseline can exceed it and OOMKill the pod mid-install into a reinstall/broadcast crash loop. Raise to at least 2Gi when that toggle is on; see that variable and docs/troubleshooting.md. | `string` | `"1Gi"` | no |
+| <a name="input_n8n_webhook_memory_request"></a> [n8n\_webhook\_memory\_request](#input\_n8n\_webhook\_memory\_request) | Memory request for n8n webhook processor pods (e.g. 512Mi, 1Gi). Raise to at least 1Gi when n8n\_reinstall\_missing\_packages = true; see that variable and docs/troubleshooting.md. | `string` | `"512Mi"` | no |
 | <a name="input_n8n_webhook_url"></a> [n8n\_webhook\_url](#input\_n8n\_webhook\_url) | Public HTTPS base URL used for webhook callbacks (e.g. https://webhooks.example.com). Defaults to https://<n8n\_domain> when not set. Override when webhooks are served from a different host than the n8n UI. | `string` | `null` | no |
 | <a name="input_n8n_worker_concurrency"></a> [n8n\_worker\_concurrency](#input\_n8n\_worker\_concurrency) | Number of jobs each worker pod can process simultaneously | `number` | `10` | no |
 | <a name="input_n8n_worker_cpu_limit"></a> [n8n\_worker\_cpu\_limit](#input\_n8n\_worker\_cpu\_limit) | CPU limit for n8n worker pods (e.g. 1000m, 2000m) | `string` | `"1000m"` | no |
