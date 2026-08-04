@@ -67,6 +67,11 @@ this project adheres to the stability contract in
   explicitly. The env var name is also reserved: an existing `n8n_extra_env`
   entry named `N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN` is now rejected at
   plan time and must be moved to the new input.
+- Vendored two agent skills from
+  [hashicorp/agent-skills](https://github.com/hashicorp/agent-skills) into
+  `.agents/skills/` via the skills CLI, pinned by `skills-lock.json`:
+  `terraform-style-guide` and `terraform-test`. Coding agents working in this
+  repo pick them up automatically; module consumers are unaffected.
 - All five examples (`small`, `medium`, `large`, `cloudflare`, `godaddy`) now
   expose the module's `n8n_image_tag` input as a passthrough variable
   (default `null`, same tag-format validation as the module), so callers can

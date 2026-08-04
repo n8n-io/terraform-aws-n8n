@@ -270,6 +270,28 @@ All of the following are present and should stay present:
 
 ## How to work in this repo (agent quick reference)
 
+### Vendored agent skills
+
+`.agents/skills/` contains two skills vendored from
+[hashicorp/agent-skills](https://github.com/hashicorp/agent-skills) via the
+[skills CLI](https://skills.sh) and pinned by `skills-lock.json`:
+`terraform-style-guide` and `terraform-test`. Agents that read
+`.agents/skills/` (pi does natively; Claude Code via the git-ignored
+`.claude/skills/` symlinks) load them automatically. The symlinks are not
+committed; Claude Code users create them once per clone:
+
+```bash
+mkdir -p .claude/skills
+ln -sf ../../.agents/skills/terraform-style-guide \
+       ../../.agents/skills/terraform-test .claude/skills/
+```
+
+Do not hand-edit the vendored files; update them with `skills update -p`.
+Where a skill's generic guidance
+conflicts with this repo's conventions (e.g. the style guide's `terraform.tf`
+vs this repo's `versions.tf`, or its Terraform version floor), **this
+`AGENTS.md` and the existing repo layout win**.
+
 ### Local development loop
 
 ```bash
