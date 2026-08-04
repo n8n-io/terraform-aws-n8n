@@ -113,6 +113,14 @@ this project adheres to the stability contract in
   queue-depth scaling. Resolves
   [#66](https://github.com/n8n-io/terraform-aws-n8n/issues/66).
 
+  Verified on a live cluster against KEDA 2.20.2, since none of this is visible
+  to a plan-time test. The ScaledObject reports `READY=True` with the HPA
+  reading a numeric `0/2 (avg), 0/2 (avg)` where the same deployment previously
+  reported `READY=False` and `<unknown>`, and the operator log carries no
+  timeout or auth errors. Driving the queue to 20 scaled workers from 2 to the
+  maximum of 6 in about 55 seconds, and clearing it returned them to 2. The AUTH
+  token appears nowhere in the rendered ScaledObject.
+
 - `n8n_license_detach_floating_on_shutdown` input (default `false`) maps to
   `N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN`, overriding n8n's own upstream
   default of `true`. In multi-main (the module default), the leader main
