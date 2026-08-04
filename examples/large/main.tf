@@ -120,10 +120,12 @@ module "n8n" {
   # floor of 2 would put an API burst behind pod startup, and it leaves nothing
   # spare during a rollout on a tier where mains span only two AZs.
   #
-  # Neither the node group nor PgBouncer is the constraint: at the ceiling,
-  # 72,000m of the ~785,000m this node group can schedule, and 300 client
-  # connections at pool_size=5 against a MAX_CLIENT_CONN of 3,000 per PgBouncer
-  # replica.
+  # Neither the node group nor PgBouncer is the constraint. Main pods alone at
+  # this ceiling request 72,000m and open 300 client connections at pool_size=5.
+  # With all three families at their ceilings at once, which is what the node
+  # group has to survive, it is 208,000m of the ~785,000m this node group can
+  # schedule (60 × 1,200m main, 160 × 700m worker, 80 × 300m webhook) and ~1,500
+  # client connections against a MAX_CLIENT_CONN of 3,000 per PgBouncer replica.
   n8n_main_hpa_min_replicas = 6
   n8n_main_hpa_max_replicas = 60
 

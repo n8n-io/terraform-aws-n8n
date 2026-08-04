@@ -89,7 +89,16 @@ resource "helm_release" "n8n" {
     # spec.replicas back to the constant, the deployment scales down to it, and
     # the autoscaler then has to scale back up to its floor, which erases the warm
     # floor at exactly the moment a rollout needs it. Setting each to its floor
-    # makes Helm's write a no-op.
+    # makes Helm's write a no-op while the deployment sits at that floor.
+    #
+    # It does not preserve an active scale-up. A deployment the autoscaler has
+    # taken above its floor is still written down to the floor on the next
+    # upgrade, and the autoscaler has to climb again. Bounding the drop at the
+    # floor is the most a caller of this chart can do: the field is rendered
+    # unconditionally, so no value omits it, and reading the live replica count
+    # back into the plan would make every plan depend on current cluster state.
+    # Fixing it properly means the chart guarding spec.replicas on whether an
+    # autoscaler owns the deployment.
 
     multiMain = {
       enabled  = true

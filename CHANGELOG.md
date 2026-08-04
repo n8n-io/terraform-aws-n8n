@@ -75,8 +75,21 @@ this project adheres to the stability contract in
 
   All three are now wired to their autoscaler's floor
   (`n8n_main_hpa_min_replicas`, `n8n_worker_keda_min_replicas`,
-  `n8n_webhook_hpa_min_replicas`), making Helm's write a no-op. Deployments on
-  the default floors see no change, since those already matched the constant.
+  `n8n_webhook_hpa_min_replicas`), so the manifest agrees with the autoscaler on
+  where the deployment rests. Helm's write is a no-op while the deployment sits
+  at its floor.
+
+  This bounds the drop rather than eliminating it, and the distinction matters if
+  you upgrade under load. A deployment the autoscaler has taken above its floor
+  is still written back down to the floor, and still has to climb again: for
+  `examples/large` that is a webhook deployment at 80 dropping to 30 instead of
+  to 2. Bounding it at the floor is the most a caller of this chart can do, since
+  the field is rendered unconditionally and no value omits it, and reading the
+  live replica count back into the plan would make every plan depend on current
+  cluster state. Eliminating it needs the chart to guard `spec.replicas` on
+  whether an autoscaler owns the deployment, which is an upstream change.
+  Deployments resting on the default floors see no change, since those already
+  matched the constant.
 
   Verified on a live cluster rather than by inspection, because no plan-time test
   can observe a `helm upgrade`. A 3-node cluster was applied from the previous
@@ -96,7 +109,9 @@ this project adheres to the stability contract in
   add, 1 to change, 0 to destroy`, an in-place `helm_release` update with no
   replacement of the ALB, RDS instance, KMS key or any PVC, and moved the stored
   manifest to 5 and 3. A second, pod-churning upgrade of the same duration as the
-  one that collapsed (1m45s) held every one of 48 samples steady.
+  one that collapsed (1m45s) held every one of 48 samples steady. Both runs had
+  the deployments resting at their floors, which is the case the fix closes; the
+  above-the-floor case described above was not exercised on the cluster.
 
   A no-op re-apply does **not** show the defect, since Terraform only runs
   `helm upgrade` when the values change. It takes a real config change or version
@@ -128,8 +143,9 @@ this project adheres to the stability contract in
   plan is a hard error rather than a warning and a data source read is exactly
   what Terraform can defer to apply. An advisory hint must not be able to break
   a plan. Verified against `ec2:DescribeInstanceTypes` across all 1,150 types
-  offered in eu-west-1: exact for 995, silent for the 104 bare-metal sizes, and
-  biased toward silence rather than false alarms on the rest. New section in
+  offered in eu-west-1: exact for 995, silent for the 104 bare-metal sizes,
+  over-counted on 48 (which costs a warning rather than raising a false one), and
+  under-counted on 3 legacy types that can warn a hair early. New section in
   README.md, "Sizing autoscaling against node capacity", documents the
   arithmetic.
 

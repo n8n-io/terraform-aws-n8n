@@ -183,7 +183,8 @@ Six runnable examples ship with the module: three sizing tiers (`small`, `medium
 | DB IOPS ceiling | 150 baseline / 3,000 burst | 3,000 baseline (gp3) | None — I/O-Optimized |
 | PgBouncer | No | No | Yes — 2 replicas |
 | Redis | cache.t3.medium | cache.r6g.large | cache.r6g.large |
-| Webhook pods min / max | 2 / 50 | 5 / 50 | 30 / 80 |
+| Main pods min / max | 2 / 6 | 3 / 24 | 6 / 60 |
+| Webhook pods min / max | 2 / 8 | 5 / 50 | 30 / 80 |
 | Worker pods min / max | 1 / 10 | 5 / 40 | 20 / 160 |
 | Worker concurrency | 10 | 20 | 40 |
 | Execution concurrency limit | 100 | 200 | 2,000 |
@@ -561,8 +562,11 @@ The check derives vCPU from the instance size rather than calling the EC2 API,
 so that an undeterminable value can never turn an advisory warning into a failed
 plan. It is exact for 995 of the 1,150 instance types EC2 currently offers in
 eu-west-1. Bare-metal sizes silence the check entirely, as does a CPU request in
-a form the module cannot parse; the remaining deviations are legacy and 1 vCPU
-families that make the check quieter, not noisier.
+a form the module cannot parse. Of the remaining deviations, the 1 vCPU families
+and the SMT-disabled and legacy sizes are over-counted, which costs a warning
+rather than raising a false one. Three legacy types are under-counted
+(`c1.xlarge`, `c4.8xlarge`, `d2.8xlarge`), so on those the check can warn a hair
+early at the boundary.
 
 ## Reference
 
