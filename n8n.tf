@@ -76,6 +76,33 @@ resource "kubernetes_secret" "n8n_redis" {
   }
 }
 
+resource "kubernetes_manifest" "keda_redis_trigger_auth" {
+  count = var.redis_transit_encryption_enabled ? 1 : 0
+
+  manifest = {
+    apiVersion = "keda.sh/v1alpha1"
+    kind       = "TriggerAuthentication"
+    metadata = {
+      name      = "n8n-redis-trigger-auth"
+      namespace = kubernetes_namespace.n8n.metadata[0].name
+    }
+    spec = {
+      secretTargetRef = [
+        {
+          parameter = "password"
+          name      = kubernetes_secret.n8n_redis[0].metadata[0].name
+          key       = "password"
+        }
+      ]
+    }
+  }
+
+  depends_on = [
+    helm_release.keda,
+    kubernetes_secret.n8n_redis,
+  ]
+}
+
 # ── Helm release ──────────────────────────────────────────────────────────────
 
 resource "helm_release" "n8n" {
@@ -205,18 +232,6 @@ resource "helm_release" "n8n" {
     # workers waiting for a task runner). KEDA takes the MAX of both.
     # Webhook processor HPA is created externally in scaling.tf (chart skips it
     # when keda.enabled = true).
-    #
-    # KNOWN GAP when redis_transit_encryption_enabled = true: these triggers
-    # carry neither TLS nor credentials. Observed on a live cluster, the first
-    # thing to break is TLS, not auth — KEDA opens a plaintext connection to the
-    # TLS-only endpoint and hangs (`connection to redis failed: i/o timeout`),
-    # so it never gets far enough to be rejected for missing credentials. The
-    # HPA then reports its metric as <unknown> and workers hold their current
-    # replica count. Nothing crashes, which is what makes it easy to miss.
-    #
-    # Fixing it needs `enableTLS` in this metadata block first, then credentials
-    # via either a TriggerAuthentication CRD or a passwordFromEnv indirection —
-    # see https://github.com/n8n-io/terraform-aws-n8n/issues/66.
     keda = {
       enabled = true
       worker = {
@@ -227,21 +242,27 @@ resource "helm_release" "n8n" {
         triggers = [
           {
             type = "redis"
-            metadata = {
-              address    = "${local.redis_host}:6379"
-              listName   = "bull:jobs:wait"
-              listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
-            }
-            authenticationRef = { name = "" }
+            metadata = merge(
+              {
+                address    = "${local.redis_host}:6379"
+                listName   = "bull:jobs:wait"
+                listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
+              },
+              var.redis_transit_encryption_enabled ? { enableTLS = "true" } : {}
+            )
+            authenticationRef = { name = var.redis_transit_encryption_enabled ? "n8n-redis-trigger-auth" : "" }
           },
           {
             type = "redis"
-            metadata = {
-              address    = "${local.redis_host}:6379"
-              listName   = "bull:jobs:active"
-              listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
-            }
-            authenticationRef = { name = "" }
+            metadata = merge(
+              {
+                address    = "${local.redis_host}:6379"
+                listName   = "bull:jobs:active"
+                listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
+              },
+              var.redis_transit_encryption_enabled ? { enableTLS = "true" } : {}
+            )
+            authenticationRef = { name = var.redis_transit_encryption_enabled ? "n8n-redis-trigger-auth" : "" }
           }
         ]
       }
