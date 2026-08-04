@@ -207,12 +207,16 @@ resource "helm_release" "n8n" {
     # when keda.enabled = true).
     #
     # KNOWN GAP when redis_transit_encryption_enabled = true: these triggers
-    # carry neither TLS nor credentials, so against a TLS+AUTH Redis the
-    # queue-depth read fails and workers hold a static count between
-    # minReplicaCount and maxReplicaCount. Nothing crashes, which is what makes
-    # it easy to miss. KEDA takes credentials via a TriggerAuthentication CRD or
-    # a passwordFromEnv indirection, neither of which is wired yet — see
-    # https://github.com/n8n-io/terraform-aws-n8n/issues/66.
+    # carry neither TLS nor credentials. Observed on a live cluster, the first
+    # thing to break is TLS, not auth — KEDA opens a plaintext connection to the
+    # TLS-only endpoint and hangs (`connection to redis failed: i/o timeout`),
+    # so it never gets far enough to be rejected for missing credentials. The
+    # HPA then reports its metric as <unknown> and workers hold their current
+    # replica count. Nothing crashes, which is what makes it easy to miss.
+    #
+    # Fixing it needs `enableTLS` in this metadata block first, then credentials
+    # via either a TriggerAuthentication CRD or a passwordFromEnv indirection —
+    # see https://github.com/n8n-io/terraform-aws-n8n/issues/66.
     keda = {
       enabled = true
       worker = {

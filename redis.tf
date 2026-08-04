@@ -89,7 +89,26 @@ resource "aws_elasticache_cluster" "n8n" {
 resource "aws_elasticache_replication_group" "n8n" {
   count = var.redis_transit_encryption_enabled ? 1 : 0
 
-  replication_group_id = "${local.cluster_name}-redis"
+  # Deliberately NOT "<cluster_name>-redis", which is what the cluster above
+  # uses. ElastiCache shares one identifier namespace between cache clusters and
+  # replication groups, and rejects a second resource reusing the name:
+  #
+  #   InvalidParameterValue: Cannot have a cluster and replication group with
+  #   same identifier. Please use a different identifier.
+  #
+  # These are two independent resources, so Terraform is free to create this one
+  # while the cluster still exists. With a shared name, flipping the variable
+  # destroys the old cache and then fails to create the replacement, leaving the
+  # deployment with no queue backend at all and needing a second apply to
+  # recover. Confirmed against a live cluster, not reasoned about — the failed
+  # apply is what put this comment here.
+  #
+  # A distinct suffix removes the ordering hazard in both directions, so
+  # enabling and disabling the flag are both single-apply operations.
+  #
+  # Length: replication group IDs cap at 40 characters. cluster_name is capped
+  # at 14 by its own validation, so 14 + 10 = 24 leaves ample headroom.
+  replication_group_id = "${local.cluster_name}-redis-tls"
   description          = "n8n queue backend (TLS + AUTH) for ${local.cluster_name}"
   engine               = "redis"
   engine_version       = "7.1"
@@ -112,5 +131,5 @@ resource "aws_elasticache_replication_group" "n8n" {
   # breaking every pod that has not yet been restarted with the new value.
   auth_token_update_strategy = "ROTATE"
 
-  tags = merge(local.common_tags, { Name = "${local.cluster_name}-redis" })
+  tags = merge(local.common_tags, { Name = "${local.cluster_name}-redis-tls" })
 }

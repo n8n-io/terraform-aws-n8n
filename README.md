@@ -474,11 +474,16 @@ downstream reads the module's internal `redis_host` local and why the
 
 ### Known limitation: worker autoscaling
 
-KEDA's worker autoscaler does not yet authenticate to Redis. Its trigger carries
-neither TLS nor credentials, so while this flag is on, KEDA cannot read queue
-depth: **workers stop scaling on backlog** and hold a static count between
-`n8n_worker_keda_min_replicas` and `n8n_worker_keda_max_replicas`. Nothing
-crashes and the pods stay healthy, which is what makes this easy to miss.
+KEDA's worker autoscaler cannot reach an encrypted Redis. Its trigger is
+configured with neither TLS nor credentials, so it opens a plaintext connection
+to a TLS-only endpoint and hangs until it times out — the KEDA operator logs
+`connection to redis failed: i/o timeout`, and the generated HPA reports its
+queue-depth metric as `<unknown>`.
+
+The practical effect: **workers stop scaling on backlog** and hold whatever
+replica count they currently have, bounded by `n8n_worker_keda_min_replicas` and
+`n8n_worker_keda_max_replicas`. Nothing crashes, n8n itself is unaffected, and
+the pods stay healthy — which is exactly what makes this easy to miss.
 
 Until [#66](https://github.com/n8n-io/terraform-aws-n8n/issues/66) lands, this
 flag trades queue-depth autoscaling for encryption and authentication. If your

@@ -992,6 +992,30 @@ run "redis_transit_encryption_on_swaps_to_replication_group" {
   }
 }
 
+# ElastiCache shares one identifier namespace between cache clusters and
+# replication groups. The two resources here are independent, so Terraform will
+# happily create the replication group while the old cluster still exists — and
+# with a shared identifier AWS rejects it:
+#
+#   InvalidParameterValue: Cannot have a cluster and replication group with
+#   same identifier.
+#
+# The old cache is already destroyed by that point, so the caller is left with
+# no queue backend and a failed apply. Found on a live cluster, and cheap enough
+# to pin here that it should never be found that way twice.
+run "redis_identifiers_must_not_collide_across_paths" {
+  command = plan
+
+  variables {
+    redis_transit_encryption_enabled = true
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].replication_group_id == "n8n-cluster-redis-tls"
+    error_message = "The replication group must not reuse the cache cluster's identifier — ElastiCache rejects the create, after the old cache has already been destroyed."
+  }
+}
+
 # The AUTH token charset is not a free choice: ElastiCache rejects anything
 # outside ! & # $ ^ < > - at create time, and the failure surfaces as an opaque
 # InvalidParameterValue from AWS well into the apply. Asserting the generator's

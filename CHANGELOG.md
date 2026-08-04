@@ -87,12 +87,24 @@ this project adheres to the stability contract in
   on main, worker and webhook processor, and as a new sensitive
   `redis_auth_token` output (`terraform output -raw redis_auth_token`).
 
-  **Known limitation:** KEDA's worker autoscaler does not yet authenticate to
-  Redis. Its trigger carries neither TLS nor credentials, so while this flag is
-  on, queue-depth autoscaling stops responding to backlog and workers hold a
-  static count between `n8n_worker_keda_min_replicas` and
-  `n8n_worker_keda_max_replicas`. Nothing crashes, which is what makes it easy
-  to miss. Tracked in
+  The two paths deliberately use **different ElastiCache identifiers**
+  (`<cluster_name>-redis` and `<cluster_name>-redis-tls`). ElastiCache shares a
+  single identifier namespace between cache clusters and replication groups, and
+  the two Terraform resources have no dependency on each other, so reusing one
+  name let Terraform destroy the old cache and then fail to create its
+  replacement — leaving the deployment with no queue backend and requiring a
+  second apply to recover. Distinct names make enabling and disabling the flag
+  single-apply operations in both directions. Found by applying against a live
+  cluster; a plan-time test cannot see it.
+
+  **Known limitation:** KEDA's worker autoscaler cannot reach an encrypted
+  Redis. Its trigger carries neither TLS nor credentials, so it opens a
+  plaintext connection to the TLS-only endpoint and hangs — the operator logs
+  `connection to redis failed: i/o timeout` and the generated HPA reports its
+  queue-depth metric as `<unknown>`. Workers then hold their current replica
+  count within `n8n_worker_keda_min_replicas` / `n8n_worker_keda_max_replicas`
+  instead of tracking backlog. n8n itself is unaffected and nothing crashes,
+  which is what makes it easy to miss. Tracked in
   [#66](https://github.com/n8n-io/terraform-aws-n8n/issues/66); until that
   lands, treat this flag as trading queue-depth autoscaling for encryption and
   authentication.
