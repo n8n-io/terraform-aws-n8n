@@ -66,7 +66,7 @@ output "redis_endpoint" {
 }
 
 output "s3_bucket_name" {
-  description = "S3 bucket used for n8n binary storage"
+  description = "S3 bucket used for n8n binary storage, and for execution data when n8n_execution_data_storage_mode = \"s3\". The module attaches no lifecycle configuration: binary data is pruned only by S3 while execution data is pruned by n8n itself, and the two cannot be separated by a prefix filter. Read the S3 lifecycle section of the README before attaching one."
   value       = aws_s3_bucket.n8n.bucket
 }
 

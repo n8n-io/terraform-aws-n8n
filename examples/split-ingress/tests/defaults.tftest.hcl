@@ -293,3 +293,21 @@ run "admin_inbound_cidrs_apply_to_the_internal_alb_only" {
   }
 }
 
+run "execution_data_storage_mode_defaults_to_database" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_execution_data_storage_mode == "database"
+    error_message = "Example must default to database storage; s3 needs an n8n >= 2.27 image and the feat:executionDataS3 entitlement, so it cannot be the default."
+  }
+}
+
+run "execution_data_storage_mode_rejects_filesystem" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "filesystem"
+  }
+
+  expect_failures = [var.n8n_execution_data_storage_mode]
+}

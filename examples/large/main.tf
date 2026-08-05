@@ -73,6 +73,17 @@ module "n8n" {
   n8n_license_key = var.n8n_license_key
   n8n_image_tag   = var.n8n_image_tag
 
+  # ── Execution data ────────────────────────────────────────────────────────────
+  # Left at "database" so this example works on any license. At this tier's
+  # volume, execution-data writes are usually the dominant write load on the
+  # database, so "s3" is the first lever to reach for when Aurora is the
+  # bottleneck. It reuses the bucket and Pod Identity role the module already
+  # creates for binary data, so nothing else changes. Read the execution data
+  # section of the root README first: it needs n8n >= 2.27 and an Enterprise
+  # license, it does not backfill, and it changes the durability posture of
+  # execution history.
+  n8n_execution_data_storage_mode = var.n8n_execution_data_storage_mode
+
   # ── External database (Aurora) via PgBouncer ──────────────────────────────────
   # Aurora is created in aurora.tf, PgBouncer in pgbouncer.tf. n8n connects to
   # the PgBouncer ClusterIP service in the `pgbouncer` namespace; PgBouncer

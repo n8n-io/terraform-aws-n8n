@@ -212,6 +212,73 @@ this project adheres to the stability contract in
   current effective policy (or to `ELBSecurityPolicy-2016-08` to keep prior
   behavior verbatim) if you need to defer this change.
 
+- `n8n_execution_data_storage_mode` input (default `"database"`, accepts
+  `"s3"`) maps to `N8N_EXECUTION_DATA_STORAGE_MODE`, the second S3 offload mode
+  n8n added in 2.27 ([n8n#32226](https://github.com/n8n-io/n8n/pull/32226)).
+  With `"s3"` the data of each new execution is written to the module's existing
+  S3 bucket as
+  `workflows/{workflowId}/executions/{executionId}/execution_data/bundle.json`
+  instead of into PostgreSQL. Execution-data writes are usually the dominant
+  write load on the n8n database at volume, so this is the main lever for
+  relieving RDS pressure in the queue-mode topology this module deploys.
+
+  Nothing new is provisioned: the bucket, IAM policy, Pod Identity role, and
+  `N8N_EXTERNAL_STORAGE_S3_*` connection already exist for binary data and are
+  reused as-is. The pinned Helm chart has no value for this (its `s3.storage`
+  block covers binary data only), so the env var goes through
+  `config.extraEnv`, which reaches main, worker, and webhook-processor pods, as
+  the n8n docs require in queue mode. Requires n8n >= 2.27 (pin
+  `n8n_image_tag`) and an Enterprise license carrying `feat:executionDataS3`,
+  which is a distinct entitlement from the `feat:binaryDataS3` the module's
+  always-on binary data offload relies on; n8n refuses to start in `s3` mode
+  without it. There is no
+  backfill, and switching modes is non-destructive in both directions.
+  `"filesystem"`, valid in n8n itself, is rejected: pod filesystems are
+  ephemeral and unshared here. Default `"database"` emits no env var at all, so
+  this is a no-op diff for existing deployments. Resolves
+  [issue #47](https://github.com/n8n-io/terraform-aws-n8n/issues/47).
+
+  **Upgrade note (breaking):** the env var name is now reserved. Unlike the
+  other names the module took over, this one was *not* previously blocked by the
+  `n8n_extra_env` guard: it matches none of the guard prefixes and was absent
+  from the exact-match list, so callers could and did opt into `s3` mode through
+  the escape hatch. Those configurations now fail variable validation at plan
+  time and must move the value to `n8n_execution_data_storage_mode`. The
+  behaviour is identical once moved, and the error message names the input, but
+  this makes the change a minor-version boundary under
+  [Stability & versioning](./README.md#stability--versioning), not a patch.
+
+  A plan-time `check` block warns when the mode is `"s3"` while `n8n_image_tag`
+  is pinned below 2.27. Older versions ignore the env var outright: pods start
+  clean and execution data silently keeps going to PostgreSQL.
+
+  Note the durability trade-off, documented in the README: `"s3"` moves
+  execution data off RDS, which this module gives 7 days of automated backups
+  and point-in-time recovery by default (`db_backup_retention_period`), and onto
+  a bucket with no versioning, no backups, and `force_destroy = true`. A
+  `terraform destroy` therefore takes execution history with it, and there is no
+  recovery path. That was already true of binary attachments; `"s3"` extends it
+  to execution history.
+
+  Documented alongside it: the module still creates **no** S3 lifecycle
+  configuration, and once execution data shares the bucket it cannot safely
+  create one. Binary data (`.../binary_data/{fileId}`) is pruned *only* by S3,
+  because n8n delegates it; execution data (`.../execution_data/bundle.json`)
+  is pruned by n8n itself and a lifecycle rule can delete bundles it still
+  references. The two cannot be separated by a rule, either: S3 lifecycle
+  filters match a literal key prefix with no wildcards, both layouts share
+  `workflows/{wf}/executions/{exec}/`, and n8n tags neither object. See the new
+  "Execution data in S3" section in `README.md` for the trade-off a caller has
+  to pick between.
+
+  All six examples expose the input as a passthrough, each left at `"database"`
+  so they apply unchanged. `large` has the most execution-data volume, but the
+  least room for it is at the bottom: `small`, `cloudflare`, `godaddy` and
+  `split-ingress` all run `db.t3.small` on 50 GB of gp2 with a 150 IOPS
+  baseline, against Aurora I/O-Optimized with no IOPS ceiling at the top tier.
+  Every example gains a test rejecting `"filesystem"`; the three that can run a
+  full mocked plan (`cloudflare`, `godaddy`, `split-ingress`) also assert the
+  `"database"` default.
 - `n8n_license_detach_floating_on_shutdown` input (default `false`) maps to
   `N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN`, overriding n8n's own upstream
   default of `true`. In multi-main (the module default), the leader main

@@ -30,3 +30,16 @@ n8n_license_key = "your-enterprise-license-key-here"
 #   Environment = "production"
 #   Owner       = "platform-team"
 # }
+
+# Where n8n stores execution data. Default "database" keeps it in PostgreSQL.
+# "s3" offloads every new execution to the bucket the module already creates for
+# binary data. This example runs the module's default db.t3.small on 50 GB of gp2
+# with a 150 IOPS baseline, the least room of any sizing this module ships, so
+# reach for this before resizing the database. It needs n8n >= 2.27 and an
+# Enterprise license with the feat:executionDataS3 entitlement, and it does not
+# backfill: existing executions stay readable where they were written. Read the
+# execution data section of the root README first, including the durability
+# trade-off (the bucket has no backups and no versioning) and the S3 lifecycle
+# constraint.
+# n8n_execution_data_storage_mode = "s3"
+# n8n_image_tag                   = "2.27.4"

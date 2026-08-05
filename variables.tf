@@ -421,6 +421,18 @@ variable "n8n_pruning_max_count" {
   default     = 10000
 }
 
+variable "n8n_execution_data_storage_mode" {
+  description = "Where n8n stores the data of each new execution. Maps to N8N_EXECUTION_DATA_STORAGE_MODE. \"database\" (the default) keeps execution data in PostgreSQL, matching n8n's own default, and emits no env var. \"s3\" offloads it to the module's S3 bucket, reusing the same bucket and N8N_EXTERNAL_STORAGE_S3_* connection that binary data mode already uses, so no extra bucket, IAM policy, or credentials are needed. Execution-data writes are usually the dominant write load on the n8n database at volume, so s3 is the main lever for relieving RDS pressure. Requires n8n >= 2.27 (pin n8n_image_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is a different entitlement from the feat:binaryDataS3 one the always-on binary data offload uses: n8n refuses to start in s3 mode without it. There is no backfill: existing executions stay readable where they were written, and only new executions go to S3, under workflows/{workflowId}/executions/{executionId}/execution_data/bundle.json. n8n prunes those objects itself as part of the executions hard-delete path (see n8n_pruning_max_age / n8n_pruning_max_count), so do NOT add an S3 lifecycle rule that can reach execution_data/ objects (see the S3 lifecycle section in the README). Note the durability trade-off: RDS gets automated backups and point-in-time recovery (db_backup_retention_period, default 7 days) while the bucket has no versioning, no backups, and force_destroy = true, so in s3 mode a terraform destroy takes execution history with it. See the durability section in the README. \"filesystem\" is deliberately not accepted: pod filesystems are ephemeral and unshared in this module's queue-mode topology, so execution data written there would be lost on reschedule and invisible to the other pods. See https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/use-external-storage."
+  type        = string
+  default     = "database"
+  nullable    = false
+
+  validation {
+    condition     = contains(["database", "s3"], var.n8n_execution_data_storage_mode)
+    error_message = "n8n_execution_data_storage_mode must be either \"database\" (n8n's default, execution data in PostgreSQL) or \"s3\" (execution data offloaded to the module's S3 bucket). \"filesystem\" is not supported by this module: pod filesystems are ephemeral and unshared in queue mode."
+  }
+}
+
 # ── Graceful shutdown ─────────────────────────────────────────────────────────
 
 variable "n8n_termination_grace_period" {

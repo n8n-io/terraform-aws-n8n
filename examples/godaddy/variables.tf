@@ -59,6 +59,18 @@ variable "n8n_image_tag" {
   }
 }
 
+variable "n8n_execution_data_storage_mode" {
+  description = "Where n8n stores the data of each new execution. Passed to the module's n8n_execution_data_storage_mode. \"database\" keeps execution data in PostgreSQL; \"s3\" offloads it to the S3 bucket the module already creates for binary data. This example runs the module's default database (db.t3.small on 50 GB of gp2, a 150 IOPS baseline), which has the least room of any sizing this module ships to absorb execution-data growth, so reaching for this is often cheaper than resizing the database. Requires n8n >= 2.27 (pin n8n_image_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is not the same one binary data offload uses. There is no backfill: existing executions stay readable where they were written. Read the execution data section of the root README before enabling it, in particular the durability trade-off and the S3 lifecycle constraint."
+  type        = string
+  default     = "database"
+  nullable    = false
+
+  validation {
+    condition     = contains(["database", "s3"], var.n8n_execution_data_storage_mode)
+    error_message = "n8n_execution_data_storage_mode must be either \"database\" or \"s3\"."
+  }
+}
+
 variable "tags" {
   description = "Additional AWS tags to apply to all resources this example creates. Merged on top of the built-in ManagedBy/Project tags."
   type        = map(string)

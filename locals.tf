@@ -145,6 +145,11 @@ locals {
     "N8N_OTEL_TRACES_PRODUCTION_ONLY",
     "N8N_LOG_STREAMING_MANAGED_BY_ENV",
     "N8N_LOG_STREAMING_DESTINATIONS",
+    # Owned by var.n8n_execution_data_storage_mode. Listed even though the module
+    # only emits it in "s3" mode: an extraEnv override would flip execution data
+    # onto S3 (or off it) without the input saying so, and in s3 mode without a
+    # licensed n8n every pod refuses to start.
+    "N8N_EXECUTION_DATA_STORAGE_MODE",
     # Rendered by the chart from module values (identity, topology, storage,
     # license). DB_*, QUEUE_*, N8N_RUNNERS_*, N8N_EXTERNAL_STORAGE_S3_*,
     # N8N_MULTI_MAIN_*, and AWS_* are covered by n8n_managed_env_prefixes.
