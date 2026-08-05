@@ -527,6 +527,16 @@ resource "helm_release" "n8n" {
       enabled      = true
       minAvailable = 1
     }
+
+    # ── Extra volumes ─────────────────────────────────────────────────────────
+    # Rendered onto main, worker and webhook-processor alike. Both default to an
+    # empty list, which is also the chart's default, so an unset caller sees no
+    # change. The snake_case-to-camelCase translation lives in locals.tf: the
+    # whole values string is unknown at plan time (it carries the S3 role ARN
+    # and the database endpoint), so anything asserted about it has to be
+    # reachable without reading it back off the resource.
+    extraVolumes      = local.n8n_extra_volumes
+    extraVolumeMounts = local.n8n_extra_volume_mounts
     },
     # Override the app image only where the caller asks for it; otherwise the
     # chart defaults apply untouched (docker.n8n.io/n8nio/n8n:stable). Repository
@@ -961,10 +971,28 @@ check "custom_image_tag_needs_a_task_runner_tag" {
   }
 }
 
-check "custom_extensions_path_requires_a_custom_image" {
+check "custom_extensions_path_requires_a_source" {
   assert {
-    condition     = var.n8n_custom_extensions_path != null ? var.n8n_image_repository != null : true
-    error_message = "n8n_custom_extensions_path is set but n8n_image_repository is null, so the pods run the chart's stock n8n image. Nothing in this module puts files at that path (no extraVolumeMounts input, no init container), so n8n will scan an empty or missing directory and load no nodes, silently. Point n8n_image_repository at an image that contains the compiled nodes at this path, or clear the path to silence this warning."
+    # Two ways to put nodes at the path, so the warning has to rule out both:
+    # a custom image that baked them in, or a volume mounted at or above it.
+    condition = var.n8n_custom_extensions_path != null ? (
+      var.n8n_image_repository != null ? true : anytrue([
+        for mount in var.n8n_extra_volume_mounts :
+        mount.mount_path == var.n8n_custom_extensions_path ||
+        startswith(var.n8n_custom_extensions_path, "${mount.mount_path}/")
+      ])
+    ) : true
+    error_message = "n8n_custom_extensions_path is set, but nothing in this configuration puts files there: n8n_image_repository is null, so the pods run the chart's stock image, and no n8n_extra_volume_mounts entry covers the path. n8n will scan an empty or missing directory and load no nodes, silently. Either point n8n_image_repository at an image with the compiled nodes baked in at this path, or mount a volume that carries them (see n8n_extra_volumes), or clear the path to silence this warning."
+  }
+}
+
+check "extra_volumes_should_be_mounted" {
+  assert {
+    condition = alltrue([
+      for volume in var.n8n_extra_volumes :
+      contains([for mount in var.n8n_extra_volume_mounts : mount.name], volume.name)
+    ])
+    error_message = "An n8n_extra_volumes entry is never mounted, because no n8n_extra_volume_mounts entry names it. Kubernetes accepts an unmounted volume, so the pods will start and the files will simply not be there. Add a mount for it, or drop the volume. Ignore this warning only if the volume exists for something outside the n8n container."
   }
 }
 

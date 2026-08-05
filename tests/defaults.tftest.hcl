@@ -3172,15 +3172,15 @@ run "custom_extensions_path_accepts_a_dotfile_component" {
   }
 }
 
-# Nothing in this module places files at the path without a custom image.
-run "custom_extensions_path_without_custom_image_warns" {
+# Nothing places files at the path: no custom image and no volume mount.
+run "custom_extensions_path_without_a_source_warns" {
   command = plan
 
   variables {
     n8n_custom_extensions_path = "/opt/n8n-nodes"
   }
 
-  expect_failures = [check.custom_extensions_path_requires_a_custom_image]
+  expect_failures = [check.custom_extensions_path_requires_a_source]
 }
 
 run "extra_env_rejects_custom_extensions_name" {
@@ -3377,6 +3377,250 @@ run "image_pull_secrets_without_custom_image_warns" {
   }
 
   expect_failures = [check.image_pull_secrets_need_a_custom_image]
+}
+
+# ── n8n_extra_volumes / n8n_extra_volume_mounts ───────────────────────────────
+# Every rejection below is something Kubernetes would refuse at pod admission,
+# or worse accept and then behave unexpectedly. The point of checking at plan
+# time is that the alternative is a cluster that applies and then does not run.
+
+run "extra_volumes_default_to_empty" {
+  command = plan
+
+  assert {
+    condition     = length(var.n8n_extra_volumes) == 0 && length(var.n8n_extra_volume_mounts) == 0
+    error_message = "Both extra volume inputs must default to an empty list, matching the chart's own defaults so an unset caller sees no change."
+  }
+}
+
+# The wiring test. snake_case in, chart camelCase out, and the octal string
+# converted to the integer Kubernetes wants: 0644 is 420, not 644.
+run "extra_volumes_translate_to_the_chart_shape" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      {
+        name       = "custom-nodes"
+        config_map = { name = "n8n-custom-nodes", default_mode = "0644" }
+      },
+      {
+        name                    = "shared-nodes"
+        persistent_volume_claim = { claim_name = "n8n-nodes-efs", read_only = true }
+      },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "/opt/n8n-nodes" },
+      { name = "shared-nodes", mount_path = "/opt/shared-nodes", sub_path = "nodes" },
+    ]
+  }
+
+  assert {
+    condition = local.n8n_extra_volumes[0] == {
+      name      = "custom-nodes"
+      configMap = { name = "n8n-custom-nodes", defaultMode = 420 }
+    }
+    error_message = "A config_map volume must render as configMap with defaultMode as the integer Kubernetes expects; \"0644\" is 420, and emitting 644 would be octal 1204."
+  }
+
+  assert {
+    condition = local.n8n_extra_volumes[1] == {
+      name                  = "shared-nodes"
+      persistentVolumeClaim = { claimName = "n8n-nodes-efs", readOnly = true }
+    }
+    error_message = "A persistent_volume_claim volume must render as persistentVolumeClaim/claimName."
+  }
+
+  assert {
+    condition = local.n8n_extra_volume_mounts == [
+      { name = "custom-nodes", mountPath = "/opt/n8n-nodes", readOnly = true },
+      { name = "shared-nodes", mountPath = "/opt/shared-nodes", readOnly = true, subPath = "nodes" },
+    ]
+    error_message = "Mounts must render as camelCase, keep their order, default readOnly to true, and omit subPath when it is unset rather than emitting null."
+  }
+}
+
+# The reason this input exists: nodes from a volume instead of from an image.
+# With a mount covering the path there is no warning, which is what makes the
+# volume route a supported alternative rather than a tolerated one.
+run "extra_volume_mount_satisfies_the_custom_extensions_path" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/opt/n8n-nodes"
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "/opt/n8n-nodes" },
+    ]
+  }
+
+  assert {
+    condition     = local.n8n_extra_volume_mounts[0].mountPath == var.n8n_custom_extensions_path
+    error_message = "The mount must land on the path n8n scans, otherwise the nodes are present in the pod and still never loaded."
+  }
+}
+
+# A mount above the path counts too: /opt carries /opt/n8n-nodes with it.
+run "extra_volume_mount_above_the_custom_extensions_path_satisfies_it" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/opt/n8n-nodes"
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "/opt" },
+    ]
+  }
+
+  assert {
+    condition     = length(local.n8n_extra_volume_mounts) == 1
+    error_message = "The mount must reach the chart values for the check above it to mean anything."
+  }
+}
+
+run "extra_volumes_reject_a_reserved_name" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "data", config_map = { name = "n8n-custom-nodes" } },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volumes]
+}
+
+run "extra_volumes_reject_a_repeated_name" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "one" } },
+      { name = "custom-nodes", config_map = { name = "two" } },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volumes]
+}
+
+run "extra_volumes_reject_a_volume_with_no_source" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [{ name = "custom-nodes" }]
+  }
+
+  expect_failures = [var.n8n_extra_volumes]
+}
+
+run "extra_volumes_reject_a_volume_with_two_sources" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      {
+        name       = "custom-nodes"
+        config_map = { name = "n8n-custom-nodes" }
+        secret     = { secret_name = "n8n-custom-nodes" }
+      },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volumes]
+}
+
+run "extra_volumes_reject_a_non_octal_default_mode" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes", default_mode = "0999" } },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volumes]
+}
+
+run "extra_volume_mounts_reject_an_undeclared_volume" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-noeds", mount_path = "/opt/n8n-nodes" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volume_mounts]
+}
+
+run "extra_volume_mounts_reject_a_relative_path" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "opt/n8n-nodes" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volume_mounts]
+}
+
+# The chart mounts its own `data` volume there on main pods, and two mounts on
+# one path is a pod spec the API server rejects outright.
+run "extra_volume_mounts_reject_the_chart_data_mount_path" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "/home/node/.n8n" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volume_mounts]
+}
+
+run "extra_volume_mounts_reject_a_repeated_path" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "one" } },
+      { name = "other-nodes", config_map = { name = "two" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "/opt/n8n-nodes" },
+      { name = "other-nodes", mount_path = "/opt/n8n-nodes" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volume_mounts]
+}
+
+# Accepted by Kubernetes, so it warns rather than fails: the pods come up and
+# the files are simply not where the caller expected them.
+run "unmounted_extra_volume_warns" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+  }
+
+  expect_failures = [check.extra_volumes_should_be_mounted]
 }
 
 # ── n8n_community_packages_registry ───────────────────────────────────────────

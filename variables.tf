@@ -903,7 +903,7 @@ variable "n8n_community_packages_registry" {
 }
 
 variable "n8n_custom_extensions_path" {
-  description = "Absolute path inside the n8n container that n8n scans for custom nodes at startup (e.g. \"/opt/n8n-nodes\"). Maps to N8N_CUSTOM_EXTENSIONS, and is set on every pod type (main, worker, webhook processor). This is the supported way to ship nodes baked into a custom image: since n8n 1.0 the loader no longer picks up nodes from the image's global node_modules, so a plain npm install into the image is never seen (n8n v10 migration guide, and packages/cli/src/load-nodes-and-credentials.ts). Requires n8n_image_repository, because nothing else puts files at this path: the module exposes no extraVolumeMounts. The path must be outside /home/node/.n8n, which the chart mounts over on main pods (see the validation below). Two caveats that no Terraform input can fix. First, nodes loaded this way are registered under the package name CUSTOM, so a node whose type was n8n-nodes-example.myNode when installed from npm becomes CUSTOM.myNode, and existing workflows referencing the npm-qualified type will not resolve. Second, only one directory is exposed even though n8n accepts a semicolon-separated list, because every custom directory is registered under the same CUSTOM key and each one overwrites the last, so all but the final directory are silently dropped. Leave null (the default) to omit the env var entirely."
+  description = "Absolute path inside the n8n container that n8n scans for custom nodes at startup (e.g. \"/opt/n8n-nodes\"). Maps to N8N_CUSTOM_EXTENSIONS, and is set on every pod type (main, worker, webhook processor). This is the supported way to ship nodes baked into a custom image: since n8n 1.0 the loader no longer picks up nodes from the image's global node_modules, so a plain npm install into the image is never seen (n8n v10 migration guide, and packages/cli/src/load-nodes-and-credentials.ts). Something has to put files at this path, so either set n8n_image_repository to an image that baked them in, or mount a volume that carries them with n8n_extra_volumes and n8n_extra_volume_mounts; a path with neither behind it warns at plan time. The path must be outside /home/node/.n8n, which the chart mounts over on main pods (see the validation below). Two caveats that no Terraform input can fix. First, nodes loaded this way are registered under the package name CUSTOM, so a node whose type was n8n-nodes-example.myNode when installed from npm becomes CUSTOM.myNode, and existing workflows referencing the npm-qualified type will not resolve. Second, only one directory is exposed even though n8n accepts a semicolon-separated list, because every custom directory is registered under the same CUSTOM key and each one overwrites the last, so all but the final directory are silently dropped. Leave null (the default) to omit the env var entirely."
   type        = string
   default     = null
 
@@ -937,6 +937,113 @@ variable "n8n_custom_extensions_path" {
       startswith(var.n8n_custom_extensions_path, "/home/node/.n8n/")
     )
     error_message = "n8n_custom_extensions_path must not be inside /home/node/.n8n. The chart mounts an emptyDir there on main pods, which hides whatever the image baked in, so the nodes would load on workers and webhook processors but not on mains. Use a path outside it, for example /opt/n8n-nodes."
+  }
+}
+
+variable "n8n_extra_volumes" {
+  description = "Volumes to add to the main, worker and webhook-processor pods, mapped to the chart's extraVolumes. Each entry needs a name and exactly one source: config_map, secret, or persistent_volume_claim. Those three are the sources that can carry files into a pod on their own, which is the point of the input: paired with n8n_extra_volume_mounts and n8n_custom_extensions_path, they load community nodes from a ConfigMap or a shared ReadWriteMany claim instead of from a custom image, which is the alternative to rebuilding an image for every package change. Other uses fit too, a CA bundle from a secret being the common one. default_mode is an octal string (\"0644\"), not a number, because Terraform reads a leading zero as decimal and would silently apply the wrong permissions. Volume sources beyond those three (csi, nfs, projected) are not exposed. Names must be unique, and \"data\" and \"task-runner-config\" are reserved by the chart."
+  type = list(object({
+    name = string
+    config_map = optional(object({
+      name         = string
+      default_mode = optional(string)
+    }))
+    secret = optional(object({
+      secret_name  = string
+      default_mode = optional(string)
+    }))
+    persistent_volume_claim = optional(object({
+      claim_name = string
+      read_only  = optional(bool)
+    }))
+  }))
+  default = []
+
+  validation {
+    condition = alltrue([
+      for volume in var.n8n_extra_volumes :
+      can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", volume.name)) && length(volume.name) <= 63
+    ])
+    error_message = "Every n8n_extra_volumes name must be a DNS-1123 label, which is what Kubernetes requires of a volume name: 63 characters or fewer of lowercase alphanumerics and hyphens, starting and ending with an alphanumeric (e.g. \"custom-nodes\")."
+  }
+
+  validation {
+    condition     = length(distinct([for volume in var.n8n_extra_volumes : volume.name])) == length(var.n8n_extra_volumes)
+    error_message = "n8n_extra_volumes names must be unique. Kubernetes rejects a pod spec with two volumes of the same name, so the whole release fails to render rather than one entry losing out."
+  }
+
+  validation {
+    # `data` is the chart's own volume, mounted at /home/node/.n8n on main pods.
+    # `task-runner-config` appears when taskRunners.customConfig is enabled.
+    # Reusing either name collides inside the rendered pod spec.
+    condition = alltrue([
+      for volume in var.n8n_extra_volumes :
+      !contains(["data", "task-runner-config"], volume.name)
+    ])
+    error_message = "n8n_extra_volumes must not use the names \"data\" or \"task-runner-config\". The chart declares both itself (data is the n8n home volume on main pods), and a duplicate volume name makes Kubernetes reject the whole pod spec. Pick another name."
+  }
+
+  validation {
+    condition = alltrue([
+      for volume in var.n8n_extra_volumes :
+      length([
+        for source in [volume.config_map, volume.secret, volume.persistent_volume_claim] :
+        source if source != null
+      ]) == 1
+    ])
+    error_message = "Every n8n_extra_volumes entry must set exactly one of config_map, secret or persistent_volume_claim. A volume with no source, or with two, is not a thing Kubernetes can mount."
+  }
+
+  validation {
+    # The `if` filters run before the mode is read, so an entry whose source is
+    # a persistent_volume_claim never has default_mode looked up on a null.
+    condition = alltrue([
+      for mode in concat(
+        [for volume in var.n8n_extra_volumes : volume.config_map.default_mode if volume.config_map != null],
+        [for volume in var.n8n_extra_volumes : volume.secret.default_mode if volume.secret != null],
+      ) : mode == null ? true : can(regex("^0?[0-7]{3}$", mode))
+    ])
+    error_message = "Every default_mode in n8n_extra_volumes must be a three-digit octal string, optionally with a leading zero (e.g. \"0644\" or \"755\"). It is a string on purpose: Terraform reads the number 0644 as decimal 644, which is octal 1204, so the files would land with permissions nobody asked for."
+  }
+}
+
+variable "n8n_extra_volume_mounts" {
+  description = "Where the n8n container mounts the volumes declared in n8n_extra_volumes, mapped to the chart's extraVolumeMounts. Applies to the main, worker and webhook-processor pods alike, and to the n8n container only, not the task runner sidecar. Every name here must match a name in n8n_extra_volumes, which is checked at plan time rather than left to fail at pod start. read_only defaults to true, so a mount that has to be written needs to say so. Use this with n8n_custom_extensions_path to load community nodes from a volume rather than from a custom image; when a mount covers that path, the module stops warning that the path has nothing behind it."
+  type = list(object({
+    name       = string
+    mount_path = string
+    sub_path   = optional(string)
+    read_only  = optional(bool, true)
+  }))
+  default = []
+
+  validation {
+    condition = alltrue([
+      for mount in var.n8n_extra_volume_mounts :
+      contains([for volume in var.n8n_extra_volumes : volume.name], mount.name)
+    ])
+    error_message = "Every n8n_extra_volume_mounts name must match a volume declared in n8n_extra_volumes. A mount referring to a volume that does not exist leaves the pods stuck in CreateContainerConfigError, which is a slow way to learn about a typo."
+  }
+
+  validation {
+    condition = alltrue([
+      for mount in var.n8n_extra_volume_mounts :
+      can(regex("^/[^[:space:]]*$", mount.mount_path)) && !can(regex("//|/\\.\\.?(/|$)", mount.mount_path))
+    ])
+    error_message = "Every n8n_extra_volume_mounts mount_path must be a canonical absolute path with no whitespace: no repeated slashes and no \".\" or \"..\" components (e.g. \"/opt/n8n-nodes\"). The canonical form is what makes the collision checks below comparisons rather than guesses."
+  }
+
+  validation {
+    condition = alltrue([
+      for mount in var.n8n_extra_volume_mounts :
+      mount.mount_path != "/home/node/.n8n"
+    ])
+    error_message = "n8n_extra_volume_mounts must not mount at /home/node/.n8n exactly. The chart already mounts its own `data` volume there on main pods, and Kubernetes rejects a container with two mounts on the same path, so the release would fail to apply. A path underneath it is fine, as is any path outside it."
+  }
+
+  validation {
+    condition     = length(distinct([for mount in var.n8n_extra_volume_mounts : mount.mount_path])) == length(var.n8n_extra_volume_mounts)
+    error_message = "n8n_extra_volume_mounts mount_path values must be unique. Two mounts on one path is a pod spec Kubernetes rejects outright."
   }
 }
 
