@@ -68,7 +68,7 @@ done
 after waiting out the delete timeout. The Ingress has a `deletionTimestamp` but still
 holds the `ingress.k8s.aws/resources` finalizer, and LBC logs repeat:
 
-```
+```text
 failed to delete targetGroup: ... ResourceInUse: Target group '...' is currently
 in use by a listener or a rule
 ```

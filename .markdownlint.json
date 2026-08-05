@@ -1,3 +1,6 @@
 {
-  "MD024": { "siblings_only": true }
+  "MD024": { "siblings_only": true },
+  "MD013": false,
+  "MD033": { "allowed_elements": ["a", "pre", "br"] },
+  "MD060": false
 }

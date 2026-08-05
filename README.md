@@ -600,7 +600,7 @@ single-node cluster (`<cluster_name>-redis-rg` rather than
 cache clusters and replication groups and rejects a second resource reusing the
 name:
 
-```
+```text
 InvalidParameterValue: Cannot have a cluster and replication group with
 same identifier. Please use a different identifier.
 ```
@@ -1106,7 +1106,7 @@ Two limits worth knowing before you commit to this:
     exists and raises `Unrecognized node type: n8n-nodes-example.myNode`.
   - The workflow still opens and saves. `Workflow`'s constructor deliberately
     skips unknown types rather than throwing, so nothing fails at load; the
-    editor just shows *"'<type>' is an unknown node type"*. The error arrives
+    editor just shows `"'<type>' is an unknown node type"`. The error arrives
     only when that node executes.
   - The `installed_packages` rows live in Postgres, not on the pod, so they
     survive the switch to a baked image. At startup `checkForMissingPackages`
