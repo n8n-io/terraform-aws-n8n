@@ -1,0 +1,84 @@
+# https://taskfile.dev
+#
+# Wraps the local validation loop documented in AGENTS.md so contributors
+# don't need to hand-type the module-root + per-example matrix. CI runs the
+# same underlying commands directly (see .github/workflows/terraform-tests.yml);
+# this file is a convenience wrapper, not a CI dependency.
+version: "3"
+
+vars:
+  EXAMPLES: small medium large cloudflare godaddy split-ingress
+
+env:
+  # The veksh/godaddy-dns provider requires credentials even in plan-time tests.
+  GODADDY_API_KEY: stub
+  GODADDY_API_SECRET: stub
+
+tasks:
+  fmt:
+    desc: Check Terraform formatting across the module and all examples.
+    cmds:
+      - terraform fmt -check -recursive
+
+  validate:
+    desc: terraform init + validate for the module root and every example.
+    cmds:
+      - terraform init -backend=false
+      - terraform validate
+      - for:
+          var: EXAMPLES
+          as: EXAMPLE
+        cmd: |
+          cd examples/{{.EXAMPLE}} && terraform init -backend=false && terraform validate
+
+  test:
+    desc: terraform test (plan-time, mocked providers) for the module root and every example.
+    cmds:
+      - terraform test -verbose
+      - for:
+          var: EXAMPLES
+          as: EXAMPLE
+        cmd: cd examples/{{.EXAMPLE}} && terraform test -verbose
+
+  lint:
+    desc: tflint for the module root and every example.
+    cmds:
+      - tflint --init
+      - tflint --format compact
+      - for:
+          var: EXAMPLES
+          as: EXAMPLE
+        cmd: cd examples/{{.EXAMPLE}} && tflint --init && tflint --format compact
+
+  docs:
+    desc: Check README.md is not stale relative to variables.tf/outputs.tf (module root and every example).
+    cmds:
+      - terraform-docs --output-check .
+      - for:
+          var: EXAMPLES
+          as: EXAMPLE
+        cmd: cd examples/{{.EXAMPLE}} && terraform-docs --output-check .
+
+  docs-generate:
+    desc: Regenerate README.md from variables.tf/outputs.tf (module root and every example).
+    cmds:
+      - terraform-docs .
+      - for:
+          var: EXAMPLES
+          as: EXAMPLE
+        cmd: cd examples/{{.EXAMPLE}} && terraform-docs .
+
+  markdown:
+    desc: markdownlint against README.md, docs/, and the root markdown files (not CI-gated; see .markdownlint.json).
+    cmds:
+      - markdownlint README.md CONTRIBUTING.md AGENTS.md docs/*.md
+
+  ci:
+    desc: Run the full local loop (fmt, validate, test, lint, docs, markdown) - mirrors the CI matrix, plus markdown which CI does not gate on.
+    cmds:
+      - task: fmt
+      - task: validate
+      - task: test
+      - task: lint
+      - task: docs
+      - task: markdown
