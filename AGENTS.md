@@ -341,6 +341,33 @@ cd examples/split-ingress && terraform init -backend=false && terraform validate
 A real deployment uses `terraform apply` from `examples/small/` with a
 populated `terraform.tfvars` — but **never apply from CI** in this repo.
 
+### Provider lock files
+
+`.terraform.lock.hcl` is committed at the module root and in every
+`examples/*` root module, each locked for `linux_amd64`, `linux_arm64`, and
+`darwin_arm64` (Intel macOS is intentionally out of scope). This is what lets
+`actions/cache` in `.github/workflows/terraform-tests.yml` key the provider
+plugin cache and lets repeated local `terraform init` runs skip the registry
+download.
+
+Refresh a lock file after changing a `required_providers` constraint by
+re-running the same `providers lock` invocation in that root module:
+
+```bash
+terraform providers lock -platform=linux_amd64 -platform=linux_arm64 -platform=darwin_arm64
+```
+
+On an unlocked platform (Intel macOS, Windows), `terraform init` fails with
+"no compatible checksums"; re-run the command above with your platform added
+(e.g. `-platform=darwin_amd64`) locally, without committing the result.
+
+The module root's lock file exists only to cache the dev loop and CI; it is
+never read by consumers of the published module (Terraform resolves a
+root module's own lock file, not one committed inside a dependency). That is
+why `.terraform-docs.yml` keeps `lockfile: false`: the README reference
+table must keep showing the provider *constraints* from `versions.tf`, not
+the pinned versions this lock file resolves to.
+
 ### When adding a new input
 
 1. Add it to `variables.tf` with `description`, `type`, sensible `default`
