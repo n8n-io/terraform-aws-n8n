@@ -142,10 +142,10 @@ this project adheres to the stability contract in
   [issue #53](https://github.com/n8n-io/terraform-aws-n8n/issues/53) and
   README → Custom n8n images.
 
-  Note that the pinned chart exposes no `imagePullSecrets` and the module adds
-  none, so the image must be pullable by the node group's IAM role (ECR in the
-  same account is, via the `AmazonEC2ContainerRegistryReadOnly` policy the
-  module already attaches) or be public.
+  With `n8n_image_pull_secrets` left empty, the image has to be pullable by the
+  node group's IAM role (ECR in the same account is, via the
+  `AmazonEC2ContainerRegistryReadOnly` policy the module already attaches) or
+  be public. See `n8n_image_pull_secrets` below for anything else.
 - `n8n_task_runner_image_tag` input (default `null`) pins the tag of the task
   runner sidecar image (`n8nio/runners`). The chart derives that tag from the
   n8n application image's tag, which breaks as soon as the application tag is
@@ -171,8 +171,10 @@ this project adheres to the stability contract in
   A path containing `;` is rejected: n8n splits the variable on it, and since
   every custom directory is registered under the same `CUSTOM` key with each
   overwriting the last, extra directories are silently dropped rather than
-  merged. A fourth `check` block warns when the path is set without
-  `n8n_image_repository`, since nothing else in the module puts files there.
+  merged. A path must also be canonical, since both of those rules are string
+  comparisons and `/home/node//.n8n/custom` would otherwise slip past them. A
+  `check` block warns when the path has nothing behind it: neither a custom
+  image nor an `n8n_extra_volume_mounts` entry covering it.
 
   Known limitation, documented rather than fixed: nodes loaded this way are
   registered as `CUSTOM.<node>` instead of `<npm-package>.<node>`, because
@@ -180,7 +182,7 @@ this project adheres to the stability contract in
   the custom loader's is the literal `CUSTOM`. Workflows built against a
   UI-installed copy of the same package will not resolve, so this suits new
   deployments rather than migrating an instance already using community nodes.
-- Three plan-time `check` blocks for custom-image configurations that are
+- Three plan-time `check` blocks for image and tag combinations that are
   accepted but almost certainly not intended: `n8n_image_repository` without
   `n8n_image_tag` (the chart appends its own `stable`, which private registries
   rarely publish), a custom repository and tag with task runners enabled but no
@@ -189,6 +191,45 @@ this project adheres to the stability contract in
   (silently inert). All warn rather than fail, since none can be decided with
   certainty from the inputs alone. Pinning only `n8n_image_tag`, the common
   case, trips none of them.
+- `n8n_image_pull_secrets` input (default `[]`) names existing
+  `kubernetes.io/dockerconfigjson` secrets in the namespace, so a custom image
+  can come from a private registry rather than only a public one or
+  same-account ECR. The pinned chart renders `imagePullSecrets` nowhere, not on
+  the pod spec and not on the ServiceAccount, so the module reaches them the
+  way the chart itself documents: a non-empty list makes it create the
+  ServiceAccount with the secrets attached and pass
+  `serviceAccount.create = false`. That account is named `n8n-enterprise-pull`
+  rather than the chart's `n8n-enterprise`, so turning the input on for a live
+  deployment creates it alongside the one Helm still owns instead of colliding
+  with it; the S3 Pod Identity association follows whichever name is in play.
+  Reverting to `[]` hands the account back to the chart in one apply. The
+  module takes secret names, never credentials, so no registry password lands
+  in Terraform state. A `check` block warns when secrets are set without
+  `n8n_image_repository`, since the chart's own images need none.
+
+  Cross-account ECR should not use this: its authorization tokens expire after
+  12 hours, so a pull secret holding one is stale before the next apply. Add
+  the node group role to the source registry's repository policy instead. The
+  new `node_group_role_arn` output is the principal to name there.
+- `n8n_extra_volumes` and `n8n_extra_volume_mounts` inputs (both default `[]`)
+  map to the chart's `extraVolumes` and `extraVolumeMounts` on main, worker and
+  webhook-processor pods, which makes a ConfigMap, Secret or ReadWriteMany
+  claim an alternative to rebuilding an image for every community-package
+  change. A volume takes a name and exactly one source (`config_map`, `secret`
+  or `persistent_volume_claim`), and the inputs are typed rather than raw chart
+  YAML so that plan time can reject what Kubernetes would refuse at admission:
+  a mount naming a volume that was never declared, the chart's reserved `data`
+  and `task-runner-config` names, a mount at `/home/node/.n8n` (where the chart
+  already mounts `data`), repeated names or paths, and a non-canonical or
+  trailing-slash path. `default_mode` is an octal string rather than a number,
+  because Terraform reads `0644` as decimal `644`, which is octal `1204`. A
+  `check` block warns about a declared volume that nothing mounts, which
+  Kubernetes accepts silently.
+
+  `persistence` is deliberately not exposed. Its PVC defaults to
+  `ReadWriteOnce`, which cannot serve the two main replicas this module runs
+  (let alone the HPA above them), and it never reaches workers or webhook
+  processors, so nodes kept there would load on some pod types and not others.
 - `n8n_community_packages_registry` input (default `null`) maps to
   `N8N_COMMUNITY_PACKAGES_REGISTRY`, so community packages can be installed
   from a private npm mirror rather than `registry.npmjs.org`, which helps when
