@@ -973,6 +973,18 @@ run "alb_inbound_prefix_list_ids_rejects_a_malformed_id" {
   expect_failures = [var.alb_inbound_prefix_list_ids]
 }
 
+# AWS only issues 8- or 17-hex-character IDs, so an in-between length is a
+# typo (usually a dropped character in a 17-hex ID) rather than a real list.
+run "alb_inbound_prefix_list_ids_rejects_an_intermediate_length" {
+  command = plan
+
+  variables {
+    alb_inbound_prefix_list_ids = ["pl-0123456789ab"]
+  }
+
+  expect_failures = [var.alb_inbound_prefix_list_ids]
+}
+
 run "alb_inbound_prefix_list_ids_rejects_a_non_prefix_list_id" {
   command = plan
 

@@ -211,8 +211,8 @@ variable "alb_inbound_prefix_list_ids" {
   nullable    = false
 
   validation {
-    condition     = alltrue([for id in var.alb_inbound_prefix_list_ids : can(regex("^pl-[0-9a-f]{8,17}$", id))])
-    error_message = "Each entry in alb_inbound_prefix_list_ids must be a managed prefix list ID of the form pl-xxxxxxxx (lowercase hex), not a prefix list name or ARN."
+    condition     = alltrue([for id in var.alb_inbound_prefix_list_ids : can(regex("^pl-([0-9a-f]{8}|[0-9a-f]{17})$", id))])
+    error_message = "Each entry in alb_inbound_prefix_list_ids must be a managed prefix list ID of the form pl-xxxxxxxx (8 or 17 lowercase hex characters, the two lengths AWS issues), not a prefix list name or ARN."
   }
 }
 
