@@ -287,8 +287,41 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
   `docs/destroy-cleanup.md`, `docs/upgrading-n8n.md`, `docs/pod-identity.md`,
   and `docs/helm-chart-coverage.md` cover operator-facing concerns that don't
   belong inline in `README.md`.
-- Inline comments in `.tf` files use the `# ── Section ──` banner style. Match
-  it when adding new sections.
+- Inline comments in `.tf` files use the `# ── Section ──` banner style. Every
+  `variable`/`output` block lives under one of these banners.
+  `scripts/check-variable-banners.sh` (`task banners`, local-only for now —
+  not yet wired into CI) fails if a block has no banner above it, or if a
+  banner comment doesn't match the `# ── Name ──...──` format.
+
+  **`variables.tf` banners, in file order:**
+
+  | Banner | Covers |
+  |---|---|
+  | `Common` | Naming/tagging threaded through every resource (`cluster_name`, `tags`, `namespace`) |
+  | `Foundation inputs` | Region, VPC, DNS/cert, k8s version, license — inputs the caller supplies from their own infra |
+  | `Ingress` | ALB / ingress-controller settings |
+  | `Nodes` | EKS managed node group sizing |
+  | `n8n chart` | Chart version, image tag, timeouts, logging |
+  | `n8n resource requests and limits` | CPU/memory requests and limits, one set per pod role |
+  | `Execution settings` | Worker concurrency, execution timeouts, pruning |
+  | `Graceful shutdown` | Termination grace period, prestop sleep |
+  | `Task runners` | Task runner sizing and lifecycle |
+  | `RDS PostgreSQL` | Everything database-related |
+  | `ElastiCache Redis` | Redis node sizing |
+  | `HPA: main pods` / `HPA: webhook processor pods` | CPU-based autoscaling |
+  | `Observability` | Metrics/telemetry toggles |
+  | `Community packages` | Custom-node loading, OTEL export, log streaming, the `n8n_extra_env` escape hatch |
+  | `KEDA: worker pods` | Queue-depth autoscaling |
+
+  `outputs.tf` banners: `App DNS`, `Secrets`, `Infrastructure`.
+
+  When adding a variable, file it under the banner matching what it
+  *configures* — not which feature or PR introduced it. A new OTEL sampling
+  knob belongs in `Community packages`, next to the other OTEL vars, not a new
+  one-off banner. Only add a new banner when a variable's theme doesn't fit
+  any existing section, the way `Common` didn't fit `Foundation inputs` (see
+  #81). Match the banner's dash-padding to its neighbors — copy an existing
+  banner line and rename it rather than typing dashes by hand.
 
 ### 5. Standard module files
 

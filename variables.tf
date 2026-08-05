@@ -641,6 +641,12 @@ variable "n8n_task_runner_auto_shutdown_timeout" {
   default     = 15
 }
 
+variable "n8n_task_runner_request_timeout" {
+  description = "Seconds n8n waits for a task runner to accept a Code node task. Wired to the N8N_RUNNERS_TASK_REQUEST_TIMEOUT env var on the main pod. Increase if Code nodes fail with 'task request timed out' under high concurrency (many parallel Code nodes competing for the single runner sidecar)."
+  type        = number
+  default     = 300
+}
+
 variable "n8n_task_runner_python_enabled" {
   description = "Enable the native Python runner (beta). Required for Python code execution in workflows."
   type        = bool
@@ -952,12 +958,6 @@ variable "redis_port" {
     condition     = var.redis_port == floor(var.redis_port)
     error_message = "redis_port must be a whole number."
   }
-}
-
-variable "n8n_task_runner_request_timeout" {
-  description = "Seconds n8n waits for a task runner to accept a Code node task. Wired to the N8N_RUNNERS_TASK_REQUEST_TIMEOUT env var on the main pod. Increase if Code nodes fail with 'task request timed out' under high concurrency (many parallel Code nodes competing for the single runner sidecar)."
-  type        = number
-  default     = 300
 }
 
 # ── HPA: main pods ────────────────────────────────────────────────────────────

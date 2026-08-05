@@ -50,6 +50,14 @@ tasks:
           as: EXAMPLE
         cmd: cd examples/{{.EXAMPLE}} && tflint --init && tflint --format compact
 
+  banners:
+    desc: >-
+      Check every variable/output block in variables.tf and outputs.tf sits under
+      a "# ── Section ──" banner (see AGENTS.md). Local-only for now, not yet a
+      CI-gated check.
+    cmds:
+      - ./scripts/check-variable-banners.sh
+
   docs:
     desc: Check README.md is not stale relative to variables.tf/outputs.tf (module root and every example).
     cmds:
@@ -74,11 +82,14 @@ tasks:
       - markdownlint README.md CONTRIBUTING.md AGENTS.md docs/*.md
 
   ci:
-    desc: Run the full local loop (fmt, validate, test, lint, docs, markdown) - mirrors the CI matrix, plus markdown which CI does not gate on.
+    desc: >-
+      Run the full local loop (fmt, validate, test, lint, banners, docs, markdown)
+      - mirrors the CI matrix, plus banners and markdown which CI does not gate on.
     cmds:
       - task: fmt
       - task: validate
       - task: test
       - task: lint
+      - task: banners
       - task: docs
       - task: markdown
