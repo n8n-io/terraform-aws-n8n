@@ -1407,6 +1407,18 @@ run "redis_high_availability_creates_a_failover_capable_replication_group" {
     error_message = "The replication group must honour redis_node_type"
   }
 
+  # ForceNew, so it has to be right in the release that introduces this
+  # resource. Adding it later replaces the cache for everyone already on HA.
+  #
+  # Compared against the STRING "true": the AWS provider types this attribute as
+  # a string, unlike transit_encryption_enabled next door which is a real bool.
+  # `== true` silently fails against "true", which is how this assert was first
+  # written and what the pinned-version CI run caught.
+  assert {
+    condition     = tostring(aws_elasticache_replication_group.n8n[0].at_rest_encryption_enabled) == "true"
+    error_message = "The replication group must encrypt at rest. It is free on the AWS-managed key, and at_rest_encryption_enabled is ForceNew, so turning it on after release would cost every existing HA caller their queue."
+  }
+
   # Both topologies share the subnet group and the security group, so the HA
   # path must not quietly drop the private placement or the VPC-only firewall.
   assert {

@@ -454,6 +454,13 @@ and `multi_az_enabled` so the replica lands in a second AZ rather than sharing
 the primary's fate. Both nodes use `redis_node_type`, so **the Redis line of
 the bill roughly doubles**.
 
+The replication group also sets `at_rest_encryption_enabled`, which the
+single-node cluster resource has no equivalent for. It is free on the
+AWS-managed key and is set in the same release that introduces the resource on
+purpose: the argument is ForceNew, so switching it on later would replace the
+cache for everyone already running HA. Encryption **in transit** is a separate
+concern and is not covered by this variable.
+
 ```hcl
 module "n8n" {
   # ...

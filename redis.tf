@@ -132,6 +132,20 @@ resource "aws_elasticache_replication_group" "n8n" {
   automatic_failover_enabled = true
   multi_az_enabled           = true
 
+  # Set here, in the commit that introduces this resource, precisely because it
+  # is ForceNew. Adding it later would replace the cache for everyone who had
+  # already enabled HA, which is the same trap replication_group_id above
+  # carries. It costs nothing (AWS-managed key, no KMS charge) and the
+  # single-node aws_elasticache_cluster path has no equivalent argument, so the
+  # default deployment is unaffected either way.
+  #
+  # This is at-rest only and is independent of transit encryption, which arrives
+  # with redis_transit_encryption_enabled (#41). Checkov CKV_AWS_191 additionally
+  # wants a customer-managed KMS key here; that is left unaddressed on purpose,
+  # matching how the module already treats RDS, and is a deliberate default for
+  # a getting-started template rather than an oversight.
+  at_rest_encryption_enabled = true
+
   subnet_group_name  = aws_elasticache_subnet_group.n8n[0].name
   security_group_ids = [aws_security_group.redis[0].id]
 
