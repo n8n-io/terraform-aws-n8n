@@ -85,6 +85,13 @@ run "defaults_produce_valid_plan" {
     error_message = "node_instance_type default should be t3.xlarge for multi-main workload"
   }
 
+  # Confirms desired_size still plans from var.node_desired on create. The
+  # lifecycle.ignore_changes = [scaling_config[0].desired_size] added for issue
+  # #50 only suppresses drift against *real* state once the Cluster Autoscaler
+  # has changed the live desired_size out-of-band — a mocked plan-time test has
+  # no prior state to diverge from, so it cannot exercise that behavior. It is
+  # verified by a live apply, a manual scale event (or CA-driven scale), and a
+  # follow-up `terraform plan` showing no changes to desired_size.
   assert {
     condition     = aws_eks_node_group.n8n.scaling_config[0].desired_size == 3
     error_message = "node_desired should default to 3 (multi-main minimum)"

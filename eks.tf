@@ -108,6 +108,13 @@ resource "aws_eks_node_group" "n8n" {
     aws_iam_role_policy_attachment.nodes_cni,
     aws_iam_role_policy_attachment.nodes_ecr,
   ]
+
+  # The Cluster Autoscaler owns desired_size after creation (see tags above).
+  # Without this, every plan after an autoscaler scaling event tries to reset
+  # desired_size back to var.node_desired, and applying that drains live nodes.
+  lifecycle {
+    ignore_changes = [scaling_config[0].desired_size]
+  }
 }
 
 # ── EKS Pod Identity Agent ────────────────────────────────────────────────────

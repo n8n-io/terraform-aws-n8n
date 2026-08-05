@@ -9,6 +9,20 @@ this project adheres to the stability contract in
 
 ### Fixed
 
+- `aws_eks_node_group.n8n` no longer fights the Cluster Autoscaler over
+  `desired_size`. The node group is tagged for autoscaler auto-discovery
+  (`k8s.io/cluster-autoscaler/enabled`), but Terraform still tracked
+  `desired_size` as authoritative. Once the autoscaler moved the live count
+  away from `var.node_desired`, every subsequent plan proposed resetting it
+  back down, and applying that drains live nodes: reported in
+  [#50](https://github.com/n8n-io/terraform-aws-n8n/issues/50) on module
+  0.2.0, an apply
+  during an HPA scale-up event reset `desired_size` from 6 to 3, draining 3
+  nodes mid-rollout and evicting n8n pods. `scaling_config[0].desired_size`
+  is now in the node group's `lifecycle.ignore_changes`, the standard pattern
+  for autoscaler-managed node groups. `node_desired` now only sets the size at
+  creation; its description was updated to say so.
+
 - The module-managed Ingress routed only `/webhook` to the webhook processors.
   n8n disables five endpoint families on the main pods when
   `disableProductionWebhooksOnMainProcess` is set, which this module always
