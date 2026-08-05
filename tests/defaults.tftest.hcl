@@ -578,8 +578,8 @@ run "all_webhook_prefixes_route_to_the_webhook_processor" {
 # ── Ingress annotations ──────────────────────────────────────────────────────
 # The escape hatch that keeps callers off a fork: the AWS Load Balancer
 # Controller has far more annotations than this module should ever mint
-# variables for (WAF, SSL policy, subnet pinning, ALB group sharing, access
-# logs). Caller entries merge over the module defaults, last write wins.
+# variables for (WAF, subnet pinning, ALB group sharing, access logs). Caller
+# entries merge over the module defaults, last write wins.
 
 run "ingress_annotation_defaults" {
   command = plan
@@ -593,6 +593,11 @@ run "ingress_annotation_defaults" {
     condition     = strcontains(kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/target-group-attributes"], "stickiness.enabled=true")
     error_message = "Session stickiness must remain on by default, or WebSockets break"
   }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/ssl-policy"] == "ELBSecurityPolicy-TLS13-1-2-2021-06"
+    error_message = "The default ssl-policy annotation should be pinned to a current, modern policy"
+  }
 }
 
 run "ingress_annotations_add_and_override" {
@@ -601,7 +606,6 @@ run "ingress_annotations_add_and_override" {
   variables {
     ingress_annotations = {
       "alb.ingress.kubernetes.io/wafv2-acl-arn"    = "arn:aws:wafv2:us-east-1:123456789012:regional/webacl/n8n/abc123"
-      "alb.ingress.kubernetes.io/ssl-policy"       = "ELBSecurityPolicy-TLS13-1-2-2021-06"
       "alb.ingress.kubernetes.io/healthcheck-path" = "/healthz-custom"
     }
   }
@@ -637,6 +641,47 @@ run "scheme_set_via_annotations_still_plans" {
   }
 
   expect_failures = [check.ingress_scheme_not_overridden_by_annotations]
+}
+
+# ── ALB SSL policy ───────────────────────────────────────────────────────────
+
+run "alb_ssl_policy_applies" {
+  command = plan
+
+  variables {
+    alb_ssl_policy = "ELBSecurityPolicy-TLS13-1-3-2021-06"
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/ssl-policy"] == "ELBSecurityPolicy-TLS13-1-3-2021-06"
+    error_message = "alb_ssl_policy should drive the ALB ssl-policy annotation"
+  }
+}
+
+run "alb_ssl_policy_validator_rejects_unknown_prefix" {
+  command = plan
+
+  variables {
+    alb_ssl_policy = "TLS-1-2-2021-06"
+  }
+
+  expect_failures = [var.alb_ssl_policy]
+}
+
+# Setting the policy through ingress_annotations silently beats var.alb_ssl_policy.
+# The check block warns without failing, so the plan still succeeds here.
+
+run "ssl_policy_set_via_annotations_still_plans" {
+  command = plan
+
+  variables {
+    alb_ssl_policy = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+    ingress_annotations = {
+      "alb.ingress.kubernetes.io/ssl-policy" = "ELBSecurityPolicy-2016-08"
+    }
+  }
+
+  expect_failures = [check.alb_ssl_policy_not_overridden_by_annotations]
 }
 
 # The namespace output must come from kubernetes_namespace.n8n, not from
@@ -827,9 +872,10 @@ run "backup_retention_default_does_not_warn" {
   }
 }
 
-# ingress_scheme and ingress_annotations only reach an Ingress this module
-# creates. Silently ignoring them would let a caller believe an internal scheme
-# or a WAF association had taken effect when their own Ingress carries neither.
+# ingress_scheme, alb_ssl_policy and ingress_annotations only reach an Ingress
+# this module creates. Silently ignoring them would let a caller believe an
+# internal scheme, a pinned TLS policy, or a WAF association had taken effect
+# when their own Ingress carries neither.
 
 run "ingress_tuning_with_create_ingress_false_warns" {
   command = plan
@@ -837,6 +883,17 @@ run "ingress_tuning_with_create_ingress_false_warns" {
   variables {
     create_ingress = false
     ingress_scheme = "internal"
+  }
+
+  expect_failures = [check.ingress_tuning_requires_module_managed_ingress]
+}
+
+run "alb_ssl_policy_with_create_ingress_false_warns" {
+  command = plan
+
+  variables {
+    create_ingress = false
+    alb_ssl_policy = "ELBSecurityPolicy-TLS13-1-3-2021-06"
   }
 
   expect_failures = [check.ingress_tuning_requires_module_managed_ingress]
