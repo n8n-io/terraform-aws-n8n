@@ -822,6 +822,24 @@ variable "redis_host" {
     )
     error_message = "redis_host is required, and must not be blank, when create_elasticache = false."
   }
+
+  # A padded host such as " redis.internal.example.com " survives the blank test
+  # above, because that one only inspects the trimmed value. The module consumes
+  # the RAW value: local.redis_host feeds n8n's host field and is interpolated
+  # into KEDA's "${local.redis_host}:${local.redis_port}", so the padding is
+  # emitted literally and the address never resolves. Rejected rather than
+  # trimmed in locals.tf, so that the value the caller sets is the value that
+  # gets deployed and a stray space is corrected at its source instead of being
+  # silently swallowed. Split from the blank test rather than folded into it so
+  # the two mistakes get their own error message.
+  #
+  # null passes here; the validation above owns that case.
+  validation {
+    condition = var.create_elasticache ? true : (
+      var.redis_host != null ? var.redis_host == trimspace(var.redis_host) : true
+    )
+    error_message = "redis_host must not have leading or trailing whitespace, because the module wires it into n8n and KEDA verbatim."
+  }
 }
 
 variable "redis_port" {

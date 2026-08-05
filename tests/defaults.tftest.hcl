@@ -1554,6 +1554,47 @@ run "external_redis_whitespace_host_fails_validation" {
   expect_failures = [var.redis_host]
 }
 
+# Non-empty after trimming, so the blank test passes it, but the module wires
+# the raw value into KEDA as " redis.internal.example.com :6379". Caught at plan
+# time rather than trimmed away, so the caller fixes the tfvars.
+run "external_redis_padded_host_fails_validation" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = " redis.internal.example.com "
+  }
+
+  expect_failures = [var.redis_host]
+}
+
+run "external_redis_leading_whitespace_host_fails_validation" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = "\tredis.internal.example.com"
+  }
+
+  expect_failures = [var.redis_host]
+}
+
+# The guard rejects padding, not interior structure: a legitimate host still
+# plans. Guards that overreach are as bad as guards that miss.
+run "external_redis_clean_host_still_passes_validation" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = "redis.internal.example.com"
+  }
+
+  assert {
+    condition     = local.redis_host == "redis.internal.example.com"
+    error_message = "An unpadded external host must survive validation and reach local.redis_host unchanged"
+  }
+}
+
 run "redis_port_rejects_a_value_outside_the_tcp_range" {
   command = plan
 
