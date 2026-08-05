@@ -198,6 +198,16 @@ locals {
     passwordFromEnv = "QUEUE_BULL_REDIS_PASSWORD"
   } : {}
 
+  # Rolls main, worker and webhook processor pods when the AUTH token changes.
+  # Lifted out of the Helm values for the same reason keda_redis_auth_metadata
+  # is: helm_release.values is unknown at plan time (it embeds the Redis
+  # endpoint), so this is the layer where the contract is assertable. See the
+  # long comment at the merge site in n8n.tf for why the chart's own
+  # checksum/secret cannot cover a Secret created outside the chart.
+  redis_pod_annotations = local.redis_tls_active ? {
+    "checksum/redis-auth-token" = sha256(random_password.redis_auth_token[0].result)
+  } : {}
+
   # Whether the endpoint n8n is being pointed at actually speaks TLS and demands
   # a token. Gated on create_elasticache as well as the variable, so the clients
   # can never be configured for a posture the module did not provision. A hard

@@ -1701,6 +1701,57 @@ run "transit_encryption_with_external_redis_fails_validation" {
   expect_failures = [var.redis_transit_encryption_enabled]
 }
 
+# ── AUTH token rotation rollout ──────────────────────────────────────────────
+# The token reaches pods through a Secret referenced by name, so rotating it
+# produces no Helm diff and nothing restarts. local.redis_pod_annotations is
+# what forces the rollout, and it is assertable here because helm_release.values
+# is not (it embeds the Redis endpoint and so is unknown at plan time).
+#
+# The hash itself is unknown at plan time, since random_password.result is. What
+# these pin is the shape: which paths carry the annotation at all, and that it
+# is a checksum key rather than the token.
+
+run "no_pod_annotations_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(local.redis_pod_annotations) == 0
+    error_message = "The default path must emit no podAnnotations key at all. An empty map is not the same as omitting it: the rendered values change and every existing release sees a Helm diff on upgrade."
+  }
+}
+
+run "no_pod_annotations_for_ha_without_tls" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled = true
+  }
+
+  assert {
+    condition     = length(local.redis_pod_annotations) == 0
+    error_message = "High availability alone generates no AUTH token, so there is nothing to checksum and no rollout to force"
+  }
+}
+
+run "pod_annotations_carry_the_token_checksum_when_enabled" {
+  command = plan
+
+  variables {
+    redis_transit_encryption_enabled = true
+  }
+
+  assert {
+    # contains + length rather than comparing keys() to a literal: keys()
+    # returns a list and the literal is a tuple, so == is a type mismatch that
+    # reads as a genuine assertion failure.
+    condition = (
+      length(local.redis_pod_annotations) == 1 &&
+      contains(keys(local.redis_pod_annotations), "checksum/redis-auth-token")
+    )
+    error_message = "Transit encryption must add exactly the token checksum annotation, so a rotation rolls main, worker and webhook processor pods"
+  }
+}
+
 # ── KEDA trigger auth metadata ───────────────────────────────────────────────
 # The KEDA triggers live inside helm_release.n8n.values, which is unknown at
 # plan time (it embeds the Redis endpoint). local.keda_redis_auth_metadata is

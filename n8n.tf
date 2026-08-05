@@ -595,6 +595,41 @@ resource "helm_release" "n8n" {
         var.n8n_image_tag == null ? {} : { tag = var.n8n_image_tag },
       )
     },
+    # ── Roll the pods when the AUTH token changes ─────────────────────────────
+    # kubernetes_secret.n8n_redis is referenced by NAME from redis.passwordSecret
+    # above, so its contents are not part of the rendered Helm values. Rotating
+    # the token therefore updates the Secret and the replication group but
+    # produces no Helm diff, and nothing restarts: env vars sourced from a
+    # secretKeyRef are resolved once at pod start, so every running pod keeps
+    # the old token indefinitely.
+    #
+    # auth_token_update_strategy = "ROTATE" (redis.tf) is what stops that being
+    # an immediate outage: AWS keeps the previous token valid alongside the new
+    # one. It is not a fix, only a grace period. The next rotation invalidates
+    # the token those pods are still holding, and the queue stops.
+    #
+    # The chart computes its own checksum/config and checksum/secret pod
+    # annotations, but checksum/secret hashes templates/secrets.yaml, which
+    # renders secretRefs.env only. A Secret created outside the chart, as this
+    # one is, can never move that hash. podAnnotations is the seam that works:
+    # the chart merges it into all three pod templates (main, worker, webhook
+    # processor), so a changed value rolls exactly the pods that hold the token.
+    #
+    # CAVEAT: podAnnotations is accepted by the templates but is NOT documented
+    # in the chart's values.yaml, so it is an implicit interface that could be
+    # renamed without a breaking-change note. Verified present at the pinned
+    # n8n_chart_version (1.10.0) and still present at 1.11.0. If a chart bump
+    # ever silently drops it, rotation goes back to being manual rather than
+    # breaking anything, and the test in defaults.tftest.hcl pins the shape.
+    #
+    # The hash, never the token: annotations are readable by anyone who can get
+    # a pod, and sha256 is enough to change when the token changes.
+    #
+    # Merged conditionally rather than emitted as an empty map, for the same
+    # reason redis.timeout is: a default deployment must render byte-identical
+    # values to what it renders today, or every existing release sees a Helm
+    # diff on upgrade.
+    local.redis_tls_active ? { podAnnotations = local.redis_pod_annotations } : {},
   ))]
 
   depends_on = [
