@@ -142,6 +142,26 @@ locals {
   # both clusters in the same account and accounts with the same cluster name.
   s3_bucket_name = "n8n-${local.cluster_name}-${substr(data.aws_caller_identity.current.account_id, 6, 6)}"
 
+  # ── n8n service account ────────────────────────────────────────────────────
+  # One name with three consumers: the chart's serviceAccount.name, the Pod
+  # Identity association that grants the pods S3 access (s3.tf), and the
+  # ServiceAccount resource in n8n.tf on the branch where the module owns it.
+  # They have to agree or the pods run as an account with no S3 credentials.
+  n8n_service_account_name = "n8n-enterprise"
+
+  # The chart creating its own ServiceAccount is the arrangement we want, with
+  # one exception: neither chart 1.10.0 nor 1.11.0 renders imagePullSecrets
+  # anywhere, not on the pod spec and not on the ServiceAccount, so a private
+  # registry has no way in through chart values. Attaching the secrets to the
+  # account the pods already run as is the remaining lever, and the chart
+  # supports it: serviceAccount.create = false with an externally managed name
+  # is documented in its own values.yaml, naming Terraform as the example.
+  #
+  # So the module takes the account over, but only when there is something to
+  # attach. With the default empty list the chart keeps creating it and nothing
+  # about an existing deployment moves.
+  n8n_manages_service_account = length(var.n8n_image_pull_secrets) > 0
+
   # ── n8n_extra_env collision guard ──────────────────────────────────────────
   # config.extraEnv is appended LAST in every n8n container's env list (see the
   # n8n Helm chart's deployment-*.yaml templates), and Kubernetes resolves

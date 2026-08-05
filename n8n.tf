@@ -58,6 +58,41 @@ resource "kubernetes_secret" "n8n_db" {
   }
 }
 
+# ── Service account ───────────────────────────────────────────────────────────
+# Only created when var.n8n_image_pull_secrets is non-empty. Otherwise the chart
+# creates the account and this resource does not exist; see the note on
+# local.n8n_manages_service_account for why the module ever takes it over.
+#
+# The name matches what the chart would have used, so the Pod Identity
+# association in s3.tf keeps binding to the same account either way. The chart's
+# eks.amazonaws.com/role-arn annotation is not reproduced here on purpose: the
+# module authenticates through Pod Identity, not IRSA, and the annotation was
+# only ever passed to satisfy the chart's own template validation, which reads
+# serviceAccount.awsRoleArn from the values regardless of who creates the
+# account.
+#
+# automount_service_account_token is set explicitly because the provider
+# defaults it to false, which would be a behaviour change: the chart leaves the
+# field unset, and an unset ServiceAccount field means the pod mounts the token.
+
+resource "kubernetes_service_account_v1" "n8n" {
+  count = local.n8n_manages_service_account ? 1 : 0
+
+  metadata {
+    name      = local.n8n_service_account_name
+    namespace = kubernetes_namespace.n8n.metadata[0].name
+  }
+
+  automount_service_account_token = true
+
+  dynamic "image_pull_secret" {
+    for_each = var.n8n_image_pull_secrets
+    content {
+      name = image_pull_secret.value
+    }
+  }
+}
+
 # ── Helm release ──────────────────────────────────────────────────────────────
 
 resource "helm_release" "n8n" {
@@ -159,10 +194,12 @@ resource "helm_release" "n8n" {
 
     # S3 credentials are injected by EKS Pod Identity (s3.tf).
     # awsRoleArn is provided only to satisfy the chart's template validation —
-    # the actual auth comes from the Pod Identity agent, not IRSA.
+    # the actual auth comes from the Pod Identity agent, not IRSA. The chart
+    # requires it whenever s3.auth.autoDetect is true, independently of who
+    # creates the account, so it stays set on both branches of `create`.
     serviceAccount = {
-      create     = true
-      name       = "n8n-enterprise"
+      create     = !local.n8n_manages_service_account
+      name       = local.n8n_service_account_name
       awsRoleArn = aws_iam_role.s3.arn
     }
 
@@ -511,6 +548,7 @@ resource "helm_release" "n8n" {
     aws_elasticache_cluster.n8n,
     aws_iam_role_policy_attachment.s3,
     aws_eks_pod_identity_association.s3,
+    kubernetes_service_account_v1.n8n, # empty list unless the module owns it
   ]
 }
 
@@ -927,6 +965,13 @@ check "custom_extensions_path_requires_a_custom_image" {
   assert {
     condition     = var.n8n_custom_extensions_path != null ? var.n8n_image_repository != null : true
     error_message = "n8n_custom_extensions_path is set but n8n_image_repository is null, so the pods run the chart's stock n8n image. Nothing in this module puts files at that path (no extraVolumeMounts input, no init container), so n8n will scan an empty or missing directory and load no nodes, silently. Point n8n_image_repository at an image that contains the compiled nodes at this path, or clear the path to silence this warning."
+  }
+}
+
+check "image_pull_secrets_need_a_custom_image" {
+  assert {
+    condition     = length(var.n8n_image_pull_secrets) > 0 ? var.n8n_image_repository != null : true
+    error_message = "n8n_image_pull_secrets is set but n8n_image_repository is null, so every image the pods pull comes from a public registry: the chart's docker.n8n.io/n8nio/n8n and, with task runners on, n8nio/runners. Neither needs credentials, so the secrets are attached and never used. The cost is not zero: setting this input moves ownership of the ServiceAccount from the chart to the module. Clear it to hand the account back, or set n8n_image_repository to the private image these credentials are for."
   }
 }
 

@@ -3276,6 +3276,109 @@ run "extra_env_rejects_execution_data_storage_mode_name" {
   expect_failures = [var.n8n_extra_env]
 }
 
+# ── n8n_image_pull_secrets ────────────────────────────────────────────────────
+# The chart renders imagePullSecrets nowhere, so these reach the pods only
+# because the module takes the ServiceAccount over. The load-bearing assertion
+# is the negative one: an existing deployment must not find the chart's account
+# swapped out from under it just because this input now exists.
+
+run "image_pull_secrets_default_to_empty_and_leave_the_account_to_the_chart" {
+  command = plan
+
+  assert {
+    condition     = length(var.n8n_image_pull_secrets) == 0
+    error_message = "n8n_image_pull_secrets must default to an empty list."
+  }
+
+  assert {
+    condition     = length(kubernetes_service_account_v1.n8n) == 0
+    error_message = "With no pull secrets the module must create no ServiceAccount, leaving serviceAccount.create = true and the chart in charge."
+  }
+}
+
+run "image_pull_secrets_move_the_account_to_the_module" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "myregistry.example.com/n8n"
+    n8n_image_tag             = "2.27.4-mypackages"
+    n8n_task_runner_image_tag = "2.27.4"
+    n8n_image_pull_secrets    = ["registry-creds", "fallback-registry-creds"]
+  }
+
+  assert {
+    condition     = length(kubernetes_service_account_v1.n8n) == 1
+    error_message = "A non-empty n8n_image_pull_secrets must make the module create the ServiceAccount, because the chart has no way to carry the secrets."
+  }
+
+  # image_pull_secret is a set in the provider schema, so order proves nothing.
+  assert {
+    condition = toset([
+      for secret in kubernetes_service_account_v1.n8n[0].image_pull_secret : secret.name
+    ]) == toset(["registry-creds", "fallback-registry-creds"])
+    error_message = "Every name in n8n_image_pull_secrets must land on the ServiceAccount; a dropped one is an ImagePullBackOff at pod start."
+  }
+
+  # The name is the contract between three places: the chart's
+  # serviceAccount.name, this resource, and the Pod Identity association that
+  # grants S3 access. Drift here costs the pods their AWS credentials, and the
+  # symptom (binary data writes failing) points nowhere near the cause.
+  assert {
+    condition     = kubernetes_service_account_v1.n8n[0].metadata[0].name == aws_eks_pod_identity_association.s3.service_account
+    error_message = "The module's ServiceAccount must carry the same name the S3 Pod Identity association binds to."
+  }
+
+  # The provider defaults this to false, which the chart never does. Left
+  # unset, taking over the account would quietly stop mounting the token.
+  assert {
+    condition     = kubernetes_service_account_v1.n8n[0].automount_service_account_token
+    error_message = "The module's ServiceAccount must mount its token, matching what the chart-created account does."
+  }
+}
+
+run "image_pull_secrets_reject_a_non_dns_name" {
+  command = plan
+
+  variables {
+    n8n_image_pull_secrets = ["Not_A_Secret_Name"]
+  }
+
+  expect_failures = [var.n8n_image_pull_secrets]
+}
+
+run "image_pull_secrets_reject_an_overlong_name" {
+  command = plan
+
+  variables {
+    # 254 characters, one past the Kubernetes limit.
+    n8n_image_pull_secrets = ["a-${join("", [for i in range(84) : "abc"])}"]
+  }
+
+  expect_failures = [var.n8n_image_pull_secrets]
+}
+
+run "image_pull_secrets_reject_a_repeated_name" {
+  command = plan
+
+  variables {
+    n8n_image_pull_secrets = ["registry-creds", "registry-creds"]
+  }
+
+  expect_failures = [var.n8n_image_pull_secrets]
+}
+
+# Pointless rather than harmful, but it costs the caller the chart-owned
+# ServiceAccount for nothing, so it warns instead of passing silently.
+run "image_pull_secrets_without_custom_image_warns" {
+  command = plan
+
+  variables {
+    n8n_image_pull_secrets = ["registry-creds"]
+  }
+
+  expect_failures = [check.image_pull_secrets_need_a_custom_image]
+}
+
 # ── n8n_community_packages_registry ───────────────────────────────────────────
 
 run "community_packages_registry_defaults_to_null" {

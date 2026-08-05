@@ -32,7 +32,8 @@ run "cluster_name_length_validation_rejects_long_names" {
 }
 
 # The n8n image inputs (n8n_image_tag, n8n_image_repository,
-# n8n_task_runner_image_tag, n8n_custom_extensions_path) are intentionally
+# n8n_task_runner_image_tag, n8n_custom_extensions_path,
+# n8n_image_pull_secrets) are intentionally
 # untested here. Asserting the null default needs a successful full plan, and
 # even an expect_failures rejection run fails: unlike cluster_name, they do not
 # feed the module's DNS resources, so the dns.tf for_each error described in

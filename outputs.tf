@@ -85,6 +85,11 @@ output "cluster_certificate_authority_data" {
   value       = aws_eks_cluster.n8n.certificate_authority[0].data
 }
 
+output "node_group_role_arn" {
+  description = "IAM role ARN the EKS node group runs under, and therefore the principal the kubelet pulls container images as. Name it in a cross-account ECR repository policy to let this cluster pull a custom n8n image from a registry in another account, which is the mechanism to reach for there: an ECR authorization token lasts 12 hours, so an imagePullSecrets holding one goes stale long before the next apply. For registries that issue static credentials, use n8n_image_pull_secrets instead."
+  value       = aws_iam_role.nodes.arn
+}
+
 output "aws_region" {
   description = "AWS region"
   value       = local.aws_region

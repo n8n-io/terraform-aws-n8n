@@ -188,3 +188,22 @@ run "n8n_custom_extensions_path_rejects_a_non_canonical_path" {
 
   expect_failures = [var.n8n_custom_extensions_path]
 }
+
+run "n8n_image_pull_secrets_defaults_to_empty" {
+  command = plan
+
+  assert {
+    condition     = length(var.n8n_image_pull_secrets) == 0
+    error_message = "Example must not attach image pull secrets by default; the Helm chart should keep creating the n8n ServiceAccount."
+  }
+}
+
+run "n8n_image_pull_secrets_rejects_a_non_dns_name" {
+  command = plan
+
+  variables {
+    n8n_image_pull_secrets = ["Not_A_Secret_Name"]
+  }
+
+  expect_failures = [var.n8n_image_pull_secrets]
+}

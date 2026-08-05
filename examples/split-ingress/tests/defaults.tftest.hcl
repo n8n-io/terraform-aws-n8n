@@ -75,11 +75,12 @@ run "admin_cidr_validation_rejects_host_bits" {
   expect_failures = [var.admin_allowed_cidr_blocks]
 }
 
-# The four n8n image inputs are passthroughs, so what is worth pinning here is
-# that this example adds no opinion of its own: each one stays null so the
-# chart's defaults apply, and each one's validation reaches the caller rather
-# than being swallowed. Same runs as examples/cloudflare and examples/godaddy;
-# examples/small and examples/medium document why they cannot host them.
+# The n8n image inputs are passthroughs, so what is worth pinning here is that
+# this example adds no opinion of its own: each one keeps its inert default so
+# the chart's own settings apply, and each one's validation reaches the caller
+# rather than being swallowed. Same runs as examples/cloudflare and
+# examples/godaddy; examples/small and examples/medium document why they cannot
+# host them.
 
 run "n8n_image_tag_defaults_to_null" {
   command = plan
@@ -175,6 +176,25 @@ run "n8n_custom_extensions_path_rejects_a_non_canonical_path" {
   }
 
   expect_failures = [var.n8n_custom_extensions_path]
+}
+
+run "n8n_image_pull_secrets_defaults_to_empty" {
+  command = plan
+
+  assert {
+    condition     = length(var.n8n_image_pull_secrets) == 0
+    error_message = "Example must not attach image pull secrets by default; the Helm chart should keep creating the n8n ServiceAccount."
+  }
+}
+
+run "n8n_image_pull_secrets_rejects_a_non_dns_name" {
+  command = plan
+
+  variables {
+    n8n_image_pull_secrets = ["Not_A_Secret_Name"]
+  }
+
+  expect_failures = [var.n8n_image_pull_secrets]
 }
 
 # ── The split itself ──────────────────────────────────────────────────────────

@@ -75,6 +75,7 @@ module "n8n" {
   n8n_image_tag              = var.n8n_image_tag
   n8n_task_runner_image_tag  = var.n8n_task_runner_image_tag
   n8n_custom_extensions_path = var.n8n_custom_extensions_path
+  n8n_image_pull_secrets     = var.n8n_image_pull_secrets
 
   # ── Execution data ────────────────────────────────────────────────────────────
   # Left at "database" so this example works on any license. At this tier's
