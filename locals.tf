@@ -65,10 +65,18 @@ locals {
     "/mcp",
   ]
 
+  # Single source of truth for var.alb_ssl_policy's default, so the
+  # create_ingress = false tuning check (n8n.tf) can compare against it
+  # without a second hardcoded copy of the literal. variable "default" values
+  # must themselves be constant literals (no references to locals allowed),
+  # so variables.tf keeps its own copy of this string; keep the two in sync
+  # when changing either.
+  alb_ssl_policy_default = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+
   # Annotations on the module-managed Ingress. Callers override any of these,
-  # and add controller features the module has no opinion on (WAF ACL, SSL
-  # policy, subnet pinning, access logs, ALB group sharing), through
-  # var.ingress_annotations. Last write wins.
+  # and add controller features the module has no opinion on (WAF ACL, subnet
+  # pinning, access logs, ALB group sharing), through var.ingress_annotations.
+  # Last write wins.
   ingress_default_annotations = {
     "kubernetes.io/ingress.class"               = "alb"
     "alb.ingress.kubernetes.io/scheme"          = var.ingress_scheme
@@ -76,6 +84,7 @@ locals {
     "alb.ingress.kubernetes.io/certificate-arn" = local.certificate_arn
     "alb.ingress.kubernetes.io/listen-ports"    = jsonencode([{ HTTP = 80 }, { HTTPS = 443 }])
     "alb.ingress.kubernetes.io/ssl-redirect"    = "443"
+    "alb.ingress.kubernetes.io/ssl-policy"      = var.alb_ssl_policy
 
     "alb.ingress.kubernetes.io/load-balancer-attributes" = "idle_timeout.timeout_seconds=300"
 

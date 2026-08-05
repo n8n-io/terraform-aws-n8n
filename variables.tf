@@ -180,9 +180,20 @@ variable "ingress_scheme" {
 }
 
 variable "ingress_annotations" {
-  description = "Extra annotations for the module-managed Ingress, merged over the module's defaults (last write wins). Use this for AWS Load Balancer Controller features the module has no opinion on: alb.ingress.kubernetes.io/wafv2-acl-arn, ssl-policy, subnets, security-groups, inbound-cidrs, load-balancer-name, group.name, access log settings. Overriding alb.ingress.kubernetes.io/target-group-attributes drops the session stickiness that keeps WebSocket connections pinned to one main pod; re-include stickiness.enabled=true if you set it. Prefer ingress_scheme over setting alb.ingress.kubernetes.io/scheme here, because setting both raises a plan-time warning. Ignored when create_ingress = false."
+  description = "Extra annotations for the module-managed Ingress, merged over the module's defaults (last write wins). Use this for AWS Load Balancer Controller features the module has no opinion on: alb.ingress.kubernetes.io/wafv2-acl-arn, subnets, security-groups, inbound-cidrs, load-balancer-name, group.name, access log settings. Overriding alb.ingress.kubernetes.io/target-group-attributes drops the session stickiness that keeps WebSocket connections pinned to one main pod; re-include stickiness.enabled=true if you set it. Prefer ingress_scheme over setting alb.ingress.kubernetes.io/scheme here, and alb_ssl_policy over setting alb.ingress.kubernetes.io/ssl-policy here, because setting both raises a plan-time warning. Ignored when create_ingress = false."
   type        = map(string)
   default     = {}
+}
+
+variable "alb_ssl_policy" {
+  description = "TLS negotiation policy for the ALB HTTPS listener, wired to alb.ingress.kubernetes.io/ssl-policy. Defaults to a current, modern policy (ELBSecurityPolicy-TLS13-1-2-2021-06) so the negotiated policy is explicit and pinned in Terraform rather than left to whatever the ALB defaults to, which AWS can change without notice. Set this to any AWS-published ELB security policy name (e.g. one of the ELBSecurityPolicy-TLS13-1-2-* or ELBSecurityPolicy-FS-1-2-* families) to match a compliance baseline such as TLS 1.2 minimum or TLS 1.3-only. Ignored when create_ingress = false, or when ingress_annotations sets alb.ingress.kubernetes.io/ssl-policy directly (last write wins; the module warns when that happens)."
+  type        = string
+  default     = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+
+  validation {
+    condition     = can(regex("^ELBSecurityPolicy-", var.alb_ssl_policy))
+    error_message = "alb_ssl_policy must be an AWS-published ELB security policy name, beginning with \"ELBSecurityPolicy-\" (e.g. ELBSecurityPolicy-TLS13-1-2-2021-06)."
+  }
 }
 
 # ── Nodes ─────────────────────────────────────────────────────────────────────

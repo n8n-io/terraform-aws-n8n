@@ -596,22 +596,40 @@ check "ingress_scheme_not_overridden_by_annotations" {
   }
 }
 
+# ── ALB SSL policy conflict check ──────────────────────────────────────────
+# Same hazard as the scheme check above: ingress_annotations is merged over
+# the module defaults, so an ssl-policy set there silently wins over
+# var.alb_ssl_policy. Warn rather than let a caller believe the validated
+# variable is what is actually in effect.
+
+check "alb_ssl_policy_not_overridden_by_annotations" {
+  assert {
+    condition = !contains(keys(var.ingress_annotations), "alb.ingress.kubernetes.io/ssl-policy")
+    error_message = join("", [
+      "ingress_annotations sets alb.ingress.kubernetes.io/ssl-policy, which overrides var.alb_ssl_policy ",
+      "(currently \"${var.alb_ssl_policy}\"). The ALB will use the annotation value. ",
+      "Set the policy through var.alb_ssl_policy instead: it is validated against the ELBSecurityPolicy- prefix.",
+    ])
+  }
+}
+
 # ── Ingress tuning without a module-managed Ingress ────────────────────────
-# ingress_scheme and ingress_annotations only reach an Ingress this module
-# creates. With create_ingress = false they are inert, and silence would leave
-# a caller believing an internal scheme or a WAF association had taken effect
-# when their own Ingress carries neither.
+# ingress_scheme, alb_ssl_policy and ingress_annotations only reach an Ingress
+# this module creates. With create_ingress = false they are inert, and silence
+# would leave a caller believing an internal scheme, a pinned TLS policy, or a
+# WAF association had taken effect when their own Ingress carries neither.
 
 check "ingress_tuning_requires_module_managed_ingress" {
   assert {
     condition = var.create_ingress ? true : (
       var.ingress_scheme == "internet-facing" &&
+      var.alb_ssl_policy == local.alb_ssl_policy_default &&
       length(var.ingress_annotations) == 0
     )
     error_message = join("", [
-      "ingress_scheme or ingress_annotations is set while create_ingress = false, so neither is applied ",
-      "to anything. With create_ingress = false you own the Ingress resources; put the scheme and ",
-      "annotations on your own Ingress instead.",
+      "ingress_scheme, alb_ssl_policy or ingress_annotations is set while create_ingress = false, so none of ",
+      "them are applied to anything. With create_ingress = false you own the Ingress resources; put the ",
+      "scheme, TLS policy and annotations on your own Ingress instead.",
     ])
   }
 }

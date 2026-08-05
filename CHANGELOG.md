@@ -186,6 +186,32 @@ this project adheres to the stability contract in
   CPU/memory requests and limits are below the values known to survive it in
   production. See [issue #52](https://github.com/n8n-io/terraform-aws-n8n/issues/52)
   and `docs/troubleshooting.md`.
+
+- `alb_ssl_policy` input (default `"ELBSecurityPolicy-TLS13-1-2-2021-06"`) maps
+  to the `alb.ingress.kubernetes.io/ssl-policy` annotation on the
+  module-managed Ingress. Previously the HTTPS listener's TLS negotiation
+  policy fell back to the AWS Load Balancer Controller's own default, which is
+  not pinned by the module and can drift as AWS changes it. Operators with a
+  compliance baseline (TLS 1.2 minimum, or TLS 1.3-only) can now set any
+  AWS-published ELB security policy name without forking the module; the
+  default pins a current, modern policy so the negotiated policy is explicit
+  rather than implicit. Ignored when `create_ingress = false`, or when
+  `ingress_annotations` sets the same annotation directly (last write wins;
+  the module now warns when that happens, mirroring the existing
+  `ingress_scheme` conflict check). See
+  [issue #43](https://github.com/n8n-io/terraform-aws-n8n/issues/43).
+
+  Upgrade note: this changes runtime behavior for existing deployments. The
+  AWS Load Balancer Controller's own default when the annotation is unset is
+  `ELBSecurityPolicy-2016-08`, which permits TLS 1.0/1.1 and weaker ciphers.
+  The first apply after upgrading sets the annotation explicitly and raises
+  the ALB's negotiated floor to TLS 1.2 (with TLS 1.3 preferred) via
+  `ELBSecurityPolicy-TLS13-1-2-2021-06`. This is an in-place annotation update
+  on the existing Ingress/ALB (no replacement), but it can reject handshakes
+  from clients that only speak TLS 1.0/1.1. Set `alb_ssl_policy` to your
+  current effective policy (or to `ELBSecurityPolicy-2016-08` to keep prior
+  behavior verbatim) if you need to defer this change.
+
 - `n8n_license_detach_floating_on_shutdown` input (default `false`) maps to
   `N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN`, overriding n8n's own upstream
   default of `true`. In multi-main (the module default), the leader main
