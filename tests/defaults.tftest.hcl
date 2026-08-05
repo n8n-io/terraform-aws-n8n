@@ -3121,6 +3121,57 @@ run "custom_extensions_path_rejects_n8n_home_itself" {
   expect_failures = [var.n8n_custom_extensions_path]
 }
 
+# The shadowing check is a string comparison, so these three spellings of the
+# mounted directory would pass it while resolving inside the mount in the
+# container. The canonical-path rule is what closes that gap.
+run "custom_extensions_path_rejects_a_doubled_slash" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node//.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+run "custom_extensions_path_rejects_a_dot_component" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node/./.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+run "custom_extensions_path_rejects_a_parent_component" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/opt/../home/node/.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+# A component may legitimately begin with a dot (.n8n is one), so the canonical
+# rule must reject only the exact "." and ".." components, not any leading dot.
+run "custom_extensions_path_accepts_a_dotfile_component" {
+  command = plan
+
+  variables {
+    n8n_image_repository       = "myregistry.example.com/n8n"
+    n8n_image_tag              = "2.27.4-mypackages"
+    n8n_task_runner_image_tag  = "2.27.4"
+    n8n_custom_extensions_path = "/opt/.n8n-nodes"
+  }
+
+  assert {
+    condition     = var.n8n_custom_extensions_path == "/opt/.n8n-nodes"
+    error_message = "A leading dot is an ordinary directory name and must not trip the canonical-path rule."
+  }
+}
+
 # Nothing in this module places files at the path without a custom image.
 run "custom_extensions_path_without_custom_image_warns" {
   command = plan

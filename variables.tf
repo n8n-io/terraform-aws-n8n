@@ -882,6 +882,18 @@ variable "n8n_custom_extensions_path" {
   }
 
   validation {
+    # The shadowing check below is a string comparison, so it only holds if the
+    # mounted directory has a single spelling. /home/node//.n8n/custom,
+    # /home/node/./.n8n/custom and /opt/../home/node/.n8n/custom all resolve
+    # inside the mount in the container while slipping past a startswith() on
+    # the raw value. Requiring a canonical path is the sound fix: abspath()
+    # would normalize against the machine running Terraform rather than the
+    # container filesystem, and rewrites separators on Windows.
+    condition     = var.n8n_custom_extensions_path == null ? true : !can(regex("//|/\\.\\.?(/|$)", var.n8n_custom_extensions_path))
+    error_message = "n8n_custom_extensions_path must be a canonical path: no repeated slashes and no \".\" or \"..\" components (e.g. \"/opt/n8n-nodes\"). Those spellings resolve to the same directory inside the container but would slip past the /home/node/.n8n shadowing check."
+  }
+
+  validation {
     # The chart mounts the `data` volume at /home/node/.n8n on the main
     # deployment only (templates/deployment-main.yaml), and the module leaves
     # persistence.enabled at the chart default, so that volume is an emptyDir.

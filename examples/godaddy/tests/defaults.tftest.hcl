@@ -186,3 +186,13 @@ run "n8n_custom_extensions_path_rejects_the_chart_mounted_data_dir" {
 
   expect_failures = [var.n8n_custom_extensions_path]
 }
+
+run "n8n_custom_extensions_path_rejects_a_non_canonical_path" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node/./.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
