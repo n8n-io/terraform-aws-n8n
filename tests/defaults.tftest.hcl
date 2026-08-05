@@ -2108,6 +2108,50 @@ run "redis_timeout_threshold_rejects_a_fractional_value" {
   expect_failures = [var.n8n_redis_timeout_threshold]
 }
 
+# The upper bound is a typo guard, not a capability limit: 600000 is ten
+# minutes, well past any managed failover, and a value above it is far more
+# likely to be a misplaced digit than an intent. Untested, a regression that
+# dropped the clamp would let 6000000 through and leave a pod wedged against a
+# dead Redis for over an hour before Kubernetes restarted it.
+run "redis_timeout_threshold_rejects_a_value_above_the_typo_guard" {
+  command = plan
+
+  variables {
+    n8n_redis_timeout_threshold = 600001
+  }
+
+  expect_failures = [var.n8n_redis_timeout_threshold]
+}
+
+# Both bounds are inclusive. Asserting the exact edges is what distinguishes
+# >= from > if either comparison is ever edited, which the rejection runs above
+# cannot see: 500 and 600001 stay rejected under both operators.
+run "redis_timeout_threshold_accepts_the_exact_lower_bound" {
+  command = plan
+
+  variables {
+    n8n_redis_timeout_threshold = 2000
+  }
+
+  assert {
+    condition     = local.redis_timeout_values["timeout"] == 2000
+    error_message = "2000 is the documented lower bound and must be accepted, not rejected as off-by-one"
+  }
+}
+
+run "redis_timeout_threshold_accepts_the_exact_upper_bound" {
+  command = plan
+
+  variables {
+    n8n_redis_timeout_threshold = 600000
+  }
+
+  assert {
+    condition     = local.redis_timeout_values["timeout"] == 600000
+    error_message = "600000 is the documented upper bound and must be accepted, not rejected as off-by-one"
+  }
+}
+
 # ── External Redis (create_elasticache = false) ──────────────────────────────
 # The hook the cross-region HA/DR design depends on: both regions point at one
 # shared, replication-capable Redis. Mirrors create_database.
