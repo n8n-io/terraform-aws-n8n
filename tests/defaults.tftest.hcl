@@ -2590,6 +2590,46 @@ run "image_repository_rejects_ipv6_zone_id" {
   expect_failures = [var.n8n_image_repository]
 }
 
+# Docker's bracketed host is hex and colons only. A dot inside the brackets is
+# rejected even in the IPv4-mapped form that looks like it ought to work.
+run "image_repository_rejects_ipv4_mapped_ipv6_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "[::ffff:1.2.3.4]:5000/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "image_repository_rejects_non_hex_ipv6_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "[gggg::1]/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# Not a typo in the test: docker accepts this, so the validation must too.
+# Tightening past docker would reject an address a registry would answer on,
+# and a variable validation has no override.
+run "image_repository_accepts_what_docker_accepts_in_brackets" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "[::::]:5000/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "[::::]:5000/n8n"
+    error_message = "n8n_image_repository should accept any bracketed hex-and-colon host that docker accepts, including structurally meaningless ones; this validation deliberately does not out-strict docker."
+  }
+}
+
 # ── n8n_task_runner_image_tag ─────────────────────────────────────────────────
 # The chart derives the runner sidecar's tag from image.tag, so a custom
 # application-image tag that is not a published n8n version needs this override

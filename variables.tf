@@ -313,7 +313,7 @@ variable "n8n_image_repository" {
     # long line by necessity (a validation condition cannot reference a local):
     #
     #   label = [A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?
-    #   ipv6  = \[[0-9A-Fa-f:.]+\]
+    #   ipv6  = \[[0-9A-Fa-f:]+\]
     #   host  = (label(.label)* | ipv6)(:port)?
     #   sep   = __ | [._] | -+
     #   comp  = [a-z0-9]+(sep[a-z0-9]+)*
@@ -336,9 +336,16 @@ variable "n8n_image_repository" {
     # slash), a label ending in a hyphen, and an IPv6 zone ID. Each of those
     # otherwise reaches the chart and surfaces as ImagePullBackOff only after
     # the cluster is up, which is the whole point of checking at plan time.
+    #
+    # The bracketed host is hex and colons only, no dots, which is Docker's
+    # grammar exactly: it rejects [....], [a:b.c] and even the IPv4-mapped
+    # [::ffff:1.2.3.4], while accepting the structurally meaningless [::::].
+    # Matching that is deliberate. Being stricter than docker here would reject
+    # an address a registry would have answered on, and this validation has no
+    # override.
     condition = var.n8n_image_repository == null ? true : (
       length(var.n8n_image_repository) <= 255 &&
-      can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:.]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_image_repository))
+      can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_image_repository))
     )
     error_message = "n8n_image_repository must be a bare image repository reference that Docker can pull: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n\", \"registry.internal:5000/n8n\", \"n8nio/n8n\", \"[2001:db8::1]:5000/n8n\"). No scheme (\"https://\"), no whitespace, no uppercase path components, and no empty label anywhere, which rules out a trailing slash, a doubled slash, and a doubled dot. Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
   }
