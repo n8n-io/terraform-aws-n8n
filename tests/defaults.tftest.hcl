@@ -1639,6 +1639,50 @@ run "redis_auth_token_respects_elasticache_charset" {
   }
 }
 
+# The resource asserts above cover whether the token is generated. These cover
+# whether the caller can actually reach it, which is a separate contract: the
+# output is the only supported way to retrieve the credential, and it carries
+# its own count-index expression that could drift from the resource guard
+# without any of the above noticing.
+
+run "redis_auth_token_output_is_null_by_default" {
+  command = plan
+
+  assert {
+    condition     = output.redis_auth_token == null
+    error_message = "The default posture has no credential, so the output must be null rather than an empty string"
+  }
+}
+
+# Guards the pairing specifically. HA alone selects the same replication group
+# but generates no token, so an output keyed on the wrong condition would fail
+# here and nowhere else.
+run "redis_auth_token_output_is_null_for_ha_without_tls" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled = true
+  }
+
+  assert {
+    condition     = output.redis_auth_token == null
+    error_message = "High availability alone generates no AUTH token, so the output must stay null"
+  }
+}
+
+# The positive case is deliberately absent. random_password.result is unknown
+# at plan time, so both `output.redis_auth_token == random_password...result`
+# and a bare `!= null` resolve to an unknown condition and fail the run rather
+# than passing. command = apply is not the escape hatch either: the mocked
+# providers fail ARN validation, which is why this file has only one apply run.
+#
+# What that leaves uncovered is narrow. The two runs above pin the half that
+# can actually drift, which is the output returning a token on a path that has
+# none, and the [0] index the true branch takes is guarded by the
+# length(random_password.redis_auth_token) == 1 assert further up. The value
+# itself is verified live instead: `terraform output -raw redis_auth_token`
+# has to authenticate against the real endpoint.
+
 # The module cannot put TLS or a token on a Redis it does not manage, and the
 # combination is worse than merely ignored: the Helm values would still render
 # tls = true plus a generated password, pointing every pod at the caller's

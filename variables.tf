@@ -815,7 +815,7 @@ variable "redis_transit_encryption_enabled" {
   # then fails at runtime, which is exactly what a plan-time error is for.
   validation {
     condition     = var.create_elasticache || !var.redis_transit_encryption_enabled
-    error_message = "redis_transit_encryption_enabled requires create_elasticache = true. The module provisions TLS and the AUTH token on the ElastiCache it manages, and cannot configure a Redis supplied via redis_host. Terminate TLS on the external Redis yourself and leave this at false."
+    error_message = "redis_transit_encryption_enabled requires create_elasticache = true. The module provisions TLS and the AUTH token on the ElastiCache it manages, and cannot configure a Redis supplied via redis_host: on that path n8n and KEDA connect in plaintext with no credential, so an external Redis must accept unauthenticated, non-TLS connections. Leave this at false and secure the external endpoint at the network boundary instead."
   }
 }
 
