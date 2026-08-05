@@ -119,6 +119,59 @@ run "defaults_produce_valid_plan" {
   }
 }
 
+# ── HPA: webhook processor scale-up stabilization ────────────────────────────
+
+run "webhook_hpa_scale_up_stabilization_window_defaults_to_zero" {
+  command = plan
+
+  assert {
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].behavior[0].scale_up[0].stabilization_window_seconds == 0
+    error_message = "n8n_webhook_hpa_scale_up_stabilization_window_seconds should default to 0, matching the Kubernetes API's own default."
+  }
+
+  # Regression guard: select_policy must be set explicitly. When it is unset,
+  # the provider sends selectPolicy: "" and the Kubernetes API rejects the HPA
+  # at apply time (`Unsupported value: ""`) — mocked tests cannot catch that
+  # server-side rejection, only this plan-time value.
+  assert {
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].behavior[0].scale_up[0].select_policy == "Max"
+    error_message = "n8n_webhook HPA scale_up.select_policy must be explicitly \"Max\" — an unset value is serialized as \"\" and rejected by the Kubernetes API at apply."
+  }
+}
+
+run "webhook_hpa_scale_up_stabilization_window_accepts_override" {
+  command = plan
+
+  variables {
+    n8n_webhook_hpa_scale_up_stabilization_window_seconds = 300
+  }
+
+  assert {
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].behavior[0].scale_up[0].stabilization_window_seconds == 300
+    error_message = "n8n_webhook_hpa_scale_up_stabilization_window_seconds should flow through to the HPA's scale_up.stabilization_window_seconds."
+  }
+}
+
+run "webhook_hpa_scale_up_stabilization_window_rejects_negative" {
+  command = plan
+
+  variables {
+    n8n_webhook_hpa_scale_up_stabilization_window_seconds = -1
+  }
+
+  expect_failures = [var.n8n_webhook_hpa_scale_up_stabilization_window_seconds]
+}
+
+run "webhook_hpa_scale_up_stabilization_window_rejects_above_max" {
+  command = plan
+
+  variables {
+    n8n_webhook_hpa_scale_up_stabilization_window_seconds = 3601
+  }
+
+  expect_failures = [var.n8n_webhook_hpa_scale_up_stabilization_window_seconds]
+}
+
 run "rds_hardened_defaults" {
   command = plan
 
@@ -1192,6 +1245,13 @@ run "community_package_toggles_accept_true" {
   variables {
     n8n_reinstall_missing_packages         = true
     n8n_community_packages_prevent_loading = true
+    # Sized above the webhook_resources_sized_for_reinstall_missing_packages
+    # thresholds so this run, which is only exercising the toggles, doesn't
+    # also trip that check. See the dedicated runs below.
+    n8n_webhook_cpu_request    = "800m"
+    n8n_webhook_cpu_limit      = "1500m"
+    n8n_webhook_memory_request = "1Gi"
+    n8n_webhook_memory_limit   = "2Gi"
   }
 
   assert {
@@ -1203,6 +1263,58 @@ run "community_package_toggles_accept_true" {
     condition     = var.n8n_community_packages_prevent_loading == true
     error_message = "n8n_community_packages_prevent_loading should accept true."
   }
+}
+
+# ── Webhook resources vs. reinstall_missing_packages ─────────────────────────
+# See https://github.com/n8n-io/terraform-aws-n8n/issues/52: every pod runs npm
+# installs at boot when n8n_reinstall_missing_packages = true, and n8n
+# rebroadcasts installs to all pods, so the webhook processor's default
+# CPU/memory is too low to absorb a rolling restart without HPA thrash or
+# OOMKills.
+
+run "webhook_resources_below_reinstall_thresholds_triggers_check_warning" {
+  command = plan
+
+  variables {
+    n8n_reinstall_missing_packages = true
+    # Module defaults (300m/800m CPU, 512Mi/1Gi memory) are deliberately below
+    # the check's thresholds.
+  }
+
+  expect_failures = [check.webhook_resources_sized_for_reinstall_missing_packages]
+}
+
+run "webhook_resources_at_reinstall_thresholds_plans_cleanly" {
+  command = plan
+
+  variables {
+    n8n_reinstall_missing_packages = true
+    n8n_webhook_cpu_request        = "800m"
+    n8n_webhook_cpu_limit          = "1500m"
+    n8n_webhook_memory_request     = "1Gi"
+    n8n_webhook_memory_limit       = "2Gi"
+  }
+
+  assert {
+    condition     = var.n8n_webhook_cpu_limit == "1500m"
+    error_message = "Webhook resources at or above the reporter's stable production values must plan cleanly."
+  }
+}
+
+run "webhook_resources_decimal_cpu_below_threshold_triggers_check_warning" {
+  command = plan
+
+  variables {
+    n8n_reinstall_missing_packages = true
+    # "0.5" (500m, decimal-core form) must parse rather than being treated as
+    # unreadable — an unreadable quantity silently skips the check.
+    n8n_webhook_cpu_request    = "0.5"
+    n8n_webhook_cpu_limit      = "1500m"
+    n8n_webhook_memory_request = "1Gi"
+    n8n_webhook_memory_limit   = "2Gi"
+  }
+
+  expect_failures = [check.webhook_resources_sized_for_reinstall_missing_packages]
 }
 
 # ── OpenTelemetry tracing toggles ─────────────────────────────────────────────

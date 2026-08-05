@@ -344,25 +344,25 @@ variable "n8n_worker_memory_limit" {
 }
 
 variable "n8n_webhook_cpu_request" {
-  description = "CPU request for n8n webhook processor pods (e.g. 300m, 500m)"
+  description = "CPU request for n8n webhook processor pods (e.g. 300m, 500m). This default is sized for typical webhook traffic, not for n8n_reinstall_missing_packages = true: a low request against an npm-install CPU spike is what drives the CPU-based HPA into a scale-up-on-every-rollout loop. Raise to at least 800m when that toggle is on; see n8n_reinstall_missing_packages and docs/troubleshooting.md."
   type        = string
   default     = "300m"
 }
 
 variable "n8n_webhook_cpu_limit" {
-  description = "CPU limit for n8n webhook processor pods (e.g. 800m, 1000m)"
+  description = "CPU limit for n8n webhook processor pods (e.g. 800m, 1000m). Raise to at least 1500m when n8n_reinstall_missing_packages = true; see that variable and docs/troubleshooting.md."
   type        = string
   default     = "800m"
 }
 
 variable "n8n_webhook_memory_request" {
-  description = "Memory request for n8n webhook processor pods (e.g. 512Mi, 1Gi)"
+  description = "Memory request for n8n webhook processor pods (e.g. 512Mi, 1Gi). Raise to at least 1Gi when n8n_reinstall_missing_packages = true; see that variable and docs/troubleshooting.md."
   type        = string
   default     = "512Mi"
 }
 
 variable "n8n_webhook_memory_limit" {
-  description = "Memory limit for n8n webhook processor pods (e.g. 1Gi, 2Gi)"
+  description = "Memory limit for n8n webhook processor pods (e.g. 1Gi, 2Gi). This default is too low for n8n_reinstall_missing_packages = true: concurrent npm installs plus the n8n baseline can exceed it and OOMKill the pod mid-install into a reinstall/broadcast crash loop. Raise to at least 2Gi when that toggle is on; see that variable and docs/troubleshooting.md."
   type        = string
   default     = "1Gi"
 }
@@ -689,6 +689,17 @@ variable "n8n_webhook_hpa_cpu_threshold" {
   default     = 65
 }
 
+variable "n8n_webhook_hpa_scale_up_stabilization_window_seconds" {
+  description = "Seconds the webhook processor HPA looks back before scaling up, via the HPA's behavior.scaleUp.stabilizationWindowSeconds. Kubernetes' own default is 0 (scale up immediately), which this module preserves by default. A short CPU spike right after a pod boots (e.g. from N8N_REINSTALL_MISSING_PACKAGES=true reinstalling community packages, see n8n_reinstall_missing_packages) can read as sustained high utilization and trigger a scale-up that a slightly longer window would absorb. Raise this (e.g. to 300) to require CPU to stay above threshold for that long before adding pods. Must be between 0 and 3600, the range the Kubernetes API enforces."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.n8n_webhook_hpa_scale_up_stabilization_window_seconds >= 0 && var.n8n_webhook_hpa_scale_up_stabilization_window_seconds <= 3600
+    error_message = "n8n_webhook_hpa_scale_up_stabilization_window_seconds must be between 0 and 3600 seconds, the range the Kubernetes HPA API enforces."
+  }
+}
+
 # ── Observability ─────────────────────────────────────────────────────────────
 
 variable "n8n_metrics_enabled" {
@@ -712,7 +723,7 @@ variable "n8n_personalization_enabled" {
 # ── Community packages ────────────────────────────────────────────────────────
 
 variable "n8n_reinstall_missing_packages" {
-  description = "Reinstall community packages that are recorded in the database but missing from a pod's local filesystem at startup. Maps to N8N_REINSTALL_MISSING_PACKAGES. n8n stores installed community packages on the pod's filesystem, which is ephemeral in EKS, so a rescheduled or newly scaled-up worker comes up without them and nodes installed via the UI fail to load on that pod. Enabling this makes every pod (main, worker, and webhook-processor) reinstall the recorded packages on boot, which is what lets community nodes work reliably in queue mode. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies."
+  description = "Reinstall community packages that are recorded in the database but missing from a pod's local filesystem at startup. Maps to N8N_REINSTALL_MISSING_PACKAGES. n8n stores installed community packages on the pod's filesystem, which is ephemeral in EKS, so a rescheduled or newly scaled-up worker comes up without them and nodes installed via the UI fail to load on that pod. Enabling this makes every pod (main, worker, and webhook-processor) reinstall the recorded packages on boot, which is what lets community nodes work reliably in queue mode. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies. When true, size the webhook processor above this module's defaults: every pod runs npm installs at boot and n8n rebroadcasts installs to all pods via pubsub, so a rolling restart makes every webhook pod install repeatedly at once. Against low CPU/memory this causes CPU-based HPA thrash and OOMKilled crash loops; see n8n_webhook_cpu_request, n8n_webhook_memory_limit, and docs/troubleshooting.md."
   type        = bool
   default     = false
 }

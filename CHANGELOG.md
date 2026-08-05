@@ -175,6 +175,17 @@ this project adheres to the stability contract in
   before anything is sent to the cluster. A floor equal to its ceiling stays
   valid, since that is how you pin a fixed-size deployment.
 
+- `n8n_webhook_hpa_scale_up_stabilization_window_seconds` input (default `0`,
+  matching the Kubernetes API's own default) exposes
+  `behavior.scaleUp.stabilizationWindowSeconds` on the module-managed
+  `kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook`. Lets a caller absorb a
+  short boot-time CPU spike (for example from
+  `n8n_reinstall_missing_packages = true`) without an immediate scale-up. A new
+  `webhook_resources_sized_for_reinstall_missing_packages` plan-time check warns
+  when `n8n_reinstall_missing_packages = true` and the webhook processor's
+  CPU/memory requests and limits are below the values known to survive it in
+  production. See [issue #52](https://github.com/n8n-io/terraform-aws-n8n/issues/52)
+  and `docs/troubleshooting.md`.
 - `n8n_license_detach_floating_on_shutdown` input (default `false`) maps to
   `N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN`, overriding n8n's own upstream
   default of `true`. In multi-main (the module default), the leader main
