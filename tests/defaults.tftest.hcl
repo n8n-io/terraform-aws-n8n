@@ -1701,6 +1701,257 @@ run "transit_encryption_with_external_redis_fails_validation" {
   expect_failures = [var.redis_transit_encryption_enabled]
 }
 
+# ── Staged migration inputs ──────────────────────────────────────────────────
+# redis_transit_encryption_mode and redis_apply_immediately exist so that TLS can
+# be added to a replication group that already exists, which AWS refuses as a
+# single modification. The contract these pin is the one that matters to callers
+# who are NOT migrating: both must be invisible at their defaults, because every
+# deployment already running redis_high_availability_enabled will re-plan against
+# this version of the module, and a spurious in-place update on Redis is exactly
+# the kind of diff that stops an upgrade from being adopted.
+
+run "redis_transit_encryption_mode_defaults_to_required" {
+  command = plan
+
+  variables {
+    redis_transit_encryption_enabled = true
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].transit_encryption_mode == "required"
+    error_message = "A first-time create with transit encryption on must land on required, i.e. TLS only. preferred is a migration state and leaves the endpoint accepting cleartext."
+  }
+}
+
+run "redis_transit_encryption_mode_is_unset_without_tls" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled = true
+  }
+
+  # Read through the local rather than the resource attribute. Both arguments
+  # are Optional+Computed, so an unset one plans as "known after apply" and a
+  # `== null` assertion against the resource fails with "Unknown condition
+  # value" rather than passing. Where a concrete value IS set the resource is
+  # assertable, and the runs below do read it there.
+  assert {
+    condition     = local.redis_transit_encryption_mode == null
+    error_message = "The HA-only path must leave transit_encryption_mode unset. Writing the default onto a plaintext group would put a value in the plan for every deployment that enabled HA before this input existed."
+  }
+}
+
+run "redis_transit_encryption_mode_accepts_preferred_for_the_migration" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled  = true
+    redis_transit_encryption_enabled = true
+    redis_transit_encryption_mode    = "preferred"
+    redis_apply_immediately          = true
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].transit_encryption_mode == "preferred"
+    error_message = "preferred must reach the resource: it is the only mode AWS accepts when turning transit encryption on for a group that already exists"
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].transit_encryption_enabled == true
+    error_message = "preferred is a mode OF transit encryption, not an alternative to it, so the enable flag must still be set alongside it"
+  }
+
+  # Warns for as long as the deployment sits in preferred, by design.
+  expect_failures = [check.redis_transit_encryption_mode_preferred_is_transitional]
+}
+
+# ── preferred means TLS without a credential, everywhere ─────────────────────
+# AWS rejects an AUTH token on a group in preferred, both on its own and bundled
+# into the call that moves the group to required:
+#
+#   InvalidParameterValue: The AUTH token modification is only supported when
+#   encryption-in-transit is enabled.
+#
+# So the module must not generate, publish or reference a token in this mode.
+# These runs pin every place the credential would otherwise leak out, because a
+# miss in any one of them turns the migration's first apply back into the AWS
+# rejection this feature exists to avoid, or points the clients at a credential
+# the server does not have.
+
+run "preferred_generates_no_auth_token_at_all" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled  = true
+    redis_transit_encryption_enabled = true
+    redis_transit_encryption_mode    = "preferred"
+    redis_apply_immediately          = true
+  }
+
+  expect_failures = [check.redis_transit_encryption_mode_preferred_is_transitional]
+
+  assert {
+    condition     = length(random_password.redis_auth_token) == 0
+    error_message = "No token may be generated in preferred mode. AWS will not accept one, so generating it would put a value in the plan that can never reach the resource."
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n_redis) == 0
+    error_message = "The Secret must not exist in preferred mode either. It would hold a password no ElastiCache node is configured with, and the chart would mount it onto every pod."
+  }
+
+  assert {
+    condition     = length(local.redis_pod_annotations) == 0
+    error_message = "There is no token to checksum in preferred mode, so there is no rollout to force"
+  }
+}
+
+run "preferred_still_puts_the_clients_on_tls" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled  = true
+    redis_transit_encryption_enabled = true
+    redis_transit_encryption_mode    = "preferred"
+    redis_apply_immediately          = true
+  }
+
+  expect_failures = [check.redis_transit_encryption_mode_preferred_is_transitional]
+
+  assert {
+    condition     = local.redis_tls_active == true
+    error_message = "preferred accepts TLS as well as plaintext, and rolling the pods onto TLS during this window is the whole reason the migration is non-disruptive. Dropping them back to plaintext here would make the move to required an outage."
+  }
+
+  assert {
+    condition     = local.redis_auth_active == false
+    error_message = "TLS without a credential is exactly the state preferred supports, and the only state it supports"
+  }
+
+  assert {
+    # enableTLS but NOT passwordFromEnv. A trigger naming an environment
+    # variable that does not exist resolves to an empty credential and then
+    # authenticates against a server with no password configured.
+    condition = (
+      local.keda_redis_auth_metadata["enableTLS"] == "true" &&
+      !contains(keys(local.keda_redis_auth_metadata), "passwordFromEnv")
+    )
+    error_message = "KEDA must speak TLS without looking for a password while the group is in preferred"
+  }
+}
+
+run "preferred_reports_no_auth_token_output" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled  = true
+    redis_transit_encryption_enabled = true
+    redis_transit_encryption_mode    = "preferred"
+    redis_apply_immediately          = true
+  }
+
+  expect_failures = [check.redis_transit_encryption_mode_preferred_is_transitional]
+
+  assert {
+    condition     = output.redis_auth_token == null
+    error_message = "The output must be null while there is no token, rather than reporting one that AWS never accepted"
+  }
+}
+
+run "required_is_what_restores_the_credential" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled  = true
+    redis_transit_encryption_enabled = true
+    redis_transit_encryption_mode    = "required"
+  }
+
+  assert {
+    condition     = local.redis_auth_active == true
+    error_message = "required is the only mode AWS accepts an AUTH token in, so it is the mode the credential comes back on"
+  }
+
+  assert {
+    condition = (
+      length(random_password.redis_auth_token) == 1 &&
+      length(kubernetes_secret.n8n_redis) == 1 &&
+      length(local.redis_pod_annotations) == 1 &&
+      contains(keys(local.keda_redis_auth_metadata), "passwordFromEnv")
+    )
+    error_message = "Moving to required must restore the token, the Secret, the rollout annotation and the KEDA credential together. Any one of them lagging leaves that client authenticating against a server that now demands a password."
+  }
+}
+
+run "redis_transit_encryption_mode_rejects_an_unknown_value" {
+  command = plan
+
+  variables {
+    redis_transit_encryption_enabled = true
+    redis_transit_encryption_mode    = "disabled"
+  }
+
+  expect_failures = [var.redis_transit_encryption_mode]
+}
+
+run "redis_transit_encryption_mode_without_transit_encryption_warns" {
+  command = plan
+
+  variables {
+    # The migration's first step, with the enable flag forgotten. This applies
+    # cleanly and leaves Redis exactly as plaintext as it was, which is why it
+    # warns rather than passing silently.
+    redis_high_availability_enabled = true
+    redis_transit_encryption_mode   = "preferred"
+  }
+
+  expect_failures = [check.redis_transit_encryption_mode_requires_transit_encryption]
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].transit_encryption_enabled == false
+    error_message = "The mode alone must not turn encryption on. If it did, the check would be wrong rather than the input."
+  }
+}
+
+run "redis_apply_immediately_is_unset_by_default" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled = true
+  }
+
+  assert {
+    condition     = local.redis_apply_immediately == null
+    error_message = "apply_immediately must be null rather than false at its default. It is a request-time flag the API never reports back, so a group created before this input existed has it null in state and an explicit false would render as an in-place update that changes nothing."
+  }
+}
+
+run "redis_apply_immediately_reaches_the_replication_group" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled = true
+    redis_apply_immediately         = true
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].apply_immediately == true
+    error_message = "AWS rejects every transit-encryption modification without this, so the migration cannot proceed if the input does not reach the resource"
+  }
+}
+
+run "redis_apply_immediately_with_external_redis_warns" {
+  command = plan
+
+  variables {
+    create_elasticache      = false
+    redis_host              = "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
+    redis_apply_immediately = true
+  }
+
+  expect_failures = [check.redis_tuning_requires_module_managed_elasticache]
+}
+
 # ── AUTH token rotation rollout ──────────────────────────────────────────────
 # The token reaches pods through a Secret referenced by name, so rotating it
 # produces no Helm diff and nothing restarts. local.redis_pod_annotations is

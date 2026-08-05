@@ -54,7 +54,7 @@ resource "aws_elasticache_subnet_group" "n8n" {
 # https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth.html
 
 resource "random_password" "redis_auth_token" {
-  count = local.redis_tls_active ? 1 : 0
+  count = local.redis_auth_active ? 1 : 0
 
   length           = 64
   special          = true
@@ -181,7 +181,35 @@ resource "aws_elasticache_replication_group" "n8n" {
   # reports and produces no diff for anyone who enabled HA before this variable
   # existed.
   transit_encryption_enabled = local.redis_tls_active
-  auth_token                 = local.redis_tls_active ? random_password.redis_auth_token[0].result : null
+  auth_token                 = local.redis_auth_active ? random_password.redis_auth_token[0].result : null
+
+  # Gated on the same variable as auth_token above, and for the same reason: the
+  # argument describes a property of transit encryption, so writing it on a
+  # plaintext group is at best noise. `null` is how the provider spells "not
+  # set", which keeps the HA-only path's plan identical to what it was before
+  # this argument existed.
+  #
+  # The default is "required", so a first-time create is TLS-only and nothing
+  # here changes for a caller who is not migrating. What this exists for is the
+  # other direction: AWS refuses to turn transit encryption on for a group that
+  # already exists unless it passes through "preferred" first, and "preferred"
+  # accepts TLS and plaintext simultaneously, which is what makes the pods'
+  # cutover survivable. See README -> "Adding TLS to an existing replication
+  # group".
+  transit_encryption_mode = local.redis_transit_encryption_mode
+
+  # Written as `? true : null` rather than passing the bool straight through so
+  # that the default produces no diff at all for deployments that predate this
+  # input. apply_immediately is a request-time flag rather than something the
+  # API reports back, so a group created before this existed has it null in
+  # state, and an explicit `false` would render as an in-place update on every
+  # such deployment for a change that alters nothing.
+  #
+  # Required by AWS for any transit-encryption modification, which is why it is
+  # an input at all rather than a constant. Left at the AWS default otherwise:
+  # forcing it on globally would make unrelated modifications skip the
+  # maintenance window the caller chose.
+  apply_immediately = local.redis_apply_immediately
 
   # Declared so a later token change rotates (both the old and new token valid
   # during the roll) instead of cutting over instantly and breaking every pod
@@ -193,7 +221,7 @@ resource "aws_elasticache_replication_group" "n8n" {
   # makes the HA-only path fail at plan time. Neither terraform validate nor
   # terraform test catches it, because the test framework's mocked provider does
   # not run the real provider's argument validation. A live plan does.
-  auth_token_update_strategy = local.redis_tls_active ? "ROTATE" : null
+  auth_token_update_strategy = local.redis_auth_active ? "ROTATE" : null
 
   # Set here, in the commit that introduces this resource, precisely because it
   # is ForceNew. Adding it later would replace the cache for everyone who had
@@ -257,12 +285,64 @@ check "redis_tuning_requires_module_managed_elasticache" {
   assert {
     condition = var.create_elasticache ? true : (
       var.redis_node_type == "cache.t3.medium" &&
-      !var.redis_high_availability_enabled
+      !var.redis_high_availability_enabled &&
+      !var.redis_apply_immediately
     )
     error_message = join("", [
-      "redis_node_type or redis_high_availability_enabled is set while create_elasticache = false. ",
-      "The module creates no ElastiCache in that mode, so neither applies. Sizing and failover are ",
-      "properties of the Redis you supply via redis_host.",
+      "redis_node_type, redis_high_availability_enabled or redis_apply_immediately is set while ",
+      "create_elasticache = false. The module creates no ElastiCache in that mode, so none of them ",
+      "apply. Sizing, failover and modification timing are properties of the Redis you supply via ",
+      "redis_host.",
+    ])
+  }
+}
+
+# redis_transit_encryption_mode is written only when transit encryption is on,
+# so setting it while the feature is off silently does nothing. Worth a warning
+# specifically because "preferred" is the migration lever: a caller who sets the
+# mode intending to begin the migration, but has not yet set
+# redis_transit_encryption_enabled, gets a clean apply that leaves Redis exactly
+# as plaintext as it was. That reads like the first step succeeded.
+# preferred is a state to pass through, not one to settle in, and settling in it
+# is silent otherwise: the endpoint speaks TLS, the pods speak TLS, everything
+# looks like the feature is on, and the cache is still reachable in cleartext by
+# anything on the VPC with no credential at all. AWS will not accept an AUTH
+# token in this mode, so a deployment parked here is encrypted and
+# unauthenticated whether or not the caller meant it to be.
+#
+# Fires on every apply for as long as the mode is preferred, which is the point:
+# during the migration it is a reminder that step two is outstanding, and
+# afterwards it is the only thing that would ever say so.
+check "redis_transit_encryption_mode_preferred_is_transitional" {
+  assert {
+    # Gated on redis_tls_active, not on the mode alone. With transit encryption
+    # off the mode reaches nothing, so the sibling check below is the accurate
+    # complaint and this one would only pile noise on top of it.
+    condition = local.redis_tls_active ? (
+      var.redis_transit_encryption_mode != "preferred"
+    ) : true
+    error_message = join("", [
+      "redis_transit_encryption_mode = \"preferred\" accepts plaintext AND TLS on the same endpoint, and ",
+      "AWS refuses to put an AUTH token on a group in this mode, so Redis is currently reachable ",
+      "unencrypted and unauthenticated from anywhere in the VPC. This is the intended middle step of the ",
+      "migration in README -> \"Adding TLS to an existing replication group\", not a resting place: once ",
+      "every pod has rolled onto TLS, set the mode back to \"required\" to close the plaintext listener ",
+      "and let the AUTH token land.",
+    ])
+  }
+}
+
+check "redis_transit_encryption_mode_requires_transit_encryption" {
+  assert {
+    condition = var.redis_transit_encryption_enabled ? true : (
+      var.redis_transit_encryption_mode == "required"
+    )
+    error_message = join("", [
+      "redis_transit_encryption_mode is set while redis_transit_encryption_enabled = false, so it is ",
+      "ignored and Redis stays plaintext. The mode selects which clients an ENCRYPTED endpoint ",
+      "accepts; it does not turn encryption on. If you are staging the migration described in README ",
+      "-> \"Adding TLS to an existing replication group\", set redis_transit_encryption_enabled = true ",
+      "in the same apply that sets the mode to \"preferred\".",
     ])
   }
 }

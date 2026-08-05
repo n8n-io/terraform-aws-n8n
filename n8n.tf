@@ -102,7 +102,7 @@ resource "kubernetes_service_account_v1" "n8n" {
 # the opt-in path: there is no token to hold otherwise.
 
 resource "kubernetes_secret" "n8n_redis" {
-  count = local.redis_tls_active ? 1 : 0
+  count = local.redis_auth_active ? 1 : 0
 
   metadata {
     name      = "n8n-enterprise-redis-secret"
@@ -208,7 +208,7 @@ resource "helm_release" "n8n" {
       port = local.redis_port
       tls  = local.redis_tls_active
       },
-      local.redis_tls_active ? {
+      local.redis_auth_active ? {
         passwordSecret = {
           name = kubernetes_secret.n8n_redis[0].metadata[0].name
           key  = "password"
@@ -629,7 +629,7 @@ resource "helm_release" "n8n" {
     # reason redis.timeout is: a default deployment must render byte-identical
     # values to what it renders today, or every existing release sees a Helm
     # diff on upgrade.
-    local.redis_tls_active ? { podAnnotations = local.redis_pod_annotations } : {},
+    local.redis_auth_active ? { podAnnotations = local.redis_pod_annotations } : {},
   ))]
 
   depends_on = [

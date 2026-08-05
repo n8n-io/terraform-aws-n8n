@@ -193,10 +193,18 @@ locals {
   # permissions.metricServer both have restrict.secret = false); setting
   # KEDA_RESTRICT_SECRET_ACCESS=true on the operator would break this path.
   # keda.tf installs the chart without overriding those values.
-  keda_redis_auth_metadata = local.redis_tls_active ? {
-    enableTLS       = "true"
-    passwordFromEnv = "QUEUE_BULL_REDIS_PASSWORD"
-  } : {}
+  #
+  # The two halves are gated separately because the migration's middle state
+  # separates them. In transit_encryption_mode = preferred the endpoint speaks
+  # TLS but has no token, so KEDA needs enableTLS and must NOT be told to look
+  # for a password: passwordFromEnv naming an environment variable that does not
+  # exist resolves to an empty credential, and the trigger then authenticates
+  # against a server with no password configured. Once the group reaches
+  # required the token exists and both halves apply.
+  keda_redis_auth_metadata = merge(
+    local.redis_tls_active ? { enableTLS = "true" } : {},
+    local.redis_auth_active ? { passwordFromEnv = "QUEUE_BULL_REDIS_PASSWORD" } : {},
+  )
 
   # Rolls main, worker and webhook processor pods when the AUTH token changes.
   # Lifted out of the Helm values for the same reason keda_redis_auth_metadata
@@ -204,9 +212,25 @@ locals {
   # endpoint), so this is the layer where the contract is assertable. See the
   # long comment at the merge site in n8n.tf for why the chart's own
   # checksum/secret cannot cover a Secret created outside the chart.
-  redis_pod_annotations = local.redis_tls_active ? {
+  redis_pod_annotations = local.redis_auth_active ? {
     "checksum/redis-auth-token" = sha256(random_password.redis_auth_token[0].result)
   } : {}
+
+  # The two arguments the staged HA -> HA+TLS migration needs, lifted here for
+  # the same testability reason as the two locals above, though the mechanism
+  # differs. Both are Optional+Computed on the replication group, so a plan that
+  # leaves either unset renders it as "known after apply" rather than null, and
+  # `aws_elasticache_replication_group.n8n[0].apply_immediately == null` fails
+  # with "Unknown condition value" instead of passing. A concrete value IS
+  # assertable on the resource, so the tests read the resource where the value
+  # is set and these locals where the contract is that nothing is set at all.
+  #
+  # That contract is the point: every deployment already on a replication group
+  # re-plans against this version of the module, and writing a default onto
+  # either argument would show them an in-place Redis update that changes
+  # nothing.
+  redis_transit_encryption_mode = local.redis_tls_active ? var.redis_transit_encryption_mode : null
+  redis_apply_immediately       = var.redis_apply_immediately ? true : null
 
   # Whether the endpoint n8n is being pointed at actually speaks TLS and demands
   # a token. Gated on create_elasticache as well as the variable, so the clients
@@ -215,6 +239,32 @@ locals {
   # combination, but the clients read this rather than the raw variable so the
   # invariant holds at the point of use.
   redis_tls_active = var.create_elasticache && var.redis_transit_encryption_enabled
+
+  # Whether there is an AUTH token at all. Narrower than redis_tls_active by
+  # exactly one condition, and that condition is AWS's, not a preference:
+  #
+  #   InvalidParameterValue: The AUTH token modification is only supported when
+  #   encryption-in-transit is enabled.
+  #
+  # AWS returns that for a group sitting in transit_encryption_mode = preferred
+  # with TransitEncryptionEnabled already true. So "encryption-in-transit is
+  # enabled" means `required` specifically, and there is no way to introduce a
+  # token during the preferred window. Confirmed live on a throwaway group, both
+  # as a standalone modify and bundled into the same call as the move to
+  # required; both are rejected identically.
+  #
+  # Gating the whole credential on this is what makes the staged migration
+  # expressible as ordinary variable changes rather than out-of-band CLI work.
+  # The first apply moves the group to preferred and rolls the pods onto TLS
+  # with no credential, which preferred accepts; the second moves it to required
+  # and lets the token land behind it. If the token were tied to
+  # redis_tls_active instead, the first apply would send it too and AWS would
+  # reject the whole modification, which is the failure this feature started
+  # from.
+  #
+  # A first-time create is unaffected: redis_transit_encryption_mode defaults to
+  # "required", so TLS and the token still arrive together in one apply.
+  redis_auth_active = local.redis_tls_active && var.redis_transit_encryption_mode == "required"
 
   common_tags = merge(
     {

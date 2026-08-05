@@ -591,8 +591,140 @@ alone leaves the cache single-node and the bill unchanged; availability does
 not buy you a credential, so enabling that alone leaves the endpoint plaintext.
 
 Because both land on **one** resource with one identifier
-(`<cluster_name>-redis-rg`), turning the second one on later modifies the
-replication group you already have rather than replacing it.
+(`<cluster_name>-redis-rg`), turning the second one on later *plans* as a
+modification of the replication group you already have rather than a
+replacement.
+
+**Adding high availability to an encrypted group** raises the node count
+through ElastiCache's `IncreaseReplicaCount` API, and Terraform plans it in
+place. That direction has not been exercised on a live cluster, so treat the
+in-place plan as the expected shape rather than a guarantee, and drain first.
+
+**Adding encryption to a plaintext replication group** works, but not in one
+apply, and not with `redis_transit_encryption_enabled` alone. See the next
+section.
+
+### Adding TLS to an existing replication group
+
+Setting `redis_transit_encryption_enabled = true` on a deployment that already
+runs `redis_high_availability_enabled = true` plans as a clean in-place modify
+and then **fails at apply**. AWS refuses a direct plaintext-to-encrypted
+transition:
+
+```
+InvalidParameterCombination: Direct transition from transit-encryption-disabled
+to transit-encryption-enabled is not allowed. Update the cluster to
+transit-encryption-mode preferred prior to enabling transit encryption.
+```
+
+That is not a dead end. `preferred` is a mode in which the endpoint accepts TLS
+**and** plaintext at the same time, which is exactly what a migration needs, and
+`redis_transit_encryption_mode` plus `redis_apply_immediately` exist to drive
+it. The sequence below was run end to end against a live ElastiCache
+replication group with a client holding a connection open throughout, and **no
+step interrupted service**.
+
+#### Step 1 of 3: accept TLS alongside plaintext
+
+```hcl
+redis_high_availability_enabled  = true
+redis_transit_encryption_enabled = true
+redis_transit_encryption_mode    = "preferred"   # <- the migration lever
+redis_apply_immediately          = true          # <- AWS rejects the change without it
+```
+
+Took **17 minutes 27 seconds**. Throughout, a plaintext connection opened before
+the change and held open answered every `PING`, and new plaintext connections
+kept succeeding: 1198 consecutive replies on the held-open connection and 1192
+on fresh ones, with zero errors. TLS starts working the moment the change lands.
+
+Terraform rolls the n8n pods onto TLS in the same apply. Pods that have not
+rolled yet keep working, because plaintext is still accepted.
+
+No AUTH token is created in this step. AWS will not accept one in `preferred`
+mode, so the module does not generate it, publish the Secret, or set
+`passwordFromEnv` on the KEDA triggers until the mode is `required`.
+
+> [!WARNING]
+> While the mode is `preferred`, Redis is reachable **unencrypted and
+> unauthenticated** by anything in the VPC. A `check` block warns on every apply
+> for as long as you stay there. Do not park here.
+
+#### Step 2 of 3: close plaintext and introduce the token
+
+```hcl
+redis_transit_encryption_mode = "required"
+redis_apply_immediately       = true
+```
+
+One apply, **8 minutes 18 seconds**. Terraform issues this as two API calls: the
+mode change first, then the AUTH token behind it. That ordering is what makes it
+work at all, since AWS rejects a token supplied in the same call as the move to
+`required`, with the same message it uses in `preferred`:
+
+```
+InvalidParameterValue: The AUTH token modification is only supported when
+encryption-in-transit is enabled.
+```
+
+Plaintext stops being accepted partway through: measured at **131 seconds**
+after the change was issued, the held-open plaintext connection was closed by
+the server and new plaintext connections began timing out. Nothing was using
+plaintext by then, because step 1 already moved the pods to TLS.
+
+The endpoint hostname also changes shape here, from
+`<group>.<id>.ng.0001.<region>.cache.amazonaws.com` to
+`master.<group>.<id>.<region>.cache.amazonaws.com`. Both resolve during the
+migration; the old name is retired when this step completes. Terraform picks up
+the new one and rewrites the Helm values in the same apply, so nothing needs
+doing by hand.
+
+#### Step 3 of 3: actually require the token
+
+**This step is not optional.** The token in step 2 is introduced with
+ElastiCache's `ROTATE` strategy, which by design keeps the *previous* credential
+valid so clients that have not restarted are not locked out. For a group that
+had no token, the previous credential is *no credential at all*, so after step 2
+the endpoint still answers unauthenticated connections:
+
+```console
+$ redis-cli -h master.<group>.<id>.<region>.cache.amazonaws.com --tls ping
+PONG          # <- with no token supplied
+```
+
+Rotate once more to close it:
+
+```bash
+terraform apply -replace='module.n8n.random_password.redis_auth_token[0]'
+```
+
+Seconds, not minutes. Afterwards an unauthenticated connection is refused, and
+**both** the old and the new token still work, so the pod roll this triggers has
+no lockout window:
+
+```console
+$ redis-cli -h ... --tls ping
+NOAUTH Authentication required.
+```
+
+#### None of this applies to a new deployment
+
+Creating Redis with `redis_transit_encryption_enabled = true` from the start
+gives you TLS and a required token in a single apply, because the group is
+created encrypted rather than modified into it. `redis_transit_encryption_mode`
+defaults to `required` and `redis_apply_immediately` to `false`, so a first-time
+caller never touches either.
+
+#### Or replace the group instead
+
+If a maintenance window is cheaper than three applies:
+
+```bash
+terraform apply -replace='module.n8n.aws_elasticache_replication_group.n8n[0]'
+```
+
+That destroys the group and builds an encrypted one in one step, and every
+queued job goes with it. Drain workers first.
 
 > [!WARNING]
 > **Enabling this on a default deployment replaces Redis.** The cluster and the
@@ -1402,11 +1534,13 @@ No modules.
 | <a name="input_node_min"></a> [node\_min](#input\_node\_min) | Minimum number of worker nodes | `number` | `3` | no |
 | <a name="input_private_subnets"></a> [private\_subnets](#input\_private\_subnets) | IDs of private subnets (one per AZ, minimum two AZs). RDS, ElastiCache, and EKS nodes attach here. | `list(string)` | n/a | yes |
 | <a name="input_public_subnets"></a> [public\_subnets](#input\_public\_subnets) | IDs of public subnets (one per AZ, minimum two AZs). The ALB attaches here. | `list(string)` | n/a | yes |
+| <a name="input_redis_apply_immediately"></a> [redis\_apply\_immediately](#input\_redis\_apply\_immediately) | Apply ElastiCache modifications as soon as the apply runs, rather than deferring them to the next maintenance window. Defaults to false, matching the AWS default and leaving every existing deployment's behaviour unchanged. Set true when changing redis\_transit\_encryption\_mode: AWS rejects any transit-encryption modification outright without it, with `InvalidParameterValue: Transit encryption modification should be called with applied immediately option.`, so the migration cannot proceed while this is false. Turning it on makes other modifications immediate too, which for a replication group can mean a node reboot outside the window you picked, so prefer scoping it to the applies that need it rather than leaving it on. | `bool` | `false` | no |
 | <a name="input_redis_high_availability_enabled"></a> [redis\_high\_availability\_enabled](#input\_redis\_high\_availability\_enabled) | When true, provision Redis as a two-node aws\_elasticache\_replication\_group (one primary, one replica) with automatic\_failover\_enabled and multi\_az\_enabled, instead of the default single-node aws\_elasticache\_cluster. Redis backs the Bull queue that distributes executions across workers and the multi-main leader election, so the default single node is a single point of failure: a node or AZ event stalls both until ElastiCache replaces it. Both nodes use redis\_node\_type, so the Redis cost roughly doubles. What this buys is that the QUEUE SURVIVES the node loss, not that n8n rides the failover out: measured on a live cluster, ElastiCache promotes the replica in about 20 seconds and every main, worker and webhook pod exits and restarts during that window (n8n's RedisClientService calls process.exit once Redis has been unreachable for QUEUE\_BULL\_REDIS\_TIMEOUT\_THRESHOLD; raising that threshold to 30s was tried and still fell short of this failover, though a larger reconnect budget can ride one out, and wiring that threshold up is the follow-up in PR #77). Recovery is automatic and takes well under a minute, and the queued executions are still there on the promoted node. Compare that with the single-node default, where a lost node means waiting for AWS to build a new one and the queue is gone with it. FLIPPING THIS ON A DEFAULT DEPLOYMENT REPLACES REDIS: the two topologies are different resource types, so no `moved` block can bridge them and Terraform destroys the cluster before creating the replication group. Every queued and in-flight execution in Redis at that moment is lost. A deployment that already has redis\_transit\_encryption\_enabled = true is on a replication group already, so Terraform plans that transition as an in-place modification rather than a replacement (the provider raises the node count via ElastiCache's IncreaseReplicaCount API). That transition has not been exercised on a live cluster, so treat the in-place plan as the expected shape rather than a guarantee of zero disruption, and still drain first. See README → "Redis high availability" for the procedure. | `bool` | `false` | no |
 | <a name="input_redis_host"></a> [redis\_host](#input\_redis\_host) | External Redis host. Required when create\_elasticache = false. Ignored otherwise. Must be reachable from the EKS node subnets on redis\_port, and must accept unauthenticated, non-TLS connections, because the module wires neither a Redis password nor TLS. For a replication group the caller manages, use its primary endpoint rather than a node address, so the name follows the primary across a failover. | `string` | `null` | no |
 | <a name="input_redis_node_type"></a> [redis\_node\_type](#input\_redis\_node\_type) | ElastiCache node type (cache.t3.medium ~$25/month). Sizes the single node when redis\_high\_availability\_enabled = false, and every node in the replication group when it is true, so the Redis line of the bill scales with the node count, not just the type. Ignored when create\_elasticache = false. | `string` | `"cache.t3.medium"` | no |
 | <a name="input_redis_port"></a> [redis\_port](#input\_redis\_port) | Port of the external Redis specified by redis\_host. Ignored when create\_elasticache = true, because module-managed ElastiCache always listens on 6379. | `number` | `6379` | no |
-| <a name="input_redis_transit_encryption_enabled"></a> [redis\_transit\_encryption\_enabled](#input\_redis\_transit\_encryption\_enabled) | Encrypt the n8n queue backend in transit and require an AUTH token on it. Defaults to false, which is the module's deliberate network-trust posture: Redis sits in private subnets behind a security group that admits only VPC traffic, so isolation is by network boundary rather than by credentials. Set true to add TLS plus a generated AUTH token on top of that boundary, worth doing when queue payloads (workflow execution data) crossing the VPC in cleartext, or an unauthenticated Redis after a network-boundary breach, are risks you need closed. Independent of redis\_high\_availability\_enabled: this buys encryption and authentication only, and leaves the cache at one node. CHANGING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS unless high availability is already on: AWS exposes the AUTH token only on aws\_elasticache\_replication\_group, so enabling it moves a default deployment off aws\_elasticache\_cluster, which drops every job queued at that moment. Drain workers and pick a maintenance window. Worker queue-depth autoscaling is unaffected: KEDA's Redis triggers pick up TLS and the AUTH token alongside the workers themselves. Requires create\_elasticache = true, since the module cannot put a token on a Redis it does not manage. Retrieve the generated token with `terraform output -raw redis_auth_token`. | `bool` | `false` | no |
+| <a name="input_redis_transit_encryption_enabled"></a> [redis\_transit\_encryption\_enabled](#input\_redis\_transit\_encryption\_enabled) | Encrypt the n8n queue backend in transit and require an AUTH token on it. Defaults to false, which is the module's deliberate network-trust posture: Redis sits in private subnets behind a security group that admits only VPC traffic, so isolation is by network boundary rather than by credentials. Set true to add TLS plus a generated AUTH token on top of that boundary, worth doing when queue payloads (workflow execution data) crossing the VPC in cleartext, or an unauthenticated Redis after a network-boundary breach, are risks you need closed. Independent of redis\_high\_availability\_enabled: this buys encryption and authentication only, and leaves the cache at one node. CHANGING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS: AWS exposes the AUTH token only on aws\_elasticache\_replication\_group, so enabling it moves a default deployment off aws\_elasticache\_cluster, which drops every job queued at that moment. Drain workers and pick a maintenance window. Enabling it on a deployment that is ALREADY on a replication group (redis\_high\_availability\_enabled = true) is supported but takes three applies, not one: AWS refuses a direct plaintext-to-encrypted transition and requires the group to pass through transit\_encryption\_mode = preferred first, and it refuses an AUTH token until the mode is required. Setting this variable on its own therefore plans clean and then fails at apply. Drive the migration with redis\_transit\_encryption\_mode and redis\_apply\_immediately instead. The full sequence was run against a live cluster with a client connection held open across every step and interrupted service at no point; see README for the three steps, their measured durations, and why the third one is not optional. Worker queue-depth autoscaling is unaffected: KEDA's Redis triggers pick up TLS and the AUTH token alongside the workers themselves. Requires create\_elasticache = true, since the module cannot put a token on a Redis it does not manage. Retrieve the generated token with `terraform output -raw redis_auth_token`. | `bool` | `false` | no |
+| <a name="input_redis_transit_encryption_mode"></a> [redis\_transit\_encryption\_mode](#input\_redis\_transit\_encryption\_mode) | Which clients the Redis replication group accepts while transit encryption is on. "required" (the default) accepts TLS only, and is where a deployment should end up. "preferred" accepts TLS AND plaintext on the same endpoint at the same time, which is the only way AWS allows transit encryption to be turned on for a replication group that already exists: it refuses a direct disabled-to-enabled transition and demands a pass through preferred first. That makes this input the migration lever rather than a tuning knob. A caller creating Redis for the first time should leave it alone; a caller adding redis\_transit\_encryption\_enabled to a deployment already running redis\_high\_availability\_enabled sets it to "preferred" for one apply and then back to "required", with redis\_apply\_immediately = true throughout. See README → "Adding TLS to an existing replication group" for the full sequence, including where the pods have to roll. Only written when redis\_transit\_encryption\_enabled = true, since it describes a property of transit encryption; ignored otherwise. Sitting on "preferred" indefinitely is valid as far as AWS is concerned but leaves the endpoint accepting cleartext, so it defeats the point of enabling the feature. | `string` | `"required"` | no |
 | <a name="input_route53_zone_id"></a> [route53\_zone\_id](#input\_route53\_zone\_id) | Route53 hosted zone ID for the parent of n8n\_domain (e.g. the zone for example.com if n8n\_domain = n8n.example.com). When set, the module issues a DNS-validated ACM certificate and creates the alias A-record automatically — single terraform apply, no manual DNS steps. Leave null and pass certificate\_arn instead. Set exactly one of certificate\_arn or route53\_zone\_id. | `string` | `null` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Additional AWS tags to apply to all resources this module creates. Merged on top of the built-in ManagedBy/Project tags. | `map(string)` | `{}` | no |
 | <a name="input_vpc_cidr_block"></a> [vpc\_cidr\_block](#input\_vpc\_cidr\_block) | CIDR block of the VPC — used by the RDS and Redis security groups to allow intra-VPC traffic. | `string` | n/a | yes |

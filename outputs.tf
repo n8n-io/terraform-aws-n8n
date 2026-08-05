@@ -67,7 +67,7 @@ output "redis_endpoint" {
 
 output "redis_auth_token" {
   description = "ElastiCache AUTH token when redis_transit_encryption_enabled = true; null otherwise, since the default posture has no credential. Retrieve with: terraform output -raw redis_auth_token"
-  value       = local.redis_tls_active ? random_password.redis_auth_token[0].result : null
+  value       = local.redis_auth_active ? random_password.redis_auth_token[0].result : null
   sensitive   = true
 }
 

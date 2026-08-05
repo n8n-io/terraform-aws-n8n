@@ -531,10 +531,44 @@ this project adheres to the stability contract in
   **either** variable alone is enough to move a deployment off the default
   cluster resource, and the two are independent once there: encryption leaves
   the cache single-node, and availability leaves the endpoint plaintext. All
-  four combinations are pinned by tests. Because both features land on one
-  resource with one identifier (`<cluster_name>-redis-rg`), enabling the second
-  one later modifies the replication group already in place rather than
-  replacing it.
+  four combinations are pinned by tests, and the both-on combination is
+  confirmed on a live cluster.
+
+  Because both features land on one resource with one identifier
+  (`<cluster_name>-redis-rg`), enabling the second one later plans as a
+  modification of the replication group already in place rather than a
+  replacement.
+
+- `redis_transit_encryption_mode` (default `"required"`) and
+  `redis_apply_immediately` (default `false`) make **adding TLS to an existing
+  replication group** a supported migration rather than a failed apply. AWS
+  refuses a direct plaintext-to-encrypted transition and refuses an AUTH token
+  until the mode is `required`, so `redis_transit_encryption_enabled` on its own
+  plans clean and then fails. `preferred` accepts TLS and plaintext on the same
+  endpoint, which is what makes the transition rideable.
+
+  Both defaults preserve existing behaviour exactly. `apply_immediately` is
+  written as `null` rather than `false` so no deployment already on a
+  replication group sees a plan diff, and `"required"` is what a first-time
+  create wants, so TLS and the token still arrive together in one apply.
+
+  The three-step migration was run end to end against a live ElastiCache
+  replication group with a client connection held open throughout, and **no step
+  interrupted service**: `preferred` took 17m27s with 1198 consecutive replies
+  on the held-open plaintext connection and zero errors; `required` took 8m18s
+  in a single Terraform apply, closing plaintext 131 seconds in, by which point
+  the pods were already on TLS; the final token rotation took seconds. Step
+  three is not optional, because ElastiCache introduces a first token with its
+  `ROTATE` strategy and that keeps the previous credential valid, which for a
+  group that had no token means unauthenticated connections keep working until a
+  second rotation. See README → "Adding TLS to an existing replication group"
+  for the sequence and the measurements.
+
+  The module generates no AUTH token, publishes no Secret and sets no
+  `passwordFromEnv` on the KEDA triggers while the mode is `preferred`, matching
+  what AWS will accept. A `check` block warns on every apply for as long as a
+  deployment stays there, since `preferred` leaves Redis reachable unencrypted
+  and unauthenticated from anywhere in the VPC.
 
   **Enabling this on a default deployment replaces Redis**, since the cluster
   and the replication group are different resource types. Every job queued at
