@@ -356,6 +356,9 @@ cover you. They keep the module's single-apply DNS wiring intact:
   sender is on a known range. To lock down the editor while keeping webhooks
   public, run two load balancers instead: that is what
   [`examples/split-ingress/`](./examples/split-ingress/) is for.
+- **`alb_ssl_policy`**: the TLS negotiation policy for the HTTPS listener,
+  pinned to `ELBSecurityPolicy-TLS13-1-2-2021-06` by default. Set it to any
+  AWS-published `ELBSecurityPolicy-*` name to match a compliance baseline.
 - **`ingress_annotations`**: a `map(string)` merged over the module's defaults
   (last write wins). This is the escape hatch for any AWS Load Balancer
   Controller feature the module has no opinion on, so you never need a fork to
@@ -363,8 +366,8 @@ cover you. They keep the module's single-apply DNS wiring intact:
 
   ```hcl
   ingress_annotations = {
-    "alb.ingress.kubernetes.io/wafv2-acl-arn" = aws_wafv2_web_acl.n8n.arn
-    "alb.ingress.kubernetes.io/ssl-policy"    = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+    "alb.ingress.kubernetes.io/wafv2-acl-arn"            = aws_wafv2_web_acl.n8n.arn
+    "alb.ingress.kubernetes.io/load-balancer-attributes" = "access_logs.s3.enabled=true,access_logs.s3.bucket=my-alb-logs"
   }
   ```
 
@@ -374,10 +377,11 @@ Seven caveats:
   session stickiness that pins a browser to one main pod for 3 hours. Without
   it, WebSocket connections break as the ALB round-robins. Re-include
   `stickiness.enabled=true` if you set that key.
-- Set the scheme through `ingress_scheme`, not through `ingress_annotations`.
-  Doing both raises a plan-time warning, because the annotation silently wins
-  and the failure mode is an admin UI that is public when you meant it to be
-  internal.
+- Set the scheme through `ingress_scheme` and the TLS policy through
+  `alb_ssl_policy`, not through `ingress_annotations`. Doing both raises a
+  plan-time warning, because the annotation silently wins and the failure mode
+  is an admin UI that is public when you meant it to be internal, or a TLS
+  floor that never took effect.
 - `alb_inbound_cidrs` narrows a public ALB; it is not the same as
   `ingress_scheme = "internal"`. The ALB stays in the public subnets with a
   public DNS name, and the allow-list is the only thing keeping other sources
