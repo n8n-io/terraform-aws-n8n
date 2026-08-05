@@ -11,8 +11,9 @@ this project adheres to the stability contract in
 
 - **`db_engine_version` now defaults to `18.4` instead of `16.9`.** n8n's
   Postgres version policy supports the latest two actively-maintained majors
-  (17 and 18, as of this writing) plus one older compatibility major (16); the
-  old default was already past that compatibility floor. See
+  (17 and 18, as of this writing) plus one older, time-limited compatibility
+  major (16); the old default sat in that deprecating compatibility tier
+  rather than on an actively-maintained major. See
   [#84](https://github.com/n8n-io/terraform-aws-n8n/issues/84).
 
   Existing deployments are unaffected: `aws_db_instance.n8n` carries
