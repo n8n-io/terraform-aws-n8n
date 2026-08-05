@@ -398,6 +398,17 @@ this project adheres to the stability contract in
   editor and REST API users, not a tier's executions/day. Resolves
   [#51](https://github.com/n8n-io/terraform-aws-n8n/issues/51).
 
+- `node_instance_type`, `node_max`, `n8n_task_runners_enabled`, and the six
+  autoscaler floor and ceiling inputs now declare `nullable = false`. A caller
+  passing an explicit `null` for one of these previously propagated it into
+  the module instead of falling back to the default, and once the capacity
+  check existed that null aborted the plan from inside the check's
+  interpolations (see the AGENTS.md note on null and `nullable = false`).
+  With `nullable = false`, Terraform substitutes the declared default at the
+  variable boundary. Only callers writing a literal `null` for one of these
+  nine inputs observe any change: they now get the default silently rather
+  than an error partway through the plan.
+
 - `aws_route53_record.cert_validation` keys its `for_each` off
   `local.acm_domain_names` instead of the certificate's computed
   `domain_validation_options`, and selects each record's values by matching

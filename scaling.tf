@@ -174,6 +174,12 @@ locals {
   # ebs-csi-node-windows is excluded deliberately: it exists in kube-system but
   # reports desiredNumberScheduled = 0, because no node here matches its Windows
   # selector. Counting it would overstate overhead by 30m per node.
+  #
+  # Maintenance: this constant is measured, not sourced from a pin. aws-node and
+  # kube-proxy track var.kubernetes_version and ebs-csi-node comes from the
+  # unpinned aws_eks_addon in storage.tf, so re-verify after bumping
+  # kubernetes_version or when the addon moves:
+  #   kubectl -n kube-system get ds -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[*].resources.requests.cpu}{"\n"}{end}'
   node_daemonset_cpu_millis = 180
 
   node_schedulable_cpu_millis = max(
@@ -192,6 +198,13 @@ locals {
   # requests at the versions this module installs, so they cost nothing against a
   # request-based model. Still an approximation, since a caller's own workloads
   # and DaemonSets are invisible here, which is why the check below only warns.
+  #
+  # Maintenance: this constant is measured, not sourced from a pin. CoreDNS
+  # tracks var.kubernetes_version; metrics-server, KEDA and ebs-csi-controller
+  # come from the unpinned charts and addon in controllers.tf, keda.tf and
+  # storage.tf, so a chart release can move these requests without any change in
+  # this repo. Re-verify after bumping kubernetes_version or upgrading a cluster:
+  #   kubectl -n kube-system get deploy -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[*].resources.requests.cpu}{"\n"}{end}'
   cluster_addon_cpu_millis = 720
 
   n8n_schedulable_cpu_millis = max(

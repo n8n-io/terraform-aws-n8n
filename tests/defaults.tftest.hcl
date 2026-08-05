@@ -31,7 +31,6 @@ mock_provider "aws" {
     }
   }
 
-
   override_data {
     target = data.aws_caller_identity.current
     values = {
