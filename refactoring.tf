@@ -39,9 +39,10 @@ moved {
 #
 # These three cover the default path only, where the Redis tier stays a
 # single-node cluster. There is deliberately no block for the replication group
-# redis_high_availability_enabled = true creates: `moved` cannot bridge two
-# different resource types, so that switch is a destroy and recreate no matter
-# how it is written. See redis.tf and README → "Redis high availability".
+# that redis_high_availability_enabled or redis_transit_encryption_enabled
+# creates: `moved` cannot bridge two different resource types, so either switch
+# is a destroy and recreate no matter how it is written. See redis.tf and
+# README → "Redis high availability".
 moved {
   from = aws_security_group.redis
   to   = aws_security_group.redis[0]

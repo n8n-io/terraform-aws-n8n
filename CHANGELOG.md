@@ -516,6 +516,71 @@ this project adheres to the stability contract in
   Every example gains a test rejecting `"filesystem"`; the three that can run a
   full mocked plan (`cloudflare`, `godaddy`, `split-ingress`) also assert the
   `"database"` default.
+- `redis_transit_encryption_enabled` input (default `false`) puts the
+  ElastiCache queue backend behind TLS and an AUTH token. The default preserves
+  the module's network-trust posture, Redis in private subnets behind a
+  VPC-only security group, so callers who leave it alone get no plan diff at
+  all. Callers who want credential-based Redis security flip one switch instead
+  of forking the module. Resolves
+  [#41](https://github.com/n8n-io/terraform-aws-n8n/issues/41).
+
+  It shares the `aws_elasticache_replication_group` that
+  `redis_high_availability_enabled` introduced, for an unrelated reason:
+  `auth_token` does not exist on `aws_elasticache_cluster`, and AWS further
+  requires transit encryption to be on before AUTH can be enabled at all. So
+  **either** variable alone is enough to move a deployment off the default
+  cluster resource, and the two are independent once there: encryption leaves
+  the cache single-node, and availability leaves the endpoint plaintext. All
+  four combinations are pinned by tests. Because both features land on one
+  resource with one identifier (`<cluster_name>-redis-rg`), enabling the second
+  one later modifies the replication group already in place rather than
+  replacing it.
+
+  **Enabling this on a default deployment replaces Redis**, since the cluster
+  and the replication group are different resource types. Every job queued at
+  that moment is lost. Drain workers and pick a maintenance window. Upgrading
+  the module *without* touching the variable does **not** replace anything: the
+  `moved` block in `refactoring.tf` absorbs the `count` on
+  `aws_elasticache_cluster.n8n`.
+
+  The generated token respects ElastiCache's constraints (16-128 chars, with
+  `! & # $ ^ < > -` the only permitted non-alphanumerics) and is published two
+  ways: as a Kubernetes secret the chart mounts as `QUEUE_BULL_REDIS_PASSWORD`
+  on main, worker and webhook processor, and as a new sensitive
+  `redis_auth_token` output (`terraform output -raw redis_auth_token`).
+
+  Not compatible with `create_elasticache = false`, and rejected at plan time
+  rather than applied. The module cannot put a token on a Redis it does not
+  manage, and the combination would otherwise render `tls = true` plus a
+  generated password against the caller's plaintext endpoint: an apply that
+  succeeds and then fails at runtime.
+
+- **Worker autoscaling follows the encryption flag.** Both KEDA Redis triggers
+  gain `enableTLS` and `passwordFromEnv: QUEUE_BULL_REDIS_PASSWORD` when
+  `redis_transit_encryption_enabled` is on, so queue-depth scaling keeps working
+  against the encrypted backend. TLS is the half that has to land: without it
+  KEDA opens a plaintext connection to a TLS-only endpoint and hangs on
+  `connection to redis failed: i/o timeout` before authentication is ever
+  attempted, so credentials alone would read as no fix at all. Nothing crashes
+  to announce it either, the HPA just reports `<unknown>` and workers freeze at
+  their current replica count. `passwordFromEnv` names an environment variable
+  rather than carrying the token, and KEDA resolves it against the worker pod's
+  first container (`n8n-worker`), which the chart already gives the token to via
+  `secretKeyRef`. So nothing sensitive is written into the ScaledObject and no
+  `TriggerAuthentication` resource is required. This relies on KEDA being
+  permitted to read Secrets outside its own namespace, which its chart allows by
+  default; installing KEDA with `KEDA_RESTRICT_SECRET_ACCESS=true` would stall
+  queue-depth scaling. Resolves
+  [#66](https://github.com/n8n-io/terraform-aws-n8n/issues/66).
+
+  Verified on a live cluster against KEDA 2.20.2, since none of this is visible
+  to a plan-time test. The ScaledObject reported `READY=True` with the HPA
+  reading a numeric `0/2 (avg), 0/2 (avg)` where the same deployment previously
+  reported `READY=False` and `<unknown>`, and the operator log carried no
+  timeout or auth errors. Driving the queue to 20 scaled workers from 2 to the
+  maximum of 6 in about 55 seconds, and clearing it returned them to 2. The AUTH
+  token appeared nowhere in the rendered ScaledObject.
+
 - `redis_high_availability_enabled` input (default `false`) provisions Redis as
   a two-node `aws_elasticache_replication_group` (one primary, one replica,
   `automatic_failover_enabled` and `multi_az_enabled`) instead of the

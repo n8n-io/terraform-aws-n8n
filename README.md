@@ -504,9 +504,9 @@ because the client hit connect timeouts rather than `READONLY`.
 ### Switching topologies replaces Redis
 
 The two topologies are **different Terraform resource types**, so a `moved`
-block cannot bridge them. Flipping the toggle on an existing deployment
-destroys the cache and creates the replacement, and **everything queued or in
-flight at that moment is lost**. This is a maintenance-window operation:
+block cannot bridge them. Flipping the toggle on a default deployment destroys
+the cache and creates the replacement, and **everything queued or in flight at
+that moment is lost**. This is a maintenance-window operation:
 
 1. Stop new work reaching n8n (pause the schedule triggers, or take the
    webhook path out of the load balancer).
@@ -534,10 +534,108 @@ no queue backend and needing a second apply to recover. The distinct suffix
 makes enabling and disabling each a single apply.
 
 The suffix reads `-redis-rg` (replication group) rather than `-redis-ha`
-because the resource is not exclusive to high availability. Anything the module
-can only express as a replication group lands on it, and `replication_group_id`
-forces replacement, so a name that had to be corrected later would cost every
-early adopter their queue a second time.
+because the resource is not exclusive to high availability.
+`redis_transit_encryption_enabled` selects it too, for an unrelated reason. See
+[Redis in-transit encryption and AUTH](#redis-in-transit-encryption-and-auth)
+for the full matrix.
+
+That sharing is also the one case where enabling high availability does **not**
+replace anything. A deployment already running with
+`redis_transit_encryption_enabled = true` is on a replication group, so
+Terraform plans the change as an in-place modification, raising the node count
+through ElastiCache's `IncreaseReplicaCount` API rather than rebuilding. That
+path has not been exercised on a live cluster, so treat the in-place plan as
+the expected shape rather than a promise of zero disruption, and still drain
+first.
+
+## Redis in-transit encryption and AUTH
+
+By default the module secures its ElastiCache queue backend by **network
+boundary**: Redis sits in private subnets behind a security group that admits
+only VPC traffic, with no TLS and no credentials. That is a defensible posture
+inside a trusted VPC and it is the module's accepted as-built behaviour, but it
+leaves two things open. Queue payloads (workflow execution data) cross the VPC
+in cleartext, and anything that reaches the network boundary reaches Redis
+unauthenticated.
+
+Set `redis_transit_encryption_enabled = true` to close both. The module then
+enables TLS in transit, generates an AUTH token, publishes it as a Kubernetes
+secret, and wires `QUEUE_BULL_REDIS_TLS` plus `QUEUE_BULL_REDIS_PASSWORD` onto
+every n8n container. Retrieve the token with:
+
+```console
+$ terraform output -raw redis_auth_token
+```
+
+The generated token respects ElastiCache's constraints: 16 to 128 characters,
+with `! & # $ ^ < > -` the only permitted non-alphanumerics. A broader special
+set is rejected by AWS at create time.
+
+### It uses the same replication group high availability does
+
+`auth_token` is not available on `aws_elasticache_cluster`. AWS exposes it only
+on `aws_elasticache_replication_group`, and only when transit encryption is
+already enabled. So this variable and `redis_high_availability_enabled` both
+select the replication group, for unrelated reasons, and **either one alone is
+enough to move off the default cluster resource**:
+
+| `redis_high_availability_enabled` | `redis_transit_encryption_enabled` | Resource | Nodes | Failover | TLS + AUTH |
+| --- | --- | --- | --- | --- | --- |
+| `false` | `false` | `aws_elasticache_cluster` | 1 | no | no |
+| `true` | `false` | `aws_elasticache_replication_group` | 2, Multi-AZ | yes | no |
+| `false` | `true` | `aws_elasticache_replication_group` | 1 | no | yes |
+| `true` | `true` | `aws_elasticache_replication_group` | 2, Multi-AZ | yes | yes |
+
+The two are independent. Encryption does not buy you a replica, so enabling it
+alone leaves the cache single-node and the bill unchanged; availability does
+not buy you a credential, so enabling that alone leaves the endpoint plaintext.
+
+Because both land on **one** resource with one identifier
+(`<cluster_name>-redis-rg`), turning the second one on later modifies the
+replication group you already have rather than replacing it.
+
+> [!WARNING]
+> **Enabling this on a default deployment replaces Redis.** The cluster and the
+> replication group are different resource types, so flipping the flag destroys
+> one and creates the other, dropping every job queued at that moment. Drain
+> workers and use a maintenance window.
+>
+> Upgrading the module *without* touching this variable replaces nothing. A
+> `moved` block absorbs the `count` added to the cluster resource, and existing
+> deployments plan `No changes.`
+
+### `create_elasticache = false` is not compatible
+
+The module cannot put TLS or a token on a Redis it does not manage, so this
+combination is rejected at plan time rather than applied. Terminate TLS on your
+own endpoint and leave this variable at its default. See
+[Bring your own Redis](#bring-your-own-redis).
+
+### Worker autoscaling
+
+Queue-depth autoscaling keeps working with the flag on. Both worker triggers
+gain `enableTLS` and a reference to the AUTH token, so KEDA reads queue depth
+over the same encrypted, authenticated connection the workers use.
+
+TLS is the half that has to land. Without it KEDA opens a plaintext connection
+to a TLS-only endpoint and hangs on `connection to redis failed: i/o timeout`
+before authentication is ever attempted. Nothing crashes: the HPA simply
+reports `<unknown>` and workers freeze at their current replica count, so
+credentials alone would read as no fix at all.
+
+The token is not written into the ScaledObject. The trigger carries
+`passwordFromEnv: QUEUE_BULL_REDIS_PASSWORD`, which names an environment
+variable rather than a value, and KEDA resolves it against the worker pod's
+first container, following the `secretKeyRef` the chart already sets there.
+Nothing sensitive lands in a manifest, and no `TriggerAuthentication` resource
+is needed.
+
+This depends on KEDA being allowed to read Secrets outside its own namespace,
+which its chart permits by default. If you install KEDA yourself with
+`KEDA_RESTRICT_SECRET_ACCESS=true`, or set
+`permissions.operator.restrict.secret` or
+`permissions.metricServer.restrict.secret` to `true`, the token cannot be
+resolved and queue-depth scaling will stall.
 
 ## Bring your own Redis
 
@@ -1184,10 +1282,12 @@ No modules.
 | [kubernetes_namespace.n8n](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/namespace) | resource |
 | [kubernetes_secret.n8n](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/secret) | resource |
 | [kubernetes_secret.n8n_db](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/secret) | resource |
+| [kubernetes_secret.n8n_redis](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/secret) | resource |
 | [kubernetes_service_account_v1.n8n](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/service_account_v1) | resource |
 | [kubernetes_storage_class_v1.gp3](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/storage_class_v1) | resource |
 | [random_id.n8n_encryption_key](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/id) | resource |
 | [random_password.db_password](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/password) | resource |
+| [random_password.redis_auth_token](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/password) | resource |
 | [random_password.task_runner_token](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/password) | resource |
 | [time_sleep.wait_for_alb_cleanup](https://registry.terraform.io/providers/hashicorp/time/latest/docs/resources/sleep) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
@@ -1302,10 +1402,11 @@ No modules.
 | <a name="input_node_min"></a> [node\_min](#input\_node\_min) | Minimum number of worker nodes | `number` | `3` | no |
 | <a name="input_private_subnets"></a> [private\_subnets](#input\_private\_subnets) | IDs of private subnets (one per AZ, minimum two AZs). RDS, ElastiCache, and EKS nodes attach here. | `list(string)` | n/a | yes |
 | <a name="input_public_subnets"></a> [public\_subnets](#input\_public\_subnets) | IDs of public subnets (one per AZ, minimum two AZs). The ALB attaches here. | `list(string)` | n/a | yes |
-| <a name="input_redis_high_availability_enabled"></a> [redis\_high\_availability\_enabled](#input\_redis\_high\_availability\_enabled) | When true, provision Redis as a two-node aws\_elasticache\_replication\_group (one primary, one replica) with automatic\_failover\_enabled and multi\_az\_enabled, instead of the default single-node aws\_elasticache\_cluster. Redis backs the Bull queue that distributes executions across workers and the multi-main leader election, so the default single node is a single point of failure: a node or AZ event stalls both until ElastiCache replaces it. Both nodes use redis\_node\_type, so the Redis cost roughly doubles. What this buys is that the QUEUE SURVIVES the node loss, not that n8n rides the failover out: measured on a live cluster, ElastiCache promotes the replica in about 20 seconds and every main, worker and webhook pod exits and restarts during that window (n8n's RedisClientService calls process.exit once Redis has been unreachable for QUEUE\_BULL\_REDIS\_TIMEOUT\_THRESHOLD; raising that threshold to 30s was tried and still fell short of this failover, though a larger reconnect budget can ride one out, and wiring that threshold up is the follow-up in PR #77). Recovery is automatic and takes well under a minute, and the queued executions are still there on the promoted node. Compare that with the single-node default, where a lost node means waiting for AWS to build a new one and the queue is gone with it. FLIPPING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS: the two topologies are different resource types, so no `moved` block can bridge them and Terraform destroys the cluster before creating the replication group. Every queued and in-flight execution in Redis at that moment is lost. See README → "Redis high availability" for the drain-first procedure. | `bool` | `false` | no |
+| <a name="input_redis_high_availability_enabled"></a> [redis\_high\_availability\_enabled](#input\_redis\_high\_availability\_enabled) | When true, provision Redis as a two-node aws\_elasticache\_replication\_group (one primary, one replica) with automatic\_failover\_enabled and multi\_az\_enabled, instead of the default single-node aws\_elasticache\_cluster. Redis backs the Bull queue that distributes executions across workers and the multi-main leader election, so the default single node is a single point of failure: a node or AZ event stalls both until ElastiCache replaces it. Both nodes use redis\_node\_type, so the Redis cost roughly doubles. What this buys is that the QUEUE SURVIVES the node loss, not that n8n rides the failover out: measured on a live cluster, ElastiCache promotes the replica in about 20 seconds and every main, worker and webhook pod exits and restarts during that window (n8n's RedisClientService calls process.exit once Redis has been unreachable for QUEUE\_BULL\_REDIS\_TIMEOUT\_THRESHOLD; raising that threshold to 30s was tried and still fell short of this failover, though a larger reconnect budget can ride one out, and wiring that threshold up is the follow-up in PR #77). Recovery is automatic and takes well under a minute, and the queued executions are still there on the promoted node. Compare that with the single-node default, where a lost node means waiting for AWS to build a new one and the queue is gone with it. FLIPPING THIS ON A DEFAULT DEPLOYMENT REPLACES REDIS: the two topologies are different resource types, so no `moved` block can bridge them and Terraform destroys the cluster before creating the replication group. Every queued and in-flight execution in Redis at that moment is lost. A deployment that already has redis\_transit\_encryption\_enabled = true is on a replication group already, so Terraform plans that transition as an in-place modification rather than a replacement (the provider raises the node count via ElastiCache's IncreaseReplicaCount API). That transition has not been exercised on a live cluster, so treat the in-place plan as the expected shape rather than a guarantee of zero disruption, and still drain first. See README → "Redis high availability" for the procedure. | `bool` | `false` | no |
 | <a name="input_redis_host"></a> [redis\_host](#input\_redis\_host) | External Redis host. Required when create\_elasticache = false. Ignored otherwise. Must be reachable from the EKS node subnets on redis\_port, and must accept unauthenticated, non-TLS connections, because the module wires neither a Redis password nor TLS. For a replication group the caller manages, use its primary endpoint rather than a node address, so the name follows the primary across a failover. | `string` | `null` | no |
 | <a name="input_redis_node_type"></a> [redis\_node\_type](#input\_redis\_node\_type) | ElastiCache node type (cache.t3.medium ~$25/month). Sizes the single node when redis\_high\_availability\_enabled = false, and every node in the replication group when it is true, so the Redis line of the bill scales with the node count, not just the type. Ignored when create\_elasticache = false. | `string` | `"cache.t3.medium"` | no |
 | <a name="input_redis_port"></a> [redis\_port](#input\_redis\_port) | Port of the external Redis specified by redis\_host. Ignored when create\_elasticache = true, because module-managed ElastiCache always listens on 6379. | `number` | `6379` | no |
+| <a name="input_redis_transit_encryption_enabled"></a> [redis\_transit\_encryption\_enabled](#input\_redis\_transit\_encryption\_enabled) | Encrypt the n8n queue backend in transit and require an AUTH token on it. Defaults to false, which is the module's deliberate network-trust posture: Redis sits in private subnets behind a security group that admits only VPC traffic, so isolation is by network boundary rather than by credentials. Set true to add TLS plus a generated AUTH token on top of that boundary, worth doing when queue payloads (workflow execution data) crossing the VPC in cleartext, or an unauthenticated Redis after a network-boundary breach, are risks you need closed. Independent of redis\_high\_availability\_enabled: this buys encryption and authentication only, and leaves the cache at one node. CHANGING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS unless high availability is already on: AWS exposes the AUTH token only on aws\_elasticache\_replication\_group, so enabling it moves a default deployment off aws\_elasticache\_cluster, which drops every job queued at that moment. Drain workers and pick a maintenance window. Worker queue-depth autoscaling is unaffected: KEDA's Redis triggers pick up TLS and the AUTH token alongside the workers themselves. Requires create\_elasticache = true, since the module cannot put a token on a Redis it does not manage. Retrieve the generated token with `terraform output -raw redis_auth_token`. | `bool` | `false` | no |
 | <a name="input_route53_zone_id"></a> [route53\_zone\_id](#input\_route53\_zone\_id) | Route53 hosted zone ID for the parent of n8n\_domain (e.g. the zone for example.com if n8n\_domain = n8n.example.com). When set, the module issues a DNS-validated ACM certificate and creates the alias A-record automatically — single terraform apply, no manual DNS steps. Leave null and pass certificate\_arn instead. Set exactly one of certificate\_arn or route53\_zone\_id. | `string` | `null` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Additional AWS tags to apply to all resources this module creates. Merged on top of the built-in ManagedBy/Project tags. | `map(string)` | `{}` | no |
 | <a name="input_vpc_cidr_block"></a> [vpc\_cidr\_block](#input\_vpc\_cidr\_block) | CIDR block of the VPC — used by the RDS and Redis security groups to allow intra-VPC traffic. | `string` | n/a | yes |
@@ -1332,7 +1433,8 @@ No modules.
 | <a name="output_namespace"></a> [namespace](#output\_namespace) | Kubernetes namespace n8n is deployed into. |
 | <a name="output_node_group_role_arn"></a> [node\_group\_role\_arn](#output\_node\_group\_role\_arn) | IAM role ARN the EKS node group runs under, and therefore the principal the kubelet pulls container images as. Name it in a cross-account ECR repository policy to let this cluster pull a custom n8n image from a registry in another account, which is the mechanism to reach for there: an ECR authorization token lasts 12 hours, so an imagePullSecrets holding one goes stale long before the next apply. For registries that issue static credentials, use n8n\_image\_pull\_secrets instead. |
 | <a name="output_rds_endpoint"></a> [rds\_endpoint](#output\_rds\_endpoint) | Database endpoint — module-managed RDS when create\_database = true, or the value of var.db\_host when using an external database (e.g. Aurora). |
-| <a name="output_redis_endpoint"></a> [redis\_endpoint](#output\_redis\_endpoint) | Redis host n8n and KEDA connect to. The single cache node's address by default; the replication group's primary endpoint when redis\_high\_availability\_enabled = true, which is the name AWS repoints at the surviving node on failover; or the value of var.redis\_host when create\_elasticache = false. |
+| <a name="output_redis_auth_token"></a> [redis\_auth\_token](#output\_redis\_auth\_token) | ElastiCache AUTH token when redis\_transit\_encryption\_enabled = true; null otherwise, since the default posture has no credential. Retrieve with: terraform output -raw redis\_auth\_token |
+| <a name="output_redis_endpoint"></a> [redis\_endpoint](#output\_redis\_endpoint) | Redis host n8n and KEDA connect to. The single cache node's address by default; the replication group's primary endpoint when redis\_high\_availability\_enabled or redis\_transit\_encryption\_enabled is true, which is the name AWS repoints at the surviving node on failover; or the value of var.redis\_host when create\_elasticache = false. Reached over TLS and requiring redis\_auth\_token when redis\_transit\_encryption\_enabled = true. |
 | <a name="output_redis_port"></a> [redis\_port](#output\_redis\_port) | Port n8n and KEDA connect to Redis on. Always 6379 for module-managed ElastiCache; the value of var.redis\_port when create\_elasticache = false. Paired with redis\_endpoint so a caller wiring its own queue-depth scaler or a debug pod does not have to assume the port. |
 | <a name="output_s3_bucket_name"></a> [s3\_bucket\_name](#output\_s3\_bucket\_name) | S3 bucket used for n8n binary storage, and for execution data when n8n\_execution\_data\_storage\_mode = "s3". The module attaches no lifecycle configuration: binary data is pruned only by S3 while execution data is pruned by n8n itself, and the two cannot be separated by a prefix filter. Read the S3 lifecycle section of the README before attaching one. |
 <!-- END_TF_DOCS -->

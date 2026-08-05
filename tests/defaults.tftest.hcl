@@ -1451,6 +1451,260 @@ run "redis_topologies_use_distinct_elasticache_identifiers" {
   }
 }
 
+# ── Redis transit encryption + AUTH (opt-in) ─────────────────────────────────
+# The second feature that selects the replication group, for a reason unrelated
+# to availability: auth_token exists ONLY on that resource type, and AWS
+# requires transit encryption before AUTH can be enabled at all.
+#
+# The pair is independent in both directions, and these runs pin all four
+# corners: neither, each alone, and both. The two failure modes worth catching
+# are a caller who asks for encryption and silently gets a doubled bill, and a
+# caller who asks for availability and silently gets a credential they were
+# never told about.
+
+run "redis_transit_encryption_defaults_off" {
+  command = plan
+
+  assert {
+    condition     = var.redis_transit_encryption_enabled == false
+    error_message = "redis_transit_encryption_enabled must default to false. The network-trust posture is the accepted as-built behaviour and enabling it replaces the cache."
+  }
+
+  assert {
+    condition     = length(random_password.redis_auth_token) == 0
+    error_message = "No AUTH token should be generated on the default path. An unconditional random_password would put `1 to add` in the plan of every caller who never opted in."
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n_redis) == 0
+    error_message = "No Redis secret should exist when there is no AUTH token to hold"
+  }
+}
+
+run "redis_transit_encryption_on_swaps_to_replication_group" {
+  command = plan
+
+  variables {
+    redis_transit_encryption_enabled = true
+  }
+
+  assert {
+    condition     = length(aws_elasticache_cluster.n8n) == 0
+    error_message = "The cluster resource cannot carry an auth_token, so the opt-in path must not create one"
+  }
+
+  assert {
+    condition     = length(aws_elasticache_replication_group.n8n) == 1
+    error_message = "The opt-in path must create the replication group, the only ElastiCache resource that accepts an auth_token"
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].transit_encryption_enabled == true
+    error_message = "transit_encryption_enabled must be true, because AWS rejects an AUTH token without it"
+  }
+
+  # Encryption must not quietly also buy a second node. Availability is a
+  # separate decision behind redis_high_availability_enabled, and a caller who
+  # asked only for TLS should not discover it in the bill.
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].num_cache_clusters == 1
+    error_message = "Transit encryption alone must stay single-node. This variable buys encryption, not a second node and a doubled bill."
+  }
+
+  assert {
+    condition = (
+      aws_elasticache_replication_group.n8n[0].automatic_failover_enabled == false &&
+      aws_elasticache_replication_group.n8n[0].multi_az_enabled == false
+    )
+    error_message = "Transit encryption alone must not enable failover or Multi-AZ. Those belong to redis_high_availability_enabled and AWS bills for the replica they require."
+  }
+
+  assert {
+    condition     = length(random_password.redis_auth_token) == 1
+    error_message = "An AUTH token must be generated on the opt-in path"
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n_redis) == 1
+    error_message = "The AUTH token must be published as a Kubernetes secret for the chart to mount as QUEUE_BULL_REDIS_PASSWORD"
+  }
+
+  # Same identifier as the HA path asserts above. Both features land on ONE
+  # replication group, so a caller who enables the second one later modifies
+  # what they have rather than replacing it. Two suffixes here would mean two
+  # forced Redis replacements for anyone who ends up wanting both.
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].replication_group_id == "n8n-cluster-redis-rg"
+    error_message = "Both features must converge on one replication group identifier, or enabling the second one destroys the cache the first one created"
+  }
+}
+
+# The inverse of the run above: availability must not smuggle in a credential.
+# A caller who enables HA and nothing else should get exactly the topology
+# change they asked for, on a plaintext endpoint, with no token in state and
+# nothing new mounted into the pods.
+run "redis_high_availability_alone_provisions_no_credential" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled = true
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].transit_encryption_enabled == false
+    error_message = "High availability alone must leave the endpoint plaintext. Enabling encryption here would break every existing client at the same moment the topology changes."
+  }
+
+  assert {
+    condition     = length(random_password.redis_auth_token) == 0
+    error_message = "No AUTH token should be generated for the HA-only path"
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n_redis) == 0
+    error_message = "No Redis secret should exist on the HA-only path"
+  }
+
+  # The provider rejects auth_token_update_strategy when no auth_token is set,
+  # failing the HA-only plan outright. terraform test cannot see this (its
+  # mocked provider skips the real argument validation), so this assert stands
+  # in for the live plan that did catch it.
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].auth_token_update_strategy == null
+    error_message = "auth_token_update_strategy must be unset when there is no token. The AWS provider errors with '\"auth_token_update_strategy\": \"auth_token\" must be specified' and the HA-only path never plans."
+  }
+
+  assert {
+    condition     = length(local.keda_redis_auth_metadata) == 0
+    error_message = "KEDA's triggers must stay plaintext on the HA-only path, matching the endpoint they read"
+  }
+}
+
+# All four corners covered: this is the both-on case. One resource carries both
+# feature sets, which is the whole reason the two counts were collapsed into
+# local.redis_needs_replication_group.
+run "redis_high_availability_and_transit_encryption_compose" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled  = true
+    redis_transit_encryption_enabled = true
+  }
+
+  assert {
+    condition     = length(aws_elasticache_replication_group.n8n) == 1 && length(aws_elasticache_cluster.n8n) == 0
+    error_message = "Both features select the same single replication group. Two resources here would mean two caches and a split queue."
+  }
+
+  assert {
+    condition = (
+      aws_elasticache_replication_group.n8n[0].num_cache_clusters == 2 &&
+      aws_elasticache_replication_group.n8n[0].automatic_failover_enabled == true &&
+      aws_elasticache_replication_group.n8n[0].multi_az_enabled == true
+    )
+    error_message = "The HA attributes must survive being combined with transit encryption"
+  }
+
+  assert {
+    condition = (
+      aws_elasticache_replication_group.n8n[0].transit_encryption_enabled == true &&
+      length(random_password.redis_auth_token) == 1
+    )
+    error_message = "The encryption attributes must survive being combined with high availability"
+  }
+}
+
+# The AUTH token charset is not a free choice: ElastiCache rejects anything
+# outside ! & # $ ^ < > - at create time, and the failure surfaces as an opaque
+# InvalidParameterValue from AWS well into the apply. Asserting the generator's
+# inputs catches a careless edit at plan time instead.
+run "redis_auth_token_respects_elasticache_charset" {
+  command = plan
+
+  variables {
+    redis_transit_encryption_enabled = true
+  }
+
+  assert {
+    condition     = random_password.redis_auth_token[0].override_special == "!&#$^<>-"
+    error_message = "AUTH token special characters must be limited to the set ElastiCache permits (! & # $ ^ < > -)"
+  }
+
+  assert {
+    condition = (
+      random_password.redis_auth_token[0].length >= 16 &&
+      random_password.redis_auth_token[0].length <= 128
+    )
+    error_message = "ElastiCache AUTH tokens must be 16-128 characters"
+  }
+}
+
+# The module cannot put TLS or a token on a Redis it does not manage, and the
+# combination is worse than merely ignored: the Helm values would still render
+# tls = true plus a generated password, pointing every pod at the caller's
+# plaintext endpoint with a credential it has never heard of. That applies
+# cleanly and fails at runtime, so it is a hard validation rather than one of
+# the `check` warnings below.
+run "transit_encryption_with_external_redis_fails_validation" {
+  command = plan
+
+  variables {
+    create_elasticache               = false
+    redis_host                       = "redis.example.internal"
+    redis_transit_encryption_enabled = true
+  }
+
+  expect_failures = [var.redis_transit_encryption_enabled]
+}
+
+# ── KEDA trigger auth metadata ───────────────────────────────────────────────
+# The KEDA triggers live inside helm_release.n8n.values, which is unknown at
+# plan time (it embeds the Redis endpoint). local.keda_redis_auth_metadata is
+# the merged-in fragment that decides what those triggers carry, and it is
+# known from the variables alone, so it is the layer where this is assertable.
+
+run "keda_triggers_carry_no_auth_metadata_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(local.keda_redis_auth_metadata) == 0
+    error_message = "The default path must add nothing to the KEDA trigger metadata. Any extra key here changes the rendered ScaledObject for every existing caller who never opted in."
+  }
+}
+
+# Both keys matter, and TLS is the one that has to land. Without enableTLS, KEDA
+# opens a plaintext connection to a TLS-only endpoint and hangs on `connection
+# to redis failed: i/o timeout` before authentication is ever attempted, so the
+# credential alone would look like no fix at all. Observed on a live cluster.
+run "keda_triggers_carry_tls_and_auth_when_enabled" {
+  command = plan
+
+  variables {
+    redis_transit_encryption_enabled = true
+  }
+
+  assert {
+    condition     = local.keda_redis_auth_metadata["enableTLS"] == "true"
+    error_message = "KEDA's Redis trigger must enable TLS when the backend is TLS-only, otherwise the metric read hangs until it times out and the HPA reports <unknown>."
+  }
+
+  # passwordFromEnv names an environment variable; KEDA resolves it against the
+  # scale target's first container, following the secretKeyRef the chart sets
+  # there. Pinning the exact env var name matters: a typo resolves to empty and
+  # fails as an auth error at runtime, which no plan can catch.
+  assert {
+    condition     = local.keda_redis_auth_metadata["passwordFromEnv"] == "QUEUE_BULL_REDIS_PASSWORD"
+    error_message = "The KEDA trigger must reference the same env var the chart mounts the AUTH token into (QUEUE_BULL_REDIS_PASSWORD) on the worker container."
+  }
+
+  # The token must reach KEDA by reference only. A literal value here would be
+  # readable by anyone who can get the ScaledObject.
+  assert {
+    condition     = !contains(keys(local.keda_redis_auth_metadata), "password")
+    error_message = "The AUTH token must not be written into trigger metadata as a literal, which puts the credential in a readable ScaledObject manifest."
+  }
+}
+
 # ── External Redis (create_elasticache = false) ──────────────────────────────
 # The hook the cross-region HA/DR design depends on: both regions point at one
 # shared, replication-capable Redis. Mirrors create_database.

@@ -130,16 +130,28 @@ locals {
     var.ingress_annotations,
   )
 
+  # ── Redis topology selection ───────────────────────────────────────────────
+  # Two independent features both require aws_elasticache_replication_group,
+  # for unrelated reasons: automatic failover and auth_token are each available
+  # only on that resource type. Naming the disjunction once keeps the two
+  # resources in redis.tf provably mutually exclusive. Written inline in both
+  # counts, the pair would be two expressions that have to be kept each other's
+  # exact negation by hand, and getting that wrong means either two caches or
+  # none.
+  redis_needs_replication_group = (
+    var.redis_high_availability_enabled || var.redis_transit_encryption_enabled
+  )
+
   # ── Redis connection coordinates ───────────────────────────────────────────
   # What n8n and KEDA actually connect to, abstracted over the three sources so
   # the Helm values, the KEDA triggers and the redis_endpoint output cannot
   # drift apart:
   #
-  #   create_elasticache = false      → the caller's own Redis (var.redis_host)
-  #   redis_high_availability_enabled → the replication group's primary
-  #                                     endpoint, a name AWS repoints at the
-  #                                     surviving node on failover
-  #   otherwise                       → the single cache node's address
+  #   create_elasticache = false     → the caller's own Redis (var.redis_host)
+  #   redis_needs_replication_group  → the replication group's primary
+  #                                    endpoint, a name AWS repoints at the
+  #                                    surviving node on failover
+  #   otherwise                      → the single cache node's address
   #
   # Branching on the variables rather than try()/coalesce() over both resources:
   # the variables are known at plan time, so the unselected resource's [0] is
@@ -152,7 +164,7 @@ locals {
   redis_host = (
     var.create_elasticache
     ? (
-      var.redis_high_availability_enabled
+      local.redis_needs_replication_group
       ? aws_elasticache_replication_group.n8n[0].primary_endpoint_address
       : aws_elasticache_cluster.n8n[0].cache_nodes[0].address
     )
@@ -162,6 +174,37 @@ locals {
   # Both module-managed topologies listen on 6379, so var.redis_port only ever
   # describes an endpoint the module did not create.
   redis_port = var.create_elasticache ? 6379 : var.redis_port
+
+  # Extra KEDA Redis trigger metadata needed once the queue backend enforces TLS
+  # and an AUTH token. Empty on every other path, so the rendered ScaledObject
+  # stays byte-identical to what existing releases already run.
+  #
+  # passwordFromEnv does not carry the token. It names an environment variable,
+  # and KEDA resolves it against the *scale target's* pod spec, specifically
+  # containers[0], since the ScaledObject sets no envSourceContainerName. On the
+  # worker Deployment containers[0] is `n8n-worker` (task-runner is a sidecar
+  # after it), and that is the container the chart already gives
+  # QUEUE_BULL_REDIS_PASSWORD to via secretKeyRef. KEDA follows the secretKeyRef
+  # rather than requiring a literal value, so the token reaches the scaler
+  # without ever appearing in the ScaledObject manifest.
+  #
+  # That resolution needs KEDA to be able to read Secrets outside its own
+  # namespace. The KEDA chart allows it by default (permissions.operator and
+  # permissions.metricServer both have restrict.secret = false); setting
+  # KEDA_RESTRICT_SECRET_ACCESS=true on the operator would break this path.
+  # keda.tf installs the chart without overriding those values.
+  keda_redis_auth_metadata = local.redis_tls_active ? {
+    enableTLS       = "true"
+    passwordFromEnv = "QUEUE_BULL_REDIS_PASSWORD"
+  } : {}
+
+  # Whether the endpoint n8n is being pointed at actually speaks TLS and demands
+  # a token. Gated on create_elasticache as well as the variable, so the clients
+  # can never be configured for a posture the module did not provision. A hard
+  # validation on redis_transit_encryption_enabled already rejects that
+  # combination, but the clients read this rather than the raw variable so the
+  # invariant holds at the point of use.
+  redis_tls_active = var.create_elasticache && var.redis_transit_encryption_enabled
 
   common_tags = merge(
     {
