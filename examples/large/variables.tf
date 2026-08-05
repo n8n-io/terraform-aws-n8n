@@ -92,6 +92,29 @@ variable "n8n_task_runner_image_tag" {
   }
 }
 
+variable "n8n_custom_extensions_path" {
+  description = "Absolute path inside the n8n container that n8n scans for custom nodes at startup (e.g. \"/opt/n8n-nodes\"). Maps to N8N_CUSTOM_EXTENSIONS, and is set on main, worker and webhook processor pods alike. Set this alongside n8n_image_repository when the custom image bakes community packages in: since n8n 1.0 the loader no longer reads the image's global node_modules, so a plain npm install into the image is never scanned and the packages ship but never load. Nodes found here register under the package name CUSTOM, so a node installed from npm as n8n-nodes-example.myNode becomes CUSTOM.myNode and existing workflows referencing the npm-qualified type will not resolve. Leave null (the default) to omit the env var."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.n8n_custom_extensions_path == null ? true : can(regex("^/[^[:space:];]*$", var.n8n_custom_extensions_path))
+    error_message = "n8n_custom_extensions_path must be an absolute container path with no whitespace and no semicolon (e.g. \"/opt/n8n-nodes\"). n8n splits N8N_CUSTOM_EXTENSIONS on \";\", so a semicolon here would be parsed as two directories and silently drop all but the last."
+  }
+
+  validation {
+    # The chart mounts the `data` volume (an emptyDir at the chart default) at
+    # /home/node/.n8n on the main deployment only, so anything the image baked
+    # in under that path is hidden on mains while still present on workers and
+    # webhook processors: the nodes would load on some pod types and not others.
+    condition = var.n8n_custom_extensions_path == null ? true : !(
+      var.n8n_custom_extensions_path == "/home/node/.n8n" ||
+      startswith(var.n8n_custom_extensions_path, "/home/node/.n8n/")
+    )
+    error_message = "n8n_custom_extensions_path must not be inside /home/node/.n8n. The chart mounts an emptyDir there on main pods, which hides whatever the image baked in, so the nodes would load on workers and webhook processors but not on mains. Use a path outside it, for example /opt/n8n-nodes."
+  }
+}
+
 variable "aurora_instance_class" {
   description = "Aurora PostgreSQL instance class for both the writer and reader. db.r6g.8xlarge (32 vCPU, 256 GB) is validated for this example's target throughput of ~50–60+M executions/day. Scale down for lower throughput targets or Reserved Instance pricing."
   type        = string

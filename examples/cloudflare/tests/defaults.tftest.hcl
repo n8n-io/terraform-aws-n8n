@@ -149,3 +149,32 @@ run "execution_data_storage_mode_rejects_filesystem" {
 
   expect_failures = [var.n8n_execution_data_storage_mode]
 }
+
+run "n8n_custom_extensions_path_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_custom_extensions_path == null
+    error_message = "Example must not set a custom extensions path by default; N8N_CUSTOM_EXTENSIONS should be omitted unless a custom image supplies nodes at that path."
+  }
+}
+
+run "n8n_custom_extensions_path_rejects_a_relative_path" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "opt/n8n-nodes"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+run "n8n_custom_extensions_path_rejects_the_chart_mounted_data_dir" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node/.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}

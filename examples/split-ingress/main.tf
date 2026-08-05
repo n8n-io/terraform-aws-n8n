@@ -86,10 +86,11 @@ module "n8n" {
   # caller silently fails to deliver.
   n8n_webhook_url = "https://${local.webhook_domain}"
 
-  n8n_license_key           = var.n8n_license_key
-  n8n_image_repository      = var.n8n_image_repository
-  n8n_image_tag             = var.n8n_image_tag
-  n8n_task_runner_image_tag = var.n8n_task_runner_image_tag
+  n8n_license_key            = var.n8n_license_key
+  n8n_image_repository       = var.n8n_image_repository
+  n8n_image_tag              = var.n8n_image_tag
+  n8n_task_runner_image_tag  = var.n8n_task_runner_image_tag
+  n8n_custom_extensions_path = var.n8n_custom_extensions_path
 
   # ── Execution data ──────────────────────────────────────────────────────────
   # Left at "database" so this example applies without the feat:executionDataS3
