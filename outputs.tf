@@ -61,8 +61,13 @@ output "rds_endpoint" {
 }
 
 output "redis_endpoint" {
-  description = "ElastiCache Redis endpoint"
-  value       = aws_elasticache_cluster.n8n.cache_nodes[0].address
+  description = "Redis host n8n and KEDA connect to. The single cache node's address by default; the replication group's primary endpoint when redis_high_availability_enabled = true, which is the name AWS repoints at the surviving node on failover; or the value of var.redis_host when create_elasticache = false."
+  value       = local.redis_host
+}
+
+output "redis_port" {
+  description = "Port n8n and KEDA connect to Redis on. Always 6379 for module-managed ElastiCache; the value of var.redis_port when create_elasticache = false. Paired with redis_endpoint so a caller wiring its own queue-depth scaler or a debug pod does not have to assume the port."
+  value       = local.redis_port
 }
 
 output "s3_bucket_name" {

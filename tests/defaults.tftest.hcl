@@ -1317,29 +1317,257 @@ run "redis_private_and_sized" {
   command = plan
 
   assert {
-    condition     = aws_elasticache_cluster.n8n.engine == "redis"
+    condition     = aws_elasticache_cluster.n8n[0].engine == "redis"
     error_message = "ElastiCache engine should be redis"
   }
 
   assert {
-    condition     = aws_elasticache_cluster.n8n.node_type == "cache.t3.medium"
+    condition     = aws_elasticache_cluster.n8n[0].node_type == "cache.t3.medium"
     error_message = "redis_node_type should default to cache.t3.medium"
   }
 
   assert {
-    condition     = one(aws_security_group.redis.ingress).from_port == 6379
+    condition     = one(aws_security_group.redis[0].ingress).from_port == 6379
     error_message = "Redis SG should allow ingress on port 6379"
   }
 
   assert {
-    condition     = one(aws_security_group.redis.ingress).to_port == 6379
+    condition     = one(aws_security_group.redis[0].ingress).to_port == 6379
     error_message = "Redis SG should allow ingress on port 6379 only"
   }
 
   assert {
-    condition     = one(aws_security_group.redis.ingress).protocol == "tcp"
+    condition     = one(aws_security_group.redis[0].ingress).protocol == "tcp"
     error_message = "Redis SG should restrict ingress to TCP"
   }
+}
+
+# ── Redis high availability ──────────────────────────────────────────────────
+# The default must stay the single-node cluster: this feature is opt-in, and
+# switching topologies replaces the cache. If this pair ever inverts, every
+# existing deployment loses its queue on the next apply.
+
+run "redis_defaults_to_a_single_node_cluster" {
+  command = plan
+
+  assert {
+    condition     = length(aws_elasticache_cluster.n8n) == 1
+    error_message = "The single-node cluster must remain the default topology"
+  }
+
+  assert {
+    condition     = length(aws_elasticache_replication_group.n8n) == 0
+    error_message = "No replication group should be created unless redis_high_availability_enabled = true"
+  }
+
+  assert {
+    condition     = aws_elasticache_cluster.n8n[0].num_cache_nodes == 1
+    error_message = "The default cluster should still be a single node"
+  }
+}
+
+run "redis_high_availability_creates_a_failover_capable_replication_group" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled = true
+  }
+
+  assert {
+    condition     = length(aws_elasticache_replication_group.n8n) == 1
+    error_message = "redis_high_availability_enabled = true must create the replication group"
+  }
+
+  assert {
+    condition     = length(aws_elasticache_cluster.n8n) == 0
+    error_message = "The two topologies are mutually exclusive: the single-node cluster must not also be created"
+  }
+
+  # The three attributes that make this HA rather than just a second resource
+  # type. automatic_failover_enabled is what promotes the replica; without
+  # multi_az_enabled both nodes can land in one AZ, which survives a node
+  # failure but not the AZ event that is the more common cause.
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].automatic_failover_enabled == true
+    error_message = "The replication group must enable automatic failover, or it is not HA"
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].multi_az_enabled == true
+    error_message = "The replication group must be Multi-AZ, or an AZ event still takes the queue down"
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].num_cache_clusters == 2
+    error_message = "Automatic failover needs a primary and at least one replica"
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].node_type == "cache.t3.medium"
+    error_message = "The replication group must honour redis_node_type"
+  }
+
+  # Both topologies share the subnet group and the security group, so the HA
+  # path must not quietly drop the private placement or the VPC-only firewall.
+  assert {
+    condition     = length(aws_elasticache_subnet_group.n8n) == 1
+    error_message = "The HA path must still place Redis in the private subnet group"
+  }
+
+  assert {
+    condition     = one(aws_security_group.redis[0].ingress).from_port == 6379
+    error_message = "The HA path must still restrict Redis ingress to 6379"
+  }
+}
+
+# The identifier collision is the one failure mode that cannot be recovered
+# inside a single apply: ElastiCache shares one namespace between cache cluster
+# IDs and replication group IDs, so if these two ever matched, the apply that
+# flips the toggle would destroy the cluster and then fail to create the
+# replacement, leaving the deployment with no queue backend at all. Asserting
+# the suffix is cheap insurance against someone "tidying up" the names.
+run "redis_topologies_use_distinct_elasticache_identifiers" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled = true
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].replication_group_id == "n8n-cluster-redis-ha"
+    error_message = "The replication group ID must not collide with the single-node cluster_id, because ElastiCache shares one identifier namespace across both"
+  }
+}
+
+# ── External Redis (create_elasticache = false) ──────────────────────────────
+# The hook the cross-region HA/DR design depends on: both regions point at one
+# shared, replication-capable Redis. Mirrors create_database.
+
+run "external_redis_skips_the_whole_redis_tier" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
+  }
+
+  assert {
+    condition     = length(aws_elasticache_cluster.n8n) == 0
+    error_message = "No ElastiCache cluster should be created when create_elasticache = false"
+  }
+
+  assert {
+    condition     = length(aws_elasticache_replication_group.n8n) == 0
+    error_message = "No replication group should be created when create_elasticache = false"
+  }
+
+  assert {
+    condition     = length(aws_elasticache_subnet_group.n8n) == 0
+    error_message = "No ElastiCache subnet group should be created when create_elasticache = false"
+  }
+
+  # Unlike the RDS security group, which stays behind unattached because
+  # db_allowed_cidr_blocks writes caller rules into it, nothing in the module
+  # attaches to the Redis SG. Leaving it would be a resource no caller asked for.
+  assert {
+    condition     = length(aws_security_group.redis) == 0
+    error_message = "No Redis security group should be created when create_elasticache = false, because nothing in the module would attach to it"
+  }
+
+  assert {
+    condition     = output.redis_endpoint == "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
+    error_message = "redis_endpoint must echo back the caller-supplied host when create_elasticache = false"
+  }
+}
+
+run "external_redis_honours_a_non_default_port" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = "redis.internal.example.com"
+    redis_port         = 6380
+  }
+
+  assert {
+    condition     = output.redis_port == 6380
+    error_message = "redis_port must reach the endpoint the module wires when create_elasticache = false"
+  }
+}
+
+run "module_managed_redis_reports_6379_by_default" {
+  command = plan
+
+  assert {
+    condition     = output.redis_port == 6379
+    error_message = "Module-managed ElastiCache must report 6379"
+  }
+}
+
+run "external_redis_missing_host_fails_validation" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    # redis_host intentionally unset
+  }
+
+  expect_failures = [var.redis_host]
+}
+
+run "redis_port_rejects_a_value_outside_the_tcp_range" {
+  command = plan
+
+  variables {
+    redis_port = 70000
+  }
+
+  expect_failures = [var.redis_port]
+}
+
+# ── Redis diagnostic checks ──────────────────────────────────────────────────
+# Both cover the "X is ignored when Y" direction, which plans and applies
+# cleanly while discarding what the caller asked for. See the check blocks in
+# redis.tf for why each one warns rather than fails.
+
+# Both halves of the mistake in one plan: the check warns, AND the inputs are
+# genuinely discarded. Asserting the second is what makes the warning worth
+# having. Module-managed ElastiCache always listens on 6379, so a redis_port
+# that leaked through to the Helm values or the KEDA triggers would silently
+# point n8n at a closed port.
+run "external_redis_inputs_with_create_elasticache_true_warns_and_are_ignored" {
+  command = plan
+
+  variables {
+    # create_elasticache defaults to true, so this Redis is never used.
+    redis_host = "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
+    redis_port = 6380
+  }
+
+  expect_failures = [check.external_redis_inputs_require_create_elasticache_false]
+
+  assert {
+    condition     = output.redis_port == 6379
+    error_message = "redis_port must not reach the endpoint the module wires while create_elasticache = true"
+  }
+
+  assert {
+    condition     = length(aws_elasticache_cluster.n8n) == 1
+    error_message = "Setting redis_host while create_elasticache = true must still create the module-managed cluster, which is exactly why the check warns"
+  }
+}
+
+run "redis_tuning_with_create_elasticache_false_warns" {
+  command = plan
+
+  variables {
+    create_elasticache              = false
+    redis_host                      = "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
+    redis_node_type                 = "cache.r6g.large"
+    redis_high_availability_enabled = true
+  }
+
+  expect_failures = [check.redis_tuning_requires_module_managed_elasticache]
 }
 
 run "s3_bucket_is_private" {

@@ -177,9 +177,12 @@ resource "helm_release" "n8n" {
     redis = {
       enabled     = true
       useExternal = true
-      host        = aws_elasticache_cluster.n8n.cache_nodes[0].address
-      port        = 6379
-      tls         = false
+      # local.redis_host / local.redis_port resolve the module-managed single
+      # node, the module-managed replication group's primary endpoint, or the
+      # caller's own Redis. See redis.tf.
+      host = local.redis_host
+      port = local.redis_port
+      tls  = false
     }
 
     s3 = {
@@ -248,7 +251,7 @@ resource "helm_release" "n8n" {
           {
             type = "redis"
             metadata = {
-              address    = "${aws_elasticache_cluster.n8n.cache_nodes[0].address}:6379"
+              address    = "${local.redis_host}:${local.redis_port}"
               listName   = "bull:jobs:wait"
               listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
             }
@@ -257,7 +260,7 @@ resource "helm_release" "n8n" {
           {
             type = "redis"
             metadata = {
-              address    = "${aws_elasticache_cluster.n8n.cache_nodes[0].address}:6379"
+              address    = "${local.redis_host}:${local.redis_port}"
               listName   = "bull:jobs:active"
               listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
             }
@@ -558,7 +561,11 @@ resource "helm_release" "n8n" {
     helm_release.lbc,
     helm_release.keda,
     aws_db_instance.n8n, # no-op (empty list) when create_database = false
+    # Exactly one of these is non-empty when create_elasticache = true, and both
+    # are empty when it is false. Listing both keeps the edge regardless of
+    # which Redis topology redis_high_availability_enabled selected.
     aws_elasticache_cluster.n8n,
+    aws_elasticache_replication_group.n8n,
     aws_iam_role_policy_attachment.s3,
     aws_eks_pod_identity_association.s3,
     kubernetes_service_account_v1.n8n, # empty list unless the module owns it

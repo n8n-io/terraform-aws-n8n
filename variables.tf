@@ -780,13 +780,52 @@ variable "db_postgresdb_ssl_enabled" {
 # ── ElastiCache Redis ──────────────────────────────────────────────────────────
 
 variable "redis_node_type" {
-  description = "ElastiCache node type (cache.t3.medium ~$25/month)"
+  description = "ElastiCache node type (cache.t3.medium ~$25/month). Sizes the single node when redis_high_availability_enabled = false, and every node in the replication group when it is true, so the Redis line of the bill scales with the node count, not just the type. Ignored when create_elasticache = false."
   type        = string
   default     = "cache.t3.medium"
 
   validation {
     condition     = can(regex("^cache\\.", var.redis_node_type))
     error_message = "Value must be a valid ElastiCache node type (e.g. cache.t3.medium)."
+  }
+}
+
+variable "redis_high_availability_enabled" {
+  description = "When true, provision Redis as a two-node aws_elasticache_replication_group (one primary, one replica) with automatic_failover_enabled and multi_az_enabled, instead of the default single-node aws_elasticache_cluster. Redis backs the Bull queue that distributes executions across workers and the multi-main leader election, so the default single node is a single point of failure: a node or AZ event stalls both until ElastiCache replaces it. Both nodes use redis_node_type, so the Redis cost roughly doubles. What this buys is that the QUEUE SURVIVES the node loss, not that n8n rides the failover out: measured on a live cluster, ElastiCache promotes the replica in about 20 seconds and every main, worker and webhook pod exits and restarts during that window (n8n's RedisClientService calls process.exit once Redis has been unreachable for QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD, and raising that threshold to 30s only delays the exit). Recovery is automatic and takes well under a minute, and the queued executions are still there on the promoted node. Compare that with the single-node default, where a lost node means waiting for AWS to build a new one and the queue is gone with it. FLIPPING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS: the two topologies are different resource types, so no `moved` block can bridge them and Terraform destroys the cluster before creating the replication group. Every queued and in-flight execution in Redis at that moment is lost. See README → \"Redis high availability\" for the drain-first procedure."
+  type        = bool
+  default     = false
+}
+
+variable "create_elasticache" {
+  description = "When true (the default), the module creates and manages the ElastiCache Redis that the Bull queue and multi-main leader election run on. Set to false to point n8n at an external Redis. redis_host must then be supplied, and the module creates no ElastiCache cluster, replication group, subnet group, or security group. Mirrors create_database, and is the hook the cross-region HA/DR design uses to share one replication-capable Redis between regions. Kept as a static boolean rather than `redis_host == null` because count expressions cannot depend on values computed at apply time. The module wires host and port only: an external Redis that requires AUTH or TLS is not supported yet."
+  type        = bool
+  default     = true
+}
+
+variable "redis_host" {
+  description = "External Redis host. Required when create_elasticache = false. Ignored otherwise. Must be reachable from the EKS node subnets on redis_port, and must accept unauthenticated, non-TLS connections, because the module wires neither a Redis password nor TLS. For a replication group the caller manages, use its primary endpoint rather than a node address, so the name follows the primary across a failover."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.create_elasticache || var.redis_host != null
+    error_message = "redis_host is required when create_elasticache = false."
+  }
+}
+
+variable "redis_port" {
+  description = "Port of the external Redis specified by redis_host. Ignored when create_elasticache = true, because module-managed ElastiCache always listens on 6379."
+  type        = number
+  default     = 6379
+
+  validation {
+    condition     = var.redis_port >= 1 && var.redis_port <= 65535
+    error_message = "redis_port must be a TCP port between 1 and 65535."
+  }
+
+  validation {
+    condition     = var.redis_port == floor(var.redis_port)
+    error_message = "redis_port must be a whole number."
   }
 }
 

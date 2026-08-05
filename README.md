@@ -187,6 +187,7 @@ Six runnable examples ship with the module: three sizing tiers (`small`, `medium
 | DB IOPS ceiling | 150 baseline / 3,000 burst | 3,000 baseline (gp3) | None — I/O-Optimized |
 | PgBouncer | No | No | Yes — 2 replicas |
 | Redis | cache.t3.medium | cache.r6g.large | cache.r6g.large |
+| Redis nodes | 1 (no failover) | 1 (no failover) | 1 (no failover) |
 | Webhook pods min / max | 2 / 50 | 5 / 50 | 30 / 80 |
 | Worker pods min / max | 1 / 10 | 5 / 40 | 20 / 160 |
 | Worker concurrency | 10 | 20 | 40 |
@@ -436,6 +437,131 @@ Setting `alb.ingress.kubernetes.io/inbound-cidrs` directly through
 existed, and it still works: `ingress_annotations` remains the last write. If
 you are migrating, delete the annotation in the same change, or the stale value
 keeps winning. The module raises a plan-time warning when both are set.
+
+## Redis high availability
+
+Redis backs two things n8n cannot run without in queue mode: the Bull queue
+that distributes executions across workers, and the leader election that
+coordinates the multi-main pods. By default the module provisions it as a
+**single-node `aws_elasticache_cluster`**: cheapest, and a single point of
+failure for both. A node failure or AZ event stalls executions and leader
+election until ElastiCache replaces the node.
+
+Set `redis_high_availability_enabled = true` to provision an
+**`aws_elasticache_replication_group`** instead: one primary and one replica,
+`automatic_failover_enabled` so ElastiCache promotes the replica on its own,
+and `multi_az_enabled` so the replica lands in a second AZ rather than sharing
+the primary's fate. Both nodes use `redis_node_type`, so **the Redis line of
+the bill roughly doubles**.
+
+```hcl
+module "n8n" {
+  # ...
+  redis_high_availability_enabled = true
+  redis_node_type                 = "cache.r6g.large"
+}
+```
+
+### What this actually buys you, measured
+
+The honest version, from a forced failover on a live cluster
+(`aws elasticache test-failover`) rather than from the AWS marketing page:
+
+| | Single node (default) | HA replication group |
+|---|---|---|
+| Queued executions after a node loss | **Gone** | **Survive** on the promoted replica |
+| Time to a working queue | However long AWS takes to build a new node | ~20s promotion, pods back within a minute |
+| n8n pods during the event | Restart | **Restart** |
+
+The row that matters is the first one. HA does **not** make the failover
+invisible to n8n: every main, worker and webhook pod exits and restarts while
+it happens. n8n's `RedisClientService` calls `process.exit` once Redis has been
+unreachable for `QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD` (10s by default) and logs
+`Unable to connect to Redis after trying to connect for 10s / Exiting process
+due to Redis connection error`. Raising that threshold to 30s was tried here
+and only moved the exit 20 seconds later, so the module does not set it.
+
+That restart is a fail-fast by design, not a crash-loop: Kubernetes brings each
+pod straight back, and the observed end-to-end recovery was under a minute with
+the queue contents intact. So buy this for **durability of the queue**, and
+plan for a brief pod-fleet restart, not for uninterrupted execution.
+
+`QUEUE_BULL_REDIS_RECONNECT_ON_FAILOVER` (on by default since **n8n 2.10.0**)
+covers the narrower case where the connection survives and the demoted primary
+answers writes with `READONLY`. It did not prevent the restarts observed here,
+because the client hit connect timeouts rather than `READONLY`.
+
+### Switching topologies replaces Redis
+
+The two topologies are **different Terraform resource types**, so a `moved`
+block cannot bridge them. Flipping the toggle on an existing deployment
+destroys the cache and creates the replacement, and **everything queued or in
+flight at that moment is lost**. This is a maintenance-window operation:
+
+1. Stop new work reaching n8n (pause the schedule triggers, or take the
+   webhook path out of the load balancer).
+2. Let the workers drain. `bull:jobs:wait` and `bull:jobs:active` at zero is
+   the signal, and they are the same two keys the KEDA triggers watch.
+3. `terraform apply`. Expect one destroy and one create on the Redis tier, and
+   an in-place update to the Helm release as it repoints at the new host.
+4. Resume traffic.
+
+The replication group deliberately carries a **different identifier** from the
+single-node cluster (`<cluster_name>-redis-ha` rather than
+`<cluster_name>-redis`). ElastiCache shares one identifier namespace between
+cache clusters and replication groups and rejects a second resource reusing the
+name:
+
+```
+InvalidParameterValue: Cannot have a cluster and replication group with
+same identifier. Please use a different identifier.
+```
+
+The two resources are independent, so Terraform is free to create the new one
+while the old one still exists. With a shared name the apply would destroy the
+old cache and then fail to create the replacement, leaving the deployment with
+no queue backend and needing a second apply to recover. The distinct suffix
+makes enabling and disabling each a single apply.
+
+## Bring your own Redis
+
+`create_elasticache = false` is the Redis-tier counterpart to
+`create_database = false`. The module then creates **no** ElastiCache cluster,
+replication group, subnet group, or security group, and wires both n8n and the
+KEDA queue-depth triggers at the endpoint you supply:
+
+```hcl
+module "n8n" {
+  # ...
+  create_elasticache = false
+  redis_host         = aws_elasticache_replication_group.shared.primary_endpoint_address
+  redis_port         = 6379 # the default
+}
+```
+
+This is the hook the cross-region HA/DR design depends on: both regions point
+at one shared, replication-capable Redis rather than each running its own.
+
+Two constraints worth knowing before you reach for it:
+
+- **The endpoint must be reachable from the EKS node subnets** on `redis_port`.
+  The module creates no security group on this path, so the rules that let the
+  nodes in are yours to write.
+- **No AUTH, no TLS.** The module wires host and port only. An external Redis
+  that requires a password or TLS is not supported on this path yet.
+
+Point `redis_host` at a **primary endpoint** rather than a node address when
+the Redis you supply is itself a replication group, so the name follows the
+primary across a failover.
+
+Getting the toggle and the inputs out of step is the easy mistake here, and it
+fails quietly rather than loudly: `create_elasticache` defaults to `true`, so
+setting `redis_host` alone gets you a module-managed ElastiCache and n8n queued
+onto *that*, while the Redis you supplied sits idle. Both exist, the apply
+succeeds, and the executions land somewhere you are not watching. The module
+raises a `check` warning for that case, and for its inverse (tuning
+`redis_node_type` or `redis_high_availability_enabled` while
+`create_elasticache = false`, where neither reaches anything).
 
 ## KMS key after `terraform destroy`
 
@@ -1002,6 +1128,7 @@ No modules.
 | [aws_eks_pod_identity_association.lbc](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
 | [aws_eks_pod_identity_association.s3](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
 | [aws_elasticache_cluster.n8n](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticache_cluster) | resource |
+| [aws_elasticache_replication_group.n8n](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticache_replication_group) | resource |
 | [aws_elasticache_subnet_group.n8n](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticache_subnet_group) | resource |
 | [aws_iam_policy.cluster_autoscaler](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_policy) | resource |
 | [aws_iam_policy.lbc](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_policy) | resource |
@@ -1062,6 +1189,7 @@ No modules.
 | <a name="input_certificate_arn"></a> [certificate\_arn](#input\_certificate\_arn) | ARN of a pre-validated ACM certificate for n8n\_domain. Use this for Cloudflare, GoDaddy, or any DNS provider other than Route53 — the respective examples (examples/cloudflare, examples/godaddy) issue the certificate and pass its ARN here. Set exactly one of certificate\_arn or route53\_zone\_id. | `string` | `null` | no |
 | <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | Name for the EKS cluster. Keep to 14 characters or fewer — the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. | `string` | `"n8n-cluster"` | no |
 | <a name="input_create_database"></a> [create\_database](#input\_create\_database) | When true (the default), the module creates and manages an Amazon RDS PostgreSQL instance. Set to false to use an external database (e.g. Amazon Aurora created by the caller) — db\_host and db\_password must then be supplied. Kept as a static boolean rather than `db_host == null` because count expressions cannot depend on values computed at apply time. | `bool` | `true` | no |
+| <a name="input_create_elasticache"></a> [create\_elasticache](#input\_create\_elasticache) | When true (the default), the module creates and manages the ElastiCache Redis that the Bull queue and multi-main leader election run on. Set to false to point n8n at an external Redis. redis\_host must then be supplied, and the module creates no ElastiCache cluster, replication group, subnet group, or security group. Mirrors create\_database, and is the hook the cross-region HA/DR design uses to share one replication-capable Redis between regions. Kept as a static boolean rather than `redis_host == null` because count expressions cannot depend on values computed at apply time. The module wires host and port only: an external Redis that requires AUTH or TLS is not supported yet. | `bool` | `true` | no |
 | <a name="input_create_ingress"></a> [create\_ingress](#input\_create\_ingress) | When true (the default), the module creates the ALB Ingress that fronts n8n: a single internet-facing ALB routing /webhook to the webhook processors and / to the mains. Set to false to bring your own Ingress resources, for example the two-ALB split where an internet-facing ALB serves /webhook and a separate internal (VPN-only) ALB serves the admin UI. When false the module also skips the Route 53 alias A-record and the ALB lookup behind it, since there is no module-owned ALB to point at; the ACM certificate is still issued when route53\_zone\_id is set. Point your own Ingresses at the module-created Services n8n\_service\_name and n8n\_webhook\_service\_name, both on port 5678. Kept as a static boolean because count expressions cannot depend on values computed at apply time. | `bool` | `true` | no |
 | <a name="input_db_allocated_storage"></a> [db\_allocated\_storage](#input\_db\_allocated\_storage) | Allocated storage for RDS in GB | `number` | `50` | no |
 | <a name="input_db_allowed_cidr_blocks"></a> [db\_allowed\_cidr\_blocks](#input\_db\_allowed\_cidr\_blocks) | Additional CIDR blocks allowed to reach the module-managed RDS instance on port 5432, appended to the VPC CIDR (which is always allowed so nodes and pods can connect). Use this for a corporate network, VPN pool, or peered VPC rather than attaching a standalone aws\_security\_group\_rule at the root, because a root-level rule is not tracked by the module's inline ingress block and gets stripped on the next plan. Duplicates, including a repeat of the VPC CIDR, are collapsed. With create\_database = false the security group is still created and carries these rules, but nothing is attached to it. | `list(string)` | `[]` | no |
@@ -1158,7 +1286,10 @@ No modules.
 | <a name="input_node_min"></a> [node\_min](#input\_node\_min) | Minimum number of worker nodes | `number` | `3` | no |
 | <a name="input_private_subnets"></a> [private\_subnets](#input\_private\_subnets) | IDs of private subnets (one per AZ, minimum two AZs). RDS, ElastiCache, and EKS nodes attach here. | `list(string)` | n/a | yes |
 | <a name="input_public_subnets"></a> [public\_subnets](#input\_public\_subnets) | IDs of public subnets (one per AZ, minimum two AZs). The ALB attaches here. | `list(string)` | n/a | yes |
-| <a name="input_redis_node_type"></a> [redis\_node\_type](#input\_redis\_node\_type) | ElastiCache node type (cache.t3.medium ~$25/month) | `string` | `"cache.t3.medium"` | no |
+| <a name="input_redis_high_availability_enabled"></a> [redis\_high\_availability\_enabled](#input\_redis\_high\_availability\_enabled) | When true, provision Redis as a two-node aws\_elasticache\_replication\_group (one primary, one replica) with automatic\_failover\_enabled and multi\_az\_enabled, instead of the default single-node aws\_elasticache\_cluster. Redis backs the Bull queue that distributes executions across workers and the multi-main leader election, so the default single node is a single point of failure: a node or AZ event stalls both until ElastiCache replaces it. Both nodes use redis\_node\_type, so the Redis cost roughly doubles. What this buys is that the QUEUE SURVIVES the node loss, not that n8n rides the failover out: measured on a live cluster, ElastiCache promotes the replica in about 20 seconds and every main, worker and webhook pod exits and restarts during that window (n8n's RedisClientService calls process.exit once Redis has been unreachable for QUEUE\_BULL\_REDIS\_TIMEOUT\_THRESHOLD, and raising that threshold to 30s only delays the exit). Recovery is automatic and takes well under a minute, and the queued executions are still there on the promoted node. Compare that with the single-node default, where a lost node means waiting for AWS to build a new one and the queue is gone with it. FLIPPING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS: the two topologies are different resource types, so no `moved` block can bridge them and Terraform destroys the cluster before creating the replication group. Every queued and in-flight execution in Redis at that moment is lost. See README → "Redis high availability" for the drain-first procedure. | `bool` | `false` | no |
+| <a name="input_redis_host"></a> [redis\_host](#input\_redis\_host) | External Redis host. Required when create\_elasticache = false. Ignored otherwise. Must be reachable from the EKS node subnets on redis\_port, and must accept unauthenticated, non-TLS connections, because the module wires neither a Redis password nor TLS. For a replication group the caller manages, use its primary endpoint rather than a node address, so the name follows the primary across a failover. | `string` | `null` | no |
+| <a name="input_redis_node_type"></a> [redis\_node\_type](#input\_redis\_node\_type) | ElastiCache node type (cache.t3.medium ~$25/month). Sizes the single node when redis\_high\_availability\_enabled = false, and every node in the replication group when it is true, so the Redis line of the bill scales with the node count, not just the type. Ignored when create\_elasticache = false. | `string` | `"cache.t3.medium"` | no |
+| <a name="input_redis_port"></a> [redis\_port](#input\_redis\_port) | Port of the external Redis specified by redis\_host. Ignored when create\_elasticache = true, because module-managed ElastiCache always listens on 6379. | `number` | `6379` | no |
 | <a name="input_route53_zone_id"></a> [route53\_zone\_id](#input\_route53\_zone\_id) | Route53 hosted zone ID for the parent of n8n\_domain (e.g. the zone for example.com if n8n\_domain = n8n.example.com). When set, the module issues a DNS-validated ACM certificate and creates the alias A-record automatically — single terraform apply, no manual DNS steps. Leave null and pass certificate\_arn instead. Set exactly one of certificate\_arn or route53\_zone\_id. | `string` | `null` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Additional AWS tags to apply to all resources this module creates. Merged on top of the built-in ManagedBy/Project tags. | `map(string)` | `{}` | no |
 | <a name="input_vpc_cidr_block"></a> [vpc\_cidr\_block](#input\_vpc\_cidr\_block) | CIDR block of the VPC — used by the RDS and Redis security groups to allow intra-VPC traffic. | `string` | n/a | yes |
@@ -1185,7 +1316,8 @@ No modules.
 | <a name="output_namespace"></a> [namespace](#output\_namespace) | Kubernetes namespace n8n is deployed into. |
 | <a name="output_node_group_role_arn"></a> [node\_group\_role\_arn](#output\_node\_group\_role\_arn) | IAM role ARN the EKS node group runs under, and therefore the principal the kubelet pulls container images as. Name it in a cross-account ECR repository policy to let this cluster pull a custom n8n image from a registry in another account, which is the mechanism to reach for there: an ECR authorization token lasts 12 hours, so an imagePullSecrets holding one goes stale long before the next apply. For registries that issue static credentials, use n8n\_image\_pull\_secrets instead. |
 | <a name="output_rds_endpoint"></a> [rds\_endpoint](#output\_rds\_endpoint) | Database endpoint — module-managed RDS when create\_database = true, or the value of var.db\_host when using an external database (e.g. Aurora). |
-| <a name="output_redis_endpoint"></a> [redis\_endpoint](#output\_redis\_endpoint) | ElastiCache Redis endpoint |
+| <a name="output_redis_endpoint"></a> [redis\_endpoint](#output\_redis\_endpoint) | Redis host n8n and KEDA connect to. The single cache node's address by default; the replication group's primary endpoint when redis\_high\_availability\_enabled = true, which is the name AWS repoints at the surviving node on failover; or the value of var.redis\_host when create\_elasticache = false. |
+| <a name="output_redis_port"></a> [redis\_port](#output\_redis\_port) | Port n8n and KEDA connect to Redis on. Always 6379 for module-managed ElastiCache; the value of var.redis\_port when create\_elasticache = false. Paired with redis\_endpoint so a caller wiring its own queue-depth scaler or a debug pod does not have to assume the port. |
 | <a name="output_s3_bucket_name"></a> [s3\_bucket\_name](#output\_s3\_bucket\_name) | S3 bucket used for n8n binary storage, and for execution data when n8n\_execution\_data\_storage\_mode = "s3". The module attaches no lifecycle configuration: binary data is pruned only by S3 while execution data is pruned by n8n itself, and the two cannot be separated by a prefix filter. Read the S3 lifecycle section of the README before attaching one. |
 <!-- END_TF_DOCS -->
 
