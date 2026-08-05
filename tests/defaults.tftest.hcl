@@ -2051,6 +2051,63 @@ run "keda_triggers_carry_tls_and_auth_when_enabled" {
   }
 }
 
+# ── Redis failover timeout threshold ─────────────────────────────────────────
+# The value lands inside helm_release.n8n.values, which is unknown at plan time,
+# so local.redis_timeout_values is the assertable layer. What matters most is
+# that it stays EMPTY by default: the module has never set redis.timeout, and
+# emitting the key at all, even with the chart's own 10000, re-renders the
+# values for every existing release and turns an upgrade into a Helm diff.
+
+run "redis_timeout_threshold_is_absent_by_default" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_redis_timeout_threshold == null
+    error_message = "n8n_redis_timeout_threshold must default to null so the chart's own 10000 applies untouched"
+  }
+
+  assert {
+    condition     = length(local.redis_timeout_values) == 0
+    error_message = "The default path must emit no redis.timeout key at all. Setting it to the chart default is not the same as omitting it: the rendered values change and every existing release sees a Helm diff on upgrade."
+  }
+}
+
+run "redis_timeout_threshold_reaches_the_chart_when_set" {
+  command = plan
+
+  variables {
+    n8n_redis_timeout_threshold = 60000
+  }
+
+  assert {
+    condition     = local.redis_timeout_values["timeout"] == 60000
+    error_message = "n8n_redis_timeout_threshold must reach the chart's redis.timeout, which maps to QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD"
+  }
+}
+
+# Below ~2s a single ioredis connect timeout (10s, which n8n does not override)
+# exceeds the whole budget before DNS has been re-resolved once, so the process
+# exits on any blip instead of reconnecting. That is worse than the default.
+run "redis_timeout_threshold_rejects_a_value_below_one_connect_attempt" {
+  command = plan
+
+  variables {
+    n8n_redis_timeout_threshold = 500
+  }
+
+  expect_failures = [var.n8n_redis_timeout_threshold]
+}
+
+run "redis_timeout_threshold_rejects_a_fractional_value" {
+  command = plan
+
+  variables {
+    n8n_redis_timeout_threshold = 30000.5
+  }
+
+  expect_failures = [var.n8n_redis_timeout_threshold]
+}
+
 # ── External Redis (create_elasticache = false) ──────────────────────────────
 # The hook the cross-region HA/DR design depends on: both regions point at one
 # shared, replication-capable Redis. Mirrors create_database.

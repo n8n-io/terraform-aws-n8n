@@ -208,6 +208,7 @@ resource "helm_release" "n8n" {
       port = local.redis_port
       tls  = local.redis_tls_active
       },
+      local.redis_timeout_values,
       local.redis_auth_active ? {
         passwordSecret = {
           name = kubernetes_secret.n8n_redis[0].metadata[0].name

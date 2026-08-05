@@ -142,6 +142,17 @@ locals {
     var.redis_high_availability_enabled || var.redis_transit_encryption_enabled
   )
 
+  # Chart fragment carrying QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD, merged into the
+  # redis values below rather than set inline. Empty when the input is null,
+  # which is the default, so the rendered values stay byte-identical for every
+  # existing release and the chart's own 10000 continues to apply. Same reason
+  # passwordSecret is merged rather than set to an explicit null.
+  redis_timeout_values = (
+    var.n8n_redis_timeout_threshold == null
+    ? {}
+    : { timeout = var.n8n_redis_timeout_threshold }
+  )
+
   # ── Redis connection coordinates ───────────────────────────────────────────
   # What n8n and KEDA actually connect to, abstracted over the three sources so
   # the Helm values, the KEDA triggers and the redis_endpoint output cannot

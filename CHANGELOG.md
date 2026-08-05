@@ -516,6 +516,35 @@ this project adheres to the stability contract in
   Every example gains a test rejecting `"filesystem"`; the three that can run a
   full mocked plan (`cloudflare`, `godaddy`, `split-ingress`) also assert the
   `"database"` default.
+- `n8n_redis_timeout_threshold` input (default `null`) exposes
+  `QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD`, the budget n8n spends trying to reach
+  Redis before calling `process.exit`. `null` leaves the chart's 10000 in place
+  and emits no `redis.timeout` key at all, so existing releases see no Helm
+  diff. Raise it when running `redis_high_availability_enabled = true` and you
+  would rather n8n rode a failover out than restarted.
+
+  This closes out the open question from the high availability work, where
+  raising the threshold to 30s appeared to do nothing but delay the exit. It was
+  not a stale-address bug in ioredis, which re-resolves DNS on every reconnect
+  attempt and was confirmed recovering on a different IP without restarting.
+  n8n simply never sets ioredis's `connectTimeout`, so it stays at 10s, and a
+  connect to a demoted primary hangs for that full 10s before failing. Each
+  failed attempt spends ~11.1s of the budget, making the threshold effectively
+  quantized to 11.1s / 33.2s / 66.4s for settings of 10s / 30s / 60s.
+
+  Against a 25 second outage, a 30s threshold fires at 43.4s and the connection
+  would have returned at 44.5s: it exits **1.1 seconds early**.
+
+  Confirmed against a real ElastiCache failover at `60000`: no container
+  terminated, and every pod logged `Recovered Redis connection` instead of
+  exiting. n8n's own counter showed the predicted quantum on live AWS (samples
+  18.1s, 29.1s, 40.1s, gaps of 11.1s and 11.0s), so a 30s threshold would have
+  exited about 11 seconds before recovery. The real endpoint stayed stale for
+  **48 seconds**, roughly double the worst case modelled locally, because
+  CoreDNS caching and the endpoint TTL stretch the window past the promotion
+  itself. 60000 cleared that with ~20s of headroom, from one observed failover,
+  so the README presents it as a good default rather than a guarantee.
+
 - `redis_transit_encryption_enabled` input (default `false`) puts the
   ElastiCache queue backend behind TLS and an AUTH token. The default preserves
   the module's network-trust posture, Redis in private subnets behind a

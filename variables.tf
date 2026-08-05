@@ -801,6 +801,26 @@ variable "redis_high_availability_enabled" {
   nullable = false
 }
 
+variable "n8n_redis_timeout_threshold" {
+  description = "Milliseconds n8n will keep trying to reach Redis before it gives up and exits the process, wired to QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD. Leave null (the default) to use the chart's 10000, which is n8n's own default and what every existing deployment already runs. Raise it when redis_high_availability_enabled = true and you would rather n8n rode a failover out than restarted: with the default, an ElastiCache promotion outlasts the budget and every main, worker and webhook pod exits and is restarted by Kubernetes. Pick the value deliberately, because the budget is coarser than it looks. n8n does not set ioredis's connectTimeout, so it stays at 10s, and a connect to a demoted primary hangs for that full 10s before failing. Each failed attempt therefore spends about 11.1s of this budget, making the effective values 11.1s, 33.2s and 66.4s for settings of 10s, 30s and 60s. 30000 was measured failing by 1.1 seconds against a 25 second outage; 60000 survived every case measured. See README → \"Surviving a Redis failover without restarting\" for the measurements and the caveat that none of this has been confirmed against a real ElastiCache failover yet."
+  type        = number
+  default     = null
+
+  # Below about 2s a single connect timeout (10s, see above) blows the entire
+  # budget before ioredis has re-resolved DNS even once, so the process exits on
+  # any blip rather than reconnecting. The upper bound is a typo guard: values
+  # this large mean a genuinely dead Redis goes unnoticed for many minutes.
+  validation {
+    condition     = var.n8n_redis_timeout_threshold == null || try(var.n8n_redis_timeout_threshold >= 2000 && var.n8n_redis_timeout_threshold <= 600000, false)
+    error_message = "n8n_redis_timeout_threshold must be between 2000 and 600000 milliseconds, or null to leave the chart default (10000) in place."
+  }
+
+  validation {
+    condition     = var.n8n_redis_timeout_threshold == null || try(var.n8n_redis_timeout_threshold == floor(var.n8n_redis_timeout_threshold), false)
+    error_message = "n8n_redis_timeout_threshold must be a whole number of milliseconds."
+  }
+}
+
 variable "redis_transit_encryption_enabled" {
   description = "Encrypt the n8n queue backend in transit and require an AUTH token on it. Defaults to false, which is the module's deliberate network-trust posture: Redis sits in private subnets behind a security group that admits only VPC traffic, so isolation is by network boundary rather than by credentials. Set true to add TLS plus a generated AUTH token on top of that boundary, worth doing when queue payloads (workflow execution data) crossing the VPC in cleartext, or an unauthenticated Redis after a network-boundary breach, are risks you need closed. Independent of redis_high_availability_enabled: this buys encryption and authentication only, and leaves the cache at one node. CHANGING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS: AWS exposes the AUTH token only on aws_elasticache_replication_group, so enabling it moves a default deployment off aws_elasticache_cluster, which drops every job queued at that moment. Drain workers and pick a maintenance window. Enabling it on a deployment that is ALREADY on a replication group (redis_high_availability_enabled = true) is supported but takes three applies, not one: AWS refuses a direct plaintext-to-encrypted transition and requires the group to pass through transit_encryption_mode = preferred first, and it refuses an AUTH token until the mode is required. Setting this variable on its own therefore plans clean and then fails at apply. Drive the migration with redis_transit_encryption_mode and redis_apply_immediately instead. The full sequence was run against a live cluster with a client connection held open across every step and interrupted service at no point; see README for the three steps, their measured durations, and why the third one is not optional. Worker queue-depth autoscaling is unaffected: KEDA's Redis triggers pick up TLS and the AUTH token alongside the workers themselves. Requires create_elasticache = true, since the module cannot put a token on a Redis it does not manage. Retrieve the generated token with `terraform output -raw redis_auth_token`."
   type        = bool

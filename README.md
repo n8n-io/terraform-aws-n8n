@@ -487,9 +487,9 @@ unreachable for `QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD` (10s by default) and logs
 `Unable to connect to Redis after trying to connect for 10s / Exiting process
 due to Redis connection error`. Raising that threshold to 30s was tried here
 and only moved the exit later, which is why the module leaves it alone by
-default. A larger reconnect budget can ride the failover out; wiring the
-threshold up is the follow-up in
-[#77](https://github.com/n8n-io/terraform-aws-n8n/pull/77).
+default. See
+[Surviving a Redis failover without restarting](#surviving-a-redis-failover-without-restarting)
+for why 30s failed and what does work.
 
 That restart is a fail-fast by design, not a crash-loop: Kubernetes brings each
 pod straight back, and the observed end-to-end recovery was under a minute with
@@ -500,6 +500,84 @@ plan for a brief pod-fleet restart, not for uninterrupted execution.
 covers the narrower case where the connection survives and the demoted primary
 answers writes with `READONLY`. It did not prevent the restarts observed here,
 because the client hit connect timeouts rather than `READONLY`.
+
+### Surviving a Redis failover without restarting
+
+`n8n_redis_timeout_threshold` sets `QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD`, the
+budget n8n spends trying to reach Redis before calling `process.exit`. It
+defaults to `null`, leaving the chart's 10000 in place, which is what every
+existing deployment already runs.
+
+Raising it is the only lever this module has, and **the budget is much coarser
+than the number suggests**. n8n does not set ioredis's `connectTimeout`, so it
+stays at its 10s default, and a connect to a demoted primary hangs for that full
+10s before failing. Each failed attempt therefore spends about 11.1s (1s retry
+interval plus the 10s hang), and the threshold is effectively quantized:
+
+| You set | Real budget | Reconnect attempts before exit |
+|---|---|---|
+| `10000` (default) | 11.1s | 1 |
+| `30000` | 33.2s | 3 |
+| `60000` | 66.4s | 6 |
+
+Measured against a reproduction of the failure (two Redis instances and a
+`/etc/hosts` flip standing in for the endpoint repointing, with n8n's exact
+client options and a verbatim copy of its retry strategy):
+
+| Endpoint stale for | Client recovered at | `10000` | `30000` | `60000` |
+|---|---|---|---|---|
+| 15s | 33.4s | exits 21.2s | survives | survives |
+| 25s | 44.5s | exits 21.4s | **exits 43.4s** | survives |
+
+The second row is the live failure, reproduced: a 30s threshold fires **1.1
+seconds before** the connection would have come back. That is the whole reason
+raising it to 30s looked like it did nothing.
+
+```hcl
+module "n8n" {
+  # ...
+  redis_high_availability_enabled = true
+  n8n_redis_timeout_threshold     = 60000
+}
+```
+
+#### Confirmed on a live cluster
+
+A forced failover against a real ElastiCache replication group, with
+`n8n_redis_timeout_threshold = 60000`: **no container terminated**, and every
+pod logged `Recovered Redis connection` rather than exiting. n8n's own counter
+shows the quantum predicted above, measured rather than inferred:
+
+```
+Lost Redis connection. Trying to reconnect in 1s... (18.1s/60s)
+Lost Redis connection. Trying to reconnect in 1s... (29.1s/60s)
+Lost Redis connection. Trying to reconnect in 1s... (40.1s/60s)
+Recovered Redis connection
+```
+
+Those gaps are 11.1s and 11.0s. A 30s threshold would have exited at the 40.1s
+sample, about 11 seconds before recovery.
+
+**The real endpoint stayed stale for 48 seconds**, roughly double the worst case
+modelled above, measured by resolving the primary endpoint once a second from
+inside the cluster. CoreDNS caching plus the endpoint's own TTL stretches the
+window well past the promotion itself.
+
+Two things worth knowing before you set it:
+
+- **It is a trade, not a free win.** The threshold is also what makes a pod
+  fail fast against a genuinely dead Redis. At 60s a real outage goes 60s
+  before Kubernetes restarts anything. For a queue worker that is usually
+  fine, since restarting does not help when Redis is gone either way.
+- **60000 is a recommendation, not a guarantee.** It cleared a 48 second window
+  with about 20 seconds of headroom, from a single observed failover. A slower
+  repoint would eat that margin. If you need certainty rather than a good
+  default, force a failover in your own account and read the counter.
+
+The underlying issue belongs upstream: n8n leaves `connectTimeout` at 10s and
+offers no way to change it, which is what makes the budget coarse. Lowering it
+to 2s pulled recovery from 8.4s after the endpoint repointed down to 1.4s in the
+same reproduction.
 
 ### Switching topologies replaces Redis
 
@@ -1497,6 +1575,7 @@ No modules.
 | <a name="input_n8n_prestop_sleep"></a> [n8n\_prestop\_sleep](#input\_n8n\_prestop\_sleep) | Seconds the preStop hook sleeps before SIGTERM is sent, giving the load balancer time to drain the pod. MINIMUM — do not lower below 10. | `number` | `10` | no |
 | <a name="input_n8n_pruning_max_age"></a> [n8n\_pruning\_max\_age](#input\_n8n\_pruning\_max\_age) | Maximum age of execution records to retain, in hours (336 = 14 days) | `number` | `336` | no |
 | <a name="input_n8n_pruning_max_count"></a> [n8n\_pruning\_max\_count](#input\_n8n\_pruning\_max\_count) | Maximum number of execution records to retain (0 = no limit) | `number` | `10000` | no |
+| <a name="input_n8n_redis_timeout_threshold"></a> [n8n\_redis\_timeout\_threshold](#input\_n8n\_redis\_timeout\_threshold) | Milliseconds n8n will keep trying to reach Redis before it gives up and exits the process, wired to QUEUE\_BULL\_REDIS\_TIMEOUT\_THRESHOLD. Leave null (the default) to use the chart's 10000, which is n8n's own default and what every existing deployment already runs. Raise it when redis\_high\_availability\_enabled = true and you would rather n8n rode a failover out than restarted: with the default, an ElastiCache promotion outlasts the budget and every main, worker and webhook pod exits and is restarted by Kubernetes. Pick the value deliberately, because the budget is coarser than it looks. n8n does not set ioredis's connectTimeout, so it stays at 10s, and a connect to a demoted primary hangs for that full 10s before failing. Each failed attempt therefore spends about 11.1s of this budget, making the effective values 11.1s, 33.2s and 66.4s for settings of 10s, 30s and 60s. 30000 was measured failing by 1.1 seconds against a 25 second outage; 60000 survived every case measured. See README → "Surviving a Redis failover without restarting" for the measurements and the caveat that none of this has been confirmed against a real ElastiCache failover yet. | `number` | `null` | no |
 | <a name="input_n8n_reinstall_missing_packages"></a> [n8n\_reinstall\_missing\_packages](#input\_n8n\_reinstall\_missing\_packages) | Reinstall community packages that are recorded in the database but missing from a pod's local filesystem at startup. Maps to N8N\_REINSTALL\_MISSING\_PACKAGES. n8n stores installed community packages on the pod's filesystem, which is ephemeral in EKS, so a rescheduled or newly scaled-up worker comes up without them and nodes installed via the UI fail to load on that pod. Enabling this makes every pod (main, worker, and webhook-processor) reinstall the recorded packages on boot, which is what lets community nodes work reliably in queue mode. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies. When true, size the webhook processor above this module's defaults: every pod runs npm installs at boot and n8n rebroadcasts installs to all pods via pubsub, so a rolling restart makes every webhook pod install repeatedly at once. Against low CPU/memory this causes CPU-based HPA thrash and OOMKilled crash loops; see n8n\_webhook\_cpu\_request, n8n\_webhook\_memory\_limit, and docs/troubleshooting.md. | `bool` | `false` | no |
 | <a name="input_n8n_task_runner_auto_shutdown_timeout"></a> [n8n\_task\_runner\_auto\_shutdown\_timeout](#input\_n8n\_task\_runner\_auto\_shutdown\_timeout) | Seconds of inactivity before the runner process shuts down. Set to 0 to disable. | `number` | `15` | no |
 | <a name="input_n8n_task_runner_cpu_limit"></a> [n8n\_task\_runner\_cpu\_limit](#input\_n8n\_task\_runner\_cpu\_limit) | CPU limit for task runner sidecar containers (e.g. 1, 2000m) | `string` | `"1"` | no |
