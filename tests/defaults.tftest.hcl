@@ -1527,6 +1527,33 @@ run "external_redis_missing_host_fails_validation" {
   expect_failures = [var.redis_host]
 }
 
+# A blank host satisfies "is set" but is not a host. Without this the module
+# plans cleanly and then hands n8n and KEDA an empty address, so the failure
+# surfaces at runtime instead of at plan time.
+run "external_redis_blank_host_fails_validation" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = ""
+  }
+
+  expect_failures = [var.redis_host]
+}
+
+# Whitespace-only is the same mistake wearing a disguise, and is what makes
+# trimspace rather than a bare != "" the right test.
+run "external_redis_whitespace_host_fails_validation" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = "   "
+  }
+
+  expect_failures = [var.redis_host]
+}
+
 run "redis_port_rejects_a_value_outside_the_tcp_range" {
   command = plan
 

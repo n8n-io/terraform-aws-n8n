@@ -807,9 +807,20 @@ variable "redis_host" {
   type        = string
   default     = null
 
+  # Blank is rejected as well as null. An empty string satisfies "is set" but
+  # reaches n8n and KEDA as an empty host, so the apply succeeds and the queue
+  # has nowhere to connect: the same succeeds-then-fails-at-runtime shape the
+  # check blocks in redis.tf exist to prevent.
+  #
+  # Written as nested ternaries rather than `||` and `&&` because Terraform 1.9,
+  # which CI pins, does not short-circuit either operator. trimspace(null) is a
+  # hard error, so the null test has to gate the blank test structurally rather
+  # than by evaluation order. See AGENTS.md.
   validation {
-    condition     = var.create_elasticache || var.redis_host != null
-    error_message = "redis_host is required when create_elasticache = false."
+    condition = var.create_elasticache ? true : (
+      var.redis_host != null ? trimspace(var.redis_host) != "" : false
+    )
+    error_message = "redis_host is required, and must not be blank, when create_elasticache = false."
   }
 }
 
