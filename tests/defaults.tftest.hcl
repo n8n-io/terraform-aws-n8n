@@ -3379,6 +3379,26 @@ run "image_pull_secrets_without_custom_image_warns" {
   expect_failures = [check.image_pull_secrets_need_a_custom_image]
 }
 
+# Turning the input on for a deployment that already exists is the case worth
+# protecting. The module's account is created before the Helm upgrade runs, so
+# reusing the chart's name would try to create an object the release still
+# owns and stop the apply at "already exists" with nothing changed.
+run "the_module_service_account_does_not_reuse_the_charts_name" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "myregistry.example.com/n8n"
+    n8n_image_tag             = "2.27.4-mypackages"
+    n8n_task_runner_image_tag = "2.27.4"
+    n8n_image_pull_secrets    = ["registry-creds"]
+  }
+
+  assert {
+    condition     = kubernetes_service_account_v1.n8n[0].metadata[0].name != "n8n-enterprise"
+    error_message = "The module-created ServiceAccount must not take the name the chart uses when it creates its own, or enabling n8n_image_pull_secrets on a live deployment fails before Helm can hand the account over."
+  }
+}
+
 # ── n8n_extra_volumes / n8n_extra_volume_mounts ───────────────────────────────
 # Every rejection below is something Kubernetes would refuse at pod admission,
 # or worse accept and then behave unexpectedly. The point of checking at plan
@@ -3586,6 +3606,23 @@ run "extra_volume_mounts_reject_the_chart_data_mount_path" {
     ]
     n8n_extra_volume_mounts = [
       { name = "custom-nodes", mount_path = "/home/node/.n8n" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volume_mounts]
+}
+
+# The same directory under a second spelling. Without this rule it would slip
+# past the check above, which is a string comparison.
+run "extra_volume_mounts_reject_a_trailing_slash" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "/home/node/.n8n/" },
     ]
   }
 

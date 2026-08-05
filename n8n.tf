@@ -63,13 +63,16 @@ resource "kubernetes_secret" "n8n_db" {
 # creates the account and this resource does not exist; see the note on
 # local.n8n_manages_service_account for why the module ever takes it over.
 #
-# The name matches what the chart would have used, so the Pod Identity
-# association in s3.tf keeps binding to the same account either way. The chart's
-# eks.amazonaws.com/role-arn annotation is not reproduced here on purpose: the
-# module authenticates through Pod Identity, not IRSA, and the annotation was
-# only ever passed to satisfy the chart's own template validation, which reads
-# serviceAccount.awsRoleArn from the values regardless of who creates the
-# account.
+# The name is deliberately not the one the chart uses, so that enabling the
+# input on a live deployment does not collide with the account Helm already
+# owns; locals.tf has the full reasoning. The Pod Identity association in s3.tf
+# reads the same local, so it follows the account whichever name is in play.
+#
+# The chart's eks.amazonaws.com/role-arn annotation is not reproduced here on
+# purpose: the module authenticates through Pod Identity, not IRSA, and the
+# annotation was only ever passed to satisfy the chart's own template
+# validation, which reads serviceAccount.awsRoleArn from the values regardless
+# of who creates the account.
 #
 # automount_service_account_token is set explicitly because the provider
 # defaults it to false, which would be a behaviour change: the chart leaves the

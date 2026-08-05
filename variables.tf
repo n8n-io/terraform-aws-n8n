@@ -361,7 +361,7 @@ variable "n8n_image_repository" {
 }
 
 variable "n8n_image_pull_secrets" {
-  description = "Names of existing Kubernetes secrets of type kubernetes.io/dockerconfigjson, in var.namespace, that the n8n pods authenticate to their image registry with. Leave empty (the default) for a public registry or an ECR repository in this account, which the node group's IAM role already pulls without credentials. Setting this changes who owns the ServiceAccount: the pinned chart renders imagePullSecrets nowhere, so the module creates the account itself, attaches these secrets to it, and passes serviceAccount.create = false, an arrangement the chart documents and supports. The pods keep the same account name, so the S3 Pod Identity association is unaffected. Creating and rotating the secrets stays the caller's job, because a dockerconfigjson generated here would sit in plaintext in Terraform state; kubectl create secret docker-registry, or an operator like External Secrets, are the usual routes. This is also the wrong tool for cross-account ECR, whose authorization tokens expire after 12 hours: add the node group role to the source registry's repository policy instead and leave this empty. The node_group_role_arn output is the principal to name in that policy."
+  description = "Names of existing Kubernetes secrets of type kubernetes.io/dockerconfigjson, in var.namespace, that the n8n pods authenticate to their image registry with. Leave empty (the default) for a public registry or an ECR repository in this account, which the node group's IAM role already pulls without credentials. Setting this changes who owns the ServiceAccount: the pinned chart renders imagePullSecrets nowhere, so the module creates the account itself, attaches these secrets to it, and passes serviceAccount.create = false, an arrangement the chart documents and supports. The module's account takes a different name from the chart's, so that turning this on for a deployment that already exists does not collide with the account Helm still owns; the S3 Pod Identity association follows whichever name is in play, so it keeps working either way. Creating and rotating the secrets stays the caller's job, because a dockerconfigjson generated here would sit in plaintext in Terraform state; kubectl create secret docker-registry, or an operator like External Secrets, are the usual routes. This is also the wrong tool for cross-account ECR, whose authorization tokens expire after 12 hours: add the node group role to the source registry's repository policy instead and leave this empty. The node_group_role_arn output is the principal to name in that policy."
   type        = list(string)
   default     = []
 
@@ -1031,6 +1031,19 @@ variable "n8n_extra_volume_mounts" {
       can(regex("^/[^[:space:]]*$", mount.mount_path)) && !can(regex("//|/\\.\\.?(/|$)", mount.mount_path))
     ])
     error_message = "Every n8n_extra_volume_mounts mount_path must be a canonical absolute path with no whitespace: no repeated slashes and no \".\" or \"..\" components (e.g. \"/opt/n8n-nodes\"). The canonical form is what makes the collision checks below comparisons rather than guesses."
+  }
+
+  validation {
+    # Every other rule here is a string comparison, so one directory has to have
+    # one spelling. "/home/node/.n8n/" is the same mount target as
+    # "/home/node/.n8n" and would slip past the check below it, and a trailing
+    # slash also breaks the prefix test that decides whether a mount covers
+    # n8n_custom_extensions_path, turning a working config into a warning.
+    condition = alltrue([
+      for mount in var.n8n_extra_volume_mounts :
+      !endswith(mount.mount_path, "/")
+    ])
+    error_message = "No n8n_extra_volume_mounts mount_path may end in a slash: write \"/opt/n8n-nodes\", not \"/opt/n8n-nodes/\". The two name the same directory, so allowing both would let a mount collide with one the chart already declares while comparing as different, and would break the test for whether a mount covers n8n_custom_extensions_path. Mounting at \"/\" is rejected by the same rule, which is intended."
   }
 
   validation {

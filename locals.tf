@@ -143,12 +143,6 @@ locals {
   s3_bucket_name = "n8n-${local.cluster_name}-${substr(data.aws_caller_identity.current.account_id, 6, 6)}"
 
   # ── n8n service account ────────────────────────────────────────────────────
-  # One name with three consumers: the chart's serviceAccount.name, the Pod
-  # Identity association that grants the pods S3 access (s3.tf), and the
-  # ServiceAccount resource in n8n.tf on the branch where the module owns it.
-  # They have to agree or the pods run as an account with no S3 credentials.
-  n8n_service_account_name = "n8n-enterprise"
-
   # The chart creating its own ServiceAccount is the arrangement we want, with
   # one exception: neither chart 1.10.0 nor 1.11.0 renders imagePullSecrets
   # anywhere, not on the pod spec and not on the ServiceAccount, so a private
@@ -161,6 +155,26 @@ locals {
   # attach. With the default empty list the chart keeps creating it and nothing
   # about an existing deployment moves.
   n8n_manages_service_account = length(var.n8n_image_pull_secrets) > 0
+
+  # The two owners deliberately use different names, which is not tidiness.
+  # helm_release.n8n depends on the ServiceAccount resource, so on the apply
+  # that first sets n8n_image_pull_secrets the module creates its account
+  # before the upgrade runs. Sharing one name there means creating an object
+  # the chart still owns, and the apply stops at "serviceaccounts
+  # \"n8n-enterprise\" already exists" with the release untouched. Reversing
+  # the dependency does not help either: with create = false the chart drops
+  # its account during the upgrade, and the new pods would fail admission
+  # looking for a ServiceAccount that Terraform has not created yet.
+  #
+  # Two names sidestep both. The new account is created alongside the old one,
+  # the upgrade points the pods at it and lets Helm delete the chart's, and the
+  # same apply works whether or not the deployment already exists.
+  #
+  # Whichever name is in play has three consumers that must agree: the chart's
+  # serviceAccount.name, the Pod Identity association granting S3 access
+  # (s3.tf), and the ServiceAccount resource in n8n.tf. Drift between them
+  # leaves the pods running as an account with no AWS credentials.
+  n8n_service_account_name = local.n8n_manages_service_account ? "n8n-enterprise-pull" : "n8n-enterprise"
 
   # ── Extra volumes, translated for the chart ────────────────────────────────
   # The inputs are snake_case and typed; the chart wants Kubernetes' camelCase.
