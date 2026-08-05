@@ -75,6 +75,108 @@ run "admin_cidr_validation_rejects_host_bits" {
   expect_failures = [var.admin_allowed_cidr_blocks]
 }
 
+# The four n8n image inputs are passthroughs, so what is worth pinning here is
+# that this example adds no opinion of its own: each one stays null so the
+# chart's defaults apply, and each one's validation reaches the caller rather
+# than being swallowed. Same runs as examples/cloudflare and examples/godaddy;
+# examples/small and examples/medium document why they cannot host them.
+
+run "n8n_image_tag_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_image_tag == null
+    error_message = "Example must not pin an image tag by default; the module's chart default (stable) should apply."
+  }
+}
+
+run "n8n_image_tag_rejects_whitespace" {
+  command = plan
+
+  variables {
+    n8n_image_tag = " 1.2.3 "
+  }
+
+  expect_failures = [var.n8n_image_tag]
+}
+
+run "n8n_image_repository_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_image_repository == null
+    error_message = "Example must not pin an image repository by default; the module's chart default (docker.n8n.io/n8nio/n8n) should apply."
+  }
+}
+
+run "n8n_image_repository_rejects_inline_tag" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/n8n:2.27.4"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "n8n_task_runner_image_tag_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_task_runner_image_tag == null
+    error_message = "Example must not pin a task runner image tag by default; the chart should keep inheriting the n8n application image's tag."
+  }
+}
+
+run "n8n_task_runner_image_tag_rejects_whitespace" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_tag = " 2.27.4 "
+  }
+
+  expect_failures = [var.n8n_task_runner_image_tag]
+}
+
+run "n8n_custom_extensions_path_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_custom_extensions_path == null
+    error_message = "Example must not set a custom extensions path by default; N8N_CUSTOM_EXTENSIONS should be omitted unless a custom image supplies nodes at that path."
+  }
+}
+
+run "n8n_custom_extensions_path_rejects_a_relative_path" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "opt/n8n-nodes"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+run "n8n_custom_extensions_path_rejects_the_chart_mounted_data_dir" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node/.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+run "n8n_custom_extensions_path_rejects_a_non_canonical_path" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node/./.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
 # ── The split itself ──────────────────────────────────────────────────────────
 # The whole point of this example: two ALBs with opposite schemes, each serving
 # a disjoint slice of traffic.
