@@ -2,6 +2,8 @@
 
 Production-grade n8n for **~50–60M executions per day** (~350–960 req/s average). Uses Amazon Aurora PostgreSQL with I/O-Optimized storage, PgBouncer for connection pooling, and Route53 for automated DNS and certificate management.
 
+> **Aurora support scope:** n8n does not officially support Amazon Aurora PostgreSQL or other Postgres-compatible derivatives. This example is kept for its I/O-Optimized throughput characteristics (see below), but Aurora is not tested or certified by n8n, and issues that reproduce only on Aurora are outside official support scope. If that matters for your deployment, use the module-managed RDS instance (`create_database = true`) instead, sized for your throughput tier.
+
 ## Architecture
 
 ```
