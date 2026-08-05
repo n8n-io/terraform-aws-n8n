@@ -7,7 +7,7 @@ Production-grade n8n for **~50–60M executions per day** (~350–960 req/s aver
 ```
 Route 53 (alias A-record)
     └─► ALB (AWS LBC) ──► EKS (10–50 × m7i.4xlarge)
-                               ├─► n8n main pods (HPA)
+                               ├─► n8n main pods (HPA, min=6 / max=60)
                                ├─► n8n webhook processors (HPA, min=30 / max=80)
                                └─► n8n workers (KEDA, min=20 / max=160)
                                         ├─► PgBouncer (2 replicas, transaction mode)
@@ -25,8 +25,9 @@ Route 53 (alias A-record)
 | VPC CNI tuning | WARM_ENI_TARGET=0, WARM_IP_TARGET=2 | Reduces pre-warmed IPs from ~2,400 to 20 across 10 nodes |
 | Database | Aurora PostgreSQL I/O-Optimized | Removes IOPS ceiling; 14,000–15,000 TPS sustained vs ~600 req/s ceiling on RDS gp3 |
 | Aurora instances | 1 writer + 1 reader | Automatic failover; reader offloads reporting queries |
-| PgBouncer | 2 replicas, transaction mode | 80 webhook + 160 worker + 2 main = 1,210 connections without pooling; transaction mode confirmed compatible with n8n TypeORM |
+| PgBouncer | 2 replicas, transaction mode | 1,500 client connections at the pod ceilings (80 webhook + 160 worker + 60 main, pool_size=5); `MAX_CLIENT_CONN=3000` per replica, so a single surviving replica absorbs all of them; transaction mode confirmed compatible with n8n TypeORM |
 | Redis | cache.r6g.large | 77% peak memory at 856 req/s with no evictions or rejected connections |
+| Main pods | min=6, max=60 | Mains serve the editor and REST API only, not webhooks or manual executions, so the ceiling tracks concurrent users rather than executions/day; 10× the module default, the same factor this tier scales the webhook ceiling by. Floor of 6 keeps warm editor/API capacity, since n8n pods take tens of seconds to boot |
 | Webhook pods | min=30, max=80 | 10 pods saturated at ~960 req/s; 30 pod floor handles 500 concurrent VUs cleanly |
 | Worker pods | min=20, max=160 | 856 req/s ÷ concurrency=40 = 22 workers at steady state; 160 max for 2,400 req/s burst |
 | Worker concurrency | 40 | Doubles throughput per pod vs 20; pool_size=5 is sufficient with PgBouncer |

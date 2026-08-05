@@ -108,6 +108,27 @@ module "n8n" {
   # timeouts. PgBouncer's own server-pool sizing lives in pgbouncer.tf.
   db_postgresdb_pool_size = 5
 
+  # ── Main pods ─────────────────────────────────────────────────────────────────
+  # Mains carry neither webhooks (disableProductionWebhooksOnMainProcess) nor
+  # manual executions (the chart sets OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS), so
+  # this ceiling tracks concurrent editor and REST API users rather than the
+  # ~50-60M executions/day this tier targets. 60 is 10× the module default, the
+  # same factor this tier already scales the webhook ceiling by (8 to 80).
+  #
+  # Floor of 6 keeps warm capacity for the editor and API the way the webhook
+  # floor of 30 does for webhooks. n8n pods take tens of seconds to boot, so a
+  # floor of 2 would put an API burst behind pod startup, and it leaves nothing
+  # spare during a rollout on a tier where mains span only two AZs.
+  #
+  # Neither the node group nor PgBouncer is the constraint. Main pods alone at
+  # this ceiling request 72,000m and open 300 client connections at pool_size=5.
+  # With all three families at their ceilings at once, which is what the node
+  # group has to survive, it is 208,000m of the ~785,000m this node group can
+  # schedule (60 × 1,200m main, 160 × 700m worker, 80 × 300m webhook) and ~1,500
+  # client connections against a MAX_CLIENT_CONN of 3,000 per PgBouncer replica.
+  n8n_main_hpa_min_replicas = 6
+  n8n_main_hpa_max_replicas = 60
+
   # ── Webhook processors ────────────────────────────────────────────────────────
   # Floor of 30: 10 pods saturated at ~960 req/s in benchmarks; 30 handles
   # 500 concurrent VUs cleanly. 4 Gi memory limit halved failure rate vs 2 Gi

@@ -57,6 +57,66 @@ this project adheres to the stability contract in
   from README.md and docs/troubleshooting.md, and the split-ingress example's
   `mcp_single_replica` workaround variable was removed with them.
 
+- Every `helm upgrade` scaled the main, worker and webhook deployments down to 2
+  replicas before their autoscalers climbed back. The chart renders
+  `spec.replicas` unconditionally on all three deployments, from
+  `multiMain.replicas`, `queueMode.workerReplicaCount` and
+  `webhookProcessor.replicaCount`, with no regard for whether an HPA or a KEDA
+  ScaledObject also owns the field. The module passed a constant `2` for all
+  three, so Helm and the autoscaler disagreed on every apply.
+
+  It reset any scale-up, not only a configured floor: a deployment the HPA had
+  taken to 8 under load went back to 2 and had to climb again. It cost most where
+  the floor was highest, since `examples/large` runs a webhook floor of 30 and a
+  worker floor of 20, both of which collapsed to 2 on each apply and then had to
+  be re-scaled while traffic was already arriving. Same class of defect as
+  [#51](https://github.com/n8n-io/terraform-aws-n8n/issues/51): pod count driven
+  by two sources that disagree.
+
+  All three are now wired to their autoscaler's floor
+  (`n8n_main_hpa_min_replicas`, `n8n_worker_keda_min_replicas`,
+  `n8n_webhook_hpa_min_replicas`), so the manifest agrees with the autoscaler on
+  where the deployment rests. Helm's write is a no-op while the deployment sits
+  at its floor.
+
+  This bounds the drop rather than eliminating it, and the distinction matters if
+  you upgrade under load. A deployment the autoscaler has taken above its floor
+  is still written back down to the floor, and still has to climb again: for
+  `examples/large` that is a webhook deployment at 80 dropping to 30 instead of
+  to 2. Bounding it at the floor is the most a caller of this chart can do, since
+  the field is rendered unconditionally and no value omits it, and reading the
+  live replica count back into the plan would make every plan depend on current
+  cluster state. Eliminating it needs the chart to guard `spec.replicas` on
+  whether an autoscaler owns the deployment, which is an upstream change.
+  Deployments resting on the default floors see no change, since those already
+  matched the constant.
+
+  Verified on a live cluster rather than by inspection, because no plan-time test
+  can observe a `helm upgrade`. A 3-node cluster was applied from the previous
+  version with a webhook floor of 5 and a worker floor of 3, then given one
+  unrelated config change to trigger an upgrade. Sampling `spec.replicas` every
+  two seconds through it:
+
+  ```
+     5 samples  webhook=5 worker=3   <- steady state at the configured floors
+     2 samples  webhook=2 worker=2   <- Helm re-asserts spec.replicas=2
+    41 samples  webhook=5 worker=3   <- HPA and KEDA climb back
+  ```
+
+  Webhook capacity dropped 60% and worker 33% mid-upgrade, and `helm get manifest`
+  confirmed the release's stored desired state read `replicas: 2` for all three
+  while the cluster ran 5 and 3. Repointing at this version planned `Plan: 0 to
+  add, 1 to change, 0 to destroy`, an in-place `helm_release` update with no
+  replacement of the ALB, RDS instance, KMS key or any PVC, and moved the stored
+  manifest to 5 and 3. A second, pod-churning upgrade of the same duration as the
+  one that collapsed (1m45s) held every one of 48 samples steady. Both runs had
+  the deployments resting at their floors, which is the case the fix closes; the
+  above-the-floor case described above was not exercised on the cluster.
+
+  A no-op re-apply does **not** show the defect, since Terraform only runs
+  `helm upgrade` when the values change. It takes a real config change or version
+  bump, which is also when it surfaces in practice.
+
 - `db_allowed_cidr_blocks` is now de-duplicated against the always-allowed VPC
   CIDR. Passing the VPC CIDR explicitly, or repeating an entry, previously
   produced a security group rule with the same permission twice, which AWS
@@ -65,6 +125,55 @@ this project adheres to the stability contract in
   API before fixing.
 
 ### Added
+
+- Plan-time warning when the autoscaler ceilings, the per-pod CPU requests, and
+  the node group are out of step. `scaling.tf` models the CPU arithmetic and the
+  `autoscaling_maxima_fit_node_group_capacity` check reports the numbers when the
+  three pod families at their maxima cannot fit in `node_max` ×
+  `node_instance_type`. The demand side sums the main, worker and webhook
+  ceilings, counting task runner sidecars on main and worker pods only, since the
+  chart adds no sidecar to webhook processors. The supply side discounts each
+  node's vCPU by the EKS kubelet reservation, the `aws-node` and `kube-proxy`
+  DaemonSets, and this module's cluster add-ons.
+
+  A `check` block, so it never fails a plan: the model is an approximation, and
+  staging higher ceilings before raising `node_max` is legitimate. vCPU is
+  derived from the instance size rather than read from
+  `data.aws_ec2_instance_type`, because a `check` whose condition is unknown at
+  plan is a hard error rather than a warning and a data source read is exactly
+  what Terraform can defer to apply. An advisory hint must not be able to break
+  a plan. Verified against `ec2:DescribeInstanceTypes` across all 1,150 types
+  offered in eu-west-1: exact for 995, silent for the 104 bare-metal sizes,
+  over-counted on 48 (which costs a warning rather than raising a false one), and
+  under-counted on 3 legacy types that can warn a hair early. New section in
+  README.md, "Sizing autoscaling against node capacity", documents the
+  arithmetic.
+
+  The supply-side constants are the requests these workloads declare on a cluster
+  this module builds, not the figures the upstream charts document: 180m per node
+  for the `aws-node`, `kube-proxy` and `ebs-csi-node` DaemonSets, and 720m once
+  for CoreDNS, metrics-server, KEDA and `ebs-csi-controller`.
+  `ebs-csi-node-windows` is excluded because it reports
+  `desiredNumberScheduled = 0` on a Linux node group. The EKS kubelet reservation
+  is modelled from the AMI's own curve, with t3.xlarge reporting 3,920m
+  allocatable.
+
+  Checked against the real scheduler rather than by inspection, by driving a
+  webhook HPA past capacity on a 3-node cluster. The model predicted 10,500m
+  available; the scheduler placed 10,200m and left 21 pods `Pending` with `0/3
+  nodes are available: 3 Insufficient cpu` while the Cluster Autoscaler sat at
+  `node_max`, which is the failure #51 reports. The 300m residue is bin-packing
+  fragmentation, which no request-based model can represent, so read the warning
+  as a bound rather than a prediction.
+
+- Validation rejecting an autoscaler floor above its own ceiling, for all three
+  pod families. Kubernetes rejects an HPA whose `minReplicas` exceeds its
+  `maxReplicas` and KEDA does the same for a ScaledObject, so this previously
+  failed partway through an apply. Lowering the two default ceilings above makes
+  the combination reachable for a caller who changes nothing, which is why the
+  check is at the variable boundary: the error names both inputs and their values
+  before anything is sent to the cluster. A floor equal to its ceiling stays
+  valid, since that is how you pin a fixed-size deployment.
 
 - `n8n_license_detach_floating_on_shutdown` input (default `false`) maps to
   `N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN`, overriding n8n's own upstream
@@ -235,6 +344,70 @@ this project adheres to the stability contract in
   every existing deployment would destroy and recreate its alias record.
 
 ### Changed
+
+- **Default HPA maxima now fit the default node group.**
+  `n8n_main_hpa_max_replicas` drops from `20` to `6` and
+  `n8n_webhook_hpa_max_replicas` from `50` to `8`. The old defaults were
+  unschedulable by construction: 20 main pods plus their task runner sidecars
+  request 24,000m CPU on their own, more than the entire default node group
+  (`node_max = 6` × t3.xlarge = 24 vCPU) can ever provide, before the worker and
+  webhook ceilings are counted at all.
+
+  The failure mode is not a plan error but a slow one. During a rollout with
+  elevated CPU the HPAs scale toward their maxima, the Cluster Autoscaler hits
+  `node_max`, and the pods that do not fit sit `Pending` with `Insufficient cpu`
+  (15 of them in the deployment that surfaced this). The surging ReplicaSet then
+  competes for the same exhausted CPU, which stretches out the rollout until the
+  HPAs are capped by hand.
+
+  At the new defaults the three pod families request 16,600m against roughly
+  21,720m schedulable, leaving headroom for a rolling-update surge.
+
+  Upgrade note: an explicit ceiling is untouched. Both HPAs update in place, with
+  no resource replacement, but a cluster currently running more than 6 main or 8
+  webhook pods will be scaled back to the new ceiling on the next apply. If you
+  rely on the old ceilings, set them explicitly and size `node_max` /
+  `node_instance_type` to match.
+
+  One case fails the plan outright: an explicit floor above the new ceiling, which
+  a caller could reach without changing anything. `n8n_main_hpa_min_replicas = 8`
+  or `n8n_webhook_hpa_min_replicas = 10` was valid against the old ceilings of 20
+  and 50, and against the new ones is not:
+
+  ```
+  Error: Invalid value for variable
+    │ var.n8n_main_hpa_max_replicas is 6
+    │ var.n8n_main_hpa_min_replicas is 8
+  n8n_main_hpa_min_replicas must not exceed n8n_main_hpa_max_replicas
+  ```
+
+  Raise the matching ceiling explicitly, and `node_max` /
+  `node_instance_type` with it. The new validation below is what makes this a
+  plan-time error naming both inputs, rather than a Kubernetes rejection partway
+  through `helm upgrade`.
+
+  `examples/medium` and `examples/large` now pin the main pod range explicitly
+  (3/24 and 6/60) rather than inheriting it, so it is tied to each tier's node
+  group instead of to the starter default, and both tiers' sizing tables gained a
+  main-pod row. The raised floors match the warm-floor approach both tiers already
+  take for webhook and worker pods: n8n pods take tens of seconds to boot, so a
+  floor of 2 puts an editor or API burst behind pod startup. Main pods carry
+  neither production webhooks (the module sets
+  `disableProductionWebhooksOnMainProcess`) nor manual executions (the chart sets
+  `OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS`), so a main ceiling tracks concurrent
+  editor and REST API users, not a tier's executions/day. Resolves
+  [#51](https://github.com/n8n-io/terraform-aws-n8n/issues/51).
+
+- `node_instance_type`, `node_max`, `n8n_task_runners_enabled`, and the six
+  autoscaler floor and ceiling inputs now declare `nullable = false`. A caller
+  passing an explicit `null` for one of these previously propagated it into
+  the module instead of falling back to the default, and once the capacity
+  check existed that null aborted the plan from inside the check's
+  interpolations (see the AGENTS.md note on null and `nullable = false`).
+  With `nullable = false`, Terraform substitutes the declared default at the
+  variable boundary. Only callers writing a literal `null` for one of these
+  nine inputs observe any change: they now get the default silently rather
+  than an error partway through the plan.
 
 - `aws_route53_record.cert_validation` keys its `for_each` off
   `local.acm_domain_names` instead of the certificate's computed

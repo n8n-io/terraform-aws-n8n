@@ -82,10 +82,26 @@ module "n8n" {
   # ── Redis ─────────────────────────────────────────────────────────────────────
   redis_node_type = "cache.r6g.large"
 
+  # ── Main pods ─────────────────────────────────────────────────────────────────
+  # Mains carry neither webhooks (disableProductionWebhooksOnMainProcess) nor
+  # manual executions (the chart sets OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS), so
+  # this ceiling tracks concurrent editor and REST API users rather than this
+  # tier's executions/day. 24 is 4× the module default, matching how the worker
+  # ceiling scales from the default 10 to this tier's 40.
+  #
+  # Floor of 3 matches the warm-floor approach the webhook and worker pods take
+  # here: one leader plus two followers, so a node drain still leaves two serving
+  # the editor while the PodDisruptionBudget only guarantees one.
+  #
+  # Costs 28,800m of the ~115,000m this node group can schedule at the ceiling,
+  # and 240 of db.m6g.2xlarge's ~3,600 connections at pool_size=10.
+  n8n_main_hpa_min_replicas = 3
+  n8n_main_hpa_max_replicas = 24
+
   # ── Webhook processors ────────────────────────────────────────────────────────
   # Minimum floor of 5 ensures warm pods are ready before traffic ramps.
-  # Max of 50 differentiates this tier from the default example's 2/50 by
-  # raising the warm floor; same ceiling handles multi-day traffic spikes.
+  # Max of 50 raises both the warm floor and the ceiling over the module default
+  # (2/8), which this tier's node group has the CPU to schedule.
   # 2 Gi memory limit prevents OOM under concurrent in-flight requests.
   n8n_webhook_hpa_min_replicas = 5
   n8n_webhook_hpa_max_replicas = 50
