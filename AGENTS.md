@@ -51,7 +51,7 @@ WAF) and an internal ALB serving the editor UI and REST API.
 
 ### Architecture at a glance
 
-```
+```text
    ┌── Route 53 (optional) ──┐
    │  or Cloudflare (opt.)  │
    │                        ▼
@@ -86,8 +86,10 @@ expected by the Terraform Registry:
 | `tests/*.tftest.hcl`              | `terraform test` plan-time tests with mocked providers.     |
 | `tests/scripts/smoke-test.sh`     | Post-`apply` smoke test for live deployments.               |
 | `tests/scripts/verify-custom-image.sh` | Post-`apply` check for baked-in community nodes (`n8n_image_repository` + `n8n_custom_extensions_path`). |
-| `docs/`                           | Long-form supplementary docs (troubleshooting, post-deploy, cleanup). |
+| `docs/`                           | Long-form supplementary docs (troubleshooting, post-deploy, cleanup, upgrades, Pod Identity, Helm chart coverage). |
 | `.github/workflows/`              | CI: fmt, validate, test, tflint, checkov.                   |
+| `.github/CODEOWNERS`              | Default reviewers for PRs.                                  |
+| `Taskfile.yml`                    | Optional convenience wrapper (`task ci`) around the local dev loop below; CI does not depend on it. |
 
 ## Quality bar: HashiCorp Terraform Registry & Partner Premier Tier
 
@@ -281,9 +283,10 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
   fail; bump both together when upgrading.
 
 - Each example has its own `README.md` documenting the runnable example.
-- `docs/troubleshooting.md`, `docs/post-deployment.md`, and
-  `docs/destroy-cleanup.md` cover operator-facing concerns that don't belong
-  inline in `README.md`.
+- `docs/troubleshooting.md`, `docs/post-deployment.md`,
+  `docs/destroy-cleanup.md`, `docs/upgrading-n8n.md`, `docs/pod-identity.md`,
+  and `docs/helm-chart-coverage.md` cover operator-facing concerns that don't
+  belong inline in `README.md`.
 - Inline comments in `.tf` files use the `# ── Section ──` banner style. Match
   it when adding new sections.
 
@@ -321,6 +324,11 @@ vs this repo's `versions.tf`, or its Terraform version floor), **this
 `AGENTS.md` and the existing repo layout win**.
 
 ### Local development loop
+
+`task ci` (see [`Taskfile.yml`](./Taskfile.yml), requires
+[`task`](https://taskfile.dev)) runs the full loop below across the module
+root and every example in one command. The raw commands work identically
+without `task` installed:
 
 ```bash
 # The veksh/godaddy-dns provider requires credentials even in plan-time tests.
