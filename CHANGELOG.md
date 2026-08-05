@@ -542,7 +542,7 @@ this project adheres to the stability contract in
   two topologies are different resource types, so no `moved` block can bridge
   them; Terraform destroys the cluster and creates the replication group, and
   everything queued or in flight goes with it. The replication group also
-  carries a deliberately distinct identifier (`<cluster_name>-redis-ha`),
+  carries a deliberately distinct identifier (`<cluster_name>-redis-rg`),
   because ElastiCache shares one identifier namespace between cache clusters
   and replication groups and rejects a second resource reusing the name. With
   a shared name the flip would destroy the old cache and then fail to create

@@ -1434,7 +1434,7 @@ run "redis_topologies_use_distinct_elasticache_identifiers" {
   }
 
   assert {
-    condition     = aws_elasticache_replication_group.n8n[0].replication_group_id == "n8n-cluster-redis-ha"
+    condition     = aws_elasticache_replication_group.n8n[0].replication_group_id == "n8n-cluster-redis-rg"
     error_message = "The replication group ID must not collide with the single-node cluster_id, because ElastiCache shares one identifier namespace across both"
   }
 }

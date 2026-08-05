@@ -109,9 +109,18 @@ resource "aws_elasticache_replication_group" "n8n" {
   # This constraint was found the hard way on a live cluster while building the
   # sibling redis_transit_encryption_enabled path (#41), not reasoned about.
   #
+  # The suffix is "-redis-rg" (replication group) rather than "-redis-ha", even
+  # though high availability is the only thing that selects this resource today.
+  # #41 needs a replication group as well, for an unrelated reason: auth_token
+  # exists only on this resource type. Both toggles therefore converge on this
+  # one resource, and a topology-specific name would misdescribe it for a caller
+  # who wanted only TLS. Naming it neutrally now is free; renaming it after
+  # release is not, because replication_group_id forces replacement and anyone
+  # who had already opted in would lose their queue a second time.
+  #
   # Length: replication group IDs cap at 40 characters. cluster_name is capped
   # at 14 by its own validation, so 14 + 9 = 23 leaves ample headroom.
-  replication_group_id = "${local.cluster_name}-redis-ha"
+  replication_group_id = "${local.cluster_name}-redis-rg"
   description          = "n8n Bull queue and multi-main coordination (HA) for ${local.cluster_name}"
 
   engine         = "redis"
@@ -126,7 +135,7 @@ resource "aws_elasticache_replication_group" "n8n" {
   subnet_group_name  = aws_elasticache_subnet_group.n8n[0].name
   security_group_ids = [aws_security_group.redis[0].id]
 
-  tags = merge(local.common_tags, { Name = "${local.cluster_name}-redis-ha" })
+  tags = merge(local.common_tags, { Name = "${local.cluster_name}-redis-rg" })
 }
 
 # ── External-Redis diagnostic checks ───────────────────────────────────────

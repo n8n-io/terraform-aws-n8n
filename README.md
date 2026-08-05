@@ -507,7 +507,7 @@ flight at that moment is lost**. This is a maintenance-window operation:
 4. Resume traffic.
 
 The replication group deliberately carries a **different identifier** from the
-single-node cluster (`<cluster_name>-redis-ha` rather than
+single-node cluster (`<cluster_name>-redis-rg` rather than
 `<cluster_name>-redis`). ElastiCache shares one identifier namespace between
 cache clusters and replication groups and rejects a second resource reusing the
 name:
@@ -522,6 +522,12 @@ while the old one still exists. With a shared name the apply would destroy the
 old cache and then fail to create the replacement, leaving the deployment with
 no queue backend and needing a second apply to recover. The distinct suffix
 makes enabling and disabling each a single apply.
+
+The suffix reads `-redis-rg` (replication group) rather than `-redis-ha`
+because the resource is not exclusive to high availability. Anything the module
+can only express as a replication group lands on it, and `replication_group_id`
+forces replacement, so a name that had to be corrected later would cost every
+early adopter their queue a second time.
 
 ## Bring your own Redis
 
