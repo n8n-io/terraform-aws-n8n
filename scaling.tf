@@ -41,6 +41,9 @@ resource "kubernetes_horizontal_pod_autoscaler_v2" "n8n_webhook" {
     behavior {
       scale_up {
         stabilization_window_seconds = var.n8n_webhook_hpa_scale_up_stabilization_window_seconds
+        # The provider omits selectPolicy when unset and the Kubernetes API
+        # rejects the resulting empty string; "Max" is the API's own default.
+        select_policy = "Max"
 
         policy {
           type           = "Percent"

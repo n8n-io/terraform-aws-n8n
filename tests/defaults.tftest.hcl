@@ -128,6 +128,15 @@ run "webhook_hpa_scale_up_stabilization_window_defaults_to_zero" {
     condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].behavior[0].scale_up[0].stabilization_window_seconds == 0
     error_message = "n8n_webhook_hpa_scale_up_stabilization_window_seconds should default to 0, matching the Kubernetes API's own default."
   }
+
+  # Regression guard: select_policy must be set explicitly. When it is unset,
+  # the provider sends selectPolicy: "" and the Kubernetes API rejects the HPA
+  # at apply time (`Unsupported value: ""`) — mocked tests cannot catch that
+  # server-side rejection, only this plan-time value.
+  assert {
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].behavior[0].scale_up[0].select_policy == "Max"
+    error_message = "n8n_webhook HPA scale_up.select_policy must be explicitly \"Max\" — an unset value is serialized as \"\" and rejected by the Kubernetes API at apply."
+  }
 }
 
 run "webhook_hpa_scale_up_stabilization_window_accepts_override" {
