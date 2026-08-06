@@ -16,16 +16,20 @@ this project adheres to the stability contract in
   rather than on an actively-maintained major. See
   [#84](https://github.com/n8n-io/terraform-aws-n8n/issues/84).
 
-  Existing deployments are unaffected: `aws_db_instance.n8n` carries
-  `lifecycle.ignore_changes = [engine_version]` (added so
-  `auto_minor_version_upgrade` drift doesn't get reset on every apply), and
-  that same setting means a new default in the variable does not by itself
-  produce a plan diff on state created under the old default. The new default
-  only applies to instances created after this change; existing instances stay
-  on whatever `engine_version` is already in state until upgraded deliberately
-  out-of-band (e.g. `aws rds modify-db-instance --engine-version ... --apply-immediately`
-  or a console-driven major-version upgrade): `ignore_changes` means Terraform
-  picks up the new value on the next refresh rather than fighting it.
+  An in-place module upgrade leaves existing deployments unchanged:
+  `aws_db_instance.n8n` carries `lifecycle.ignore_changes = [engine_version]`
+  (added so `auto_minor_version_upgrade` drift doesn't get reset on every
+  apply), and that same setting means a new default in the variable does not by
+  itself produce a plan diff on state created under the old default. The new
+  default applies to instances created after this change, including replacement
+  instances. Existing instances stay on whatever `engine_version` is already
+  in state until upgraded deliberately out-of-band. Follow
+  [AWS's major-version upgrade process](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_UpgradeDBInstance.PostgreSQL.MajorVersion.Process.html):
+  validate extensions and application compatibility first, plan for downtime
+  or use a blue/green deployment, and pass `--allow-major-version-upgrade` when
+  using `aws rds modify-db-instance`. Omit `--apply-immediately` to schedule the
+  change for the next maintenance window. After the upgrade, `ignore_changes`
+  means Terraform picks up the new value on refresh rather than fighting it.
 
 - **`examples/large`'s Aurora PostgreSQL cluster now pins `engine_version =
   "18.4"` instead of `16.4`,** for the same reason as the RDS default above.

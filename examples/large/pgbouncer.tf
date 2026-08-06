@@ -29,9 +29,10 @@
 #   - n8n connects over plain TCP (in-cluster); PgBouncer terminates SSL on
 #     its upstream leg to Aurora.
 #   - AUTH_TYPE=plain stores the plaintext password in userlist.txt so
-#     PgBouncer can negotiate any upstream auth method. Aurora 16 stores
-#     passwords as scram-sha-256 (PG14+ default), and PgBouncer needs
-#     plaintext to compute the SCRAM response. AUTH_TYPE=md5 fails with
+#     PgBouncer can negotiate any upstream auth method. Aurora PostgreSQL's
+#     current default parameter groups store passwords as scram-sha-256 (the
+#     PostgreSQL default since PG14), and PgBouncer needs plaintext to compute
+#     the SCRAM response. AUTH_TYPE=md5 fails with
 #     "server login failed: wrong password type" because md5-hashed
 #     passwords cannot satisfy a SCRAM challenge. Plaintext only exists
 #     inside the pgbouncer pod's filesystem; the in-cluster client→PgBouncer

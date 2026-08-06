@@ -656,6 +656,7 @@ variable "db_engine_version" {
   description = "PostgreSQL engine version for the RDS instance. Must be a version available from `aws rds describe-db-engine-versions --engine postgres` in the target region — RDS deprecates and removes minor versions over time, and supported versions vary by region. Bump as needed without forking."
   type        = string
   default     = "18.4"
+  nullable    = false
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+$", var.db_engine_version))
