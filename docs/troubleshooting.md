@@ -196,6 +196,36 @@ aws ec2 describe-security-groups --group-ids <sg-id> \
 
 Note that hand-editing that security group is not a durable fix: the controller reverts it on the next reconcile. Change the Terraform inputs and apply.
 
+## A prefix-list restriction takes the ALB offline for every source
+
+**Symptom**
+
+`terraform apply` succeeds after setting `alb_inbound_prefix_list_ids`, and then every source times out: the editor UI, the REST API, and inbound webhooks alike. The annotation is present on the Ingress, but the controller-managed security group has no ingress rules at all:
+
+```bash
+kubectl get ingress n8n-ingress -n n8n \
+  -o jsonpath='{.metadata.annotations.alb\.ingress\.kubernetes\.io/security-group-prefix-lists}'
+# Resolve the ALB's security group as in the previous entry, then:
+aws ec2 describe-security-groups --group-ids <sg-id> \
+  --query 'SecurityGroups[].IpPermissions'   # returns []
+```
+
+**Cause**
+
+A security group rule that references a managed prefix list counts against the rules-per-security-group quota by the list's max-entries weight, not as one rule. The quota defaults to 60 (`L-0EA8095F`, "Inbound or outbound rules per security group"), and the controller writes each source once per listen port; the module's ALB listens on 80 and 443, so everything counts twice. The AWS-managed CloudFront origin-facing list (`pl-3b927c52` in us-east-1) has a weight of 55: alongside a single CIDR, the controller needs 2 x (55 + 1) = 112 rules and the quota stops it at 60.
+
+The controller revokes the group's existing rules first, then fails on `AuthorizeSecurityGroupIngress` with `RulesPerSecurityGroupLimitExceeded` and retries indefinitely, leaving the group empty in between. The apply had already reported success, because the annotation itself applied cleanly; the failure exists only in the Ingress events and the controller log. Observed live against LBC v3.5.0.
+
+```bash
+kubectl describe ingress n8n-ingress -n n8n | tail -5
+# Warning  FailedDeployModel ... api error RulesPerSecurityGroupLimitExceeded:
+# The maximum number of rules per security group has been reached.
+```
+
+**Fix**
+
+Make the restriction fit the quota: keep 2 x (combined prefix-list weight + number of `alb_inbound_cidrs` entries) at or under it, move the ranges into `alb_inbound_cidrs`, or request an increase on `L-0EA8095F` before referencing heavy lists. Then `terraform apply`; the controller's next reconcile authorizes the rules and the ALB comes back without recreating anything. Adding rules to the group by hand does not help: the controller reverts them on the next reconcile, the same as the previous entry.
+
 ## Caller-owned Ingress fails with `namespaces "n8n" not found`
 
 **Symptom**

@@ -257,6 +257,19 @@ this project adheres to the stability contract in
   against the security group the controller owns rather than against the
   annotation.
 
+  Live verification also surfaced a quota hazard on
+  `alb_inbound_prefix_list_ids`: a security group rule referencing a managed
+  prefix list counts against the rules-per-security-group quota (default 60,
+  `L-0EA8095F`) by the list's max-entries weight, once per listen port, and the
+  module's ALB listens on 80 and 443. A list too heavy to fit (the AWS-managed
+  CloudFront origin-facing list weighs 55, needing 112 rules) takes the ALB
+  offline for every source after a clean apply: the controller revokes the
+  existing rules first, fails with `RulesPerSecurityGroupLimitExceeded`, and
+  leaves the security group with no ingress rules at all. The input's
+  description spells out the arithmetic instead of suggesting AWS-managed
+  lists, and `docs/troubleshooting.md` gains an entry with the diagnosis and
+  recovery.
+
   Behaviour above was verified against a live deployment on LBC v3.5.0 rather
   than from the controller source alone, including that the restriction covers
   port 80 as well as 443, that CIDRs and prefix lists are a union, that the
