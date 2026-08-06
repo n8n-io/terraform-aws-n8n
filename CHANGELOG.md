@@ -780,7 +780,7 @@ under **Changed**.
   `N8N_LOG_STREAMING_*` env vars are emitted.
 - `n8n_image_tag` input variable: optional string (default `null`) that pins the n8n
   application image to a specific version (e.g. `"1.2.3"`). When `null`, the Helm
-  chart's own default applies — currently the floating `stable` tag — so existing
+  chart's own default applies (currently the floating `stable` tag), so existing
   deployments see no change. Validated at plan time against Docker tag rules
   (`^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$`) to catch malformed or whitespace-padded
   values before deployment. Pinning a concrete version is recommended for production
@@ -867,7 +867,7 @@ Initial release on the Terraform Registry as `n8n-io/n8n/aws`.
   shared binary storage.
 - AWS Load Balancer Controller, Cluster Autoscaler, KEDA (queue-driven
   worker scaling), and metrics-server installed via Helm.
-- Route 53 path: end-to-end automation — pass `route53_zone_id` and the
+- Route 53 path: end-to-end automation, pass `route53_zone_id` and the
   module issues the ACM certificate and creates the DNS alias record
   itself.
 - Cloudflare and GoDaddy paths via the respective examples, which issue

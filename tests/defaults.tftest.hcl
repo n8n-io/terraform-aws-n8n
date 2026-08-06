@@ -2726,317 +2726,6 @@ run "chart_repository_with_version_pin_does_not_warn" {
   command = plan
 
   variables {
-# ── Autoscaling capacity against the node group ──────────────────────────────
-# The autoscaler ceilings, the per-pod CPU requests, and node_max ×
-# node_instance_type have to be sized together: nothing in Kubernetes couples
-# them, so a ceiling above what the node group can hold just produces Pending
-# pods once the Cluster Autoscaler runs out of nodes (issue #51). scaling.tf
-# models the CPU arithmetic and warns; these runs pin both the shipped defaults
-# and the warning's boundaries.
-#
-# The model reads vCPU off the instance size rather than the EC2 API, so these
-# numbers are deterministic under mocks with nothing to override. At the default
-# t3.xlarge: 6 nodes × (4,000m − 80m kubelet reserve − 180m of per-node
-# DaemonSets) − 720m of cluster add-ons ≈ 21,720m available to n8n, against
-# 16,600m requested at the default ceilings. The remainder is headroom for a
-# rollout surge. scaling.tf documents where each constant in that sum comes from.
-
-run "autoscaling_defaults_fit_the_default_node_group" {
-  command = plan
-
-  # No expect_failures: a warning from the capacity check would fail this run,
-  # which is the assertion that matters here. The replica asserts pin the
-  # defaults that make it hold.
-  assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].max_replicas == 8
-    error_message = "The webhook HPA ceiling must default to 8, which the default node group can schedule alongside the main and worker ceilings"
-  }
-
-  assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].min_replicas == 2
-    error_message = "The webhook HPA floor must stay at 2 for multi-replica availability"
-  }
-
-  assert {
-    condition     = aws_eks_node_group.n8n.scaling_config[0].max_size == 6
-    error_message = "node_max must default to 6; the HPA and KEDA ceilings are sized against it"
-  }
-}
-
-# The pre-fix defaults: 20 mains at 1,200m each (pod + task runner sidecar) is
-# 24,000m on its own, more than the whole node group can ever schedule.
-run "pre_fix_main_hpa_maximum_warns" {
-  command = plan
-
-  variables {
-    n8n_main_hpa_max_replicas = 20
-  }
-
-  expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
-}
-
-run "pre_fix_webhook_hpa_maximum_warns" {
-  command = plan
-
-  variables {
-    n8n_webhook_hpa_max_replicas = 50
-  }
-
-  expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
-}
-
-# Workers are not on an HPA but compete for the same CPU, so their KEDA ceiling
-# is part of the same budget.
-run "worker_keda_maximum_counts_against_the_same_budget" {
-  command = plan
-
-  variables {
-    n8n_worker_keda_max_replicas = 40
-  }
-
-  expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
-}
-
-# Task runner sidecars ride on main and worker pods only, so turning them off
-# frees 200m per main and per worker. 12 mains is over the line with them
-# (23,800m) and under it without (19,400m). The pair pins that accounting.
-run "main_maximum_of_twelve_warns_with_task_runners_enabled" {
-  command = plan
-
-  variables {
-    n8n_main_hpa_max_replicas = 12
-  }
-
-  expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
-}
-
-run "main_maximum_of_twelve_fits_without_task_runners" {
-  command = plan
-
-  variables {
-    n8n_main_hpa_max_replicas = 12
-    n8n_task_runners_enabled  = false
-  }
-
-  assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].max_replicas == 8
-    error_message = "Disabling task runners must not disturb the webhook ceiling"
-  }
-}
-
-# Raising node_max is the other side of the same equation: the maxima that warn
-# above are fine once there is somewhere to put the pods.
-run "raising_node_max_admits_higher_maxima" {
-  command = plan
-
-  variables {
-    node_max                     = 14
-    n8n_main_hpa_max_replicas    = 20
-    n8n_webhook_hpa_max_replicas = 50
-  }
-
-  assert {
-    condition     = aws_eks_node_group.n8n.scaling_config[0].max_size == 14
-    error_message = "node_max must reach the node group so the capacity model reflects it"
-  }
-}
-
-# A bigger instance type buys the same headroom as more nodes. m6i.2xlarge is
-# 8 vCPU off the size ladder, so 6 of them roughly doubles what 6 t3.xlarge give.
-run "a_larger_instance_type_admits_higher_maxima" {
-  command = plan
-
-  variables {
-    node_instance_type           = "m6i.2xlarge"
-    n8n_main_hpa_max_replicas    = 20
-    n8n_webhook_hpa_max_replicas = 20
-  }
-
-  assert {
-    condition     = one(aws_eks_node_group.n8n.instance_types) == "m6i.2xlarge"
-    error_message = "node_instance_type must reach the node group so the capacity model reflects it"
-  }
-}
-
-# ...and the ladder has to be read, not assumed. 4 × m6i.2xlarge is 8 vCPU × 4,
-# which the same maxima do not fit into, so this run proves the size suffix is
-# actually parsed rather than treated as a constant.
-run "the_instance_size_ladder_is_read_not_assumed" {
-  command = plan
-
-  variables {
-    node_instance_type           = "m6i.2xlarge"
-    node_max                     = 4
-    n8n_main_hpa_max_replicas    = 20
-    n8n_webhook_hpa_max_replicas = 20
-  }
-
-  expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
-}
-
-# Sizes off the standard ladder ("metal" and its variants) have no derivable vCPU
-# count, so the model goes unreadable and the check stays silent rather than
-# warning off a guess. The ceiling here would warn loudly on any ladder size.
-run "an_off_ladder_instance_size_silences_the_capacity_check" {
-  command = plan
-
-  variables {
-    node_instance_type        = "m5.metal"
-    n8n_main_hpa_max_replicas = 200
-  }
-
-  assert {
-    condition     = one(aws_eks_node_group.n8n.instance_types) == "m5.metal"
-    error_message = "An instance size the model cannot read must still reach the node group"
-  }
-}
-
-# Likewise for a CPU request in a form the module cannot parse: the ceiling here
-# would warn loudly if the quantity had parsed.
-run "unparseable_cpu_request_silences_the_capacity_check" {
-  command = plan
-
-  variables {
-    n8n_main_cpu_request      = "one and a half cores"
-    n8n_main_hpa_max_replicas = 200
-  }
-
-  assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].max_replicas == 8
-    error_message = "An unreadable CPU quantity must leave the rest of the plan intact"
-  }
-}
-
-# ── Autoscaler floors drive the deployments' own replica counts ───────────────
-# The chart renders spec.replicas unconditionally on all three deployments,
-# ignoring whether an HPA or a KEDA ScaledObject also owns the field. Left at a
-# constant, every helm upgrade would scale down to it and make the autoscaler
-# climb back, erasing a warm floor exactly when a rollout needs it. n8n.tf wires
-# each replica count to its floor so Helm's write is a no-op.
-#
-# helm_release.values is unknown at plan under mocks (see "Known mock provider
-# limitations" in AGENTS.md), so the wiring itself cannot be asserted here. These
-# runs pin the floors as inputs and the one autoscaler the module owns directly;
-# examples/medium and examples/large exercise raised floors end to end.
-
-run "autoscaler_floors_default_to_warm_multi_replica_values" {
-  command = plan
-
-  assert {
-    condition     = var.n8n_main_hpa_min_replicas == 2 && var.n8n_webhook_hpa_min_replicas == 2
-    error_message = "Main and webhook floors must default to 2; a floor of 1 leaves no replica available during a node drain under the module's PodDisruptionBudget"
-  }
-
-  assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].min_replicas == var.n8n_webhook_hpa_min_replicas
-    error_message = "The webhook HPA floor must track n8n_webhook_hpa_min_replicas, which is also what the chart writes to spec.replicas"
-  }
-}
-
-run "raised_floors_reach_the_module_owned_webhook_hpa" {
-  command = plan
-
-  variables {
-    n8n_webhook_hpa_min_replicas = 5
-    n8n_worker_keda_min_replicas = 5
-    n8n_main_hpa_min_replicas    = 3
-  }
-
-  assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].min_replicas == 5
-    error_message = "A raised webhook floor must reach the HPA the module creates in scaling.tf"
-  }
-}
-
-# A floor above the ceiling is rejected by Kubernetes and KEDA at apply, which is
-# a slow way to find a typo now that the floors also drive spec.replicas.
-
-run "main_floor_above_its_ceiling_fails_validation" {
-  command = plan
-
-  variables {
-    n8n_main_hpa_min_replicas = 8
-    n8n_main_hpa_max_replicas = 6
-  }
-
-  expect_failures = [var.n8n_main_hpa_min_replicas]
-}
-
-run "webhook_floor_above_its_ceiling_fails_validation" {
-  command = plan
-
-  variables {
-    n8n_webhook_hpa_min_replicas = 10
-    n8n_webhook_hpa_max_replicas = 8
-  }
-
-  expect_failures = [var.n8n_webhook_hpa_min_replicas]
-}
-
-run "worker_floor_above_its_ceiling_fails_validation" {
-  command = plan
-
-  variables {
-    n8n_worker_keda_min_replicas = 20
-    n8n_worker_keda_max_replicas = 10
-  }
-
-  expect_failures = [var.n8n_worker_keda_min_replicas]
-}
-
-# ── Not testable here: null passed as a module argument ──────────────────────
-# The nine inputs the capacity model reads carry nullable = false. On a nullable
-# variable, a caller passing null in a module block propagates that null instead
-# of falling back to the default, and the check's error_message is evaluated
-# alongside its condition rather than lazily, so a null aborted the plan from
-# inside a block whose whole purpose is to warn without failing.
-#
-# This suite cannot cover it. A run block's `variables` treats `x = null` as
-# *unset*, so the variable takes its default and no error is raised: the two
-# semantics differ, and only the module-call one is the bug. An earlier attempt
-# here failed with "Missing expected failure" for exactly that reason. See
-# "Known mock provider limitations" in AGENTS.md.
-
-# Equal floor and ceiling pins the replica count with no autoscaling range, which
-# is a legitimate way to run a fixed-size deployment.
-run "equal_floor_and_ceiling_is_accepted" {
-  command = plan
-
-  variables {
-    n8n_webhook_hpa_min_replicas = 4
-    n8n_webhook_hpa_max_replicas = 4
-  }
-
-  assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].min_replicas == kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].max_replicas
-    error_message = "A floor equal to its ceiling must be accepted as a fixed-size deployment"
-  }
-}
-
-# ── n8n_execution_data_storage_mode ──────────────────────────────────────────
-# Execution-data offload to S3 (issue #47). Asserted at the variable contract
-# level: the env var goes into config.extraEnv inside helm_release.n8n.values,
-# which is unknown at plan time under the mock provider (see "Known mock
-# provider limitations" in AGENTS.md). To verify end-to-end, run a real
-# `terraform plan` from examples/small/ with
-# n8n_execution_data_storage_mode = "s3" and confirm
-# N8N_EXECUTION_DATA_STORAGE_MODE=s3 appears in the helm_release.n8n values.
-run "execution_data_storage_mode_defaults_to_database" {
-  command = plan
-
-  assert {
-    condition     = var.n8n_execution_data_storage_mode == "database"
-    error_message = "n8n_execution_data_storage_mode should default to \"database\", matching n8n's own default, so no env var is emitted unless a caller opts in."
-  }
-}
-
-run "execution_data_storage_mode_accepts_s3" {
-  command = plan
-
-  variables {
-    n8n_execution_data_storage_mode = "s3"
-    # Pinned at the floor the feature requires so the version check in n8n.tf
-    # stays quiet for this run.
     n8n_image_tag = "2.27.4"
   }
 
@@ -3184,92 +2873,11 @@ run "custom_extensions_path_without_a_source_warns" {
 }
 
 run "extra_env_rejects_custom_extensions_name" {
-    condition     = var.n8n_execution_data_storage_mode == "s3"
-    error_message = "n8n_execution_data_storage_mode should accept \"s3\"."
-  }
-}
-
-# filesystem is a valid n8n value but not a valid one here: pod filesystems are
-# ephemeral and unshared in this module's queue-mode topology, so execution data
-# written there is lost on reschedule and invisible to the other pods.
-run "execution_data_storage_mode_rejects_filesystem" {
-  command = plan
-
-  variables {
-    n8n_execution_data_storage_mode = "filesystem"
-  }
-
-  expect_failures = [var.n8n_execution_data_storage_mode]
-}
-
-run "execution_data_storage_mode_rejects_unknown_value" {
-  command = plan
-
-  variables {
-    n8n_execution_data_storage_mode = "postgres"
-  }
-
-  expect_failures = [var.n8n_execution_data_storage_mode]
-}
-
-# The version check only compares tags shaped like MAJOR.MINOR.<rest>, so it
-# warns on 2.26.9 but stays silent on 2.27.0 (exercised by the accepts_s3 run
-# above), on a null tag (the chart's floating `stable`), and on channel tags,
-# both exercised by the runs below.
-run "execution_data_s3_with_pre_2_27_image_tag_triggers_check_warning" {
-  command = plan
-
-  variables {
-    n8n_execution_data_storage_mode = "s3"
-    n8n_image_tag                   = "2.26.9"
-  }
-
-  expect_failures = [check.execution_data_s3_requires_n8n_2_27]
-}
-
-# The chart-default case most callers hit: s3 mode with n8n_image_tag left at
-# null (the floating `stable` tag). There is no version to compare, so the
-# check must stay quiet rather than block the plan.
-run "execution_data_s3_with_null_image_tag_plans_cleanly" {
-  command = plan
-
-  variables {
-    n8n_execution_data_storage_mode = "s3"
-  }
-
-  assert {
-    condition     = var.n8n_image_tag == null
-    error_message = "A null image tag (chart default, floating stable) should be accepted without the version check firing."
-  }
-}
-
-run "execution_data_s3_with_unparseable_image_tag_plans_cleanly" {
-  command = plan
-
-  variables {
-    n8n_execution_data_storage_mode = "s3"
-    # No MAJOR.MINOR.<rest> to compare, so the check leaves channel tags alone
-    # rather than guessing what version they resolve to.
-    n8n_image_tag = "beta"
-  }
-
-  assert {
-    condition     = var.n8n_image_tag == "beta"
-    error_message = "A channel tag should be accepted without the version check firing."
-  }
-}
-
-# Regression guard: N8N_EXECUTION_DATA_STORAGE_MODE became module-managed
-# alongside the input above, so the escape hatch must reject it. An override
-# here would flip execution data onto S3 (or off it) without the input saying
-# so, and on an unlicensed n8n every pod refuses to start in s3 mode.
-run "extra_env_rejects_execution_data_storage_mode_name" {
   command = plan
 
   variables {
     n8n_extra_env = [
       { name = "N8N_CUSTOM_EXTENSIONS", value = "/opt/n8n-nodes" },
-      { name = "N8N_EXECUTION_DATA_STORAGE_MODE", value = "s3" },
     ]
   }
 
@@ -3769,4 +3377,410 @@ run "extra_env_accepts_community_packages_auth_token" {
     condition     = var.n8n_extra_env[0].name == "N8N_COMMUNITY_PACKAGES_AUTH_TOKEN"
     error_message = "N8N_COMMUNITY_PACKAGES_AUTH_TOKEN is not module-managed and should stay settable via n8n_extra_env."
   }
+}
+
+# ── Autoscaling capacity against the node group ──────────────────────────────
+# The autoscaler ceilings, the per-pod CPU requests, and node_max ×
+# node_instance_type have to be sized together: nothing in Kubernetes couples
+# them, so a ceiling above what the node group can hold just produces Pending
+# pods once the Cluster Autoscaler runs out of nodes (issue #51). scaling.tf
+# models the CPU arithmetic and warns; these runs pin both the shipped defaults
+# and the warning's boundaries.
+#
+# The model reads vCPU off the instance size rather than the EC2 API, so these
+# numbers are deterministic under mocks with nothing to override. At the default
+# t3.xlarge: 6 nodes × (4,000m − 80m kubelet reserve − 180m of per-node
+# DaemonSets) − 720m of cluster add-ons ≈ 21,720m available to n8n, against
+# 16,600m requested at the default ceilings. The remainder is headroom for a
+# rollout surge. scaling.tf documents where each constant in that sum comes from.
+
+run "autoscaling_defaults_fit_the_default_node_group" {
+  command = plan
+
+  # No expect_failures: a warning from the capacity check would fail this run,
+  # which is the assertion that matters here. The replica asserts pin the
+  # defaults that make it hold.
+  assert {
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].max_replicas == 8
+    error_message = "The webhook HPA ceiling must default to 8, which the default node group can schedule alongside the main and worker ceilings"
+  }
+
+  assert {
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].min_replicas == 2
+    error_message = "The webhook HPA floor must stay at 2 for multi-replica availability"
+  }
+
+  assert {
+    condition     = aws_eks_node_group.n8n.scaling_config[0].max_size == 6
+    error_message = "node_max must default to 6; the HPA and KEDA ceilings are sized against it"
+  }
+}
+
+# The pre-fix defaults: 20 mains at 1,200m each (pod + task runner sidecar) is
+# 24,000m on its own, more than the whole node group can ever schedule.
+run "pre_fix_main_hpa_maximum_warns" {
+  command = plan
+
+  variables {
+    n8n_main_hpa_max_replicas = 20
+  }
+
+  expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
+}
+
+run "pre_fix_webhook_hpa_maximum_warns" {
+  command = plan
+
+  variables {
+    n8n_webhook_hpa_max_replicas = 50
+  }
+
+  expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
+}
+
+# Workers are not on an HPA but compete for the same CPU, so their KEDA ceiling
+# is part of the same budget.
+run "worker_keda_maximum_counts_against_the_same_budget" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_max_replicas = 40
+  }
+
+  expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
+}
+
+# Task runner sidecars ride on main and worker pods only, so turning them off
+# frees 200m per main and per worker. 12 mains is over the line with them
+# (23,800m) and under it without (19,400m). The pair pins that accounting.
+run "main_maximum_of_twelve_warns_with_task_runners_enabled" {
+  command = plan
+
+  variables {
+    n8n_main_hpa_max_replicas = 12
+  }
+
+  expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
+}
+
+run "main_maximum_of_twelve_fits_without_task_runners" {
+  command = plan
+
+  variables {
+    n8n_main_hpa_max_replicas = 12
+    n8n_task_runners_enabled  = false
+  }
+
+  assert {
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].max_replicas == 8
+    error_message = "Disabling task runners must not disturb the webhook ceiling"
+  }
+}
+
+# Raising node_max is the other side of the same equation: the maxima that warn
+# above are fine once there is somewhere to put the pods.
+run "raising_node_max_admits_higher_maxima" {
+  command = plan
+
+  variables {
+    node_max                     = 14
+    n8n_main_hpa_max_replicas    = 20
+    n8n_webhook_hpa_max_replicas = 50
+  }
+
+  assert {
+    condition     = aws_eks_node_group.n8n.scaling_config[0].max_size == 14
+    error_message = "node_max must reach the node group so the capacity model reflects it"
+  }
+}
+
+# A bigger instance type buys the same headroom as more nodes. m6i.2xlarge is
+# 8 vCPU off the size ladder, so 6 of them roughly doubles what 6 t3.xlarge give.
+run "a_larger_instance_type_admits_higher_maxima" {
+  command = plan
+
+  variables {
+    node_instance_type           = "m6i.2xlarge"
+    n8n_main_hpa_max_replicas    = 20
+    n8n_webhook_hpa_max_replicas = 20
+  }
+
+  assert {
+    condition     = one(aws_eks_node_group.n8n.instance_types) == "m6i.2xlarge"
+    error_message = "node_instance_type must reach the node group so the capacity model reflects it"
+  }
+}
+
+# ...and the ladder has to be read, not assumed. 4 × m6i.2xlarge is 8 vCPU × 4,
+# which the same maxima do not fit into, so this run proves the size suffix is
+# actually parsed rather than treated as a constant.
+run "the_instance_size_ladder_is_read_not_assumed" {
+  command = plan
+
+  variables {
+    node_instance_type           = "m6i.2xlarge"
+    node_max                     = 4
+    n8n_main_hpa_max_replicas    = 20
+    n8n_webhook_hpa_max_replicas = 20
+  }
+
+  expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
+}
+
+# Sizes off the standard ladder ("metal" and its variants) have no derivable vCPU
+# count, so the model goes unreadable and the check stays silent rather than
+# warning off a guess. The ceiling here would warn loudly on any ladder size.
+run "an_off_ladder_instance_size_silences_the_capacity_check" {
+  command = plan
+
+  variables {
+    node_instance_type        = "m5.metal"
+    n8n_main_hpa_max_replicas = 200
+  }
+
+  assert {
+    condition     = one(aws_eks_node_group.n8n.instance_types) == "m5.metal"
+    error_message = "An instance size the model cannot read must still reach the node group"
+  }
+}
+
+# Likewise for a CPU request in a form the module cannot parse: the ceiling here
+# would warn loudly if the quantity had parsed.
+run "unparseable_cpu_request_silences_the_capacity_check" {
+  command = plan
+
+  variables {
+    n8n_main_cpu_request      = "one and a half cores"
+    n8n_main_hpa_max_replicas = 200
+  }
+
+  assert {
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].max_replicas == 8
+    error_message = "An unreadable CPU quantity must leave the rest of the plan intact"
+  }
+}
+
+# ── Autoscaler floors drive the deployments' own replica counts ───────────────
+# The chart renders spec.replicas unconditionally on all three deployments,
+# ignoring whether an HPA or a KEDA ScaledObject also owns the field. Left at a
+# constant, every helm upgrade would scale down to it and make the autoscaler
+# climb back, erasing a warm floor exactly when a rollout needs it. n8n.tf wires
+# each replica count to its floor so Helm's write is a no-op.
+#
+# helm_release.values is unknown at plan under mocks (see "Known mock provider
+# limitations" in AGENTS.md), so the wiring itself cannot be asserted here. These
+# runs pin the floors as inputs and the one autoscaler the module owns directly;
+# examples/medium and examples/large exercise raised floors end to end.
+
+run "autoscaler_floors_default_to_warm_multi_replica_values" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_main_hpa_min_replicas == 2 && var.n8n_webhook_hpa_min_replicas == 2
+    error_message = "Main and webhook floors must default to 2; a floor of 1 leaves no replica available during a node drain under the module's PodDisruptionBudget"
+  }
+
+  assert {
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].min_replicas == var.n8n_webhook_hpa_min_replicas
+    error_message = "The webhook HPA floor must track n8n_webhook_hpa_min_replicas, which is also what the chart writes to spec.replicas"
+  }
+}
+
+run "raised_floors_reach_the_module_owned_webhook_hpa" {
+  command = plan
+
+  variables {
+    n8n_webhook_hpa_min_replicas = 5
+    n8n_worker_keda_min_replicas = 5
+    n8n_main_hpa_min_replicas    = 3
+  }
+
+  assert {
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].min_replicas == 5
+    error_message = "A raised webhook floor must reach the HPA the module creates in scaling.tf"
+  }
+}
+
+# A floor above the ceiling is rejected by Kubernetes and KEDA at apply, which is
+# a slow way to find a typo now that the floors also drive spec.replicas.
+
+run "main_floor_above_its_ceiling_fails_validation" {
+  command = plan
+
+  variables {
+    n8n_main_hpa_min_replicas = 8
+    n8n_main_hpa_max_replicas = 6
+  }
+
+  expect_failures = [var.n8n_main_hpa_min_replicas]
+}
+
+run "webhook_floor_above_its_ceiling_fails_validation" {
+  command = plan
+
+  variables {
+    n8n_webhook_hpa_min_replicas = 10
+    n8n_webhook_hpa_max_replicas = 8
+  }
+
+  expect_failures = [var.n8n_webhook_hpa_min_replicas]
+}
+
+run "worker_floor_above_its_ceiling_fails_validation" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_min_replicas = 20
+    n8n_worker_keda_max_replicas = 10
+  }
+
+  expect_failures = [var.n8n_worker_keda_min_replicas]
+}
+
+# ── Not testable here: null passed as a module argument ──────────────────────
+# The nine inputs the capacity model reads carry nullable = false. On a nullable
+# variable, a caller passing null in a module block propagates that null instead
+# of falling back to the default, and the check's error_message is evaluated
+# alongside its condition rather than lazily, so a null aborted the plan from
+# inside a block whose whole purpose is to warn without failing.
+#
+# This suite cannot cover it. A run block's `variables` treats `x = null` as
+# *unset*, so the variable takes its default and no error is raised: the two
+# semantics differ, and only the module-call one is the bug. An earlier attempt
+# here failed with "Missing expected failure" for exactly that reason. See
+# "Known mock provider limitations" in AGENTS.md.
+
+# Equal floor and ceiling pins the replica count with no autoscaling range, which
+# is a legitimate way to run a fixed-size deployment.
+run "equal_floor_and_ceiling_is_accepted" {
+  command = plan
+
+  variables {
+    n8n_webhook_hpa_min_replicas = 4
+    n8n_webhook_hpa_max_replicas = 4
+  }
+
+  assert {
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].min_replicas == kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].max_replicas
+    error_message = "A floor equal to its ceiling must be accepted as a fixed-size deployment"
+  }
+}
+
+# ── n8n_execution_data_storage_mode ──────────────────────────────────────────
+# Execution-data offload to S3 (issue #47). Asserted at the variable contract
+# level: the env var goes into config.extraEnv inside helm_release.n8n.values,
+# which is unknown at plan time under the mock provider (see "Known mock
+# provider limitations" in AGENTS.md). To verify end-to-end, run a real
+# `terraform plan` from examples/small/ with
+# n8n_execution_data_storage_mode = "s3" and confirm
+# N8N_EXECUTION_DATA_STORAGE_MODE=s3 appears in the helm_release.n8n values.
+run "execution_data_storage_mode_defaults_to_database" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_execution_data_storage_mode == "database"
+    error_message = "n8n_execution_data_storage_mode should default to \"database\", matching n8n's own default, so no env var is emitted unless a caller opts in."
+  }
+}
+
+run "execution_data_storage_mode_accepts_s3" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "s3"
+    # Pinned at the floor the feature requires so the version check in n8n.tf
+    # stays quiet for this run.
+    n8n_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_execution_data_storage_mode == "s3"
+    error_message = "n8n_execution_data_storage_mode should accept \"s3\"."
+  }
+}
+
+# filesystem is a valid n8n value but not a valid one here: pod filesystems are
+# ephemeral and unshared in this module's queue-mode topology, so execution data
+# written there is lost on reschedule and invisible to the other pods.
+run "execution_data_storage_mode_rejects_filesystem" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "filesystem"
+  }
+
+  expect_failures = [var.n8n_execution_data_storage_mode]
+}
+
+run "execution_data_storage_mode_rejects_unknown_value" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "postgres"
+  }
+
+  expect_failures = [var.n8n_execution_data_storage_mode]
+}
+
+# The version check only compares tags shaped like MAJOR.MINOR.<rest>, so it
+# warns on 2.26.9 but stays silent on 2.27.0 (exercised by the accepts_s3 run
+# above), on a null tag (the chart's floating `stable`), and on channel tags,
+# both exercised by the runs below.
+run "execution_data_s3_with_pre_2_27_image_tag_triggers_check_warning" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "s3"
+    n8n_image_tag                   = "2.26.9"
+  }
+
+  expect_failures = [check.execution_data_s3_requires_n8n_2_27]
+}
+
+# The chart-default case most callers hit: s3 mode with n8n_image_tag left at
+# null (the floating `stable` tag). There is no version to compare, so the
+# check must stay quiet rather than block the plan.
+run "execution_data_s3_with_null_image_tag_plans_cleanly" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "s3"
+  }
+
+  assert {
+    condition     = var.n8n_image_tag == null
+    error_message = "A null image tag (chart default, floating stable) should be accepted without the version check firing."
+  }
+}
+
+run "execution_data_s3_with_unparseable_image_tag_plans_cleanly" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "s3"
+    # No MAJOR.MINOR.<rest> to compare, so the check leaves channel tags alone
+    # rather than guessing what version they resolve to.
+    n8n_image_tag = "beta"
+  }
+
+  assert {
+    condition     = var.n8n_image_tag == "beta"
+    error_message = "A channel tag should be accepted without the version check firing."
+  }
+}
+
+# Regression guard: N8N_EXECUTION_DATA_STORAGE_MODE became module-managed
+# alongside the input above, so the escape hatch must reject it. An override
+# here would flip execution data onto S3 (or off it) without the input saying
+# so, and on an unlicensed n8n every pod refuses to start in s3 mode.
+run "extra_env_rejects_execution_data_storage_mode_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_EXECUTION_DATA_STORAGE_MODE", value = "s3" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
 }

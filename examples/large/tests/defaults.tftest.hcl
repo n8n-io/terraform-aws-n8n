@@ -313,14 +313,6 @@ run "n8n_task_runner_image_tag_rejects_whitespace" {
   }
 
   expect_failures = [var.n8n_task_runner_image_tag]
-run "execution_data_storage_mode_rejects_filesystem" {
-  command = plan
-
-  variables {
-    n8n_execution_data_storage_mode = "filesystem"
-  }
-
-  expect_failures = [var.n8n_execution_data_storage_mode]
 }
 
 run "n8n_custom_extensions_path_defaults_to_null" {
@@ -379,4 +371,14 @@ run "n8n_image_pull_secrets_rejects_a_non_dns_name" {
   }
 
   expect_failures = [var.n8n_image_pull_secrets]
+}
+
+run "execution_data_storage_mode_rejects_filesystem" {
+  command = plan
+
+  variables {
+    n8n_execution_data_storage_mode = "filesystem"
+  }
+
+  expect_failures = [var.n8n_execution_data_storage_mode]
 }

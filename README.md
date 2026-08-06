@@ -465,13 +465,6 @@ package with a large dependency tree makes every rollout CPU and memory heavy
 ([#52](https://github.com/n8n-io/terraform-aws-n8n/issues/52)).
 
 Deploying a custom image is the easy half:
-## Execution data in S3 (Enterprise)
-
-The module always stores n8n's **binary** data in S3. From **n8n 2.27** the
-**execution** data itself can be offloaded to the same bucket instead of
-PostgreSQL. Execution-data writes are usually the dominant write load on the
-n8n database at volume, so this is the main lever for relieving RDS pressure in
-the queue-mode topology this module deploys:
 
 ```hcl
 module "n8n" {
@@ -706,6 +699,19 @@ default registry. A mirror
 requiring authentication also needs `N8N_COMMUNITY_PACKAGES_AUTH_TOKEN`, which
 the module does not manage; pass it through `n8n_extra_env`, noting that those
 values are stored in plaintext in the Helm release and Terraform state.
+
+## Execution data in S3 (Enterprise)
+
+The module always stores n8n's **binary** data in S3. From **n8n 2.27** the
+**execution** data itself can be offloaded to the same bucket instead of
+PostgreSQL. Execution-data writes are usually the dominant write load on the
+n8n database at volume, so this is the main lever for relieving RDS pressure in
+the queue-mode topology this module deploys:
+
+```hcl
+module "n8n" {
+  # ...other inputs...
+
   n8n_execution_data_storage_mode = "s3"   # default: "database"
   n8n_image_tag                   = "2.27.4"
 }
