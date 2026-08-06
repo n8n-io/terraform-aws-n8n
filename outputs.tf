@@ -61,12 +61,12 @@ output "rds_endpoint" {
 }
 
 output "redis_endpoint" {
-  description = "Redis host n8n and KEDA connect to. The single cache node's address by default; the replication group's primary endpoint when redis_high_availability_enabled or redis_transit_encryption_enabled is true, which is the name AWS repoints at the surviving node on failover; or the value of var.redis_host when create_elasticache = false. Reached over TLS and requiring redis_auth_token when redis_transit_encryption_enabled = true."
+  description = "Redis host n8n and KEDA connect to. The single cache node's address by default; the replication group's primary endpoint when redis_high_availability_enabled or redis_transit_encryption_enabled is true, which is the name AWS repoints at the surviving node on failover; or the value of var.redis_host when create_elasticache = false. Reached over TLS and requiring redis_auth_token when redis_transit_encryption_enabled = true and redis_transit_encryption_mode = \"required\" (the default); with redis_transit_encryption_mode = \"preferred\", the transitional state used while migrating an existing replication group, the endpoint still accepts plaintext and there is no token."
   value       = local.redis_host
 }
 
 output "redis_auth_token" {
-  description = "ElastiCache AUTH token when redis_transit_encryption_enabled = true; null otherwise, since the default posture has no credential. Retrieve with: terraform output -raw redis_auth_token"
+  description = "ElastiCache AUTH token when redis_transit_encryption_enabled = true and redis_transit_encryption_mode = \"required\" (the default); null otherwise, since the default posture has no credential and the transitional redis_transit_encryption_mode = \"preferred\" state does not carry a token either. Retrieve with: terraform output -raw redis_auth_token"
   value       = local.redis_auth_active ? random_password.redis_auth_token[0].result : null
   sensitive   = true
 }

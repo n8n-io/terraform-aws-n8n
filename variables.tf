@@ -837,6 +837,12 @@ variable "redis_transit_encryption_enabled" {
     condition     = var.create_elasticache || !var.redis_transit_encryption_enabled
     error_message = "redis_transit_encryption_enabled requires create_elasticache = true. The module provisions TLS and the AUTH token on the ElastiCache it manages, and cannot configure a Redis supplied via redis_host: on that path n8n and KEDA connect in plaintext with no credential, so an external Redis must accept unauthenticated, non-TLS connections. Leave this at false and secure the external endpoint at the network boundary instead."
   }
+
+  # null is not meaningful here: a caller writing `x = null` in a module block
+  # would otherwise propagate null into local.redis_tls_active and the other
+  # boolean expressions in locals.tf that key off this variable, and die with
+  # an opaque "Invalid value for operand". See AGENTS.md on nullable.
+  nullable = false
 }
 
 variable "redis_transit_encryption_mode" {
@@ -854,6 +860,13 @@ variable "redis_apply_immediately" {
   description = "Apply ElastiCache modifications as soon as the apply runs, rather than deferring them to the next maintenance window. Defaults to false, matching the AWS default and leaving every existing deployment's behaviour unchanged. Set true when changing redis_transit_encryption_mode: AWS rejects any transit-encryption modification outright without it, with `InvalidParameterValue: Transit encryption modification should be called with applied immediately option.`, so the migration cannot proceed while this is false. Turning it on makes other modifications immediate too, which for a replication group can mean a node reboot outside the window you picked, so prefer scoping it to the applies that need it rather than leaving it on."
   type        = bool
   default     = false
+
+  # null is not meaningful here: a caller writing `x = null` in a module block
+  # would otherwise propagate null into the `var.redis_apply_immediately ?
+  # true : null` ternary in locals.tf, which requires a bool condition, and
+  # die with an opaque "Invalid conditional condition". See AGENTS.md on
+  # nullable.
+  nullable = false
 }
 
 variable "create_elasticache" {
