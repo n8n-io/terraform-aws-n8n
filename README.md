@@ -516,8 +516,11 @@ Three things to know about the inputs:
   `n8n-enterprise-pull` rather than the chart's `n8n-enterprise`, so that
   enabling this on a running deployment creates a new account alongside the
   one Helm still owns instead of colliding with it; the S3 Pod Identity
-  association follows whichever name is in play, so the pods keep their AWS
-  credentials across the switch. And the secrets are yours to create and
+  association follows whichever name is in play. Changing the association's
+  service account replaces it, so pods running under the old name briefly
+  cannot refresh their S3 credentials until the same apply's rollout
+  repoints them, which it does within minutes and cached credentials
+  outlive. And the secrets are yours to create and
   rotate: the module takes names, not credentials, so nothing lands in
   Terraform state that a `terraform show` would leak.
 

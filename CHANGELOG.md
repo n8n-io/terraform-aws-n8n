@@ -506,12 +506,14 @@ this project adheres to the stability contract in
   expose the module's `n8n_image_tag` input as a passthrough variable
   (default `null`, same tag-format validation as the module), so callers can
   pin the n8n image version without editing the example source.
-- All six examples also expose `n8n_image_repository` and
-  `n8n_task_runner_image_tag` as passthrough variables (default `null`, same
-  validation as the module), so a custom image can be deployed from an example
-  without editing its source. The three image inputs travel together: a custom
-  repository normally comes with a custom tag, and a custom tag normally needs
-  the runner tag pinned.
+- All six examples also expose `n8n_image_repository`,
+  `n8n_task_runner_image_tag`, `n8n_custom_extensions_path`, and
+  `n8n_image_pull_secrets` as passthrough variables (defaults matching the
+  module, same validation), so a custom image with baked-in nodes can be
+  deployed from an example without editing its source. The image inputs travel
+  together: a custom repository normally comes with a custom tag, a custom tag
+  normally needs the runner tag pinned, and baked-in nodes need the extensions
+  path set.
 - `db_allowed_security_group_ids` input allows sources to reach RDS by security
   group rather than by address. Preferred over `db_allowed_cidr_blocks` inside
   the VPC, since membership follows the instances and the rule survives subnet

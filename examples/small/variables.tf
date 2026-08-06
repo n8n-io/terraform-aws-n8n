@@ -37,6 +37,8 @@ variable "n8n_image_repository" {
   default     = null
 
   validation {
+    # Keep this validation in sync with the module root's variables.tf; the
+    # grammar is duplicated in every example.
     # Docker's own reference grammar (distribution/reference), repository half
     # only, with every rule read off docker's exit code rather than inferred.
     # splitDockerDomain treats a first component as a registry host when it has
@@ -111,6 +113,8 @@ variable "n8n_custom_extensions_path" {
   type        = string
   default     = null
 
+  # Keep these validations in sync with the module root's variables.tf; they
+  # are duplicated in every example.
   validation {
     condition     = var.n8n_custom_extensions_path == null ? true : can(regex("^/[^[:space:];]*$", var.n8n_custom_extensions_path))
     error_message = "n8n_custom_extensions_path must be an absolute container path with no whitespace and no semicolon (e.g. \"/opt/n8n-nodes\"). n8n splits N8N_CUSTOM_EXTENSIONS on \";\", so a semicolon here would be parsed as two directories and silently drop all but the last."
