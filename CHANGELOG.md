@@ -7,6 +7,43 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+### Changed
+
+- **`db_engine_version` now defaults to `18.4` instead of `16.9`.** n8n's
+  Postgres version policy supports the latest two actively-maintained majors
+  (17 and 18, as of this writing) plus one older, time-limited compatibility
+  major (16); the old default sat in that deprecating compatibility tier
+  rather than on an actively-maintained major. See
+  [#84](https://github.com/n8n-io/terraform-aws-n8n/issues/84).
+
+  An in-place module upgrade leaves existing deployments unchanged:
+  `aws_db_instance.n8n` carries `lifecycle.ignore_changes = [engine_version]`
+  (added so `auto_minor_version_upgrade` drift doesn't get reset on every
+  apply), and that same setting means a new default in the variable does not by
+  itself produce a plan diff on state created under the old default. The new
+  default applies to instances created after this change, including replacement
+  instances. Existing instances stay on whatever `engine_version` is already
+  in state until upgraded deliberately out-of-band. Follow
+  [AWS's major-version upgrade process](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_UpgradeDBInstance.PostgreSQL.MajorVersion.Process.html):
+  validate extensions and application compatibility first, plan for downtime
+  or use a blue/green deployment, and pass `--allow-major-version-upgrade` when
+  using `aws rds modify-db-instance`. Omit `--apply-immediately` to schedule the
+  change for the next maintenance window. After the upgrade, `ignore_changes`
+  means Terraform picks up the new value on refresh rather than fighting it.
+
+- **`db_engine_version` now declares `nullable = false`.** Passing `null`
+  falls back to the default instead of failing the format validation with a
+  misleading "must be of the form MAJOR.MINOR" error.
+
+- **`examples/large`'s Aurora PostgreSQL cluster now pins `engine_version =
+  "18.4"` instead of `16.4`,** for the same reason as the RDS default above.
+  Aurora and other Postgres-compatible derivatives are explicitly out of
+  n8n's official support scope per policy; the example's README and
+  `aurora.tf` now say so. The example is kept for its I/O-Optimized
+  throughput characteristics, which are unrelated to the engine version bump.
+  Same `ignore_changes` caveat applies: this only affects newly-created
+  clusters.
+
 ### Fixed
 
 - `aws_eks_node_group.n8n` no longer fights the Cluster Autoscaler over

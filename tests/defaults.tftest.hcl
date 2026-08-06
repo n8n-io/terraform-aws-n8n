@@ -181,8 +181,8 @@ run "rds_hardened_defaults" {
   }
 
   assert {
-    condition     = aws_db_instance.n8n[0].engine_version == "16.9"
-    error_message = "RDS engine_version should default to 16.9 (var.db_engine_version)"
+    condition     = aws_db_instance.n8n[0].engine_version == "18.4"
+    error_message = "RDS engine_version should default to 18.4 (var.db_engine_version)"
   }
 
   assert {

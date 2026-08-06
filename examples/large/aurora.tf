@@ -9,6 +9,13 @@
 #   - Read replica offloads reporting / analytics queries from the writer.
 #
 # The module-managed RDS instance is skipped (db_host is set in main.tf).
+#
+# n8n does not officially support Amazon Aurora PostgreSQL or other
+# Postgres-compatible derivatives (AlloyDB, CockroachDB, YugabyteDB, etc.).
+# This example may work, but it is not tested or certified against Aurora
+# specifically; issues that reproduce only on Aurora are outside official
+# support scope. It stays in this repo for the I/O-Optimized throughput
+# numbers above, which are specific to Aurora's storage engine.
 
 resource "random_password" "aurora" {
   length  = 24
@@ -135,7 +142,7 @@ resource "aws_rds_cluster" "n8n" {
   # checkov:skip=CKV_AWS_139:Deletion protection is intentionally disabled in this reference example so `terraform destroy` works cleanly during evaluation and load testing. Flip to `true` for production use. See README.md → "Production considerations".
   cluster_identifier = "${var.cluster_name}-aurora"
   engine             = "aurora-postgresql"
-  engine_version     = "16.4"
+  engine_version     = "18.4"
 
   database_name   = "n8n_enterprise"
   master_username = "n8n"

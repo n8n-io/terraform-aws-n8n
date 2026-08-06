@@ -97,8 +97,8 @@ run "aurora_cluster_topology" {
   }
 
   assert {
-    condition     = aws_rds_cluster.n8n.engine_version == "16.4"
-    error_message = "Aurora engine_version pinned to 16.4 (validated against PgBouncer + n8n TypeORM)"
+    condition     = aws_rds_cluster.n8n.engine_version == "18.4"
+    error_message = "Aurora engine_version pinned to 18.4 to track the newest supported Postgres major"
   }
 }
 
