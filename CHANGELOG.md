@@ -31,6 +31,10 @@ this project adheres to the stability contract in
   change for the next maintenance window. After the upgrade, `ignore_changes`
   means Terraform picks up the new value on refresh rather than fighting it.
 
+- **`db_engine_version` now declares `nullable = false`.** Passing `null`
+  falls back to the default instead of failing the format validation with a
+  misleading "must be of the form MAJOR.MINOR" error.
+
 - **`examples/large`'s Aurora PostgreSQL cluster now pins `engine_version =
   "18.4"` instead of `16.4`,** for the same reason as the RDS default above.
   Aurora and other Postgres-compatible derivatives are explicitly out of
