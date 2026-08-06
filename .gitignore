@@ -10,7 +10,10 @@ terraform.tfstate
 terraform.tfstate.backup
 *.tfstate
 *.tfstate.*
-*.terraform.lock.*
+
+# .terraform.lock.hcl is intentionally committed at the module root and in
+# every examples/* root module: see AGENTS.md "Provider lock files" and
+# the `docs` job's `lockfile: false` handling in .terraform-docs.yml.
 
 # Saved plan files. A plan is a zip containing a full tfstate, so it carries
 # every variable value in plaintext (license keys, DB passwords, the n8n
@@ -29,6 +32,10 @@ plan.out
 
 # Provider downloads and module cache — large and fully reproducible via `terraform init`
 .terraform/
+
+# Local TF_PLUGIN_CACHE_DIR, if set to a path inside the repo to mirror the
+# CI cache in terraform-tests.yml. Large and fully reproducible.
+.terraform-plugin-cache/
 
 # Crash logs
 crash.log

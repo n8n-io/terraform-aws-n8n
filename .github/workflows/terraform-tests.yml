@@ -15,6 +15,11 @@ env:
   TFLINT_VERSION: "v0.53.0"
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
+  # Shared provider plugin cache across the validate/test/tflint matrices.
+  # `terraform init` fills this from the registry on a cache miss and reuses
+  # it on a hit, keyed below on the .terraform.lock.hcl files committed at
+  # the module root and in each examples/* root module.
+  TF_PLUGIN_CACHE_DIR: "${{ github.workspace }}/.terraform-plugin-cache"
 
 jobs:
   fmt:
@@ -95,9 +100,16 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      - name: cache terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: tf-providers-${{ hashFiles('**/.terraform.lock.hcl') }}
+          restore-keys: tf-providers-
+
       - name: terraform init (no backend, providers only)
         working-directory: ${{ matrix.target }}
-        run: terraform init -backend=false
+        run: mkdir -p "$TF_PLUGIN_CACHE_DIR" && terraform init -backend=false
 
       - name: terraform validate
         working-directory: ${{ matrix.target }}
@@ -127,9 +139,16 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      - name: cache terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: tf-providers-${{ hashFiles('**/.terraform.lock.hcl') }}
+          restore-keys: tf-providers-
+
       - name: terraform init
         working-directory: ${{ matrix.target }}
-        run: terraform init -backend=false
+        run: mkdir -p "$TF_PLUGIN_CACHE_DIR" && terraform init -backend=false
 
       - name: terraform test
         working-directory: ${{ matrix.target }}
@@ -153,9 +172,16 @@ jobs:
         with:
           tflint_version: ${{ env.TFLINT_VERSION }}
 
+      - name: cache terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: tf-providers-${{ hashFiles('**/.terraform.lock.hcl') }}
+          restore-keys: tf-providers-
+
       - name: terraform init (fetch modules for tflint)
         working-directory: ${{ matrix.target }}
-        run: terraform init -backend=false
+        run: mkdir -p "$TF_PLUGIN_CACHE_DIR" && terraform init -backend=false
 
       - name: tflint --init
         working-directory: ${{ matrix.target }}
