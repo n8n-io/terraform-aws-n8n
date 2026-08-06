@@ -2276,6 +2276,1109 @@ run "image_tag_rejects_overlong_tag" {
   expect_failures = [var.n8n_image_tag]
 }
 
+# ── n8n_image_repository ──────────────────────────────────────────────────────
+# Same coverage shape as n8n_image_tag above, and for the same reason limited to
+# the variable contract: helm_release.values is unknown at plan time under the
+# mock provider, so the merge() of image.repository into the Helm values cannot
+# be asserted here. To verify end-to-end: run `terraform plan` from
+# examples/small/ with n8n_image_repository set and confirm `image.repository`
+# appears in the helm_release.n8n plan output.
+
+run "image_repository_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_image_repository == null
+    error_message = "n8n_image_repository should default to null so the chart's own repository (docker.n8n.io/n8nio/n8n) applies by default."
+  }
+}
+
+run "image_repository_accepts_ecr_reference" {
+  command = plan
+
+  # A complete custom-image config: repository, tag, and the runner tag the
+  # chart cannot derive from a non-version tag. This is the shape the three
+  # custom-image check blocks are all satisfied by, so it must plan clean.
+  variables {
+    n8n_image_repository      = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n"
+    n8n_image_tag             = "2.27.4-mypackages"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n"
+    error_message = "n8n_image_repository should accept a registry-qualified ECR repository."
+  }
+}
+
+run "image_repository_accepts_registry_port" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "registry.internal:5000/n8n/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "registry.internal:5000/n8n/n8n"
+    error_message = "n8n_image_repository should accept a registry host with an explicit port; the colon only appears in the host segment."
+  }
+}
+
+run "image_repository_rejects_empty_string" {
+  command = plan
+
+  variables {
+    n8n_image_repository = ""
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "image_repository_rejects_whitespace_padded_value" {
+  command = plan
+
+  variables {
+    n8n_image_repository = " myregistry.example.com/n8n "
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# The chart renders `{{ .Values.image.repository }}:{{ .Values.image.tag }}`, so
+# an inlined tag would yield "myregistry.example.com/n8n:2.27.4:stable".
+run "image_repository_rejects_inline_tag" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/n8n:2.27.4"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "image_repository_rejects_digest" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/n8n@sha256:0123456789abcdef"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# A URL is the intuitive thing to paste in, and a character whitelist accepted
+# it: the scheme's own characters are all legal in a repository reference. It
+# then reaches the chart and fails as an unpullable image after the cluster is
+# already up, which is exactly what plan-time validation is for.
+run "image_repository_rejects_scheme_prefix" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "https://myregistry.example.com/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# Only the first segment may carry a port. A second colon is a typo, not a
+# reference the registry could resolve.
+run "image_repository_rejects_multiple_colons" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "registry.internal:5000:bad/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# An empty path component renders as "myregistry.example.com/n8n/:2.27.4" once
+# the chart appends the tag.
+run "image_repository_rejects_trailing_slash" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/n8n/"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "image_repository_rejects_consecutive_slashes" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com//n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# Docker rejects this itself: "repository name (N8N) must be lowercase".
+run "image_repository_rejects_uppercase_path_component" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/N8N"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# The mirror image of the rule above: DNS is case-insensitive and Docker does
+# accept an uppercase registry host, so the validation must not reject one.
+run "image_repository_accepts_uppercase_registry_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "MyRegistry.example.com/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "MyRegistry.example.com/n8n"
+    error_message = "n8n_image_repository should accept an uppercase registry host, which Docker resolves case-insensitively; only path components must be lowercase."
+  }
+}
+
+# Docker Hub short form, where the first segment is a namespace rather than a
+# registry host. It has no dot and no port, so it must satisfy the lowercase
+# path-component rule rather than the host rule.
+run "image_repository_accepts_docker_hub_short_form" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "n8nio/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "n8nio/n8n"
+    error_message = "n8n_image_repository should accept the Docker Hub short form (namespace/repository) with no registry host."
+  }
+}
+
+# Docker's path-component separator is `[._] | __ | -+`, so a doubled hyphen or
+# underscore is legal even though a doubled dot is not. An earlier attempt at
+# this validation allowed only a single separator character and rejected these,
+# which is the worse failure: a plan-time rejection blocks a caller outright,
+# with no override, over an image the registry would have served.
+run "image_repository_accepts_doubled_separators" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "myregistry.example.com/my--repo__v2"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "myregistry.example.com/my--repo__v2"
+    error_message = "n8n_image_repository should accept doubled hyphen and underscore separators in a path component, which Docker's name grammar permits."
+  }
+}
+
+# The counterpart to the rule above: a doubled dot is not a legal separator, in
+# a path component or in a host label.
+run "image_repository_rejects_doubled_dot_in_path" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/a..b"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "image_repository_rejects_empty_host_label" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "a..b.example.com/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# A host label may contain hyphens but may not end in one, so an internal
+# doubled hyphen is fine (xn-- punycode relies on it) and a trailing one is not.
+run "image_repository_rejects_host_label_ending_in_hyphen" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "foo-.example.com/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "image_repository_accepts_punycode_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "xn--bcher-kva.example.com/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "xn--bcher-kva.example.com/n8n"
+    error_message = "n8n_image_repository should accept a punycode registry host, whose labels legitimately contain a doubled hyphen."
+  }
+}
+
+# Docker's splitDockerDomain treats a first component as a registry host when it
+# contains a dot or a colon, is localhost, *or contains an uppercase letter*.
+# So this is a host named N8NIO, not an illegally-uppercase namespace, and
+# docker pulls it. Reading the lowercase rule as applying to the first component
+# too rejects a reference that works.
+run "image_repository_accepts_uppercase_single_label_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "N8NIO/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "N8NIO/n8n"
+    error_message = "n8n_image_repository should accept an uppercase single-label registry host: Docker promotes any uppercase first component to a host rather than treating it as a path component."
+  }
+}
+
+# The boundary of the rule above. FOO is promoted to a host, which leaves BAR as
+# a path component, and that one really must be lowercase.
+run "image_repository_rejects_uppercase_after_promoted_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "FOO/BAR"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# A registry reachable only over IPv6 is addressed with a bracketed literal.
+run "image_repository_accepts_bracketed_ipv6_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "[2001:db8::1]:5000/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "[2001:db8::1]:5000/n8n"
+    error_message = "n8n_image_repository should accept a bracketed IPv6 registry host, which Docker's reference grammar allows."
+  }
+}
+
+# A zone ID is valid in a URI host but not in a Docker reference.
+run "image_repository_rejects_ipv6_zone_id" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "[fe80::1%25eth0]:5000/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# Docker's bracketed host is hex and colons only. A dot inside the brackets is
+# rejected even in the IPv4-mapped form that looks like it ought to work.
+run "image_repository_rejects_ipv4_mapped_ipv6_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "[::ffff:1.2.3.4]:5000/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "image_repository_rejects_non_hex_ipv6_host" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "[gggg::1]/n8n"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# Not a typo in the test: docker accepts this, so the validation must too.
+# Tightening past docker would reject an address a registry would answer on,
+# and a variable validation has no override.
+run "image_repository_accepts_what_docker_accepts_in_brackets" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "[::::]:5000/n8n"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == "[::::]:5000/n8n"
+    error_message = "n8n_image_repository should accept any bracketed hex-and-colon host that docker accepts, including structurally meaningless ones; this validation deliberately does not out-strict docker."
+  }
+}
+
+# ── n8n_task_runner_image_tag ─────────────────────────────────────────────────
+# The chart derives the runner sidecar's tag from image.tag, so a custom
+# application-image tag that is not a published n8n version needs this override
+# or main and worker pods land in ImagePullBackOff.
+
+run "task_runner_image_tag_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_task_runner_image_tag == null
+    error_message = "n8n_task_runner_image_tag should default to null so the chart keeps inheriting the n8n application image's tag."
+  }
+}
+
+run "task_runner_image_tag_accepts_concrete_version" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "myregistry.example.com/n8n"
+    n8n_image_tag             = "2.27.4-mypackages"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_task_runner_image_tag == "2.27.4"
+    error_message = "n8n_task_runner_image_tag should accept the underlying n8n version when the app image tag is custom."
+  }
+}
+
+run "task_runner_image_tag_rejects_empty_string" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_tag = ""
+  }
+
+  expect_failures = [var.n8n_task_runner_image_tag]
+}
+
+run "task_runner_image_tag_rejects_whitespace_padded_value" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_tag = " 2.27.4 "
+  }
+
+  expect_failures = [var.n8n_task_runner_image_tag]
+}
+
+# ── Custom image check blocks ─────────────────────────────────────────────────
+# These warn rather than fail, so expect_failures on the check is how a warning
+# is asserted (same pattern as the ingress and RDS tuning checks above).
+
+# A repository with no tag resolves to "<repo>:stable" via the chart default,
+# which a private registry almost never publishes.
+run "custom_image_repository_without_tag_warns" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/n8n"
+  }
+
+  expect_failures = [check.custom_image_repository_needs_an_explicit_tag]
+}
+
+# A custom image tag with task runners enabled and no runner tag is the
+# ImagePullBackOff case: the sidecar inherits a tag that does not exist upstream.
+run "custom_image_without_task_runner_tag_warns" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/n8n"
+    n8n_image_tag        = "2.27.4-mypackages"
+  }
+
+  expect_failures = [check.custom_image_tag_needs_a_task_runner_tag]
+}
+
+run "task_runner_image_tag_without_task_runners_warns" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled  = false
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  expect_failures = [check.task_runner_image_tag_requires_task_runners]
+}
+
+# The chart's own repository with a plain version pin is the common case and
+# must not trip the custom-image checks: no repository override means the runner
+# sidecar's inherited tag is a published n8n version.
+run "chart_repository_with_version_pin_does_not_warn" {
+  command = plan
+
+  variables {
+    n8n_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = var.n8n_image_repository == null
+    error_message = "Pinning only n8n_image_tag must stay a clean configuration with no custom-image warnings."
+  }
+}
+
+# ── n8n_custom_extensions_path ────────────────────────────────────────────────
+# The supported way to load nodes baked into a custom image: since n8n 1.0 the
+# loader ignores the image's global node_modules, so N8N_CUSTOM_EXTENSIONS is
+# what makes baked nodes visible.
+
+run "custom_extensions_path_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_custom_extensions_path == null
+    error_message = "n8n_custom_extensions_path should default to null so N8N_CUSTOM_EXTENSIONS is omitted entirely."
+  }
+}
+
+run "custom_extensions_path_accepts_absolute_path" {
+  command = plan
+
+  variables {
+    n8n_image_repository       = "myregistry.example.com/n8n"
+    n8n_image_tag              = "2.27.4-mypackages"
+    n8n_task_runner_image_tag  = "2.27.4"
+    n8n_custom_extensions_path = "/opt/n8n-nodes"
+  }
+
+  assert {
+    condition     = var.n8n_custom_extensions_path == "/opt/n8n-nodes"
+    error_message = "n8n_custom_extensions_path should accept an absolute container path."
+  }
+}
+
+run "custom_extensions_path_rejects_relative_path" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "opt/n8n-nodes"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+# n8n splits N8N_CUSTOM_EXTENSIONS on ";" and registers every custom directory
+# under the same CUSTOM key, so all but the last are silently dropped. Reject
+# the separator rather than let a caller lose nodes to it.
+run "custom_extensions_path_rejects_semicolon_separated_list" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/opt/n8n-nodes;/opt/more-nodes"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+# The chart mounts an emptyDir at /home/node/.n8n on main pods only, so a path
+# under it loads on workers and webhook processors but not on mains.
+run "custom_extensions_path_rejects_the_shadowed_n8n_home" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node/.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+run "custom_extensions_path_rejects_n8n_home_itself" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node/.n8n"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+# The shadowing check is a string comparison, so these three spellings of the
+# mounted directory would pass it while resolving inside the mount in the
+# container. The canonical-path rule is what closes that gap.
+run "custom_extensions_path_rejects_a_doubled_slash" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node//.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+run "custom_extensions_path_rejects_a_dot_component" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node/./.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+run "custom_extensions_path_rejects_a_parent_component" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/opt/../home/node/.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+# A component may legitimately begin with a dot (.n8n is one), so the canonical
+# rule must reject only the exact "." and ".." components, not any leading dot.
+run "custom_extensions_path_accepts_a_dotfile_component" {
+  command = plan
+
+  variables {
+    n8n_image_repository       = "myregistry.example.com/n8n"
+    n8n_image_tag              = "2.27.4-mypackages"
+    n8n_task_runner_image_tag  = "2.27.4"
+    n8n_custom_extensions_path = "/opt/.n8n-nodes"
+  }
+
+  assert {
+    condition     = var.n8n_custom_extensions_path == "/opt/.n8n-nodes"
+    error_message = "A leading dot is an ordinary directory name and must not trip the canonical-path rule."
+  }
+}
+
+# Nothing places files at the path: no custom image and no volume mount.
+run "custom_extensions_path_without_a_source_warns" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/opt/n8n-nodes"
+  }
+
+  expect_failures = [check.custom_extensions_path_requires_a_source]
+}
+
+run "extra_env_rejects_custom_extensions_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_CUSTOM_EXTENSIONS", value = "/opt/n8n-nodes" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# ── n8n_image_pull_secrets ────────────────────────────────────────────────────
+# The chart renders imagePullSecrets nowhere, so these reach the pods only
+# because the module takes the ServiceAccount over. The load-bearing assertion
+# is the negative one: an existing deployment must not find the chart's account
+# swapped out from under it just because this input now exists.
+
+run "image_pull_secrets_default_to_empty_and_leave_the_account_to_the_chart" {
+  command = plan
+
+  assert {
+    condition     = length(var.n8n_image_pull_secrets) == 0
+    error_message = "n8n_image_pull_secrets must default to an empty list."
+  }
+
+  assert {
+    condition     = length(kubernetes_service_account_v1.n8n) == 0
+    error_message = "With no pull secrets the module must create no ServiceAccount, leaving serviceAccount.create = true and the chart in charge."
+  }
+}
+
+run "image_pull_secrets_move_the_account_to_the_module" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "myregistry.example.com/n8n"
+    n8n_image_tag             = "2.27.4-mypackages"
+    n8n_task_runner_image_tag = "2.27.4"
+    n8n_image_pull_secrets    = ["registry-creds", "fallback-registry-creds"]
+  }
+
+  assert {
+    condition     = length(kubernetes_service_account_v1.n8n) == 1
+    error_message = "A non-empty n8n_image_pull_secrets must make the module create the ServiceAccount, because the chart has no way to carry the secrets."
+  }
+
+  # image_pull_secret is a set in the provider schema, so order proves nothing.
+  assert {
+    condition = toset([
+      for secret in kubernetes_service_account_v1.n8n[0].image_pull_secret : secret.name
+    ]) == toset(["registry-creds", "fallback-registry-creds"])
+    error_message = "Every name in n8n_image_pull_secrets must land on the ServiceAccount; a dropped one is an ImagePullBackOff at pod start."
+  }
+
+  # The name is the contract between three places: the chart's
+  # serviceAccount.name, this resource, and the Pod Identity association that
+  # grants S3 access. Drift here costs the pods their AWS credentials, and the
+  # symptom (binary data writes failing) points nowhere near the cause.
+  assert {
+    condition     = kubernetes_service_account_v1.n8n[0].metadata[0].name == aws_eks_pod_identity_association.s3.service_account
+    error_message = "The module's ServiceAccount must carry the same name the S3 Pod Identity association binds to."
+  }
+
+  # The provider defaults this to false, which the chart never does. Left
+  # unset, taking over the account would quietly stop mounting the token.
+  assert {
+    condition     = kubernetes_service_account_v1.n8n[0].automount_service_account_token
+    error_message = "The module's ServiceAccount must mount its token, matching what the chart-created account does."
+  }
+}
+
+run "image_pull_secrets_reject_a_non_dns_name" {
+  command = plan
+
+  variables {
+    n8n_image_pull_secrets = ["Not_A_Secret_Name"]
+  }
+
+  expect_failures = [var.n8n_image_pull_secrets]
+}
+
+run "image_pull_secrets_reject_an_overlong_name" {
+  command = plan
+
+  variables {
+    # 254 characters, one past the Kubernetes limit.
+    n8n_image_pull_secrets = ["a-${join("", [for i in range(84) : "abc"])}"]
+  }
+
+  expect_failures = [var.n8n_image_pull_secrets]
+}
+
+run "image_pull_secrets_reject_a_repeated_name" {
+  command = plan
+
+  variables {
+    n8n_image_pull_secrets = ["registry-creds", "registry-creds"]
+  }
+
+  expect_failures = [var.n8n_image_pull_secrets]
+}
+
+# Pointless rather than harmful, but it costs the caller the chart-owned
+# ServiceAccount for nothing, so it warns instead of passing silently.
+run "image_pull_secrets_without_custom_image_warns" {
+  command = plan
+
+  variables {
+    n8n_image_pull_secrets = ["registry-creds"]
+  }
+
+  expect_failures = [check.image_pull_secrets_need_a_custom_image]
+}
+
+# Turning the input on for a deployment that already exists is the case worth
+# protecting. The module's account is created before the Helm upgrade runs, so
+# reusing the chart's name would try to create an object the release still
+# owns and stop the apply at "already exists" with nothing changed.
+run "the_module_service_account_does_not_reuse_the_charts_name" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "myregistry.example.com/n8n"
+    n8n_image_tag             = "2.27.4-mypackages"
+    n8n_task_runner_image_tag = "2.27.4"
+    n8n_image_pull_secrets    = ["registry-creds"]
+  }
+
+  assert {
+    condition     = kubernetes_service_account_v1.n8n[0].metadata[0].name != "n8n-enterprise"
+    error_message = "The module-created ServiceAccount must not take the name the chart uses when it creates its own, or enabling n8n_image_pull_secrets on a live deployment fails before Helm can hand the account over."
+  }
+}
+
+# ── n8n_extra_volumes / n8n_extra_volume_mounts ───────────────────────────────
+# Every rejection below is something Kubernetes would refuse at pod admission,
+# or worse accept and then behave unexpectedly. The point of checking at plan
+# time is that the alternative is a cluster that applies and then does not run.
+
+run "extra_volumes_default_to_empty" {
+  command = plan
+
+  assert {
+    condition     = length(var.n8n_extra_volumes) == 0 && length(var.n8n_extra_volume_mounts) == 0
+    error_message = "Both extra volume inputs must default to an empty list, matching the chart's own defaults so an unset caller sees no change."
+  }
+}
+
+# The wiring test. snake_case in, chart camelCase out, and the octal string
+# converted to the integer Kubernetes wants: 0644 is 420, not 644.
+run "extra_volumes_translate_to_the_chart_shape" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      {
+        name       = "custom-nodes"
+        config_map = { name = "n8n-custom-nodes", default_mode = "0644" }
+      },
+      {
+        name                    = "shared-nodes"
+        persistent_volume_claim = { claim_name = "n8n-nodes-efs", read_only = true }
+      },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "/opt/n8n-nodes" },
+      { name = "shared-nodes", mount_path = "/opt/shared-nodes", sub_path = "nodes" },
+    ]
+  }
+
+  assert {
+    condition = local.n8n_extra_volumes[0] == {
+      name      = "custom-nodes"
+      configMap = { name = "n8n-custom-nodes", defaultMode = 420 }
+    }
+    error_message = "A config_map volume must render as configMap with defaultMode as the integer Kubernetes expects; \"0644\" is 420, and emitting 644 would be octal 1204."
+  }
+
+  assert {
+    condition = local.n8n_extra_volumes[1] == {
+      name                  = "shared-nodes"
+      persistentVolumeClaim = { claimName = "n8n-nodes-efs", readOnly = true }
+    }
+    error_message = "A persistent_volume_claim volume must render as persistentVolumeClaim/claimName."
+  }
+
+  assert {
+    condition = local.n8n_extra_volume_mounts == [
+      { name = "custom-nodes", mountPath = "/opt/n8n-nodes", readOnly = true },
+      { name = "shared-nodes", mountPath = "/opt/shared-nodes", readOnly = true, subPath = "nodes" },
+    ]
+    error_message = "Mounts must render as camelCase, keep their order, default readOnly to true, and omit subPath when it is unset rather than emitting null."
+  }
+}
+
+# The reason this input exists: nodes from a volume instead of from an image.
+# With a mount covering the path there is no warning, which is what makes the
+# volume route a supported alternative rather than a tolerated one.
+run "extra_volume_mount_satisfies_the_custom_extensions_path" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/opt/n8n-nodes"
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "/opt/n8n-nodes" },
+    ]
+  }
+
+  assert {
+    condition     = local.n8n_extra_volume_mounts[0].mountPath == var.n8n_custom_extensions_path
+    error_message = "The mount must land on the path n8n scans, otherwise the nodes are present in the pod and still never loaded."
+  }
+}
+
+# A mount above the path counts too: /opt carries /opt/n8n-nodes with it.
+run "extra_volume_mount_above_the_custom_extensions_path_satisfies_it" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/opt/n8n-nodes"
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "/opt" },
+    ]
+  }
+
+  assert {
+    condition     = length(local.n8n_extra_volume_mounts) == 1
+    error_message = "The mount must reach the chart values for the check above it to mean anything."
+  }
+}
+
+run "extra_volumes_reject_a_reserved_name" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "data", config_map = { name = "n8n-custom-nodes" } },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volumes]
+}
+
+run "extra_volumes_reject_a_repeated_name" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "one" } },
+      { name = "custom-nodes", config_map = { name = "two" } },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volumes]
+}
+
+run "extra_volumes_reject_a_volume_with_no_source" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [{ name = "custom-nodes" }]
+  }
+
+  expect_failures = [var.n8n_extra_volumes]
+}
+
+run "extra_volumes_reject_a_volume_with_two_sources" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      {
+        name       = "custom-nodes"
+        config_map = { name = "n8n-custom-nodes" }
+        secret     = { secret_name = "n8n-custom-nodes" }
+      },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volumes]
+}
+
+run "extra_volumes_reject_a_non_octal_default_mode" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes", default_mode = "0999" } },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volumes]
+}
+
+run "extra_volume_mounts_reject_an_undeclared_volume" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-noeds", mount_path = "/opt/n8n-nodes" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volume_mounts]
+}
+
+run "extra_volume_mounts_reject_a_relative_path" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "opt/n8n-nodes" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volume_mounts]
+}
+
+# The chart mounts its own `data` volume there on main pods, and two mounts on
+# one path is a pod spec the API server rejects outright.
+run "extra_volume_mounts_reject_the_chart_data_mount_path" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "/home/node/.n8n" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volume_mounts]
+}
+
+# The same directory under a second spelling. Without this rule it would slip
+# past the check above, which is a string comparison.
+run "extra_volume_mounts_reject_a_trailing_slash" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "/home/node/.n8n/" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volume_mounts]
+}
+
+run "extra_volume_mounts_reject_a_repeated_path" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "one" } },
+      { name = "other-nodes", config_map = { name = "two" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "custom-nodes", mount_path = "/opt/n8n-nodes" },
+      { name = "other-nodes", mount_path = "/opt/n8n-nodes" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_volume_mounts]
+}
+
+# Accepted by Kubernetes, so it warns rather than fails: the pods come up and
+# the files are simply not where the caller expected them.
+run "unmounted_extra_volume_warns" {
+  command = plan
+
+  variables {
+    n8n_extra_volumes = [
+      { name = "custom-nodes", config_map = { name = "n8n-custom-nodes" } },
+    ]
+  }
+
+  expect_failures = [check.extra_volumes_should_be_mounted]
+}
+
+# ── n8n_community_packages_registry ───────────────────────────────────────────
+
+run "community_packages_registry_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_community_packages_registry == null
+    error_message = "n8n_community_packages_registry should default to null so the env var is omitted and n8n's own default (https://registry.npmjs.org) applies."
+  }
+}
+
+run "community_packages_registry_accepts_private_mirror" {
+  command = plan
+
+  variables {
+    n8n_community_packages_registry = "https://npm.internal.example.com"
+  }
+
+  assert {
+    condition     = var.n8n_community_packages_registry == "https://npm.internal.example.com"
+    error_message = "n8n_community_packages_registry should accept a private HTTPS mirror URL."
+  }
+}
+
+run "community_packages_registry_rejects_bare_hostname" {
+  command = plan
+
+  variables {
+    n8n_community_packages_registry = "npm.internal.example.com"
+  }
+
+  expect_failures = [var.n8n_community_packages_registry]
+}
+
+run "community_packages_registry_rejects_whitespace_padded_value" {
+  command = plan
+
+  variables {
+    n8n_community_packages_registry = " https://npm.internal.example.com "
+  }
+
+  expect_failures = [var.n8n_community_packages_registry]
+}
+
+# A scheme check alone passed this, and n8n only surfaces it when a caller
+# first tries to install a package.
+run "community_packages_registry_rejects_scheme_without_host" {
+  command = plan
+
+  variables {
+    n8n_community_packages_registry = "https://"
+  }
+
+  expect_failures = [var.n8n_community_packages_registry]
+}
+
+run "community_packages_registry_rejects_non_numeric_port" {
+  command = plan
+
+  variables {
+    n8n_community_packages_registry = "https://npm.internal.example.com:notaport"
+  }
+
+  expect_failures = [var.n8n_community_packages_registry]
+}
+
+run "community_packages_registry_accepts_port_and_path" {
+  command = plan
+
+  variables {
+    n8n_community_packages_registry = "https://npm.internal.example.com:4873/repository/npm-group"
+  }
+
+  assert {
+    condition     = var.n8n_community_packages_registry == "https://npm.internal.example.com:4873/repository/npm-group"
+    error_message = "n8n_community_packages_registry should accept a mirror URL carrying an explicit port and a repository path, which Nexus and Artifactory both use."
+  }
+}
+
+# Regression guard: N8N_COMMUNITY_PACKAGES_REGISTRY became module-managed
+# alongside the n8n_community_packages_registry input, so the escape hatch must
+# reject it and send callers to the dedicated input.
+run "extra_env_rejects_community_packages_registry_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_COMMUNITY_PACKAGES_REGISTRY", value = "https://npm.internal.example.com" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# The private-registry auth token stays caller-managed (it is a credential the
+# module deliberately does not render), so it must remain accepted here.
+run "extra_env_accepts_community_packages_auth_token" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_COMMUNITY_PACKAGES_AUTH_TOKEN", value = "npm-token-placeholder" },
+    ]
+  }
+
+  assert {
+    condition     = var.n8n_extra_env[0].name == "N8N_COMMUNITY_PACKAGES_AUTH_TOKEN"
+    error_message = "N8N_COMMUNITY_PACKAGES_AUTH_TOKEN is not module-managed and should stay settable via n8n_extra_env."
+  }
+}
+
 # ── Autoscaling capacity against the node group ──────────────────────────────
 # The autoscaler ceilings, the per-pod CPU requests, and node_max ×
 # node_instance_type have to be sized together: nothing in Kubernetes couples

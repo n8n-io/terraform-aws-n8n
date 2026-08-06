@@ -93,7 +93,7 @@ resource "aws_iam_role_policy_attachment" "s3" {
 resource "aws_eks_pod_identity_association" "s3" {
   cluster_name    = aws_eks_cluster.n8n.name
   namespace       = var.namespace
-  service_account = "n8n-enterprise"
+  service_account = local.n8n_service_account_name
   role_arn        = aws_iam_role.s3.arn
 
   tags = local.common_tags

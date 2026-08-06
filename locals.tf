@@ -142,6 +142,92 @@ locals {
   # both clusters in the same account and accounts with the same cluster name.
   s3_bucket_name = "n8n-${local.cluster_name}-${substr(data.aws_caller_identity.current.account_id, 6, 6)}"
 
+  # ── n8n service account ────────────────────────────────────────────────────
+  # The chart creating its own ServiceAccount is the arrangement we want, with
+  # one exception: neither chart 1.10.0 nor 1.11.0 renders imagePullSecrets
+  # anywhere, not on the pod spec and not on the ServiceAccount, so a private
+  # registry has no way in through chart values. Attaching the secrets to the
+  # account the pods already run as is the remaining lever, and the chart
+  # supports it: serviceAccount.create = false with an externally managed name
+  # is documented in its own values.yaml, naming Terraform as the example.
+  #
+  # So the module takes the account over, but only when there is something to
+  # attach. With the default empty list the chart keeps creating it and nothing
+  # about an existing deployment moves.
+  n8n_manages_service_account = length(var.n8n_image_pull_secrets) > 0
+
+  # The two owners deliberately use different names, which is not tidiness.
+  # helm_release.n8n depends on the ServiceAccount resource, so on the apply
+  # that first sets n8n_image_pull_secrets the module creates its account
+  # before the upgrade runs. Sharing one name there means creating an object
+  # the chart still owns, and the apply stops at "serviceaccounts
+  # \"n8n-enterprise\" already exists" with the release untouched. Reversing
+  # the dependency does not help either: with create = false the chart drops
+  # its account during the upgrade, and the new pods would fail admission
+  # looking for a ServiceAccount that Terraform has not created yet.
+  #
+  # Two names sidestep both. The new account is created alongside the old one,
+  # the upgrade points the pods at it and lets Helm delete the chart's, and the
+  # same apply works whether or not the deployment already exists.
+  #
+  # Whichever name is in play has three consumers that must agree: the chart's
+  # serviceAccount.name, the Pod Identity association granting S3 access
+  # (s3.tf), and the ServiceAccount resource in n8n.tf. Drift between them
+  # leaves the pods running as an account with no AWS credentials.
+  n8n_service_account_name = local.n8n_manages_service_account ? "n8n-enterprise-pull" : "n8n-enterprise"
+
+  # ── Extra volumes, translated for the chart ────────────────────────────────
+  # The inputs are snake_case and typed; the chart wants Kubernetes' camelCase.
+  # Doing the translation here rather than asking callers to write chart YAML
+  # through a Terraform variable is what makes the inputs checkable at plan
+  # time, and keeping it in a local rather than inline in the values map is
+  # what makes it assertable: helm_release.n8n.values is unknown at plan time,
+  # since it carries the S3 role ARN and the database endpoint among others.
+  #
+  # default_mode arrives as an octal string and is converted with parseint,
+  # because Kubernetes wants the integer. A Terraform number literal cannot do
+  # this job: 0644 parses as decimal 644, which is octal 1204.
+  n8n_extra_volumes = [
+    for volume in var.n8n_extra_volumes : merge(
+      { name = volume.name },
+      volume.config_map == null ? {} : {
+        configMap = merge(
+          { name = volume.config_map.name },
+          volume.config_map.default_mode == null ? {} : {
+            defaultMode = parseint(volume.config_map.default_mode, 8)
+          },
+        )
+      },
+      volume.secret == null ? {} : {
+        secret = merge(
+          { secretName = volume.secret.secret_name },
+          volume.secret.default_mode == null ? {} : {
+            defaultMode = parseint(volume.secret.default_mode, 8)
+          },
+        )
+      },
+      volume.persistent_volume_claim == null ? {} : {
+        persistentVolumeClaim = merge(
+          { claimName = volume.persistent_volume_claim.claim_name },
+          volume.persistent_volume_claim.read_only == null ? {} : {
+            readOnly = volume.persistent_volume_claim.read_only
+          },
+        )
+      },
+    )
+  ]
+
+  n8n_extra_volume_mounts = [
+    for mount in var.n8n_extra_volume_mounts : merge(
+      {
+        name      = mount.name
+        mountPath = mount.mount_path
+        readOnly  = mount.read_only
+      },
+      mount.sub_path == null ? {} : { subPath = mount.sub_path },
+    )
+  ]
+
   # ── n8n_extra_env collision guard ──────────────────────────────────────────
   # config.extraEnv is appended LAST in every n8n container's env list (see the
   # n8n Helm chart's deployment-*.yaml templates), and Kubernetes resolves
@@ -164,6 +250,8 @@ locals {
     "N8N_METRICS",
     "N8N_REINSTALL_MISSING_PACKAGES",
     "N8N_COMMUNITY_PACKAGES_PREVENT_LOADING",
+    "N8N_COMMUNITY_PACKAGES_REGISTRY",
+    "N8N_CUSTOM_EXTENSIONS",
     "WEBHOOK_URL",
     "N8N_TEMPLATES_ENABLED",
     "N8N_PERSONALIZATION_ENABLED",

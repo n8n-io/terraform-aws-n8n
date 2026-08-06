@@ -44,6 +44,13 @@ run "cluster_name_length_validation_rejects_long_names" {
   expect_failures = [var.cluster_name]
 }
 
+# The custom-image inputs added alongside n8n_image_tag (n8n_image_repository,
+# n8n_task_runner_image_tag, n8n_custom_extensions_path,
+# n8n_image_pull_secrets) are intentionally untested here; their variable
+# contracts (default, format validation) are covered by
+# tests/defaults.tftest.hcl at the repo root, and the passthrough is verified
+# manually with a real `terraform plan`.
+
 run "n8n_image_tag_defaults_to_null" {
   command = plan
 

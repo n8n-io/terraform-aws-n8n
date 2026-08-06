@@ -277,6 +277,102 @@ run "n8n_image_tag_rejects_whitespace" {
   expect_failures = [var.n8n_image_tag]
 }
 
+run "n8n_image_repository_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_image_repository == null
+    error_message = "Example must not pin an image repository by default; the module's chart default (docker.n8n.io/n8nio/n8n) should apply."
+  }
+}
+
+run "n8n_image_repository_rejects_inline_tag" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "myregistry.example.com/n8n:2.27.4"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "n8n_task_runner_image_tag_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_task_runner_image_tag == null
+    error_message = "Example must not pin a task runner image tag by default; the chart should keep inheriting the n8n application image's tag."
+  }
+}
+
+run "n8n_task_runner_image_tag_rejects_whitespace" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_tag = " 2.27.4 "
+  }
+
+  expect_failures = [var.n8n_task_runner_image_tag]
+}
+
+run "n8n_custom_extensions_path_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_custom_extensions_path == null
+    error_message = "Example must not set a custom extensions path by default; N8N_CUSTOM_EXTENSIONS should be omitted unless a custom image supplies nodes at that path."
+  }
+}
+
+run "n8n_custom_extensions_path_rejects_a_relative_path" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "opt/n8n-nodes"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+run "n8n_custom_extensions_path_rejects_the_chart_mounted_data_dir" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node/.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+run "n8n_custom_extensions_path_rejects_a_non_canonical_path" {
+  command = plan
+
+  variables {
+    n8n_custom_extensions_path = "/home/node/./.n8n/custom"
+  }
+
+  expect_failures = [var.n8n_custom_extensions_path]
+}
+
+run "n8n_image_pull_secrets_defaults_to_empty" {
+  command = plan
+
+  assert {
+    condition     = length(var.n8n_image_pull_secrets) == 0
+    error_message = "Example must not attach image pull secrets by default; the Helm chart should keep creating the n8n ServiceAccount."
+  }
+}
+
+run "n8n_image_pull_secrets_rejects_a_non_dns_name" {
+  command = plan
+
+  variables {
+    n8n_image_pull_secrets = ["Not_A_Secret_Name"]
+  }
+
+  expect_failures = [var.n8n_image_pull_secrets]
+}
+
 run "execution_data_storage_mode_rejects_filesystem" {
   command = plan
 

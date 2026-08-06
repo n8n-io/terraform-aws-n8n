@@ -302,6 +302,95 @@ variable "n8n_image_tag" {
   }
 }
 
+variable "n8n_image_repository" {
+  description = "Container image repository for the n8n application, without a tag (e.g. \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n\"). When it is null (the default), the Helm chart's own repository applies (currently `docker.n8n.io/n8nio/n8n`). Point this at a custom image built from the n8n base image to bake community packages into the image itself, which removes the boot-time npm install that n8n_reinstall_missing_packages performs on every pod start. Set the tag through n8n_image_tag, not here. Two things come with a custom image: the image has to be pullable, which a public registry or an ECR repository in this account already is, while any other private registry needs its credentials listed in n8n_image_pull_secrets (cross-account ECR is the exception, and is better served by naming the node_group_role_arn output in the source repository's policy); and when the tag is not a published n8n version, also set n8n_task_runner_image_tag, because the chart derives the task runner sidecar's tag from this image's tag."
+  type        = string
+  default     = null
+
+  validation {
+    # Docker's own reference grammar (distribution/reference), narrowed to the
+    # repository half: no tag, no digest. Reading it in pieces, since it is one
+    # long line by necessity (a validation condition cannot reference a local):
+    #
+    #   label = [A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?
+    #   ipv6  = \[[0-9A-Fa-f:]+\]
+    #   host  = (label(.label)* | ipv6)(:port)?
+    #   sep   = __ | [._] | -+
+    #   comp  = [a-z0-9]+(sep[a-z0-9]+)*
+    #   ref   = (host/)? comp(/comp)*
+    #
+    # Every accept and reject below was read off docker's exit code rather than
+    # inferred, because two earlier attempts at this validation got the rules
+    # backwards in both directions.
+    #
+    # The host is deliberately permissive about case while path components are
+    # not, and that asymmetry is Docker's, not ours. splitDockerDomain treats a
+    # first component as a registry host when it contains a dot or a colon, is
+    # localhost, *or contains an uppercase letter*, so N8NIO/n8n and MYREG/n8n
+    # are pullable while myorg/N8N is not ("repository name must be lowercase")
+    # and FOO/BAR is not. Path components may carry doubled separators
+    # (my--repo, my__repo, a---b) which an earlier version wrongly rejected.
+    #
+    # What stays rejected is a reference no registry could serve: a scheme
+    # prefix, a second colon, an empty label (a..b, a trailing slash, a doubled
+    # slash), a label ending in a hyphen, and an IPv6 zone ID. Each of those
+    # otherwise reaches the chart and surfaces as ImagePullBackOff only after
+    # the cluster is up, which is the whole point of checking at plan time.
+    #
+    # The bracketed host is hex and colons only, no dots, which is Docker's
+    # grammar exactly: it rejects [....], [a:b.c] and even the IPv4-mapped
+    # [::ffff:1.2.3.4], while accepting the structurally meaningless [::::].
+    # Matching that is deliberate. Being stricter than docker here would reject
+    # an address a registry would have answered on, and this validation has no
+    # override.
+    condition = var.n8n_image_repository == null ? true : (
+      length(var.n8n_image_repository) <= 255 &&
+      can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_image_repository))
+    )
+    error_message = "n8n_image_repository must be a bare image repository reference that Docker can pull: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n\", \"registry.internal:5000/n8n\", \"n8nio/n8n\", \"[2001:db8::1]:5000/n8n\"). No scheme (\"https://\"), no whitespace, no uppercase path components, and no empty label anywhere, which rules out a trailing slash, a doubled slash, and a doubled dot. Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
+  }
+
+  validation {
+    # The chart renders `image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"`,
+    # so a tag or digest carried in the repository string would render an
+    # unpullable reference like "myrepo/n8n:1.2.3:stable". Catch it at plan time
+    # and point at the right input instead of failing at pod start.
+    condition     = var.n8n_image_repository == null ? true : !can(regex(":", reverse(split("/", var.n8n_image_repository))[0]))
+    error_message = "n8n_image_repository must not include a tag or digest, because the chart appends the tag itself. Pass the version via n8n_image_tag instead (e.g. n8n_image_repository = \"myregistry.example.com/n8n\", n8n_image_tag = \"2.27.4\")."
+  }
+}
+
+variable "n8n_image_pull_secrets" {
+  description = "Names of existing Kubernetes secrets of type kubernetes.io/dockerconfigjson, in var.namespace, that the n8n pods authenticate to their image registry with. Leave empty (the default) for a public registry or an ECR repository in this account, which the node group's IAM role already pulls without credentials. Setting this changes who owns the ServiceAccount: the pinned chart renders imagePullSecrets nowhere, so the module creates the account itself, attaches these secrets to it, and passes serviceAccount.create = false, an arrangement the chart documents and supports. The module's account takes a different name from the chart's, so that turning this on for a deployment that already exists does not collide with the account Helm still owns; the S3 Pod Identity association follows whichever name is in play, so it keeps working either way. Creating and rotating the secrets stays the caller's job, because a dockerconfigjson generated here would sit in plaintext in Terraform state; kubectl create secret docker-registry, or an operator like External Secrets, are the usual routes. This is also the wrong tool for cross-account ECR, whose authorization tokens expire after 12 hours: add the node group role to the source registry's repository policy instead and leave this empty. The node_group_role_arn output is the principal to name in that policy."
+  type        = list(string)
+  default     = []
+
+  validation {
+    # A secret name is a DNS-1123 subdomain. Rejecting a malformed one here
+    # beats the alternative: the ServiceAccount apply fails partway through,
+    # after the cluster and the namespace already exist.
+    condition = alltrue([
+      for name in var.n8n_image_pull_secrets :
+      can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$", name))
+    ])
+    error_message = "Every n8n_image_pull_secrets entry must be a DNS-1123 subdomain, which is what Kubernetes requires of a secret name: lowercase alphanumerics, hyphens and dots, starting and ending with an alphanumeric, with no empty label (e.g. \"ecr-cross-account\"). Pass the secret's name, not its contents."
+  }
+
+  validation {
+    condition = alltrue([
+      for name in var.n8n_image_pull_secrets : length(name) <= 253
+    ])
+    error_message = "Every n8n_image_pull_secrets entry must be 253 characters or fewer, the Kubernetes limit on a secret name."
+  }
+
+  validation {
+    # Kubernetes tolerates a repeated imagePullSecrets entry, but a duplicate
+    # here is far more likely to be a copy-paste slip than an intent.
+    condition     = length(distinct(var.n8n_image_pull_secrets)) == length(var.n8n_image_pull_secrets)
+    error_message = "n8n_image_pull_secrets must not repeat a secret name. Listing one twice adds nothing, since the kubelet tries each entry once."
+  }
+}
+
 variable "n8n_helm_timeout" {
   description = "Seconds Terraform waits for the n8n Helm release to converge. Increase for large deployments where rolling out 50+ pods (workers + webhook processors + main) exceeds the default. 600s is fine for the default/medium examples; large deployments at 250+ pods need ~1800s."
   type        = number
@@ -501,6 +590,17 @@ variable "n8n_task_runners_enabled" {
   type        = bool
   default     = true
   nullable    = false
+}
+
+variable "n8n_task_runner_image_tag" {
+  description = "Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every main and worker pod stays in ImagePullBackOff. Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n_task_runners_enabled = false."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.n8n_task_runner_image_tag == null ? true : can(regex("^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$", var.n8n_task_runner_image_tag))
+    error_message = "n8n_task_runner_image_tag must be a non-empty string with no whitespace, containing only alphanumeric characters, dots, underscores, and hyphens (e.g. \"2.27.4\"). Set to null to inherit the n8n application image's tag."
+  }
 }
 
 variable "n8n_task_runner_cpu_request" {
@@ -786,6 +886,178 @@ variable "n8n_reinstall_missing_packages" {
   description = "Reinstall community packages that are recorded in the database but missing from a pod's local filesystem at startup. Maps to N8N_REINSTALL_MISSING_PACKAGES. n8n stores installed community packages on the pod's filesystem, which is ephemeral in EKS, so a rescheduled or newly scaled-up worker comes up without them and nodes installed via the UI fail to load on that pod. Enabling this makes every pod (main, worker, and webhook-processor) reinstall the recorded packages on boot, which is what lets community nodes work reliably in queue mode. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies. When true, size the webhook processor above this module's defaults: every pod runs npm installs at boot and n8n rebroadcasts installs to all pods via pubsub, so a rolling restart makes every webhook pod install repeatedly at once. Against low CPU/memory this causes CPU-based HPA thrash and OOMKilled crash loops; see n8n_webhook_cpu_request, n8n_webhook_memory_limit, and docs/troubleshooting.md."
   type        = bool
   default     = false
+}
+
+variable "n8n_community_packages_registry" {
+  description = "npm registry community packages are installed from (e.g. https://npm.internal.example.com). Maps to N8N_COMMUNITY_PACKAGES_REGISTRY, which n8n gates behind a specific licensed feature rather than a license key alone: any value other than https://registry.npmjs.org makes installs throw FeatureNotLicensedError unless the instance is entitled to COMMUNITY_NODES_CUSTOM_REGISTRY (`getNpmRegistry` in community-packages.service.ts). Confirm that entitlement before setting this, since an unentitled instance breaks community-package installs instead of falling back to the public registry. Point this at a private mirror to install community nodes from an internal registry instead of the public npm one, e.g. when egress to registry.npmjs.org is blocked or packages are vendored. n8n defaults to https://registry.npmjs.org; when this is null (the default) the env var is omitted entirely so n8n's own default applies. A mirror that requires authentication also needs N8N_COMMUNITY_PACKAGES_AUTH_TOKEN, which this module does not manage; pass it via n8n_extra_env, keeping in mind that n8n_extra_env values are stored in plaintext in the Helm release and Terraform state. Baking packages into a custom image via n8n_image_repository avoids registry access at pod start entirely."
+  type        = string
+  default     = null
+
+  validation {
+    # A scheme check alone accepted a bare "https://", which n8n only rejects
+    # when it first tries to install a package. Require a host, and a numeric
+    # port if one is given, so a truncated value fails at plan instead.
+    condition     = var.n8n_community_packages_registry == null ? true : can(regex("^https?://[A-Za-z0-9._~-]+(:[0-9]+)?(/[^[:space:]]*)?$", var.n8n_community_packages_registry))
+    error_message = "n8n_community_packages_registry must be a registry URL with a host, starting with http:// or https://, with an optional numeric port and path, and no whitespace (e.g. https://npm.internal.example.com, https://npm.internal.example.com:4873/repository/npm-group). Set to null to use n8n's default (https://registry.npmjs.org)."
+  }
+}
+
+variable "n8n_custom_extensions_path" {
+  description = "Absolute path inside the n8n container that n8n scans for custom nodes at startup (e.g. \"/opt/n8n-nodes\"). Maps to N8N_CUSTOM_EXTENSIONS, and is set on every pod type (main, worker, webhook processor). This is the supported way to ship nodes baked into a custom image: since n8n 1.0 the loader no longer picks up nodes from the image's global node_modules, so a plain npm install into the image is never seen (n8n v10 migration guide, and packages/cli/src/load-nodes-and-credentials.ts). Something has to put files at this path, so either set n8n_image_repository to an image that baked them in, or mount a volume that carries them with n8n_extra_volumes and n8n_extra_volume_mounts; a path with neither behind it warns at plan time. The path must be outside /home/node/.n8n, which the chart mounts over on main pods (see the validation below). Two caveats that no Terraform input can fix. First, nodes loaded this way are registered under the package name CUSTOM, so a node whose type was n8n-nodes-example.myNode when installed from npm becomes CUSTOM.myNode, and existing workflows referencing the npm-qualified type will not resolve. Second, only one directory is exposed even though n8n accepts a semicolon-separated list, because every custom directory is registered under the same CUSTOM key and each one overwrites the last, so all but the final directory are silently dropped. Leave null (the default) to omit the env var entirely."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.n8n_custom_extensions_path == null ? true : can(regex("^/[^[:space:];]*$", var.n8n_custom_extensions_path))
+    error_message = "n8n_custom_extensions_path must be an absolute container path with no whitespace and no semicolon (e.g. \"/opt/n8n-nodes\"). n8n splits N8N_CUSTOM_EXTENSIONS on \";\", so a semicolon here would be parsed as two directories and silently drop all but the last."
+  }
+
+  validation {
+    # The shadowing check below is a string comparison, so it only holds if the
+    # mounted directory has a single spelling. /home/node//.n8n/custom,
+    # /home/node/./.n8n/custom and /opt/../home/node/.n8n/custom all resolve
+    # inside the mount in the container while slipping past a startswith() on
+    # the raw value. Requiring a canonical path is the sound fix: abspath()
+    # would normalize against the machine running Terraform rather than the
+    # container filesystem, and rewrites separators on Windows.
+    condition     = var.n8n_custom_extensions_path == null ? true : !can(regex("//|/\\.\\.?(/|$)", var.n8n_custom_extensions_path))
+    error_message = "n8n_custom_extensions_path must be a canonical path: no repeated slashes and no \".\" or \"..\" components (e.g. \"/opt/n8n-nodes\"). Those spellings resolve to the same directory inside the container but would slip past the /home/node/.n8n shadowing check."
+  }
+
+  validation {
+    # The chart mounts the `data` volume at /home/node/.n8n on the main
+    # deployment only (templates/deployment-main.yaml), and the module leaves
+    # persistence.enabled at the chart default, so that volume is an emptyDir.
+    # Anything the image placed under that path is therefore hidden on mains
+    # while still present on workers and webhook processors: the nodes load on
+    # some pod types and not others, which surfaces as workflows that run on a
+    # worker but fail to open in the editor.
+    condition = var.n8n_custom_extensions_path == null ? true : !(
+      var.n8n_custom_extensions_path == "/home/node/.n8n" ||
+      startswith(var.n8n_custom_extensions_path, "/home/node/.n8n/")
+    )
+    error_message = "n8n_custom_extensions_path must not be inside /home/node/.n8n. The chart mounts an emptyDir there on main pods, which hides whatever the image baked in, so the nodes would load on workers and webhook processors but not on mains. Use a path outside it, for example /opt/n8n-nodes."
+  }
+}
+
+variable "n8n_extra_volumes" {
+  description = "Volumes to add to the main, worker and webhook-processor pods, mapped to the chart's extraVolumes. Each entry needs a name and exactly one source: config_map, secret, or persistent_volume_claim. Those three are the sources that can carry files into a pod on their own, which is the point of the input: paired with n8n_extra_volume_mounts and n8n_custom_extensions_path, they load community nodes from a ConfigMap or a shared ReadWriteMany claim instead of from a custom image, which is the alternative to rebuilding an image for every package change. Other uses fit too, a CA bundle from a secret being the common one. default_mode is an octal string (\"0644\"), not a number, because Terraform reads a leading zero as decimal and would silently apply the wrong permissions. Volume sources beyond those three (csi, nfs, projected) are not exposed. Names must be unique, and \"data\" and \"task-runner-config\" are reserved by the chart."
+  type = list(object({
+    name = string
+    config_map = optional(object({
+      name         = string
+      default_mode = optional(string)
+    }))
+    secret = optional(object({
+      secret_name  = string
+      default_mode = optional(string)
+    }))
+    persistent_volume_claim = optional(object({
+      claim_name = string
+      read_only  = optional(bool)
+    }))
+  }))
+  default = []
+
+  validation {
+    condition = alltrue([
+      for volume in var.n8n_extra_volumes :
+      can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", volume.name)) && length(volume.name) <= 63
+    ])
+    error_message = "Every n8n_extra_volumes name must be a DNS-1123 label, which is what Kubernetes requires of a volume name: 63 characters or fewer of lowercase alphanumerics and hyphens, starting and ending with an alphanumeric (e.g. \"custom-nodes\")."
+  }
+
+  validation {
+    condition     = length(distinct([for volume in var.n8n_extra_volumes : volume.name])) == length(var.n8n_extra_volumes)
+    error_message = "n8n_extra_volumes names must be unique. Kubernetes rejects a pod spec with two volumes of the same name, so the whole release fails to render rather than one entry losing out."
+  }
+
+  validation {
+    # `data` is the chart's own volume, mounted at /home/node/.n8n on main pods.
+    # `task-runner-config` appears when taskRunners.customConfig is enabled.
+    # Reusing either name collides inside the rendered pod spec.
+    condition = alltrue([
+      for volume in var.n8n_extra_volumes :
+      !contains(["data", "task-runner-config"], volume.name)
+    ])
+    error_message = "n8n_extra_volumes must not use the names \"data\" or \"task-runner-config\". The chart declares both itself (data is the n8n home volume on main pods), and a duplicate volume name makes Kubernetes reject the whole pod spec. Pick another name."
+  }
+
+  validation {
+    condition = alltrue([
+      for volume in var.n8n_extra_volumes :
+      length([
+        for source in [volume.config_map, volume.secret, volume.persistent_volume_claim] :
+        source if source != null
+      ]) == 1
+    ])
+    error_message = "Every n8n_extra_volumes entry must set exactly one of config_map, secret or persistent_volume_claim. A volume with no source, or with two, is not a thing Kubernetes can mount."
+  }
+
+  validation {
+    # The `if` filters run before the mode is read, so an entry whose source is
+    # a persistent_volume_claim never has default_mode looked up on a null.
+    condition = alltrue([
+      for mode in concat(
+        [for volume in var.n8n_extra_volumes : volume.config_map.default_mode if volume.config_map != null],
+        [for volume in var.n8n_extra_volumes : volume.secret.default_mode if volume.secret != null],
+      ) : mode == null ? true : can(regex("^0?[0-7]{3}$", mode))
+    ])
+    error_message = "Every default_mode in n8n_extra_volumes must be a three-digit octal string, optionally with a leading zero (e.g. \"0644\" or \"755\"). It is a string on purpose: Terraform reads the number 0644 as decimal 644, which is octal 1204, so the files would land with permissions nobody asked for."
+  }
+}
+
+variable "n8n_extra_volume_mounts" {
+  description = "Where the n8n container mounts the volumes declared in n8n_extra_volumes, mapped to the chart's extraVolumeMounts. Applies to the main, worker and webhook-processor pods alike, and to the n8n container only, not the task runner sidecar. Every name here must match a name in n8n_extra_volumes, which is checked at plan time rather than left to fail at pod start. read_only defaults to true, so a mount that has to be written needs to say so. Use this with n8n_custom_extensions_path to load community nodes from a volume rather than from a custom image; when a mount covers that path, the module stops warning that the path has nothing behind it."
+  type = list(object({
+    name       = string
+    mount_path = string
+    sub_path   = optional(string)
+    read_only  = optional(bool, true)
+  }))
+  default = []
+
+  validation {
+    condition = alltrue([
+      for mount in var.n8n_extra_volume_mounts :
+      contains([for volume in var.n8n_extra_volumes : volume.name], mount.name)
+    ])
+    error_message = "Every n8n_extra_volume_mounts name must match a volume declared in n8n_extra_volumes. A mount referring to a volume that does not exist leaves the pods stuck in CreateContainerConfigError, which is a slow way to learn about a typo."
+  }
+
+  validation {
+    condition = alltrue([
+      for mount in var.n8n_extra_volume_mounts :
+      can(regex("^/[^[:space:]]*$", mount.mount_path)) && !can(regex("//|/\\.\\.?(/|$)", mount.mount_path))
+    ])
+    error_message = "Every n8n_extra_volume_mounts mount_path must be a canonical absolute path with no whitespace: no repeated slashes and no \".\" or \"..\" components (e.g. \"/opt/n8n-nodes\"). The canonical form is what makes the collision checks below comparisons rather than guesses."
+  }
+
+  validation {
+    # Every other rule here is a string comparison, so one directory has to have
+    # one spelling. "/home/node/.n8n/" is the same mount target as
+    # "/home/node/.n8n" and would slip past the check below it, and a trailing
+    # slash also breaks the prefix test that decides whether a mount covers
+    # n8n_custom_extensions_path, turning a working config into a warning.
+    condition = alltrue([
+      for mount in var.n8n_extra_volume_mounts :
+      !endswith(mount.mount_path, "/")
+    ])
+    error_message = "No n8n_extra_volume_mounts mount_path may end in a slash: write \"/opt/n8n-nodes\", not \"/opt/n8n-nodes/\". The two name the same directory, so allowing both would let a mount collide with one the chart already declares while comparing as different, and would break the test for whether a mount covers n8n_custom_extensions_path. Mounting at \"/\" is rejected by the same rule, which is intended."
+  }
+
+  validation {
+    condition = alltrue([
+      for mount in var.n8n_extra_volume_mounts :
+      mount.mount_path != "/home/node/.n8n"
+    ])
+    error_message = "n8n_extra_volume_mounts must not mount at /home/node/.n8n exactly. The chart already mounts its own `data` volume there on main pods, and Kubernetes rejects a container with two mounts on the same path, so the release would fail to apply. A path underneath it is fine, as is any path outside it."
+  }
+
+  validation {
+    condition     = length(distinct([for mount in var.n8n_extra_volume_mounts : mount.mount_path])) == length(var.n8n_extra_volume_mounts)
+    error_message = "n8n_extra_volume_mounts mount_path values must be unique. Two mounts on one path is a pod spec Kubernetes rejects outright."
+  }
 }
 
 variable "n8n_community_packages_prevent_loading" {

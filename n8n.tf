@@ -58,6 +58,44 @@ resource "kubernetes_secret" "n8n_db" {
   }
 }
 
+# ── Service account ───────────────────────────────────────────────────────────
+# Only created when var.n8n_image_pull_secrets is non-empty. Otherwise the chart
+# creates the account and this resource does not exist; see the note on
+# local.n8n_manages_service_account for why the module ever takes it over.
+#
+# The name is deliberately not the one the chart uses, so that enabling the
+# input on a live deployment does not collide with the account Helm already
+# owns; locals.tf has the full reasoning. The Pod Identity association in s3.tf
+# reads the same local, so it follows the account whichever name is in play.
+#
+# The chart's eks.amazonaws.com/role-arn annotation is not reproduced here on
+# purpose: the module authenticates through Pod Identity, not IRSA, and the
+# annotation was only ever passed to satisfy the chart's own template
+# validation, which reads serviceAccount.awsRoleArn from the values regardless
+# of who creates the account.
+#
+# automount_service_account_token is set explicitly because the provider
+# defaults it to false, which would be a behaviour change: the chart leaves the
+# field unset, and an unset ServiceAccount field means the pod mounts the token.
+
+resource "kubernetes_service_account_v1" "n8n" {
+  count = local.n8n_manages_service_account ? 1 : 0
+
+  metadata {
+    name      = local.n8n_service_account_name
+    namespace = kubernetes_namespace.n8n.metadata[0].name
+  }
+
+  automount_service_account_token = true
+
+  dynamic "image_pull_secret" {
+    for_each = var.n8n_image_pull_secrets
+    content {
+      name = image_pull_secret.value
+    }
+  }
+}
+
 # ── Helm release ──────────────────────────────────────────────────────────────
 
 resource "helm_release" "n8n" {
@@ -159,10 +197,12 @@ resource "helm_release" "n8n" {
 
     # S3 credentials are injected by EKS Pod Identity (s3.tf).
     # awsRoleArn is provided only to satisfy the chart's template validation —
-    # the actual auth comes from the Pod Identity agent, not IRSA.
+    # the actual auth comes from the Pod Identity agent, not IRSA. The chart
+    # requires it whenever s3.auth.autoDetect is true, independently of who
+    # creates the account, so it stays set on both branches of `create`.
     serviceAccount = {
-      create     = true
-      name       = "n8n-enterprise"
+      create     = !local.n8n_manages_service_account
+      name       = local.n8n_service_account_name
       awsRoleArn = aws_iam_role.s3.arn
     }
 
@@ -322,6 +362,22 @@ resource "helm_release" "n8n" {
         var.n8n_community_packages_prevent_loading ? [
           { name = "N8N_COMMUNITY_PACKAGES_PREVENT_LOADING", value = "true" },
         ] : [],
+        # Private npm mirror for community package installs. Omitted unless set,
+        # so n8n's own default (https://registry.npmjs.org) applies. The
+        # companion N8N_COMMUNITY_PACKAGES_AUTH_TOKEN is deliberately not
+        # managed here: it is a credential, and config.extraEnv renders into
+        # the Helm release and Terraform state in plaintext.
+        var.n8n_community_packages_registry == null ? [] : [
+          { name = "N8N_COMMUNITY_PACKAGES_REGISTRY", value = var.n8n_community_packages_registry },
+        ],
+        # Directory n8n scans for custom nodes at startup, which is how nodes
+        # baked into a custom image are picked up: since n8n 1.0 the loader
+        # ignores the image's global node_modules entirely. Applied to every pod
+        # type, because a node type that resolves on main and not on workers
+        # fails at execution time instead of at edit time.
+        var.n8n_custom_extensions_path == null ? [] : [
+          { name = "N8N_CUSTOM_EXTENSIONS", value = var.n8n_custom_extensions_path },
+        ],
 
         # Execution-data offload to S3 (n8n >= 2.27, Enterprise). The chart has
         # no value for this at var.n8n_chart_version (its s3.storage block only
@@ -438,7 +494,15 @@ resource "helm_release" "n8n" {
     # worker pods to execute JavaScript and Python code in isolation from the n8n
     # process. The n8n container runs a task broker on port 5679; each sidecar
     # connects to it over localhost using the auto-generated auth token.
-    taskRunners = {
+    #
+    # The sidecar's image tag is left to the chart, which defaults it to the n8n
+    # application image's tag (`default .Values.image.tag
+    # .Values.taskRunners.image.tag` in deployment-main.yaml and
+    # deployment-worker.yaml). That is correct for a published n8n tag but wrong
+    # for a custom image tagged something like "2.27.4-mypackages", since no such
+    # `n8nio/runners` tag exists, hence the n8n_task_runner_image_tag override,
+    # merged in only when set so the chart's inheritance stays the default.
+    taskRunners = merge({
       enabled = var.n8n_task_runners_enabled
       authToken = {
         value = random_password.task_runner_token.result
@@ -456,7 +520,9 @@ resource "helm_release" "n8n" {
         requests = { cpu = var.n8n_task_runner_cpu_request, memory = var.n8n_task_runner_memory_request }
         limits   = { cpu = var.n8n_task_runner_cpu_limit, memory = var.n8n_task_runner_memory_limit }
       }
-    }
+      },
+      var.n8n_task_runner_image_tag == null ? {} : { image = { tag = var.n8n_task_runner_image_tag } },
+    )
 
     # ── Pod Disruption Budget ─────────────────────────────────────────────────
     # Ensures at least one main pod stays running during node drains or rollouts.
@@ -464,10 +530,28 @@ resource "helm_release" "n8n" {
       enabled      = true
       minAvailable = 1
     }
+
+    # ── Extra volumes ─────────────────────────────────────────────────────────
+    # Rendered onto main, worker and webhook-processor alike. Both default to an
+    # empty list, which is also the chart's default, so an unset caller sees no
+    # change. The snake_case-to-camelCase translation lives in locals.tf: the
+    # whole values string is unknown at plan time (it carries the S3 role ARN
+    # and the database endpoint), so anything asserted about it has to be
+    # reachable without reading it back off the resource.
+    extraVolumes      = local.n8n_extra_volumes
+    extraVolumeMounts = local.n8n_extra_volume_mounts
     },
-    # Pin the app image only when the caller asks for it; otherwise the chart
-    # default (floating `stable`) applies untouched.
-    var.n8n_image_tag != null ? { image = { tag = var.n8n_image_tag } } : {},
+    # Override the app image only where the caller asks for it; otherwise the
+    # chart defaults apply untouched (docker.n8n.io/n8nio/n8n:stable). Repository
+    # and tag are merged key by key rather than as a whole `image` map so setting
+    # one does not blank the other: yamlencode would emit `repository: null`,
+    # which the chart renders into an unpullable `null:2.27.4` reference.
+    var.n8n_image_repository == null && var.n8n_image_tag == null ? {} : {
+      image = merge(
+        var.n8n_image_repository == null ? {} : { repository = var.n8n_image_repository },
+        var.n8n_image_tag == null ? {} : { tag = var.n8n_image_tag },
+      )
+    },
   ))]
 
   depends_on = [
@@ -477,6 +561,7 @@ resource "helm_release" "n8n" {
     aws_elasticache_cluster.n8n,
     aws_iam_role_policy_attachment.s3,
     aws_eks_pod_identity_association.s3,
+    kubernetes_service_account_v1.n8n, # empty list unless the module owns it
   ]
 }
 
@@ -859,5 +944,73 @@ check "log_streaming_destinations_require_managed_by_env" {
       length(var.n8n_log_streaming_destinations) == 0
     )
     error_message = "n8n_log_streaming_destinations is set, but n8n_log_streaming_managed_by_env is false — the destinations will be ignored and no N8N_LOG_STREAMING_* env vars will be set on the n8n pods. Set n8n_log_streaming_managed_by_env = true to apply them, or clear the destinations to silence this warning."
+  }
+}
+
+# ── Custom image guards ───────────────────────────────────────────────────────
+# Four plan-time warnings for custom-image configurations that are accepted but
+# almost certainly not what the caller meant. All are warnings rather than
+# errors: each is legitimate in some deployment, and none can be decided with
+# certainty from the inputs alone.
+#
+# Written as `guard ? body : true` per AGENTS.md, since Terraform 1.9 (the
+# version floor) does not short-circuit && and ||. The same rule applies inside
+# the bodies: nested conditionals rather than chained ||, so the conditions
+# stay known at plan time even if a caller ever wires one of these inputs from
+# a resource attribute.
+
+check "custom_image_repository_needs_an_explicit_tag" {
+  assert {
+    condition     = var.n8n_image_repository != null ? var.n8n_image_tag != null : true
+    error_message = "n8n_image_repository is set but n8n_image_tag is null, so the chart appends its own default and the release resolves to <repository>:stable. A custom registry rarely publishes a `stable` tag, and the pods then fail with ImagePullBackOff. Set n8n_image_tag to a tag that exists in this repository. Ignore this warning if the repository is a mirror that does publish `stable`."
+  }
+}
+
+check "custom_image_tag_needs_a_task_runner_tag" {
+  assert {
+    condition = var.n8n_image_repository != null ? (
+      var.n8n_task_runners_enabled ? (
+        var.n8n_image_tag != null ? var.n8n_task_runner_image_tag != null : true
+      ) : true
+    ) : true
+    error_message = "A custom n8n image (n8n_image_repository + n8n_image_tag) is set with task runners enabled, but n8n_task_runner_image_tag is null. The chart tags the runner sidecar from the app image, so the sidecar resolves to n8nio/runners:<n8n_image_tag> and every main and worker pod fails with ImagePullBackOff unless that exact tag exists upstream, which fails the apply rather than completing with broken pods. Set n8n_task_runner_image_tag to the n8n version the custom image is built from. Ignore this warning if the custom image's tag is itself a published n8n version."
+  }
+}
+
+check "custom_extensions_path_requires_a_source" {
+  assert {
+    # Two ways to put nodes at the path, so the warning has to rule out both:
+    # a custom image that baked them in, or a volume mounted at or above it.
+    condition = var.n8n_custom_extensions_path != null ? (
+      var.n8n_image_repository != null ? true : anytrue([
+        for mount in var.n8n_extra_volume_mounts :
+        mount.mount_path == var.n8n_custom_extensions_path ? true : startswith(var.n8n_custom_extensions_path, "${mount.mount_path}/")
+      ])
+    ) : true
+    error_message = "n8n_custom_extensions_path is set, but nothing in this configuration puts files there: n8n_image_repository is null, so the pods run the chart's stock image, and no n8n_extra_volume_mounts entry covers the path. n8n will scan an empty or missing directory and load no nodes, silently. Either point n8n_image_repository at an image with the compiled nodes baked in at this path, or mount a volume that carries them (see n8n_extra_volumes), or clear the path to silence this warning."
+  }
+}
+
+check "extra_volumes_should_be_mounted" {
+  assert {
+    condition = alltrue([
+      for volume in var.n8n_extra_volumes :
+      contains([for mount in var.n8n_extra_volume_mounts : mount.name], volume.name)
+    ])
+    error_message = "An n8n_extra_volumes entry is never mounted, because no n8n_extra_volume_mounts entry names it. Kubernetes accepts an unmounted volume, so the pods will start and the files will simply not be there. Add a mount for it, or drop the volume. Ignore this warning only if the volume exists for something outside the n8n container."
+  }
+}
+
+check "image_pull_secrets_need_a_custom_image" {
+  assert {
+    condition     = length(var.n8n_image_pull_secrets) > 0 ? var.n8n_image_repository != null : true
+    error_message = "n8n_image_pull_secrets is set but n8n_image_repository is null, so every image the pods pull comes from a public registry: the chart's docker.n8n.io/n8nio/n8n and, with task runners on, n8nio/runners. Neither needs credentials, so the secrets are attached and never used. The cost is not zero: setting this input moves ownership of the ServiceAccount from the chart to the module. Clear it to hand the account back, or set n8n_image_repository to the private image these credentials are for."
+  }
+}
+
+check "task_runner_image_tag_requires_task_runners" {
+  assert {
+    condition     = var.n8n_task_runner_image_tag != null ? var.n8n_task_runners_enabled : true
+    error_message = "n8n_task_runner_image_tag is set, but n8n_task_runners_enabled is false, so no runner sidecar is deployed and the tag is ignored. Set n8n_task_runners_enabled = true to apply it, or clear the tag to silence this warning."
   }
 }

@@ -85,6 +85,7 @@ expected by the Terraform Registry:
 | `examples/split-ingress/`         | Topology-variant of `small`: `create_ingress = false` with a public webhook ALB and an internal admin ALB (Route 53, includes the VPC). |
 | `tests/*.tftest.hcl`              | `terraform test` plan-time tests with mocked providers.     |
 | `tests/scripts/smoke-test.sh`     | Post-`apply` smoke test for live deployments.               |
+| `tests/scripts/verify-custom-image.sh` | Post-`apply` check for baked-in community nodes (`n8n_image_repository` + `n8n_custom_extensions_path`). |
 | `docs/`                           | Long-form supplementary docs (troubleshooting, post-deploy, cleanup). |
 | `.github/workflows/`              | CI: fmt, validate, test, tflint, checkov.                   |
 
@@ -145,6 +146,11 @@ Concretely, in this repo:
 - `tests/scripts/smoke-test.sh` is the **integration / post-apply** check used
   against a real cluster — kept out of CI on purpose (it needs live AWS
   credentials and an applied stack).
+- `tests/scripts/verify-custom-image.sh` is the same tier, narrowed to
+  deployments that bake community packages into a custom image. Plan-time tests
+  cannot reach what it checks: whether n8n *loaded* the baked nodes, and whether
+  it loaded them on workers as well as mains. A deployment can pass every other
+  check and still fail only when a production execution hits the node.
 
 When you add a feature, add an `assert` for it in the relevant `.tftest.hcl`
 file. Use `command = plan` unless you specifically need apply semantics.

@@ -1,8 +1,17 @@
-# Smoke test
+# Post-deployment scripts
+
+Two manual verification scripts. Neither runs in CI: both need a live cluster, which a pull request check cannot provide.
+
+| Script | Use it when |
+|---|---|
+| [`smoke-test.sh`](#smoke-test) | Always, after any deploy. Checks the deployment is healthy end to end. |
+| [`verify-custom-image.sh`](#custom-image-verification) | The deployment sets `n8n_image_repository` and `n8n_custom_extensions_path` to bake community packages into the image. |
+
+## Smoke test
 
 Post-deployment smoke test for `terraform-aws-n8n`. Verifies the multi-main deployment is healthy end to end — pod health, queue mode, KEDA, HTTPS, API, and a full webhook → worker execution.
 
-## What it covers
+### What it covers
 
 | Check | What it verifies |
 |---|---|
@@ -19,7 +28,7 @@ Post-deployment smoke test for `terraform-aws-n8n`. Verifies the multi-main depl
 | Workflow execution (if API key set) | Creates a webhook → set workflow, fires it, confirms success, deletes it |
 | Worker scaling (opt-in) | Queues CPU-burning executions and confirms workers scale up |
 
-## Quick start
+### Quick start
 
 The script reads `namespace`, `n8n_url`, and `kubectl_config_command` automatically from `terraform output`.
 
@@ -36,7 +45,7 @@ The script automatically:
 
 > **Note:** Run the script from the directory that holds `terraform.tfstate` (e.g. `examples/small/`), not from `tests/scripts/`. The script calls `terraform output` against the current working directory by default.
 
-## API key (required for API and execution tests)
+### API key (required for API and execution tests)
 
 The API connectivity and workflow execution checks need an n8n API key. Without one, those checks are skipped with a warning.
 
@@ -58,7 +67,7 @@ cp ../../tests/scripts/.env.example ../../tests/scripts/.env
 ../../tests/scripts/smoke-test.sh
 ```
 
-## Configuration
+### Configuration
 
 All settings can be overridden via environment variables or a `.env` file.
 
@@ -78,7 +87,7 @@ All settings can be overridden via environment variables or a `.env` file.
 
 **Priority:** `.env` values → environment variables → Terraform outputs → built-in defaults.
 
-## Worker scaling test (opt-in)
+### Worker scaling test (opt-in)
 
 The scaling test creates real load and is therefore opt-in:
 
@@ -97,7 +106,7 @@ What it does:
 
 If workers don't scale within the wait window, the script warns and suggests increasing `LOAD_REQUESTS` or `LOAD_JOB_DURATION_SECS`.
 
-## Running against a remote deployment
+### Running against a remote deployment
 
 You can run without local Terraform state — for example against a cluster managed by someone else — by setting everything explicitly:
 
@@ -110,7 +119,70 @@ N8N_API_KEY=your-key \
 
 You're responsible for pointing kubectl at the right cluster yourself in that case (the script only switches contexts when it can read `kubectl_config_command` from Terraform).
 
+## Custom image verification
+
+`verify-custom-image.sh` covers what `smoke-test.sh` cannot: a deployment can be perfectly healthy and still have its baked nodes silently unloaded. The specific failure it exists to catch is **asymmetric loading**, where a node type resolves on main pods but not on workers. That looks correct in the editor and fails only when a production execution reaches the node.
+
+```bash
+cd examples/small
+../../tests/scripts/verify-custom-image.sh
+```
+
+### What it covers
+
+| Check | What it verifies |
+|---|---|
+| Image consistency | Every Running pod, every replica, runs the same image, so a half-finished rollout is not mistaken for a loading bug. A pod whose image cannot be read fails rather than being skipped |
+| Task runner sidecar | The runner image resolves and nothing is stuck in `ImagePullBackOff`, the symptom of a custom `n8n_image_tag` with no `n8n_task_runner_image_tag` |
+| Extensions path | `N8N_CUSTOM_EXTENSIONS` is set, and set *identically*, on main, worker, and webhook-processor |
+| Shadowed directory | The path is outside `/home/node/.n8n`, which the chart mounts over on main pods only |
+| Baked files on disk | At least one `*.node.js` exists under the path, on every pod type |
+| Loaded node types | n8n's generated type list contains at least one `CUSTOM.*` type. This is the difference between present on disk and actually loaded |
+| Boot-time installs | Warns if `N8N_REINSTALL_MISSING_PACKAGES=true`, which reintroduces the per-pod npm install that baking exists to remove |
+| Execution (opt-in) | Runs a workflow using a baked node through the queue, proving a *worker* resolved the type |
+
+### The execution check
+
+Everything above proves main loaded the nodes. None of it proves a worker did, because workers serve no type list. Only executing a workflow that uses a baked node settles that, and it needs a workflow specific to whichever node you baked, so you supply one:
+
+```bash
+CUSTOM_NODE_WORKFLOW=./my-node-test.json \
+  ../../tests/scripts/verify-custom-image.sh
+```
+
+The file is a workflow JSON with two requirements: a webhook trigger, which is what routes the execution to a worker instead of the main process, and at least one node whose `type` starts with `CUSTOM.`. The script rewrites the webhook path to a unique value and its method to `POST` (it copies the workflow before sending it, so your file is not modified), creates and activates the workflow, fires it, waits for the execution, then deactivates and deletes it.
+
+```json
+{
+  "nodes": [
+    { "id": "a", "name": "Webhook", "type": "n8n-nodes-base.webhook", "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": { "httpMethod": "POST", "path": "placeholder", "responseMode": "lastNode" } },
+    { "id": "b", "name": "Baked", "type": "CUSTOM.myNode", "typeVersion": 1,
+      "position": [220, 0], "parameters": {} }
+  ],
+  "connections": { "Webhook": { "main": [[{ "node": "Baked", "type": "main", "index": 0 }]] } },
+  "settings": { "executionOrder": "v1" }
+}
+```
+
+Use the type name *as n8n loaded it*. A package installed from npm as `n8n-nodes-example.myNode` becomes `CUSTOM.myNode` once baked, because the custom directory loader registers everything under the package name `CUSTOM`. Run the script once without a workflow and it lists the loaded `CUSTOM.*` types.
+
+A workflow with no `CUSTOM.*` node is rejected rather than run. It would execute and report success while proving nothing, which is worse than not running it at all.
+
+### Settings
+
+| Variable | Effect |
+|---|---|
+| `CUSTOM_NODE_WORKFLOW` | Path to the workflow JSON above. Enables the execution check (also needs `N8N_URL` and `N8N_API_KEY`) |
+| `EXPECT_IMAGE_REPOSITORY` | Assert the deployed repository matches this exactly |
+| `EXPECT_EXTENSIONS_PATH` | Assert `N8N_CUSTOM_EXTENSIONS` matches this exactly |
+
+Against a deployment that sets no custom extensions path, the script warns and exits 0 rather than failing, so it is safe to run anywhere.
+
 ## Exit codes
+
+Both scripts share these.
 
 | Code | Meaning |
 |---|---|
