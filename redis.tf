@@ -87,7 +87,9 @@ resource "aws_elasticache_cluster" "n8n" {
 # and webhook pod exited and restarted while it happened. n8n's
 # RedisClientService calls process.exit once Redis has been unreachable for
 # QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD; raising that to 30s was tried here and
-# only moved the exit later, so n8n's default is left alone. See README ->
+# still fell short of this failover. A larger budget can ride one out, and
+# wiring the threshold up is the follow-up in PR #77, so n8n's default is
+# left alone here. See README ->
 # "What this actually buys you, measured".
 resource "aws_elasticache_replication_group" "n8n" {
   count = var.create_elasticache && var.redis_high_availability_enabled ? 1 : 0

@@ -533,8 +533,11 @@ this project adheres to the stability contract in
   pod exited and restarted** while it happened: n8n's `RedisClientService`
   calls `process.exit` once Redis has been unreachable for
   `QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD`. Raising that threshold to 30s was tried
-  and only delayed the exit by 20 seconds, so the module leaves n8n's default
-  alone. Recovery is automatic and completed inside a minute. Compare with the
+  and still fell short of this failover, so this release leaves n8n's default
+  alone; a larger reconnect budget can ride the failover out, and wiring the
+  threshold up is the follow-up in
+  [#77](https://github.com/n8n-io/terraform-aws-n8n/pull/77). Recovery is
+  automatic and completed inside a minute. Compare with the
   single-node default, where losing the node means waiting for AWS to build a
   replacement and the queue is gone with it.
 
