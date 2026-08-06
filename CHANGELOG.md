@@ -262,7 +262,8 @@ this project adheres to the stability contract in
   prefix list counts against the rules-per-security-group quota (default 60,
   `L-0EA8095F`) by the list's max-entries weight, once per listen port, and the
   module's ALB listens on 80 and 443. A list too heavy to fit (the AWS-managed
-  CloudFront origin-facing list weighs 55, needing 112 rules) takes the ALB
+  CloudFront origin-facing list weighs 55, needing 110 rules by itself) takes
+  the ALB
   offline for every source after a clean apply: the controller revokes the
   existing rules first, fails with `RulesPerSecurityGroupLimitExceeded`, and
   leaves the security group with no ingress rules at all. The input's
