@@ -954,7 +954,10 @@ check "log_streaming_destinations_require_managed_by_env" {
 # certainty from the inputs alone.
 #
 # Written as `guard ? body : true` per AGENTS.md, since Terraform 1.9 (the
-# version floor) does not short-circuit && and ||.
+# version floor) does not short-circuit && and ||. The same rule applies inside
+# the bodies: nested conditionals rather than chained ||, so the conditions
+# stay known at plan time even if a caller ever wires one of these inputs from
+# a resource attribute.
 
 check "custom_image_repository_needs_an_explicit_tag" {
   assert {
@@ -967,7 +970,7 @@ check "custom_image_tag_needs_a_task_runner_tag" {
   assert {
     condition = var.n8n_image_repository != null ? (
       var.n8n_task_runners_enabled ? (
-        var.n8n_image_tag == null || var.n8n_task_runner_image_tag != null
+        var.n8n_image_tag != null ? var.n8n_task_runner_image_tag != null : true
       ) : true
     ) : true
     error_message = "A custom n8n image (n8n_image_repository + n8n_image_tag) is set with task runners enabled, but n8n_task_runner_image_tag is null. The chart tags the runner sidecar from the app image, so the sidecar resolves to n8nio/runners:<n8n_image_tag> and every main and worker pod fails with ImagePullBackOff unless that exact tag exists upstream, which fails the apply rather than completing with broken pods. Set n8n_task_runner_image_tag to the n8n version the custom image is built from. Ignore this warning if the custom image's tag is itself a published n8n version."
@@ -981,8 +984,7 @@ check "custom_extensions_path_requires_a_source" {
     condition = var.n8n_custom_extensions_path != null ? (
       var.n8n_image_repository != null ? true : anytrue([
         for mount in var.n8n_extra_volume_mounts :
-        mount.mount_path == var.n8n_custom_extensions_path ||
-        startswith(var.n8n_custom_extensions_path, "${mount.mount_path}/")
+        mount.mount_path == var.n8n_custom_extensions_path ? true : startswith(var.n8n_custom_extensions_path, "${mount.mount_path}/")
       ])
     ) : true
     error_message = "n8n_custom_extensions_path is set, but nothing in this configuration puts files there: n8n_image_repository is null, so the pods run the chart's stock image, and no n8n_extra_volume_mounts entry covers the path. n8n will scan an empty or missing directory and load no nodes, silently. Either point n8n_image_repository at an image with the compiled nodes baked in at this path, or mount a volume that carries them (see n8n_extra_volumes), or clear the path to silence this warning."
