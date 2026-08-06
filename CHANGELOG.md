@@ -94,6 +94,26 @@ this project adheres to the stability contract in
   "Redis in-transit encryption and AUTH" for the full three-variable
   interaction table.
 
+<!--
+  The entry below is slated for 0.4.0, not this 0.3.0-bound Unreleased batch.
+  A few other PRs land ahead of it and close out 0.3.0 first; whoever cuts
+  the 0.3.0 release notes should leave this entry behind in [Unreleased]
+  rather than moving it up. Tracked as a draft PR: held on version sequencing,
+  and may need further refinement even after 0.3.0 ships and it's ready to
+  come off draft.
+-->
+
+- **`examples/istio-split-ingress`** (targeted for 0.4.0): an Istio-native
+  equivalent of `examples/split-ingress` for callers running Istio instead of
+  an ALB Ingress Controller. Two physically separate Istio ingress gateways,
+  each behind its own Network Load Balancer, split public webhook traffic
+  from an internal-only editor UI and REST API, routed via a local `Gateway`/
+  `VirtualService` Helm chart rather than `kubernetes_ingress_v1` resources.
+  Supports both NLB-terminated (default) and Gateway-terminated TLS via the
+  new `istio_tls_mode` variable. AWS WAFv2 cannot attach to a Network Load
+  Balancer, so this example has no WAF equivalent; see its README for the
+  gap. See [#87](https://github.com/n8n-io/terraform-aws-n8n/issues/87).
+
 ### Changed
 
 - **`examples/customer-managed-everything` orders n8n after the controllers it

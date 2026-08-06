@@ -1,0 +1,37 @@
+# Every field here is overridden by routes.tf's helm_release.split_routes.
+# These defaults exist only so `helm lint` / `helm template` work standalone
+# for local iteration on the templates.
+
+# "nlb": Envoy receives plain HTTP on port 8080; the NLB already terminated
+#   TLS (gateways.tf's ssl-cert annotation).
+# "gateway": Envoy terminates TLS itself (SIMPLE mode) on port 8443, from the
+#   credential named below.
+tlsMode: nlb
+
+public:
+  host: hooks.example.com
+  gatewaySelector: ingressgateway-public
+  credentialSecretName: n8n-gateway-tls-public
+
+internal:
+  host: n8n.example.com
+  gatewaySelector: ingressgateway-internal
+  credentialSecretName: n8n-gateway-tls-internal
+
+# Every prefix n8n disables on the main pods. Sourced from
+# module.n8n.n8n_webhook_path_prefixes by routes.tf so this chart cannot
+# drift from what n8n actually serves.
+webhookPrefixes:
+  - /webhook
+  - /webhook-waiting
+  - /form
+  - /form-waiting
+  - /mcp
+
+webhookService:
+  name: n8n-webhook-processor
+  port: 5678
+
+mainService:
+  name: n8n-main
+  port: 5678

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: split-routes
+description: >-
+  Istio Gateway + VirtualService pair implementing n8n's split-ingress trust
+  boundary: a public route carrying only webhook/form/waiting/MCP traffic, and
+  an internal route carrying those same prefixes plus the editor UI / REST
+  API catch-all. Local chart consumed by examples/istio-split-ingress's
+  routes.tf; not published anywhere.
+type: application
+version: 0.1.0

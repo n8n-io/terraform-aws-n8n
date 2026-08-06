@@ -49,6 +49,16 @@ A **topology-variant example** at `small` sizing,
 internet-facing ALB serving only the webhook path prefixes (optionally behind a
 WAF) and an internal ALB serving the editor UI and REST API.
 
+A second topology-variant example,
+[`examples/istio-split-ingress/`](./examples/istio-split-ingress/), implements
+the same trust-boundary split for callers running Istio instead of an ALB
+Ingress Controller: two physically separate Istio ingress gateways, each
+behind its own Network Load Balancer, routed via a local `Gateway`/
+`VirtualService` Helm chart instead of `kubernetes_ingress_v1` resources. AWS
+WAFv2 cannot attach to a Network Load Balancer, so this example has no WAF
+equivalent; see its README for the gap and the CloudFront-based workaround it
+does not implement.
+
 Four **customer-managed examples**, also at `small` sizing, cover the
 `create_<x> = false` paths described in
 [`docs/customer-managed-infrastructure.md`](./docs/customer-managed-infrastructure.md).
@@ -96,6 +106,7 @@ expected by the Terraform Registry:
 | `examples/cloudflare/`            | DNS-variant of `small` using Cloudflare DNS, including the VPC. |
 | `examples/godaddy/`               | DNS-variant of `small` using GoDaddy DNS, including the VPC.    |
 | `examples/split-ingress/`         | Topology-variant of `small`: `create_ingress = false` with a public webhook ALB and an internal admin ALB (Route 53, includes the VPC). |
+| `examples/istio-split-ingress/`   | Istio-native topology-variant of `small`: two Istio ingress gateways (public/internal) behind two NLBs, routed via a local Gateway/VirtualService Helm chart, instead of split-ingress's ALB Ingresses (Route 53, includes the VPC). |
 | `examples/customer-managed-redis/` | Customer-managed variant of `small`: a plain-Terraform ElastiCache replication group (AUTH + TLS) stands in for infrastructure the customer already runs, consumed via `create_elasticache = false`. |
 | `examples/customer-managed-s3/`   | Customer-managed variant of `small`: a plain-Terraform bucket with its own security configuration, consumed via `create_s3_bucket = false`. |
 | `examples/customer-managed-cluster/` | Customer-managed variant of `small`: a plain-Terraform EKS cluster and node group, consumed via `create_eks = false` + `existing_eks_cluster_name`. |
@@ -137,8 +148,8 @@ Concretely, in this repo:
 - **`terraform validate`** against the module root *and* every example
   (`examples/small/`, `examples/medium/`, `examples/large/`,
   `examples/cloudflare/`, `examples/godaddy/`, `examples/split-ingress/`,
-  `examples/customer-managed-redis/`, `examples/customer-managed-s3/`,
-  `examples/customer-managed-cluster/`,
+  `examples/istio-split-ingress/`, `examples/customer-managed-redis/`,
+  `examples/customer-managed-s3/`, `examples/customer-managed-cluster/`,
   `examples/customer-managed-everything/`) via the CI matrix.
 - **`tflint`** against the module root and every example, with the AWS
   ruleset initialized via `tflint --init`.
@@ -166,7 +177,8 @@ Concretely, in this repo:
   widening the shared mock, which silently weakens every other run that reads
   the same attribute.
 - Each example has its own `tests/defaults.tftest.hcl` (`small`, `medium`,
-  `large`, `cloudflare`, `godaddy`, `split-ingress`) that exercises the example end-to-end with
+  `large`, `cloudflare`, `godaddy`, `split-ingress`, `istio-split-ingress`)
+  that exercises the example end-to-end with
   the same mocking strategy, catching wiring mistakes between the module and a
   realistic caller.
 - `tests/scripts/smoke-test.sh` is the **integration / post-apply** check used
@@ -188,7 +200,14 @@ file. Use `command = plan` unless you specifically need apply semantics.
   resource that depends on `kubernetes_namespace` (whose attributes are
   `(known after apply)` under the mock provider), the whole resource —
   including its inputs — is deferred. You cannot assert on Helm values
-  content in `command = plan` tests.
+  content in `command = plan` tests. `examples/istio-split-ingress` hits this
+  harder than most: its entire routing logic (no catch-all on the public
+  route, prefix-before-catch-all ordering on the internal one) lives inside a
+  local chart's rendered templates, consumed as one `helm_release.values`
+  argument, so none of it is assertable under `terraform test`. Its own
+  `tests/defaults.tftest.hcl` documents the gap and verifies the routing with
+  `helm template charts/split-routes` instead; there is no `verify-routes.sh`
+  script automating that yet.
 - **`command = apply` under mocks fails ARN validation.** The AWS mock
   provider generates random strings for computed attributes. Resources that
   consume an ARN as an input (`aws_iam_role_policy_attachment.policy_arn`,
@@ -266,7 +285,7 @@ instinct that was, for a long stretch of this repo's history, wrong.
 #### The floor is `>= 1.11`
 
 Declared as `required_version = ">= 1.11"` everywhere: root, `modules/controllers`,
-and all ten examples, though not all in a `versions.tf` — eight examples have
+and all eleven examples, though not all in a `versions.tf` — nine examples have
 one, but `cloudflare` and `godaddy` declare it inline in `providers.tf`
 instead. Matched by CI's single `TF_VERSION` pin either way. It moved up from
 `>= 1.9` because `override_resource`'s `override_during` attribute, which
@@ -440,7 +459,7 @@ terraform-docs --output-check .                # README drift check
 # when adding an example: one that no local wrapper visits is one nobody
 # validates before pushing.
 for ex in small medium large cloudflare godaddy split-ingress \
-          customer-managed-redis customer-managed-s3 \
+          istio-split-ingress customer-managed-redis customer-managed-s3 \
           customer-managed-cluster customer-managed-everything; do
   ( cd "examples/$ex" \
       && terraform init -backend=false \

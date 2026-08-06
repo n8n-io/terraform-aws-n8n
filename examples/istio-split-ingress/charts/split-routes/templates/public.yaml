@@ -1,0 +1,65 @@
+# ── Public gateway: webhooks only, no catch-all ──────────────────────────────
+# selector matches the "istio: ingressgateway-public" label the public
+# istio-ingressgateway-public helm_release (gateways.tf) sets on its pods, so
+# this Gateway binds to that Envoy deployment and no other.
+#
+# The port number here must match the containerPort Envoy actually listens on
+# for this traffic, which gateways.tf's service.ports mapping controls: 8080
+# (plain HTTP) in "nlb" mode, since the NLB already terminated TLS, or 8443
+# (Istio's default HTTPS listener) in "gateway" mode, since Envoy terminates
+# TLS itself there. Keep these two files in sync if either port ever changes.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: n8n-public
+  labels:
+    app.kubernetes.io/part-of: n8n-split-routes
+spec:
+  selector:
+    istio: {{ .Values.public.gatewaySelector }}
+  servers:
+    - hosts:
+        - {{ .Values.public.host | quote }}
+{{- if eq .Values.tlsMode "nlb" }}
+      port:
+        number: 8080
+        name: http
+        protocol: HTTP
+{{- else }}
+      port:
+        number: 8443
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE
+        credentialName: {{ .Values.public.credentialSecretName | quote }}
+{{- end }}
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: n8n-public
+  labels:
+    app.kubernetes.io/part-of: n8n-split-routes
+spec:
+  hosts:
+    - {{ .Values.public.host | quote }}
+  gateways:
+    - n8n-public
+  http:
+    # The only route this VirtualService carries. There is deliberately no
+    # second, catch-all http entry: a request outside these prefixes matches
+    # nothing and Envoy returns its own 404, so the editor UI is not merely
+    # firewalled from the public gateway, it is simply absent from this
+    # Envoy's routing table. Mirrors examples/split-ingress's public ALB,
+    # which carries the same prefixes and no "/" rule.
+    - match:
+{{- range .Values.webhookPrefixes }}
+        - uri:
+            prefix: {{ . | quote }}
+{{- end }}
+      route:
+        - destination:
+            host: {{ printf "%s.%s.svc.cluster.local" .Values.webhookService.name .Release.Namespace }}
+            port:
+              number: {{ .Values.webhookService.port }}

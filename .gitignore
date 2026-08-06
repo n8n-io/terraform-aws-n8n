@@ -55,9 +55,12 @@ kubeconfig.yaml
 *.kubeconfig
 .kube/
 
-# Helm chart cache and downloads
+# Helm chart cache and downloads (e.g. `helm dependency update`'s subchart
+# .tgz archives), NOT examples/istio-split-ingress/charts/split-routes/,
+# which is a hand-authored chart checked into the repo, not a download.
 charts/
 chart-cache/
+!examples/istio-split-ingress/charts/
 
 # ── Secrets and credentials ───────────────────────────────────────────────────
 
