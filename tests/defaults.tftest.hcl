@@ -684,6 +684,317 @@ run "ssl_policy_set_via_annotations_still_plans" {
   expect_failures = [check.alb_ssl_policy_not_overridden_by_annotations]
 }
 
+# ── ALB source restrictions ──────────────────────────────────────────────────
+# alb_inbound_cidrs and alb_inbound_prefix_list_ids narrow which sources reach
+# the ALB. Both render as annotations the AWS Load Balancer Controller reads at
+# reconcile time to build the ALB's security group rules, so these runs prove
+# only that the annotation is rendered with the right value. That the controller
+# then translates it into an EC2 security group rule is runtime behavior no
+# mocked provider can observe.
+#
+# To verify end to end against a live deployment: apply with alb_inbound_cidrs
+# set to a range that excludes your own address, confirm
+# `aws elbv2 describe-load-balancers` names a controller-managed group whose
+# `aws ec2 describe-security-groups` ingress rules match the list exactly, then
+# confirm the editor URL times out from outside the range and still loads from
+# inside it. A timeout rather than a 403 is the expected signature, because the
+# filtering happens at the security group, before the listener.
+
+run "alb_source_restrictions_absent_by_default" {
+  command = plan
+
+  # The upgrade-safety assertion for every existing deployment: with both inputs
+  # at their defaults the keys must not appear at all, leaving the controller's
+  # own default (0.0.0.0/0). Asserting the keys are absent rather than empty is
+  # the point, since an empty-string annotation would restrict the ALB to
+  # nothing and black-hole all traffic.
+  assert {
+    condition     = !contains(keys(kubernetes_ingress_v1.n8n[0].metadata[0].annotations), "alb.ingress.kubernetes.io/inbound-cidrs")
+    error_message = "The inbound-cidrs annotation must be omitted entirely when alb_inbound_cidrs is empty, or existing deployments see a plan diff"
+  }
+
+  assert {
+    condition     = !contains(keys(kubernetes_ingress_v1.n8n[0].metadata[0].annotations), "alb.ingress.kubernetes.io/security-group-prefix-lists")
+    error_message = "The security-group-prefix-lists annotation must be omitted entirely when alb_inbound_prefix_list_ids is empty"
+  }
+}
+
+run "alb_inbound_cidrs_render_comma_joined_in_order" {
+  command = plan
+
+  variables {
+    alb_inbound_cidrs = ["203.0.113.0/24", "198.51.100.7/32", "10.20.0.0/16"]
+  }
+
+  # Order is preserved rather than sorted: the controller treats the list as a
+  # set, but a stable order keeps the annotation value, and therefore the plan
+  # diff, tied to what the caller wrote.
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/inbound-cidrs"] == "203.0.113.0/24,198.51.100.7/32,10.20.0.0/16"
+    error_message = "alb_inbound_cidrs must render as a comma-separated list in the order given"
+  }
+
+  assert {
+    condition     = !contains(keys(kubernetes_ingress_v1.n8n[0].metadata[0].annotations), "alb.ingress.kubernetes.io/security-group-prefix-lists")
+    error_message = "Setting only alb_inbound_cidrs must not emit the prefix-list annotation"
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/scheme"] == "internet-facing"
+    error_message = "Restricting sources must not change the ALB scheme; it narrows a public ALB rather than making it internal"
+  }
+}
+
+run "alb_inbound_prefix_list_ids_render_comma_joined" {
+  command = plan
+
+  variables {
+    alb_inbound_prefix_list_ids = ["pl-63a5400a", "pl-0123456789abcdef0"]
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/security-group-prefix-lists"] == "pl-63a5400a,pl-0123456789abcdef0"
+    error_message = "alb_inbound_prefix_list_ids must render as a comma-separated list, accepting both AWS-managed (8 hex) and customer-managed (17 hex) IDs"
+  }
+
+  assert {
+    condition     = !contains(keys(kubernetes_ingress_v1.n8n[0].metadata[0].annotations), "alb.ingress.kubernetes.io/inbound-cidrs")
+    error_message = "Setting only alb_inbound_prefix_list_ids must not emit the inbound-cidrs annotation"
+  }
+}
+
+run "alb_source_restrictions_combine" {
+  command = plan
+
+  variables {
+    alb_inbound_cidrs           = ["203.0.113.0/24"]
+    alb_inbound_prefix_list_ids = ["pl-63a5400a"]
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/inbound-cidrs"] == "203.0.113.0/24"
+    error_message = "Both source-restriction annotations must render when both inputs are set"
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/security-group-prefix-lists"] == "pl-63a5400a"
+    error_message = "Both source-restriction annotations must render when both inputs are set"
+  }
+
+  assert {
+    condition     = strcontains(kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/target-group-attributes"], "stickiness.enabled=true")
+    error_message = "Module defaults must survive alongside the source-restriction annotations"
+  }
+}
+
+# ingress_annotations is merged last, so the raw annotation still wins over the
+# dedicated input. That precedence is deliberate (it keeps working for callers
+# who restricted their ALB before these inputs existed) but a half-finished
+# migration leaves the ALB on the stale range, so the check warns.
+
+run "inbound_cidrs_annotation_overrides_the_input" {
+  command = plan
+
+  variables {
+    alb_inbound_cidrs = ["203.0.113.0/24"]
+    ingress_annotations = {
+      "alb.ingress.kubernetes.io/inbound-cidrs" = "198.51.100.0/24"
+    }
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/inbound-cidrs"] == "198.51.100.0/24"
+    error_message = "ingress_annotations must stay the last write, matching its documented contract"
+  }
+
+  expect_failures = [check.alb_source_restrictions_not_overridden_by_annotations]
+}
+
+run "prefix_list_annotation_overrides_the_input" {
+  command = plan
+
+  variables {
+    alb_inbound_prefix_list_ids = ["pl-63a5400a"]
+    ingress_annotations = {
+      "alb.ingress.kubernetes.io/security-group-prefix-lists" = "pl-0123456789abcdef0"
+    }
+  }
+
+  expect_failures = [check.alb_source_restrictions_not_overridden_by_annotations]
+}
+
+# An annotation carrying only the *other* restriction key is not a conflict, so
+# the check must stay quiet. This guards against the check being written as a
+# blanket "any inbound-related annotation" test.
+
+run "unrelated_annotations_alongside_source_restrictions_are_quiet" {
+  command = plan
+
+  variables {
+    alb_inbound_cidrs = ["203.0.113.0/24"]
+    ingress_annotations = {
+      "alb.ingress.kubernetes.io/wafv2-acl-arn" = "arn:aws:wafv2:us-east-1:123456789012:regional/webacl/n8n/abc123"
+    }
+  }
+
+  assert {
+    condition     = kubernetes_ingress_v1.n8n[0].metadata[0].annotations["alb.ingress.kubernetes.io/inbound-cidrs"] == "203.0.113.0/24"
+    error_message = "An unrelated annotation must not disturb the rendered source restriction"
+  }
+}
+
+# The silent one: the controller ignores both restrictions when the caller
+# supplies its own security groups, so the annotations render, the apply
+# succeeds, and the ALB is still open.
+
+run "source_restrictions_with_caller_owned_security_groups_warn" {
+  command = plan
+
+  variables {
+    alb_inbound_cidrs = ["203.0.113.0/24"]
+    ingress_annotations = {
+      "alb.ingress.kubernetes.io/security-groups" = "sg-0123456789abcdef0"
+    }
+  }
+
+  expect_failures = [check.alb_source_restrictions_require_controller_managed_security_group]
+}
+
+run "prefix_lists_with_caller_owned_security_groups_warn" {
+  command = plan
+
+  variables {
+    alb_inbound_prefix_list_ids = ["pl-63a5400a"]
+    ingress_annotations = {
+      "alb.ingress.kubernetes.io/security-groups" = "sg-0123456789abcdef0"
+    }
+  }
+
+  expect_failures = [check.alb_source_restrictions_require_controller_managed_security_group]
+}
+
+# Source restrictions set with create_ingress = false are inert: the caller owns
+# the Ingress and this module has nothing to annotate. Believing the ALB is
+# VPN-only when it is wide open is the worst of the tuning-input mistakes, so it
+# folds into the existing tuning check rather than passing silently.
+
+run "source_restrictions_with_create_ingress_false_warn" {
+  command = plan
+
+  variables {
+    create_ingress    = false
+    alb_inbound_cidrs = ["203.0.113.0/24"]
+  }
+
+  expect_failures = [check.ingress_tuning_requires_module_managed_ingress]
+}
+
+run "prefix_lists_with_create_ingress_false_warn" {
+  command = plan
+
+  variables {
+    create_ingress              = false
+    alb_inbound_prefix_list_ids = ["pl-63a5400a"]
+  }
+
+  expect_failures = [check.ingress_tuning_requires_module_managed_ingress]
+}
+
+# Validator coverage. A CIDR with host bits set is the interesting case: it
+# passes cidrhost, so Terraform accepts it, then EC2 rejects the security group
+# rule the controller builds from it. That surfaces as a stuck reconcile well
+# after a clean apply, which is why it is rejected at plan time.
+
+run "alb_inbound_cidrs_rejects_a_missing_prefix_length" {
+  command = plan
+
+  variables {
+    alb_inbound_cidrs = ["203.0.113.0"]
+  }
+
+  expect_failures = [var.alb_inbound_cidrs]
+}
+
+run "alb_inbound_cidrs_rejects_a_non_cidr_string" {
+  command = plan
+
+  variables {
+    alb_inbound_cidrs = ["not-a-cidr"]
+  }
+
+  expect_failures = [var.alb_inbound_cidrs]
+}
+
+run "alb_inbound_cidrs_rejects_host_bits" {
+  command = plan
+
+  variables {
+    alb_inbound_cidrs = ["203.0.113.5/24"]
+  }
+
+  expect_failures = [var.alb_inbound_cidrs]
+}
+
+# IPv6 is rejected rather than accepted-and-ignored. The module leaves the ALB
+# at the controller's default ipv4 address type, so an IPv6 rule could never
+# match a client. Worse, the controller applies its 0.0.0.0/0 default only when
+# no inbound CIDR of either family is set (pkg/ingress/model_builder.go), so an
+# IPv6-only list would suppress the IPv4 default without replacing it and take
+# the ALB offline for everyone. Rejecting the family removes that failure mode
+# instead of warning about it. A dualstack caller sets the annotation directly.
+
+run "alb_inbound_cidrs_rejects_ipv6" {
+  command = plan
+
+  variables {
+    alb_inbound_cidrs = ["2001:db8::/32"]
+  }
+
+  expect_failures = [var.alb_inbound_cidrs]
+}
+
+run "alb_inbound_cidrs_rejects_a_mixed_family_list" {
+  command = plan
+
+  variables {
+    alb_inbound_cidrs = ["203.0.113.0/24", "2001:db8::/32"]
+  }
+
+  expect_failures = [var.alb_inbound_cidrs]
+}
+
+run "alb_inbound_prefix_list_ids_rejects_a_malformed_id" {
+  command = plan
+
+  variables {
+    alb_inbound_prefix_list_ids = ["pl-XYZ"]
+  }
+
+  expect_failures = [var.alb_inbound_prefix_list_ids]
+}
+
+# AWS only issues 8- or 17-hex-character IDs, so an in-between length is a
+# typo (usually a dropped character in a 17-hex ID) rather than a real list.
+run "alb_inbound_prefix_list_ids_rejects_an_intermediate_length" {
+  command = plan
+
+  variables {
+    alb_inbound_prefix_list_ids = ["pl-0123456789ab"]
+  }
+
+  expect_failures = [var.alb_inbound_prefix_list_ids]
+}
+
+run "alb_inbound_prefix_list_ids_rejects_a_non_prefix_list_id" {
+  command = plan
+
+  variables {
+    alb_inbound_prefix_list_ids = ["sg-0123456789abcdef0"]
+  }
+
+  expect_failures = [var.alb_inbound_prefix_list_ids]
+}
+
 # The namespace output must come from kubernetes_namespace.n8n, not from
 # var.namespace. As a plain variable it is a plan-time constant, so a caller's
 # own kubernetes_* resources get no dependency edge to the namespace, Terraform

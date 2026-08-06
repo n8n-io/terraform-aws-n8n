@@ -179,8 +179,45 @@ variable "ingress_scheme" {
   }
 }
 
+variable "alb_inbound_cidrs" {
+  description = "IPv4 CIDR blocks allowed to reach the module-managed ALB, rendered into alb.ingress.kubernetes.io/inbound-cidrs. Empty (the default) omits the annotation, leaving the AWS Load Balancer Controller default of 0.0.0.0/0, so the ALB accepts connections from anywhere. IMPORTANT: the module-managed ALB serves the webhook path prefixes as well as the editor UI, and this restriction applies to the whole load balancer rather than per path, so it blocks inbound production webhooks from third-party senders (Slack, Stripe, GitHub, Telegram) as surely as it blocks a browser. Use it when nothing external needs to call in, or when every sender is on a known range. To lock down the editor while keeping webhooks public, run two load balancers instead: see examples/split-ingress. This narrows an internet-facing ALB; it is not the same as ingress_scheme = \"internal\", which moves the ALB into private subnets and off public DNS. The restriction applies to every listen port, so port 80 (the HTTPS redirect) is filtered too. IPv4 only, matching the ALB this module builds: it leaves the controller's default ipv4 address type in place, so an IPv6 rule would never match a client. A dualstack ALB needs a VPC and subnets with IPv6 CIDRs, which the module does not create; set the whole allow-list on the annotation through ingress_annotations if you run one. LBC ignores this annotation when alb.ingress.kubernetes.io/security-groups is set through ingress_annotations, because the caller then owns the security group. An IngressClassParams setting spec.inboundCIDRs does replace this annotation rather than merging with it, but only for an Ingress the controller classifies through spec.ingressClassName; the module-managed Ingress also carries the legacy kubernetes.io/ingress.class annotation, which the controller matches first, so a populated IngressClassParams cannot override this input. See docs/troubleshooting.md, which has the kubectl commands and covers the caller-owned Ingresses that are exposed. LBC also reverts hand-edits to the security group it manages, so widening the range back after locking yourself out is a terraform apply, not a console fix. Ignored when create_ingress = false."
+  type        = list(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for c in var.alb_inbound_cidrs : can(cidrnetmask(c))])
+    error_message = "Each entry in alb_inbound_cidrs must be a valid IPv4 CIDR block including the prefix length (e.g. 203.0.113.0/24, 198.51.100.7/32). IPv6 is not supported: the module leaves the ALB at the controller's default ipv4 address type, where an IPv6 rule can never match. Set the annotation directly through ingress_annotations if you run a dualstack ALB."
+  }
+
+  # A CIDR with host bits set (203.0.113.5/24 instead of 203.0.113.0/24) passes
+  # cidrnetmask, and LBC's own net.ParseCIDR accepts it too and forwards the raw
+  # string, so EC2 is the first thing to reject it, when it builds the security
+  # group rule. That surfaces as a stuck reconcile after an apply that looked
+  # clean, which is why it is caught here instead.
+  validation {
+    condition = alltrue([
+      for c in var.alb_inbound_cidrs :
+      can(cidrnetmask(c)) ? c == "${cidrhost(c, 0)}/${split("/", c)[1]}" : true
+    ])
+    error_message = "Each entry in alb_inbound_cidrs must be the network address of its block, with no host bits set (203.0.113.0/24, not 203.0.113.5/24). Use /32 for a single address."
+  }
+}
+
+variable "alb_inbound_prefix_list_ids" {
+  description = "VPC managed prefix list IDs allowed to reach the module-managed ALB, rendered into alb.ingress.kubernetes.io/security-group-prefix-lists. Empty (the default) omits the annotation. Carries the same blast radius as alb_inbound_cidrs: the restriction covers the whole ALB, webhook paths included, so third-party webhook senders outside the lists stop reaching n8n. Preferred over alb_inbound_cidrs when the allowed ranges are already maintained as a prefix list, or shared across load balancers and security groups: the list is edited in one place and every reference follows, instead of re-applying this module for a range change. Combines with alb_inbound_cidrs, which is a union rather than an intersection. Mind the security group quota: a rule referencing a prefix list counts against the rules-per-security-group quota (default 60, quota code L-0EA8095F) by the list's max-entries weight rather than as one rule, once per listen port, and this ALB listens on 80 and 443, so everything counts twice. Keep 2 x (combined list weight + number of alb_inbound_cidrs entries) at or under the quota. A list too heavy to fit, and most AWS-managed lists are (the CloudFront origin-facing list weighs 55, needing 110 rules of the default 60 by itself), takes the ALB offline for every source instead of failing the apply: the controller revokes the existing rules first, then RulesPerSecurityGroupLimitExceeded stops it from authorizing the new ones, and the security group is left with no ingress rules at all, webhooks included, while terraform apply reports success. Verified live against LBC v3.5.0. Recovery is shrinking the lists (or raising the quota) and re-applying; see docs/troubleshooting.md. LBC ignores this annotation when alb.ingress.kubernetes.io/security-groups is set through ingress_annotations. An IngressClassParams setting spec.prefixListsIDs replaces this annotation rather than merging with it, but cannot reach the module-managed Ingress, for the reason given on alb_inbound_cidrs; see docs/troubleshooting.md. Ignored when create_ingress = false."
+  type        = list(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for id in var.alb_inbound_prefix_list_ids : can(regex("^pl-([0-9a-f]{8}|[0-9a-f]{17})$", id))])
+    error_message = "Each entry in alb_inbound_prefix_list_ids must be a managed prefix list ID of the form pl-xxxxxxxx (8 or 17 lowercase hex characters, the two lengths AWS issues), not a prefix list name or ARN."
+  }
+}
+
 variable "ingress_annotations" {
-  description = "Extra annotations for the module-managed Ingress, merged over the module's defaults (last write wins). Use this for AWS Load Balancer Controller features the module has no opinion on: alb.ingress.kubernetes.io/wafv2-acl-arn, subnets, security-groups, inbound-cidrs, load-balancer-name, group.name, access log settings. Overriding alb.ingress.kubernetes.io/target-group-attributes drops the session stickiness that keeps WebSocket connections pinned to one main pod; re-include stickiness.enabled=true if you set it. Prefer ingress_scheme over setting alb.ingress.kubernetes.io/scheme here, and alb_ssl_policy over setting alb.ingress.kubernetes.io/ssl-policy here, because setting both raises a plan-time warning. Ignored when create_ingress = false."
+  description = "Extra annotations for the module-managed Ingress, merged over the module's defaults (last write wins). Use this for AWS Load Balancer Controller features the module has no opinion on: alb.ingress.kubernetes.io/wafv2-acl-arn, subnets, security-groups, load-balancer-name, group.name, access log settings. Overriding alb.ingress.kubernetes.io/target-group-attributes drops the session stickiness that keeps WebSocket connections pinned to one main pod; re-include stickiness.enabled=true if you set it. Prefer ingress_scheme over setting alb.ingress.kubernetes.io/scheme here, alb_ssl_policy over setting alb.ingress.kubernetes.io/ssl-policy here, and alb_inbound_cidrs / alb_inbound_prefix_list_ids over setting alb.ingress.kubernetes.io/inbound-cidrs or security-group-prefix-lists here, because setting both raises a plan-time warning. Ignored when create_ingress = false."
   type        = map(string)
   default     = {}
 }

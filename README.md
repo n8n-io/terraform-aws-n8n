@@ -324,11 +324,41 @@ resource "kubernetes_ingress_v1" "webhook" {
 
 ## Customizing the module-managed Ingress
 
-Before reaching for `create_ingress = false`, check whether the two narrower
-inputs cover you. They keep the module's single-apply DNS wiring intact:
+Before reaching for `create_ingress = false`, check whether the narrower inputs
+cover you. They keep the module's single-apply DNS wiring intact:
 
 - **`ingress_scheme`**: `internet-facing` (default) or `internal`. Use this
   when the whole deployment should be private rather than split in two.
+- **`alb_inbound_cidrs`** and **`alb_inbound_prefix_list_ids`**: restrict which
+  sources reach the ALB, while it stays public and keeps its public DNS name.
+  Both default to `[]`, which leaves the ALB open to the internet, as it has
+  always been. Set either one and the AWS Load Balancer Controller narrows the
+  security group it manages for the ALB:
+
+  ```hcl
+  # Reachable only from the corporate egress ranges.
+  alb_inbound_cidrs = ["203.0.113.0/24", "198.51.100.7/32"]
+
+  # Or keep the ranges in a managed prefix list, edited in one place and shared
+  # with other load balancers and security groups.
+  alb_inbound_prefix_list_ids = [aws_ec2_managed_prefix_list.corp_egress.id]
+  ```
+
+  Setting both is a union, not an intersection. The restriction covers every
+  listen port, so port 80 (the HTTPS redirect) is filtered too.
+
+  **This also blocks inbound webhooks.** The module-managed ALB serves the
+  webhook path prefixes alongside the editor UI, and a source restriction
+  applies to the whole load balancer rather than per path. Slack, Stripe,
+  GitHub, and Telegram senders outside the allow-list stop reaching n8n, and
+  they see a connection timeout rather than an error you will find in the n8n
+  logs. Reach for these inputs when nothing external calls in, or when every
+  sender is on a known range. To lock down the editor while keeping webhooks
+  public, run two load balancers instead: that is what
+  [`examples/split-ingress/`](./examples/split-ingress/) is for.
+- **`alb_ssl_policy`**: the TLS negotiation policy for the HTTPS listener,
+  pinned to `ELBSecurityPolicy-TLS13-1-2-2021-06` by default. Set it to any
+  AWS-published `ELBSecurityPolicy-*` name to match a compliance baseline.
 - **`ingress_annotations`**: a `map(string)` merged over the module's defaults
   (last write wins). This is the escape hatch for any AWS Load Balancer
   Controller feature the module has no opinion on, so you never need a fork to
@@ -336,22 +366,72 @@ inputs cover you. They keep the module's single-apply DNS wiring intact:
 
   ```hcl
   ingress_annotations = {
-    "alb.ingress.kubernetes.io/wafv2-acl-arn" = aws_wafv2_web_acl.n8n.arn
-    "alb.ingress.kubernetes.io/ssl-policy"    = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-    "alb.ingress.kubernetes.io/inbound-cidrs" = "203.0.113.0/24"
+    "alb.ingress.kubernetes.io/wafv2-acl-arn"            = aws_wafv2_web_acl.n8n.arn
+    "alb.ingress.kubernetes.io/load-balancer-attributes" = "access_logs.s3.enabled=true,access_logs.s3.bucket=my-alb-logs"
   }
   ```
 
-Two caveats:
+Eight caveats:
 
 - Overriding `alb.ingress.kubernetes.io/target-group-attributes` drops the
   session stickiness that pins a browser to one main pod for 3 hours. Without
   it, WebSocket connections break as the ALB round-robins. Re-include
   `stickiness.enabled=true` if you set that key.
-- Set the scheme through `ingress_scheme`, not through `ingress_annotations`.
-  Doing both raises a plan-time warning, because the annotation silently wins
-  and the failure mode is an admin UI that is public when you meant it to be
-  internal.
+- Set the scheme through `ingress_scheme` and the TLS policy through
+  `alb_ssl_policy`, not through `ingress_annotations`. Doing both raises a
+  plan-time warning, because the annotation silently wins and the failure mode
+  is an admin UI that is public when you meant it to be internal, or a TLS
+  floor that never took effect.
+- `alb_inbound_cidrs` narrows a public ALB; it is not the same as
+  `ingress_scheme = "internal"`. The ALB stays in the public subnets with a
+  public DNS name, and the allow-list is the only thing keeping other sources
+  out. Choose `internal` when the deployment should not be on the public
+  internet at all, and use the two together for defence in depth.
+- Both source restrictions are ignored by the controller when
+  `ingress_annotations` sets `alb.ingress.kubernetes.io/security-groups`,
+  because you then own the ALB's security group and the controller stops
+  managing its rules. Nothing in the plan reveals this, so the module warns.
+  Put the restriction in your own security group rules instead.
+- `alb_inbound_cidrs` is IPv4 only, matching the ALB the module builds: it
+  leaves the controller's default `ipv4` address type in place, so an IPv6 rule
+  could never match a client. A dualstack ALB also needs a VPC and subnets
+  carrying IPv6 CIDRs, which this module does not create. If you run one, set
+  the allow-list on the annotation through `ingress_annotations` instead.
+- An `IngressClassParams` setting `spec.inboundCIDRs` or `spec.prefixListsIDs`
+  replaces the annotation rather than merging with it, but it cannot override
+  these inputs. The controller only loads an IngressClass and its params for an
+  Ingress it classifies through `spec.ingressClassName`, and the module-managed
+  Ingress also carries the legacy `kubernetes.io/ingress.class` annotation, which
+  the controller matches first. Verified live against LBC v3.5.0. The immunity is
+  incidental rather than designed, so it is worth knowing about: caller-owned
+  Ingresses that set only `spec.ingressClassName`, including both of the ones in
+  [`examples/split-ingress/`](./examples/split-ingress/), do not have it. See
+  [`docs/troubleshooting.md`](./docs/troubleshooting.md#an-inbound-cidr-restriction-applies-cleanly-but-the-alb-still-answers-everyone)
+  for the `kubectl` commands, and for the two preconditions that make the
+  override possible at all, neither of which the LBC chart sets up by default.
+- Prefix lists are heavier than they look. A security group rule referencing a
+  managed prefix list counts against the rules-per-security-group quota
+  (default 60) by the list's max-entries weight rather than as one rule, once
+  per listen port, and the module's ALB listens on 80 and 443, so everything
+  counts twice. A list too heavy to fit, and most AWS-managed lists are (the
+  CloudFront origin-facing list weighs 55, needing 110 rules of the default
+  60 by itself), takes the ALB offline for every source instead of failing the apply:
+  the controller revokes the old rules, hits
+  `RulesPerSecurityGroupLimitExceeded` authorizing the new ones, and leaves
+  the security group with no ingress rules, so everything times out, webhooks
+  included, while `terraform apply` reports success. Verified live against LBC
+  v3.5.0. Keep `2 x (combined list weight + CIDR count)` at or under the
+  quota, or raise quota `L-0EA8095F` first. See the
+  [troubleshooting entry](./docs/troubleshooting.md#a-prefix-list-restriction-takes-the-alb-offline-for-every-source).
+- Locking yourself out is recovered with `terraform apply`, not from the
+  console. The controller owns the security group it created for the ALB and
+  reverts hand-edits to it on the next reconcile.
+
+Setting `alb.ingress.kubernetes.io/inbound-cidrs` directly through
+`ingress_annotations` was the only way to restrict the ALB before these inputs
+existed, and it still works: `ingress_annotations` remains the last write. If
+you are migrating, delete the annotation in the same change, or the stale value
+keeps winning. The module raises a plan-time warning when both are set.
 
 ## KMS key after `terraform destroy`
 
@@ -719,6 +799,8 @@ No modules.
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
+| <a name="input_alb_inbound_cidrs"></a> [alb\_inbound\_cidrs](#input\_alb\_inbound\_cidrs) | IPv4 CIDR blocks allowed to reach the module-managed ALB, rendered into alb.ingress.kubernetes.io/inbound-cidrs. Empty (the default) omits the annotation, leaving the AWS Load Balancer Controller default of 0.0.0.0/0, so the ALB accepts connections from anywhere. IMPORTANT: the module-managed ALB serves the webhook path prefixes as well as the editor UI, and this restriction applies to the whole load balancer rather than per path, so it blocks inbound production webhooks from third-party senders (Slack, Stripe, GitHub, Telegram) as surely as it blocks a browser. Use it when nothing external needs to call in, or when every sender is on a known range. To lock down the editor while keeping webhooks public, run two load balancers instead: see examples/split-ingress. This narrows an internet-facing ALB; it is not the same as ingress\_scheme = "internal", which moves the ALB into private subnets and off public DNS. The restriction applies to every listen port, so port 80 (the HTTPS redirect) is filtered too. IPv4 only, matching the ALB this module builds: it leaves the controller's default ipv4 address type in place, so an IPv6 rule would never match a client. A dualstack ALB needs a VPC and subnets with IPv6 CIDRs, which the module does not create; set the whole allow-list on the annotation through ingress\_annotations if you run one. LBC ignores this annotation when alb.ingress.kubernetes.io/security-groups is set through ingress\_annotations, because the caller then owns the security group. An IngressClassParams setting spec.inboundCIDRs does replace this annotation rather than merging with it, but only for an Ingress the controller classifies through spec.ingressClassName; the module-managed Ingress also carries the legacy kubernetes.io/ingress.class annotation, which the controller matches first, so a populated IngressClassParams cannot override this input. See docs/troubleshooting.md, which has the kubectl commands and covers the caller-owned Ingresses that are exposed. LBC also reverts hand-edits to the security group it manages, so widening the range back after locking yourself out is a terraform apply, not a console fix. Ignored when create\_ingress = false. | `list(string)` | `[]` | no |
+| <a name="input_alb_inbound_prefix_list_ids"></a> [alb\_inbound\_prefix\_list\_ids](#input\_alb\_inbound\_prefix\_list\_ids) | VPC managed prefix list IDs allowed to reach the module-managed ALB, rendered into alb.ingress.kubernetes.io/security-group-prefix-lists. Empty (the default) omits the annotation. Carries the same blast radius as alb\_inbound\_cidrs: the restriction covers the whole ALB, webhook paths included, so third-party webhook senders outside the lists stop reaching n8n. Preferred over alb\_inbound\_cidrs when the allowed ranges are already maintained as a prefix list, or shared across load balancers and security groups: the list is edited in one place and every reference follows, instead of re-applying this module for a range change. Combines with alb\_inbound\_cidrs, which is a union rather than an intersection. Mind the security group quota: a rule referencing a prefix list counts against the rules-per-security-group quota (default 60, quota code L-0EA8095F) by the list's max-entries weight rather than as one rule, once per listen port, and this ALB listens on 80 and 443, so everything counts twice. Keep 2 x (combined list weight + number of alb\_inbound\_cidrs entries) at or under the quota. A list too heavy to fit, and most AWS-managed lists are (the CloudFront origin-facing list weighs 55, needing 110 rules of the default 60 by itself), takes the ALB offline for every source instead of failing the apply: the controller revokes the existing rules first, then RulesPerSecurityGroupLimitExceeded stops it from authorizing the new ones, and the security group is left with no ingress rules at all, webhooks included, while terraform apply reports success. Verified live against LBC v3.5.0. Recovery is shrinking the lists (or raising the quota) and re-applying; see docs/troubleshooting.md. LBC ignores this annotation when alb.ingress.kubernetes.io/security-groups is set through ingress\_annotations. An IngressClassParams setting spec.prefixListsIDs replaces this annotation rather than merging with it, but cannot reach the module-managed Ingress, for the reason given on alb\_inbound\_cidrs; see docs/troubleshooting.md. Ignored when create\_ingress = false. | `list(string)` | `[]` | no |
 | <a name="input_alb_ssl_policy"></a> [alb\_ssl\_policy](#input\_alb\_ssl\_policy) | TLS negotiation policy for the ALB HTTPS listener, wired to alb.ingress.kubernetes.io/ssl-policy. Defaults to a current, modern policy (ELBSecurityPolicy-TLS13-1-2-2021-06) so the negotiated policy is explicit and pinned in Terraform rather than left to whatever the ALB defaults to, which AWS can change without notice. Set this to any AWS-published ELB security policy name (e.g. one of the ELBSecurityPolicy-TLS13-1-2-* or ELBSecurityPolicy-FS-1-2-* families) to match a compliance baseline such as TLS 1.2 minimum or TLS 1.3-only. Ignored when create\_ingress = false, or when ingress\_annotations sets alb.ingress.kubernetes.io/ssl-policy directly (last write wins; the module warns when that happens). | `string` | `"ELBSecurityPolicy-TLS13-1-2-2021-06"` | no |
 | <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1). Must match the region the AWS provider is configured for. | `string` | n/a | yes |
 | <a name="input_certificate_arn"></a> [certificate\_arn](#input\_certificate\_arn) | ARN of a pre-validated ACM certificate for n8n\_domain. Use this for Cloudflare, GoDaddy, or any DNS provider other than Route53 — the respective examples (examples/cloudflare, examples/godaddy) issue the certificate and pass its ARN here. Set exactly one of certificate\_arn or route53\_zone\_id. | `string` | `null` | no |
@@ -737,7 +819,7 @@ No modules.
 | <a name="input_db_postgresdb_pool_size"></a> [db\_postgresdb\_pool\_size](#input\_db\_postgresdb\_pool\_size) | Number of TypeORM connection pool slots per n8n pod. Each pod holds this many persistent PostgreSQL connections. Rule of thumb: pool\_size >= worker\_concurrency / 4. With PgBouncer in transaction mode a lower value (5) is sufficient; without PgBouncer use a value matching concurrency (10-20). | `number` | `10` | no |
 | <a name="input_db_postgresdb_ssl_enabled"></a> [db\_postgresdb\_ssl\_enabled](#input\_db\_postgresdb\_ssl\_enabled) | Whether n8n connects to the database over SSL. Set to true (the default) for direct connections to RDS or Aurora — they use the AWS CA which Node.js doesn't trust by default, so the connection still negotiates SSL but skips certificate verification. Set to false when n8n connects to an in-cluster connection pooler (e.g. PgBouncer) that handles SSL on its upstream leg — the pod-to-pod traffic stays inside the cluster network. | `bool` | `true` | no |
 | <a name="input_db_storage_encrypted"></a> [db\_storage\_encrypted](#input\_db\_storage\_encrypted) | When true (the default), encrypt the RDS instance's storage, Performance Insights data, and the postgresql CloudWatch log group with a module-created Customer Managed KMS Key (aws\_kms\_key.db). Clears Checkov findings CKV\_AWS\_16, CKV\_AWS\_354, and CKV\_AWS\_158. Flipping this from false to true on an existing RDS instance forces a replacement — AWS does not support enabling storage encryption in place, so the upgrade path is snapshot → restore into a new encrypted instance. Set to false in your tfvars to preserve current behavior on pre-existing unencrypted deployments. The CMK rotates annually and uses a 7-day deletion window (AWS minimum). Ignored when create\_database = false. | `bool` | `true` | no |
-| <a name="input_ingress_annotations"></a> [ingress\_annotations](#input\_ingress\_annotations) | Extra annotations for the module-managed Ingress, merged over the module's defaults (last write wins). Use this for AWS Load Balancer Controller features the module has no opinion on: alb.ingress.kubernetes.io/wafv2-acl-arn, subnets, security-groups, inbound-cidrs, load-balancer-name, group.name, access log settings. Overriding alb.ingress.kubernetes.io/target-group-attributes drops the session stickiness that keeps WebSocket connections pinned to one main pod; re-include stickiness.enabled=true if you set it. Prefer ingress\_scheme over setting alb.ingress.kubernetes.io/scheme here, and alb\_ssl\_policy over setting alb.ingress.kubernetes.io/ssl-policy here, because setting both raises a plan-time warning. Ignored when create\_ingress = false. | `map(string)` | `{}` | no |
+| <a name="input_ingress_annotations"></a> [ingress\_annotations](#input\_ingress\_annotations) | Extra annotations for the module-managed Ingress, merged over the module's defaults (last write wins). Use this for AWS Load Balancer Controller features the module has no opinion on: alb.ingress.kubernetes.io/wafv2-acl-arn, subnets, security-groups, load-balancer-name, group.name, access log settings. Overriding alb.ingress.kubernetes.io/target-group-attributes drops the session stickiness that keeps WebSocket connections pinned to one main pod; re-include stickiness.enabled=true if you set it. Prefer ingress\_scheme over setting alb.ingress.kubernetes.io/scheme here, alb\_ssl\_policy over setting alb.ingress.kubernetes.io/ssl-policy here, and alb\_inbound\_cidrs / alb\_inbound\_prefix\_list\_ids over setting alb.ingress.kubernetes.io/inbound-cidrs or security-group-prefix-lists here, because setting both raises a plan-time warning. Ignored when create\_ingress = false. | `map(string)` | `{}` | no |
 | <a name="input_ingress_scheme"></a> [ingress\_scheme](#input\_ingress\_scheme) | ALB scheme for the module-managed Ingress: internet-facing (the default) or internal. Use internal to keep n8n reachable only from within the VPC and any peered/VPN networks. Ignored when create\_ingress = false. An internal scheme makes the Route 53 alias record resolve to private addresses, which is the intended behavior for a private deployment. | `string` | `"internet-facing"` | no |
 | <a name="input_kubernetes_version"></a> [kubernetes\_version](#input\_kubernetes\_version) | Kubernetes version for the EKS cluster | `string` | `"1.35"` | no |
 | <a name="input_n8n_additional_domains"></a> [n8n\_additional\_domains](#input\_n8n\_additional\_domains) | Extra fully-qualified hostnames n8n should answer on, beyond n8n\_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53\_zone\_id set); with a caller-supplied certificate\_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create\_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create\_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate\_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n\_domain stays canonical: it is what n8n advertises as WEBHOOK\_URL and N8N\_HOST. Every name must live in the hosted zone given by route53\_zone\_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns. Names are normalized to lowercase before use: ACM and Kubernetes both store them that way, and DNS is case-insensitive. | `list(string)` | `[]` | no |
