@@ -1407,6 +1407,14 @@ run "redis_high_availability_creates_a_failover_capable_replication_group" {
     error_message = "The replication group must honour redis_node_type"
   }
 
+  # Existing HA deployments already carry this exact description in state.
+  # Preserve it so adopting TLS support with every new input left at its default
+  # does not produce an unrelated ElastiCache modification.
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].description == "n8n Bull queue and multi-main coordination (HA) for n8n-cluster"
+    error_message = "The HA description must remain stable so existing replication groups receive a no-op module upgrade"
+  }
+
   # ForceNew, so it has to be right in the release that introduces this
   # resource. Adding it later replaces the cache for everyone already on HA.
   #

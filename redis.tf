@@ -165,7 +165,7 @@ resource "aws_elasticache_replication_group" "n8n" {
   # Length: replication group IDs cap at 40 characters. cluster_name is capped
   # at 14 by its own validation, so 14 + 9 = 23 leaves ample headroom.
   replication_group_id = "${local.cluster_name}-redis-rg"
-  description          = "n8n Bull queue and multi-main coordination for ${local.cluster_name}"
+  description          = var.redis_high_availability_enabled ? "n8n Bull queue and multi-main coordination (HA) for ${local.cluster_name}" : "n8n Bull queue and multi-main coordination for ${local.cluster_name}"
 
   engine         = "redis"
   engine_version = "7.1"

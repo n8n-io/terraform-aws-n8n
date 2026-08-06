@@ -850,6 +850,11 @@ variable "redis_transit_encryption_mode" {
   type        = string
   default     = "required"
 
+  # null is not meaningful here: a caller writing `x = null` in a module block
+  # should receive the documented "required" default rather than failing the
+  # enum validation. See AGENTS.md on nullable.
+  nullable = false
+
   validation {
     condition     = contains(["preferred", "required"], var.redis_transit_encryption_mode)
     error_message = "redis_transit_encryption_mode must be either \"preferred\" or \"required\". AWS spells the third state (no encryption) as transit encryption being off, which is redis_transit_encryption_enabled = false, not a mode."
