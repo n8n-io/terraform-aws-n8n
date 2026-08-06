@@ -33,3 +33,26 @@ moved {
   from = kubernetes_ingress_v1.n8n
   to   = kubernetes_ingress_v1.n8n[0]
 }
+
+# create_elasticache. Skipped when the caller points n8n at an external Redis,
+# e.g. one endpoint shared between regions in a cross-region HA/DR topology.
+#
+# These three cover the default path only, where the Redis tier stays a
+# single-node cluster. There is deliberately no block for the replication group
+# redis_high_availability_enabled = true creates: `moved` cannot bridge two
+# different resource types, so that switch is a destroy and recreate no matter
+# how it is written. See redis.tf and README → "Redis high availability".
+moved {
+  from = aws_security_group.redis
+  to   = aws_security_group.redis[0]
+}
+
+moved {
+  from = aws_elasticache_subnet_group.n8n
+  to   = aws_elasticache_subnet_group.n8n[0]
+}
+
+moved {
+  from = aws_elasticache_cluster.n8n
+  to   = aws_elasticache_cluster.n8n[0]
+}

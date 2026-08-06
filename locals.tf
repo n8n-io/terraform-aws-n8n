@@ -130,6 +130,39 @@ locals {
     var.ingress_annotations,
   )
 
+  # ── Redis connection coordinates ───────────────────────────────────────────
+  # What n8n and KEDA actually connect to, abstracted over the three sources so
+  # the Helm values, the KEDA triggers and the redis_endpoint output cannot
+  # drift apart:
+  #
+  #   create_elasticache = false      → the caller's own Redis (var.redis_host)
+  #   redis_high_availability_enabled → the replication group's primary
+  #                                     endpoint, a name AWS repoints at the
+  #                                     surviving node on failover
+  #   otherwise                       → the single cache node's address
+  #
+  # Branching on the variables rather than try()/coalesce() over both resources:
+  # the variables are known at plan time, so the unselected resource's [0] is
+  # never indexed. try() would also mask a genuine error in the live branch as a
+  # silent fallback to the dead one.
+  #
+  # Shadowing var.redis_host / var.redis_port with locals of the same name is
+  # deliberate and matches local.certificate_arn above: consumers read the
+  # local, and the local is the only place the choice is made.
+  redis_host = (
+    var.create_elasticache
+    ? (
+      var.redis_high_availability_enabled
+      ? aws_elasticache_replication_group.n8n[0].primary_endpoint_address
+      : aws_elasticache_cluster.n8n[0].cache_nodes[0].address
+    )
+    : var.redis_host
+  )
+
+  # Both module-managed topologies listen on 6379, so var.redis_port only ever
+  # describes an endpoint the module did not create.
+  redis_port = var.create_elasticache ? 6379 : var.redis_port
+
   common_tags = merge(
     {
       ManagedBy = "terraform"

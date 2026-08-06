@@ -516,6 +516,67 @@ this project adheres to the stability contract in
   Every example gains a test rejecting `"filesystem"`; the three that can run a
   full mocked plan (`cloudflare`, `godaddy`, `split-ingress`) also assert the
   `"database"` default.
+- `redis_high_availability_enabled` input (default `false`) provisions Redis as
+  a two-node `aws_elasticache_replication_group` (one primary, one replica,
+  `automatic_failover_enabled` and `multi_az_enabled`) instead of the
+  single-node `aws_elasticache_cluster` the module has always created. Redis
+  backs the Bull queue that distributes executions across workers and the
+  multi-main leader election, so the default single node is a single point of
+  failure for both: a node or AZ event stalls executions and leader election
+  until ElastiCache replaces it. Both nodes use `redis_node_type`, so the Redis
+  cost roughly doubles.
+
+  What this buys is durability of the queue, not an invisible failover, and the
+  distinction was measured rather than assumed. A forced failover on a live
+  cluster promoted the replica in about 20 seconds and left the queued
+  executions intact on the promoted node, but **every main, worker and webhook
+  pod exited and restarted** while it happened: n8n's `RedisClientService`
+  calls `process.exit` once Redis has been unreachable for
+  `QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD`. Raising that threshold to 30s was tried
+  and still fell short of this failover, so this release leaves n8n's default
+  alone; a larger reconnect budget can ride the failover out, and wiring the
+  threshold up is the follow-up in
+  [#77](https://github.com/n8n-io/terraform-aws-n8n/pull/77). Recovery is
+  automatic and completed inside a minute. Compare with the
+  single-node default, where losing the node means waiting for AWS to build a
+  replacement and the queue is gone with it.
+
+  Upgrade note: **flipping this on an existing deployment replaces Redis.** The
+  two topologies are different resource types, so no `moved` block can bridge
+  them; Terraform destroys the cluster and creates the replication group, and
+  everything queued or in flight goes with it. The replication group also
+  carries a deliberately distinct identifier (`<cluster_name>-redis-rg`),
+  because ElastiCache shares one identifier namespace between cache clusters
+  and replication groups and rejects a second resource reusing the name. With
+  a shared name the flip would destroy the old cache and then fail to create
+  the replacement, leaving no queue backend at all. See README → "Redis high
+  availability" for the drain-first procedure. Resolves part of
+  [issue #44](https://github.com/n8n-io/terraform-aws-n8n/issues/44).
+
+- `create_elasticache` (default `true`), `redis_host`, and `redis_port` inputs
+  mirror the existing `create_database` / `db_host` hook for the Redis tier.
+  With `create_elasticache = false` the module creates no ElastiCache cluster,
+  replication group, subnet group, or security group, and wires n8n and the
+  KEDA queue-depth triggers at the supplied endpoint instead. This is the hook
+  the cross-region HA/DR design presumes, so both regions can point at one
+  shared, replication-capable Redis.
+
+  The module wires host and port only: an external Redis requiring AUTH or TLS
+  is not supported on this path yet. Two `check` blocks warn when the inputs
+  and the toggle disagree, rather than silently discarding what was asked for.
+
+  Upgrade note: gating the Redis tier on `create_elasticache` adds `count` to
+  `aws_elasticache_cluster.n8n`, `aws_elasticache_subnet_group.n8n`, and
+  `aws_security_group.redis`, changing their addresses from `.n8n` to
+  `.n8n[0]`. `moved` blocks in `refactoring.tf` absorb this, so upgrading on
+  the default path is an in-place no-op, verified against a live 0.2.x
+  deployment, not by inspection.
+
+- `redis_port` output, paired with the existing `redis_endpoint`, so a caller
+  wiring its own queue-depth scaler or a debug pod does not have to assume the
+  port. `redis_endpoint` now reports the replication group's primary endpoint
+  on the HA path and `var.redis_host` on the external path.
+
 - `n8n_license_detach_floating_on_shutdown` input (default `false`) maps to
   `N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN`, overriding n8n's own upstream
   default of `true`. In multi-main (the module default), the leader main

@@ -780,13 +780,96 @@ variable "db_postgresdb_ssl_enabled" {
 # ── ElastiCache Redis ──────────────────────────────────────────────────────────
 
 variable "redis_node_type" {
-  description = "ElastiCache node type (cache.t3.medium ~$25/month)"
+  description = "ElastiCache node type (cache.t3.medium ~$25/month). Sizes the single node when redis_high_availability_enabled = false, and every node in the replication group when it is true, so the Redis line of the bill scales with the node count, not just the type. Ignored when create_elasticache = false."
   type        = string
   default     = "cache.t3.medium"
 
   validation {
     condition     = can(regex("^cache\\.", var.redis_node_type))
     error_message = "Value must be a valid ElastiCache node type (e.g. cache.t3.medium)."
+  }
+}
+
+variable "redis_high_availability_enabled" {
+  description = "When true, provision Redis as a two-node aws_elasticache_replication_group (one primary, one replica) with automatic_failover_enabled and multi_az_enabled, instead of the default single-node aws_elasticache_cluster. Redis backs the Bull queue that distributes executions across workers and the multi-main leader election, so the default single node is a single point of failure: a node or AZ event stalls both until ElastiCache replaces it. Both nodes use redis_node_type, so the Redis cost roughly doubles. What this buys is that the QUEUE SURVIVES the node loss, not that n8n rides the failover out: measured on a live cluster, ElastiCache promotes the replica in about 20 seconds and every main, worker and webhook pod exits and restarts during that window (n8n's RedisClientService calls process.exit once Redis has been unreachable for QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD; raising that threshold to 30s was tried and still fell short of this failover, though a larger reconnect budget can ride one out, and wiring that threshold up is the follow-up in PR #77). Recovery is automatic and takes well under a minute, and the queued executions are still there on the promoted node. Compare that with the single-node default, where a lost node means waiting for AWS to build a new one and the queue is gone with it. FLIPPING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS: the two topologies are different resource types, so no `moved` block can bridge them and Terraform destroys the cluster before creating the replication group. Every queued and in-flight execution in Redis at that moment is lost. See README → \"Redis high availability\" for the drain-first procedure."
+  type        = bool
+  default     = false
+
+  # null is not meaningful here: a caller writing `x = null` in a module block
+  # would otherwise propagate null into the count expressions in redis.tf and
+  # die with an opaque "Invalid count argument". See AGENTS.md on nullable.
+  nullable = false
+}
+
+variable "create_elasticache" {
+  description = "When true (the default), the module creates and manages the ElastiCache Redis that the Bull queue and multi-main leader election run on. Set to false to point n8n at an external Redis. redis_host must then be supplied, and the module creates no ElastiCache cluster, replication group, subnet group, or security group. Mirrors create_database, and is the hook the cross-region HA/DR design uses to share one replication-capable Redis between regions. Kept as a static boolean rather than `redis_host == null` because count expressions cannot depend on values computed at apply time. The module wires host and port only: an external Redis that requires AUTH or TLS is not supported yet."
+  type        = bool
+  default     = true
+
+  # null is not meaningful here: a caller writing `x = null` in a module block
+  # would otherwise propagate null into every Redis-tier count expression and
+  # die with an opaque "Invalid count argument". See AGENTS.md on nullable.
+  nullable = false
+}
+
+variable "redis_host" {
+  description = "External Redis host. Required when create_elasticache = false. Ignored otherwise. Must be reachable from the EKS node subnets on redis_port, and must accept unauthenticated, non-TLS connections, because the module wires neither a Redis password nor TLS. For a replication group the caller manages, use its primary endpoint rather than a node address, so the name follows the primary across a failover."
+  type        = string
+  default     = null
+
+  # Blank is rejected as well as null. An empty string satisfies "is set" but
+  # reaches n8n and KEDA as an empty host, so the apply succeeds and the queue
+  # has nowhere to connect: the same succeeds-then-fails-at-runtime shape the
+  # check blocks in redis.tf exist to prevent.
+  #
+  # Written as nested ternaries rather than `||` and `&&` because Terraform 1.9,
+  # which CI pins, does not short-circuit either operator. trimspace(null) is a
+  # hard error, so the null test has to gate the blank test structurally rather
+  # than by evaluation order. See AGENTS.md.
+  validation {
+    condition = var.create_elasticache ? true : (
+      var.redis_host != null ? trimspace(var.redis_host) != "" : false
+    )
+    error_message = "redis_host is required, and must not be blank, when create_elasticache = false."
+  }
+
+  # A padded host such as " redis.internal.example.com " survives the blank test
+  # above, because that one only inspects the trimmed value. The module consumes
+  # the RAW value: local.redis_host feeds n8n's host field and is interpolated
+  # into KEDA's "${local.redis_host}:${local.redis_port}", so the padding is
+  # emitted literally and the address never resolves. Rejected rather than
+  # trimmed in locals.tf, so that the value the caller sets is the value that
+  # gets deployed and a stray space is corrected at its source instead of being
+  # silently swallowed. Split from the blank test rather than folded into it so
+  # the two mistakes get their own error message.
+  #
+  # null passes here; the validation above owns that case.
+  validation {
+    condition = var.create_elasticache ? true : (
+      var.redis_host != null ? var.redis_host == trimspace(var.redis_host) : true
+    )
+    error_message = "redis_host must not have leading or trailing whitespace, because the module wires it into n8n and KEDA verbatim."
+  }
+}
+
+variable "redis_port" {
+  description = "Port of the external Redis specified by redis_host. Ignored when create_elasticache = true, because module-managed ElastiCache always listens on 6379."
+  type        = number
+  default     = 6379
+
+  # null is not meaningful here: a caller writing `x = null` in a module block
+  # would otherwise reach `null >= 1` in the validation below and die with an
+  # opaque comparison error instead of a clean message. See AGENTS.md.
+  nullable = false
+
+  validation {
+    condition     = var.redis_port >= 1 && var.redis_port <= 65535
+    error_message = "redis_port must be a TCP port between 1 and 65535."
+  }
+
+  validation {
+    condition     = var.redis_port == floor(var.redis_port)
+    error_message = "redis_port must be a whole number."
   }
 }
 
