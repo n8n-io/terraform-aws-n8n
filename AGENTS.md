@@ -460,7 +460,7 @@ the pinned versions this lock file resolves to.
 - Don't add inline lint-suppression comments (`<!-- markdownlint-disable -->`,
   `# tflint-ignore`, `# checkov:skip`) as a first response to a lint
   warning. Prefer fixing the root cause or updating the relevant config file
-  (`.markdownlint.json`, `.tflint.hcl`). Inline suppressions are acceptable
+  (`.markdownlint.jsonc`, `.tflint.hcl`). Inline suppressions are acceptable
   only for genuine false positives that cannot be resolved at the config
   level, and must include a comment explaining why.
 

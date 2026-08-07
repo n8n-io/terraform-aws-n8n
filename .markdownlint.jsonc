@@ -1,0 +1,19 @@
+{
+  // Allow repeated headings (e.g. "### Added") under different versions in
+  // CHANGELOG.md without tripping MD024.
+  "MD024": { "siblings_only": true },
+  // Line-length wrapping is impractical for the long, single-line variable
+  // and output descriptions in variables.tf/outputs.tf and for the prose in
+  // README.md and docs/*.md. Revisit if long-form docs get split into
+  // shorter paragraphs (no tracking issue filed yet).
+  "MD013": false,
+  "MD033": { "allowed_elements": ["a", "pre", "br"] },
+  // MD060 (table-column-style) would force every table's pipes onto one
+  // alignment convention repo-wide. The terraform-docs-generated Inputs and
+  // Outputs tables in README.md use "compact" pipes and are regenerated
+  // verbatim by `terraform-docs .` (see Taskfile.yml's `docs` task), while
+  // hand-written tables elsewhere use "aligned" pipes for readability;
+  // reformatting one to satisfy the other isn't practical without fighting
+  // the generator (no tracking issue filed yet).
+  "MD060": false
+}

@@ -15,6 +15,13 @@
 
 set -euo pipefail
 
+# The banner regexes below match the multibyte "─" (U+2500) used in
+# variables.tf/outputs.tf. Bash's [[ =~ ]] only resolves that against file
+# content under a UTF-8 locale; a C/POSIX locale (the default in minimal
+# shells and containers) makes every real banner fail the strict-format
+# check. Force UTF-8 so the result doesn't depend on the caller's locale.
+export LC_ALL=C.UTF-8
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 

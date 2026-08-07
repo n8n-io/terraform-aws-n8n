@@ -77,14 +77,16 @@ tasks:
         cmd: cd examples/{{.EXAMPLE}} && terraform-docs .
 
   markdown:
-    desc: markdownlint against README.md, docs/, and the root markdown files (not CI-gated; see .markdownlint.json).
+    desc: markdownlint against README.md, docs/*.md, CONTRIBUTING.md, and AGENTS.md (not CHANGELOG.md/ROADMAP.md/SECURITY.md; not CI-gated; see .markdownlint.jsonc).
     cmds:
       - markdownlint README.md CONTRIBUTING.md AGENTS.md docs/*.md
 
   ci:
     desc: >-
       Run the full local loop (fmt, validate, test, lint, banners, docs, markdown)
-      - mirrors the CI matrix, plus banners and markdown which CI does not gate on.
+      - mirrors every CI job except checkov (soft_fail: true in CI, and not
+      installed as a local prerequisite here), plus banners and markdown
+      which CI does not gate on at all.
     cmds:
       - task: fmt
       - task: validate
