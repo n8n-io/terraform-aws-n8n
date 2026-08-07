@@ -621,10 +621,10 @@ That sharing is also the one case where enabling high availability does **not**
 replace anything. A deployment already running with
 `redis_transit_encryption_enabled = true` is on a replication group, so
 Terraform plans the change as an in-place modification, raising the node count
-through ElastiCache's `IncreaseReplicaCount` API rather than rebuilding. That
-path has not been exercised on a live cluster, so treat the in-place plan as
-the expected shape rather than a promise of zero disruption, and still drain
-first.
+through ElastiCache's `IncreaseReplicaCount` API rather than rebuilding. The
+provider converges that change in stages, so one apply does not enable automatic
+failover. Follow [Adding high availability to an encrypted group](#adding-high-availability-to-an-encrypted-group)
+for the measured sequence, and still drain first.
 
 ## Redis in-transit encryption and AUTH
 
@@ -673,10 +673,34 @@ Because both land on **one** resource with one identifier
 modification of the replication group you already have rather than a
 replacement.
 
-**Adding high availability to an encrypted group** raises the node count
-through ElastiCache's `IncreaseReplicaCount` API, and Terraform plans it in
-place. That direction has not been exercised on a live cluster, so treat the
-in-place plan as the expected shape rather than a guarantee, and drain first.
+### Adding high availability to an encrypted group
+
+This direction is in place, but it takes more than one plan-and-apply cycle. The
+AWS provider handles the replica count before automatic failover: the first
+apply calls ElastiCache's `IncreaseReplicaCount` API, waits for the replica, and
+returns with automatic failover still disabled. A fresh plan then proposes the
+remaining automatic-failover change.
+
+Use this sequence:
+
+1. Drain the queue, set `redis_high_availability_enabled = true`, and apply.
+   Expect one in-place replication-group update that raises the node count from
+   one to two. It does not replace Redis.
+2. Wait until the replication group is `available`, then plan and apply again.
+   With the default `redis_apply_immediately = false`, AWS records
+   `AutomaticFailoverStatus = "enabled"` in `PendingModifiedValues` and activates
+   it in the next maintenance window. To activate it now, set
+   `redis_apply_immediately = true` for this apply.
+3. Wait for AWS to report automatic failover as `enabled`, then run one final
+   plan. Remove `redis_apply_immediately = true` if you used it; the final plan
+   should be empty.
+
+This sequence was verified on a live encrypted replication group. The replica
+landed in a second availability zone without replacing the group. A forced
+failover then promoted it in 22 seconds. Authenticated Redis probes recovered
+after approximately 26 to 31 seconds, `/healthz` stayed available, and every
+n8n pod kept the same UID and zero restart count with
+`n8n_redis_timeout_threshold = 60000`.
 
 **Adding encryption to a plaintext replication group** works, but not in one
 apply, and not with `redis_transit_encryption_enabled` alone. See the next
@@ -1614,7 +1638,7 @@ No modules.
 | <a name="input_private_subnets"></a> [private\_subnets](#input\_private\_subnets) | IDs of private subnets (one per AZ, minimum two AZs). RDS, ElastiCache, and EKS nodes attach here. | `list(string)` | n/a | yes |
 | <a name="input_public_subnets"></a> [public\_subnets](#input\_public\_subnets) | IDs of public subnets (one per AZ, minimum two AZs). The ALB attaches here. | `list(string)` | n/a | yes |
 | <a name="input_redis_apply_immediately"></a> [redis\_apply\_immediately](#input\_redis\_apply\_immediately) | Apply ElastiCache modifications as soon as the apply runs, rather than deferring them to the next maintenance window. Defaults to false, matching the AWS default and leaving every existing deployment's behaviour unchanged. Set true when changing redis\_transit\_encryption\_mode: AWS rejects any transit-encryption modification outright without it, with `InvalidParameterValue: Transit encryption modification should be called with applied immediately option.`, so the migration cannot proceed while this is false. Turning it on makes other modifications immediate too, which for a replication group can mean a node reboot outside the window you picked, so prefer scoping it to the applies that need it rather than leaving it on. | `bool` | `false` | no |
-| <a name="input_redis_high_availability_enabled"></a> [redis\_high\_availability\_enabled](#input\_redis\_high\_availability\_enabled) | When true, provision Redis as a two-node aws\_elasticache\_replication\_group (one primary, one replica) with automatic\_failover\_enabled and multi\_az\_enabled, instead of the default single-node aws\_elasticache\_cluster. Redis backs the Bull queue that distributes executions across workers and the multi-main leader election, so the default single node is a single point of failure: a node or AZ event stalls both until ElastiCache replaces it. Both nodes use redis\_node\_type, so the Redis cost roughly doubles. What this buys is that the QUEUE SURVIVES the node loss, not that n8n rides the failover out: measured on a live cluster, ElastiCache promotes the replica in about 20 seconds and every main, worker and webhook pod exits and restarts during that window (n8n's RedisClientService calls process.exit once Redis has been unreachable for QUEUE\_BULL\_REDIS\_TIMEOUT\_THRESHOLD; raising that threshold to 30s was tried and still fell short of this failover, though a larger reconnect budget can ride one out, and wiring that threshold up is the follow-up in PR #77). Recovery is automatic and takes well under a minute, and the queued executions are still there on the promoted node. Compare that with the single-node default, where a lost node means waiting for AWS to build a new one and the queue is gone with it. FLIPPING THIS ON A DEFAULT DEPLOYMENT REPLACES REDIS: the two topologies are different resource types, so no `moved` block can bridge them and Terraform destroys the cluster before creating the replication group. Every queued and in-flight execution in Redis at that moment is lost. A deployment that already has redis\_transit\_encryption\_enabled = true is on a replication group already, so Terraform plans that transition as an in-place modification rather than a replacement (the provider raises the node count via ElastiCache's IncreaseReplicaCount API). That transition has not been exercised on a live cluster, so treat the in-place plan as the expected shape rather than a guarantee of zero disruption, and still drain first. See README → "Redis high availability" for the procedure. | `bool` | `false` | no |
+| <a name="input_redis_high_availability_enabled"></a> [redis\_high\_availability\_enabled](#input\_redis\_high\_availability\_enabled) | When true, provision Redis as a two-node aws\_elasticache\_replication\_group (one primary, one replica) with automatic\_failover\_enabled and multi\_az\_enabled, instead of the default single-node aws\_elasticache\_cluster. Redis backs the Bull queue that distributes executions across workers and the multi-main leader election, so the default single node is a single point of failure: a node or AZ event stalls both until ElastiCache replaces it. Both nodes use redis\_node\_type, so the Redis cost roughly doubles. What this buys is that the QUEUE SURVIVES the node loss, not that n8n rides the failover out: measured on a live cluster, ElastiCache promotes the replica in about 20 seconds and every main, worker and webhook pod exits and restarts during that window (n8n's RedisClientService calls process.exit once Redis has been unreachable for QUEUE\_BULL\_REDIS\_TIMEOUT\_THRESHOLD; raising that threshold to 30s was tried and still fell short of this failover, though a larger reconnect budget can ride one out, and wiring that threshold up is the follow-up in PR #77). Recovery is automatic and takes well under a minute, and the queued executions are still there on the promoted node. Compare that with the single-node default, where a lost node means waiting for AWS to build a new one and the queue is gone with it. FLIPPING THIS ON A DEFAULT DEPLOYMENT REPLACES REDIS: the two topologies are different resource types, so no `moved` block can bridge them and Terraform destroys the cluster before creating the replication group. Every queued and in-flight execution in Redis at that moment is lost. A deployment that already has redis\_transit\_encryption\_enabled = true is on a replication group already, so Terraform modifies that replication group in place rather than replacing it. Live testing confirmed that the provider converges this direction in stages: the first apply raises the node count through ElastiCache's IncreaseReplicaCount API and returns with automatic failover still disabled; rerun plan and apply after the group is available to enable failover. The default redis\_apply\_immediately = false schedules that second change for the maintenance window; set it to true for the second apply to activate failover immediately, then unset it. Drain first and see README → "Adding high availability to an encrypted group" for the measured sequence. | `bool` | `false` | no |
 | <a name="input_redis_host"></a> [redis\_host](#input\_redis\_host) | External Redis host. Required when create\_elasticache = false. Ignored otherwise. Must be reachable from the EKS node subnets on redis\_port, and must accept unauthenticated, non-TLS connections, because the module wires neither a Redis password nor TLS. For a replication group the caller manages, use its primary endpoint rather than a node address, so the name follows the primary across a failover. | `string` | `null` | no |
 | <a name="input_redis_node_type"></a> [redis\_node\_type](#input\_redis\_node\_type) | ElastiCache node type (cache.t3.medium ~$25/month). Sizes the single node when redis\_high\_availability\_enabled = false, and every node in the replication group when it is true, so the Redis line of the bill scales with the node count, not just the type. Ignored when create\_elasticache = false. | `string` | `"cache.t3.medium"` | no |
 | <a name="input_redis_port"></a> [redis\_port](#input\_redis\_port) | Port of the external Redis specified by redis\_host. Ignored when create\_elasticache = true, because module-managed ElastiCache always listens on 6379. | `number` | `6379` | no |
@@ -1651,4 +1675,3 @@ No modules.
 | <a name="output_redis_port"></a> [redis\_port](#output\_redis\_port) | Port n8n and KEDA connect to Redis on. Always 6379 for module-managed ElastiCache; the value of var.redis\_port when create\_elasticache = false. Paired with redis\_endpoint so a caller wiring its own queue-depth scaler or a debug pod does not have to assume the port. |
 | <a name="output_s3_bucket_name"></a> [s3\_bucket\_name](#output\_s3\_bucket\_name) | S3 bucket used for n8n binary storage, and for execution data when n8n\_execution\_data\_storage\_mode = "s3". The module attaches no lifecycle configuration: binary data is pruned only by S3 while execution data is pruned by n8n itself, and the two cannot be separated by a prefix filter. Read the S3 lifecycle section of the README before attaching one. |
 <!-- END_TF_DOCS -->
-

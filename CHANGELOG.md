@@ -566,7 +566,16 @@ this project adheres to the stability contract in
   Because both features land on one resource with one identifier
   (`<cluster_name>-redis-rg`), enabling the second one later plans as a
   modification of the replication group already in place rather than a
-  replacement.
+  replacement. The encrypted-to-HA direction was verified live and exposed a
+  staged provider workflow: the first apply raises the node count through
+  `IncreaseReplicaCount` and returns with automatic failover still disabled. A
+  fresh plan and apply enables failover; with `redis_apply_immediately = false`
+  that second change waits for the maintenance window, while `true` activates
+  it immediately. The README now documents the full sequence. After activation,
+  a forced failover promoted the replica in 22 seconds, authenticated Redis
+  probes recovered after approximately 26 to 31 seconds, `/healthz` stayed
+  available, and all n8n pods kept their UIDs with zero restarts at a 60,000 ms
+  reconnect threshold.
 
 - `redis_transit_encryption_mode` (default `"required"`) and
   `redis_apply_immediately` (default `false`) make **adding TLS to an existing
