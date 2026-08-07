@@ -791,13 +791,86 @@ variable "redis_node_type" {
 }
 
 variable "redis_high_availability_enabled" {
-  description = "When true, provision Redis as a two-node aws_elasticache_replication_group (one primary, one replica) with automatic_failover_enabled and multi_az_enabled, instead of the default single-node aws_elasticache_cluster. Redis backs the Bull queue that distributes executions across workers and the multi-main leader election, so the default single node is a single point of failure: a node or AZ event stalls both until ElastiCache replaces it. Both nodes use redis_node_type, so the Redis cost roughly doubles. What this buys is that the QUEUE SURVIVES the node loss, not that n8n rides the failover out: measured on a live cluster, ElastiCache promotes the replica in about 20 seconds and every main, worker and webhook pod exits and restarts during that window (n8n's RedisClientService calls process.exit once Redis has been unreachable for QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD; raising that threshold to 30s was tried and still fell short of this failover, though a larger reconnect budget can ride one out, and wiring that threshold up is the follow-up in PR #77). Recovery is automatic and takes well under a minute, and the queued executions are still there on the promoted node. Compare that with the single-node default, where a lost node means waiting for AWS to build a new one and the queue is gone with it. FLIPPING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS: the two topologies are different resource types, so no `moved` block can bridge them and Terraform destroys the cluster before creating the replication group. Every queued and in-flight execution in Redis at that moment is lost. See README → \"Redis high availability\" for the drain-first procedure."
+  description = "When true, provision Redis as a two-node aws_elasticache_replication_group (one primary, one replica) with automatic_failover_enabled and multi_az_enabled, instead of the default single-node aws_elasticache_cluster. Redis backs the Bull queue that distributes executions across workers and the multi-main leader election, so the default single node is a single point of failure: a node or AZ event stalls both until ElastiCache replaces it. Both nodes use redis_node_type, so the Redis cost roughly doubles. What this buys is that the QUEUE SURVIVES the node loss, not that n8n rides the failover out: measured on a live cluster, ElastiCache promotes the replica in about 20 seconds and every main, worker and webhook pod exits and restarts during that window (n8n's RedisClientService calls process.exit once Redis has been unreachable for QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD; raising that threshold to 30s was tried and still fell short of this failover, though a larger reconnect budget can ride one out, and wiring that threshold up is the follow-up in PR #77). Recovery is automatic and takes well under a minute, and the queued executions are still there on the promoted node. Compare that with the single-node default, where a lost node means waiting for AWS to build a new one and the queue is gone with it. FLIPPING THIS ON A DEFAULT DEPLOYMENT REPLACES REDIS: the two topologies are different resource types, so no `moved` block can bridge them and Terraform destroys the cluster before creating the replication group. Every queued and in-flight execution in Redis at that moment is lost. A deployment that already has redis_transit_encryption_enabled = true is on a replication group already, so Terraform modifies that replication group in place rather than replacing it. Live testing confirmed that the provider converges this direction in stages: the first apply raises the node count through ElastiCache's IncreaseReplicaCount API and returns with automatic failover still disabled; rerun plan and apply after the group is available to enable failover. The default redis_apply_immediately = false schedules that second change for the maintenance window; set it to true for the second apply to activate failover immediately, then unset it. Drain first and see README → \"Adding high availability to an encrypted group\" for the measured sequence."
   type        = bool
   default     = false
 
   # null is not meaningful here: a caller writing `x = null` in a module block
   # would otherwise propagate null into the count expressions in redis.tf and
   # die with an opaque "Invalid count argument". See AGENTS.md on nullable.
+  nullable = false
+}
+
+variable "n8n_redis_timeout_threshold" {
+  description = "Milliseconds n8n will keep trying to reach Redis before it gives up and exits the process, wired to QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD. Leave null (the default) to use the chart's 10000, which is n8n's own default and what every existing deployment already runs. Raise it when redis_high_availability_enabled = true and you would rather n8n rode a failover out than restarted: with the default, an ElastiCache promotion outlasts the budget and every main, worker and webhook pod exits and is restarted by Kubernetes. Pick the value deliberately, because the budget is coarser than it looks. n8n does not set ioredis's connectTimeout, so it stays at 10s, and a connect to a demoted primary hangs for that full 10s before failing. Each failed attempt therefore spends about 11.1s of this budget, making the effective values 11.1s, 33.2s and 66.4s for settings of 10s, 30s and 60s. 30000 was measured failing by 1.1 seconds against a 25 second outage; 60000 survived every case measured. 60000 is also confirmed against a real ElastiCache failover, where no container terminated and the endpoint stayed stale for 48 seconds, leaving about 20 seconds of headroom. That is one observed failover, so treat it as a good default rather than a guarantee. See README → \"Surviving a Redis failover without restarting\" for the measurements."
+  type        = number
+  default     = null
+
+  # Below about 2s a single connect timeout (10s, see above) blows the entire
+  # budget before ioredis has re-resolved DNS even once, so the process exits on
+  # any blip rather than reconnecting. The upper bound is a typo guard: values
+  # this large mean a genuinely dead Redis goes unnoticed for many minutes.
+  validation {
+    condition     = var.n8n_redis_timeout_threshold == null || try(var.n8n_redis_timeout_threshold >= 2000 && var.n8n_redis_timeout_threshold <= 600000, false)
+    error_message = "n8n_redis_timeout_threshold must be between 2000 and 600000 milliseconds, or null to leave the chart default (10000) in place."
+  }
+
+  validation {
+    condition     = var.n8n_redis_timeout_threshold == null || try(var.n8n_redis_timeout_threshold == floor(var.n8n_redis_timeout_threshold), false)
+    error_message = "n8n_redis_timeout_threshold must be a whole number of milliseconds."
+  }
+}
+
+variable "redis_transit_encryption_enabled" {
+  description = "Encrypt the n8n queue backend in transit and require an AUTH token on it. Defaults to false, which is the module's deliberate network-trust posture: Redis sits in private subnets behind a security group that admits only VPC traffic, so isolation is by network boundary rather than by credentials. Set true to add TLS plus a generated AUTH token on top of that boundary, worth doing when queue payloads (workflow execution data) crossing the VPC in cleartext, or an unauthenticated Redis after a network-boundary breach, are risks you need closed. Independent of redis_high_availability_enabled: this buys encryption and authentication only, and leaves the cache at one node. CHANGING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS: AWS exposes the AUTH token only on aws_elasticache_replication_group, so enabling it moves a default deployment off aws_elasticache_cluster, which drops every job queued at that moment. Drain workers and pick a maintenance window. Enabling it on a deployment that is ALREADY on a replication group (redis_high_availability_enabled = true) is supported but takes three applies, not one: AWS refuses a direct plaintext-to-encrypted transition and requires the group to pass through transit_encryption_mode = preferred first, and it refuses an AUTH token until the mode is required. Setting this variable on its own therefore plans clean and then fails at apply. Drive the migration with redis_transit_encryption_mode and redis_apply_immediately instead. The full sequence was run against a live cluster with a client connection held open across every step and interrupted service at no point; see README for the three steps, their measured durations, and why the third one is not optional. Worker queue-depth autoscaling is unaffected: KEDA's Redis triggers pick up TLS and the AUTH token alongside the workers themselves. Requires create_elasticache = true, since the module cannot put a token on a Redis it does not manage. Retrieve the generated token with `terraform output -raw redis_auth_token`."
+  type        = bool
+  default     = false
+
+  # Hard error rather than a `check` warning, unlike the two diagnostics in
+  # redis.tf. Those cover inputs that are merely ignored. This combination is
+  # worse than ignored: with no module-managed ElastiCache there is nothing to
+  # put a token on, yet the Helm values would still be rendered with tls = true
+  # and a generated password, pointing every n8n pod at the caller's plaintext
+  # Redis with a credential it has never heard of. That applies cleanly and
+  # then fails at runtime, which is exactly what a plan-time error is for.
+  validation {
+    condition     = var.create_elasticache || !var.redis_transit_encryption_enabled
+    error_message = "redis_transit_encryption_enabled requires create_elasticache = true. The module provisions TLS and the AUTH token on the ElastiCache it manages, and cannot configure a Redis supplied via redis_host: on that path n8n and KEDA connect in plaintext with no credential, so an external Redis must accept unauthenticated, non-TLS connections. Leave this at false and secure the external endpoint at the network boundary instead."
+  }
+
+  # null is not meaningful here: a caller writing `x = null` in a module block
+  # would otherwise propagate null into local.redis_tls_active and the other
+  # boolean expressions in locals.tf that key off this variable, and die with
+  # an opaque "Invalid value for operand". See AGENTS.md on nullable.
+  nullable = false
+}
+
+variable "redis_transit_encryption_mode" {
+  description = "Which clients the Redis replication group accepts while transit encryption is on. \"required\" (the default) accepts TLS only, and is where a deployment should end up. \"preferred\" accepts TLS AND plaintext on the same endpoint at the same time, which is the only way AWS allows transit encryption to be turned on for a replication group that already exists: it refuses a direct disabled-to-enabled transition and demands a pass through preferred first. That makes this input the migration lever rather than a tuning knob. A caller creating Redis for the first time should leave it alone; a caller adding redis_transit_encryption_enabled to a deployment already running redis_high_availability_enabled sets it to \"preferred\" for one apply and then back to \"required\", with redis_apply_immediately = true throughout. See README → \"Adding TLS to an existing replication group\" for the full sequence, including where the pods have to roll. Only written when redis_transit_encryption_enabled = true, since it describes a property of transit encryption; ignored otherwise. Sitting on \"preferred\" indefinitely is valid as far as AWS is concerned but leaves the endpoint accepting cleartext, so it defeats the point of enabling the feature."
+  type        = string
+  default     = "required"
+
+  # null is not meaningful here: a caller writing `x = null` in a module block
+  # should receive the documented "required" default rather than failing the
+  # enum validation. See AGENTS.md on nullable.
+  nullable = false
+
+  validation {
+    condition     = contains(["preferred", "required"], var.redis_transit_encryption_mode)
+    error_message = "redis_transit_encryption_mode must be either \"preferred\" or \"required\". AWS spells the third state (no encryption) as transit encryption being off, which is redis_transit_encryption_enabled = false, not a mode."
+  }
+}
+
+variable "redis_apply_immediately" {
+  description = "Apply ElastiCache modifications as soon as the apply runs, rather than deferring them to the next maintenance window. Defaults to false, matching the AWS default and leaving every existing deployment's behaviour unchanged. Set true when changing redis_transit_encryption_mode: AWS rejects any transit-encryption modification outright without it, with `InvalidParameterValue: Transit encryption modification should be called with applied immediately option.`, so the migration cannot proceed while this is false. Turning it on makes other modifications immediate too, which for a replication group can mean a node reboot outside the window you picked, so prefer scoping it to the applies that need it rather than leaving it on."
+  type        = bool
+  default     = false
+
+  # null is not meaningful here: a caller writing `x = null` in a module block
+  # would otherwise propagate null into the `var.redis_apply_immediately ?
+  # true : null` ternary in locals.tf, which requires a bool condition, and
+  # die with an opaque "Invalid conditional condition". See AGENTS.md on
+  # nullable.
   nullable = false
 }
 

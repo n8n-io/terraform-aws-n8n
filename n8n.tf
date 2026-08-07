@@ -96,6 +96,24 @@ resource "kubernetes_service_account_v1" "n8n" {
   }
 }
 
+# The ElastiCache AUTH token, on the same shape as the DB secret above. The
+# chart mounts it as QUEUE_BULL_REDIS_PASSWORD on main, worker and webhook
+# processor via redis.passwordSecret (see the Helm values below). Exists only on
+# the opt-in path: there is no token to hold otherwise.
+
+resource "kubernetes_secret" "n8n_redis" {
+  count = local.redis_auth_active ? 1 : 0
+
+  metadata {
+    name      = "n8n-enterprise-redis-secret"
+    namespace = kubernetes_namespace.n8n.metadata[0].name
+  }
+
+  data = {
+    password = random_password.redis_auth_token[0].result
+  }
+}
+
 # ── Helm release ──────────────────────────────────────────────────────────────
 
 resource "helm_release" "n8n" {
@@ -174,7 +192,13 @@ resource "helm_release" "n8n" {
       }
     }
 
-    redis = {
+    # passwordSecret is merged in rather than set inline so the default path
+    # renders exactly the five keys it always has. The chart's default for it is
+    # null and its templates guard on `if and .name .key`, so an omitted key and
+    # an explicit null behave the same, but omitting it keeps the rendered
+    # values byte-identical for existing releases, which is what makes the
+    # upgrade a no-op rather than a Helm diff.
+    redis = merge({
       enabled     = true
       useExternal = true
       # local.redis_host / local.redis_port resolve the module-managed single
@@ -182,8 +206,16 @@ resource "helm_release" "n8n" {
       # caller's own Redis. See redis.tf.
       host = local.redis_host
       port = local.redis_port
-      tls  = false
-    }
+      tls  = local.redis_tls_active
+      },
+      local.redis_timeout_values,
+      local.redis_auth_active ? {
+        passwordSecret = {
+          name = kubernetes_secret.n8n_redis[0].metadata[0].name
+          key  = "password"
+        }
+      } : {}
+    )
 
     s3 = {
       enabled = true
@@ -240,6 +272,15 @@ resource "helm_release" "n8n" {
     # workers waiting for a task runner). KEDA takes the MAX of both.
     # Webhook processor HPA is created externally in scaling.tf (chart skips it
     # when keda.enabled = true).
+    #
+    # When redis_transit_encryption_enabled = true both triggers additionally
+    # carry TLS and an AUTH token, merged in from local.keda_redis_auth_metadata
+    # (see locals.tf for how the token reaches KEDA without being written into
+    # the ScaledObject). Both keys are needed and TLS is the one that has to
+    # land: without it KEDA opens a plaintext connection to a TLS-only endpoint
+    # and hangs on `connection to redis failed: i/o timeout` before it ever
+    # reaches authentication. The HPA then reports `<unknown>` and workers
+    # freeze at their current replica count, which nothing crashes to announce.
     keda = {
       enabled = true
       worker = {
@@ -250,20 +291,20 @@ resource "helm_release" "n8n" {
         triggers = [
           {
             type = "redis"
-            metadata = {
+            metadata = merge({
               address    = "${local.redis_host}:${local.redis_port}"
               listName   = "bull:jobs:wait"
               listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
-            }
+            }, local.keda_redis_auth_metadata)
             authenticationRef = { name = "" }
           },
           {
             type = "redis"
-            metadata = {
+            metadata = merge({
               address    = "${local.redis_host}:${local.redis_port}"
               listName   = "bull:jobs:active"
               listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
-            }
+            }, local.keda_redis_auth_metadata)
             authenticationRef = { name = "" }
           }
         ]
@@ -555,6 +596,41 @@ resource "helm_release" "n8n" {
         var.n8n_image_tag == null ? {} : { tag = var.n8n_image_tag },
       )
     },
+    # ── Roll the pods when the AUTH token changes ─────────────────────────────
+    # kubernetes_secret.n8n_redis is referenced by NAME from redis.passwordSecret
+    # above, so its contents are not part of the rendered Helm values. Rotating
+    # the token therefore updates the Secret and the replication group but
+    # produces no Helm diff, and nothing restarts: env vars sourced from a
+    # secretKeyRef are resolved once at pod start, so every running pod keeps
+    # the old token indefinitely.
+    #
+    # auth_token_update_strategy = "ROTATE" (redis.tf) is what stops that being
+    # an immediate outage: AWS keeps the previous token valid alongside the new
+    # one. It is not a fix, only a grace period. The next rotation invalidates
+    # the token those pods are still holding, and the queue stops.
+    #
+    # The chart computes its own checksum/config and checksum/secret pod
+    # annotations, but checksum/secret hashes templates/secrets.yaml, which
+    # renders secretRefs.env only. A Secret created outside the chart, as this
+    # one is, can never move that hash. podAnnotations is the seam that works:
+    # the chart merges it into all three pod templates (main, worker, webhook
+    # processor), so a changed value rolls exactly the pods that hold the token.
+    #
+    # CAVEAT: podAnnotations is accepted by the templates but is NOT documented
+    # in the chart's values.yaml, so it is an implicit interface that could be
+    # renamed without a breaking-change note. Verified present at the pinned
+    # n8n_chart_version (1.10.0) and still present at 1.11.0. If a chart bump
+    # ever silently drops it, rotation goes back to being manual rather than
+    # breaking anything, and the test in defaults.tftest.hcl pins the shape.
+    #
+    # The hash, never the token: annotations are readable by anyone who can get
+    # a pod, and sha256 is enough to change when the token changes.
+    #
+    # Merged conditionally rather than emitted as an empty map, for the same
+    # reason redis.timeout is: a default deployment must render byte-identical
+    # values to what it renders today, or every existing release sees a Helm
+    # diff on upgrade.
+    local.redis_auth_active ? { podAnnotations = local.redis_pod_annotations } : {},
   ))]
 
   depends_on = [
