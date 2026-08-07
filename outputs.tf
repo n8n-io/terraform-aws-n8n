@@ -14,12 +14,12 @@ output "alb_hostname" {
 }
 
 output "n8n_service_name" {
-  description = "Name of the Kubernetes Service fronting the n8n main pods (the editor UI and REST API), on port 5678. Point a bring-your-own Ingress at this when create_ingress = false."
+  description = "Name of the Kubernetes Service fronting the n8n main pods (the editor UI and REST API), on port 5678. Point a customer-managed Ingress at this when create_ingress = false."
   value       = local.n8n_service_name
 }
 
 output "n8n_webhook_service_name" {
-  description = "Name of the Kubernetes Service fronting the n8n webhook processors, on port 5678. Production webhooks are disabled on the main pods, so a bring-your-own Ingress must route /webhook here."
+  description = "Name of the Kubernetes Service fronting the n8n webhook processors, on port 5678. Production webhooks are disabled on the main pods, so a customer-managed Ingress must route /webhook here."
   value       = local.n8n_webhook_service_name
 }
 
@@ -42,8 +42,8 @@ output "n8n_url" {
 # Both values are sensitive — retrieve them with terraform output -raw <name>
 
 output "n8n_encryption_key" {
-  description = "n8n encryption key — back this up in a password manager. Losing it makes all stored credentials unreadable."
-  value       = random_id.n8n_encryption_key.hex
+  description = "n8n encryption key, back this up in a password manager. Losing it makes all stored credentials unreadable. Also the value to pass as var.n8n_encryption_key when restoring this database (e.g. an RDS snapshot) into a new stack, so the new deployment can still decrypt it."
+  value       = local.n8n_encryption_key
   sensitive   = true
 }
 
@@ -66,8 +66,8 @@ output "redis_endpoint" {
 }
 
 output "redis_auth_token" {
-  description = "ElastiCache AUTH token when redis_transit_encryption_enabled = true and redis_transit_encryption_mode = \"required\" (the default); null otherwise, since the default posture has no credential and the transitional redis_transit_encryption_mode = \"preferred\" state does not carry a token either. Retrieve with: terraform output -raw redis_auth_token"
-  value       = local.redis_auth_active ? random_password.redis_auth_token[0].result : null
+  description = "The Redis AUTH token in effect, or null when there is none. Module-generated when create_elasticache = true and redis_transit_encryption_enabled = true (AWS requires transit_encryption_mode = \"required\" before the token exists; see the variable). Echoes var.redis_auth_token back when create_elasticache = false and it was supplied. Also null when redis_auth_token_secret_ref is set instead: the token then lives in a Secret the module never reads. Retrieve with: terraform output -raw redis_auth_token"
+  value       = (local.redis_auth_active && var.redis_auth_token_secret_ref == null) ? local.redis_auth_token_value : null
   sensitive   = true
 }
 
@@ -77,28 +77,28 @@ output "redis_port" {
 }
 
 output "s3_bucket_name" {
-  description = "S3 bucket used for n8n binary storage, and for execution data when n8n_execution_data_storage_mode = \"s3\". The module attaches no lifecycle configuration: binary data is pruned only by S3 while execution data is pruned by n8n itself, and the two cannot be separated by a prefix filter. Read the S3 lifecycle section of the README before attaching one."
-  value       = aws_s3_bucket.n8n.bucket
+  description = "S3 bucket used for n8n binary storage, and for execution data when n8n_execution_data_storage_mode = \"s3\". Module-managed when create_s3_bucket = true (the default), or the value of var.existing_s3_bucket_name when using an existing bucket. The module attaches no lifecycle configuration: binary data is pruned only by S3 while execution data is pruned by n8n itself, and the two cannot be separated by a prefix filter. Read the S3 lifecycle section of the README before attaching one."
+  value       = local.s3_bucket_name
 }
 
 output "cluster_name" {
-  description = "EKS cluster name"
-  value       = aws_eks_cluster.n8n.name
+  description = "EKS cluster name: the cluster this module created (create_eks = true, the default), or the value of existing_eks_cluster_name when create_eks = false."
+  value       = local.eks_cluster_name
 }
 
 output "cluster_endpoint" {
-  description = "EKS cluster API endpoint — pass to the kubernetes/helm providers as host."
-  value       = aws_eks_cluster.n8n.endpoint
+  description = "EKS cluster API endpoint, resolved the same way as cluster_name. Pass to the kubernetes/helm providers as host."
+  value       = local.eks_cluster_endpoint
 }
 
 output "cluster_certificate_authority_data" {
-  description = "Base64-encoded EKS cluster CA certificate — pass to kubernetes/helm providers as cluster_ca_certificate (after base64decode)."
-  value       = aws_eks_cluster.n8n.certificate_authority[0].data
+  description = "Base64-encoded EKS cluster CA certificate, resolved the same way as cluster_name. Pass to kubernetes/helm providers as cluster_ca_certificate (after base64decode)."
+  value       = local.eks_cluster_ca_data
 }
 
 output "node_group_role_arn" {
-  description = "IAM role ARN the EKS node group runs under, and therefore the principal the kubelet pulls container images as. Name it in a cross-account ECR repository policy to let this cluster pull a custom n8n image from a registry in another account, which is the mechanism to reach for there: an ECR authorization token lasts 12 hours, so an imagePullSecrets holding one goes stale long before the next apply. For registries that issue static credentials, use n8n_image_pull_secrets instead."
-  value       = aws_iam_role.nodes.arn
+  description = "IAM role ARN the EKS node group runs under, and therefore the principal the kubelet pulls container images as. Name it in a cross-account ECR repository policy to let this cluster pull a custom n8n image from a registry in another account, which is the mechanism to reach for there: an ECR authorization token lasts 12 hours, so an imagePullSecrets holding one goes stale long before the next apply. For registries that issue static credentials, use n8n_image_pull_secrets instead. Null when create_eks = false: the module creates no node group on that path, and an existing node group's role (if the caller even runs a conventional EKS-managed one) is not something this module can discover generically."
+  value       = var.create_eks ? aws_iam_role.nodes[0].arn : null
 }
 
 output "aws_region" {
@@ -108,17 +108,21 @@ output "aws_region" {
 
 output "kubectl_config_command" {
   description = "Command to configure kubectl for this cluster"
-  value       = "aws eks update-kubeconfig --name ${aws_eks_cluster.n8n.name} --region ${local.aws_region}"
+  value       = "aws eks update-kubeconfig --name ${local.eks_cluster_name} --region ${local.aws_region}"
 }
 
 output "namespace" {
   description = "Kubernetes namespace n8n is deployed into."
-  # Deliberately sourced from the resource rather than var.namespace. Returning
-  # the variable makes this a plan-time constant, which leaves a caller's own
-  # kubernetes_* resources with no dependency edge to the namespace: Terraform
-  # schedules them concurrently and they fail with `namespaces "n8n" not found`.
-  # That trap is easy to hit on the create_ingress = false path, where the
-  # caller's Ingresses are the first thing to reference this output. Reading the
-  # resource attribute gives every consumer the dependency implicitly.
-  value = kubernetes_namespace.n8n.metadata[0].name
+  # Deliberately sourced from local.namespace_name rather than var.namespace
+  # directly. On the create_namespace = true path (the default), that local
+  # reads the resource attribute rather than the plan-time-constant variable,
+  # so a caller's own kubernetes_* resources referencing this output get a
+  # dependency edge on the namespace; without it Terraform schedules them
+  # concurrently and they fail with `namespaces "n8n" not found`. That trap is
+  # easy to hit on the create_ingress = false path, where the caller's
+  # Ingresses are the first thing to reference this output. On the
+  # create_namespace = false path there is no module-owned namespace resource
+  # to depend on, so the local is just var.namespace, and there is nothing for
+  # a consumer to wait on: the namespace already existed before this apply.
+  value = local.namespace_name
 }

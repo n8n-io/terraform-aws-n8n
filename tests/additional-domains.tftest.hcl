@@ -49,7 +49,7 @@ mock_provider "aws" {
   }
 
   override_data {
-    target = data.aws_iam_policy_document.lbc
+    target = module.controllers.data.aws_iam_policy_document.lbc
     values = {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"elasticloadbalancing:*\"],\"Resource\":\"*\"}]}"
     }

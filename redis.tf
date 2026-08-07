@@ -103,11 +103,17 @@ resource "aws_elasticache_subnet_group" "n8n" {
 }
 
 # ── AUTH token ────────────────────────────────────────────────────────────────
-# Only generated on the opt-in path. random_password.db_password and
-# random_password.task_runner_token are both unconditional, but this one is
-# count-gated deliberately: the contract for this feature is that a caller who
-# leaves redis_transit_encryption_enabled at its default sees NO plan diff, and
-# an unconditional random_password would still render `Plan: 1 to add`.
+# Only generated on the module-managed, opt-in path. random_password.db_password
+# is unconditional, but this one is count-gated deliberately: the contract for
+# this feature is that a caller who leaves redis_transit_encryption_enabled at
+# its default sees NO plan diff, and an unconditional random_password would
+# still render `Plan: 1 to add`.
+#
+# Also gated on create_elasticache: with create_elasticache = false and
+# redis_auth_token set, local.redis_auth_active is true but the credential is
+# the caller's own (local.redis_auth_token_value reads var.redis_auth_token on
+# that path), so generating one here would mint a random password nothing ever
+# uses while still consuming an apply.
 #
 # ElastiCache AUTH constraints: 16-128 printable characters, and the only
 # permitted non-alphanumerics are ! & # $ ^ < > - . A broader special set (the
@@ -115,7 +121,7 @@ resource "aws_elasticache_subnet_group" "n8n" {
 # https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth.html
 
 resource "random_password" "redis_auth_token" {
-  count = local.redis_auth_active ? 1 : 0
+  count = var.create_elasticache && local.redis_auth_active ? 1 : 0
 
   length           = 64
   special          = true
@@ -220,6 +226,8 @@ resource "aws_elasticache_cluster" "n8n" {
 # "What this actually buys you, measured".
 resource "aws_elasticache_replication_group" "n8n" {
   # checkov:skip=CKV2_AWS_50:Automatic failover and Multi-AZ are wired to var.redis_high_availability_enabled below, so this check passes for the caller who asks for high availability and fails only on the TLS-only shape, where it is describing the design rather than a defect. This one resource is selected by EITHER redis_high_availability_enabled OR redis_transit_encryption_enabled, and the two are deliberately independent: enabling transit encryption must not also add a second node and double the Redis bill. See the comment above this resource for the three reachable shapes. A caller who wants the failover this check asks for sets redis_high_availability_enabled = true, which is exactly what the input is for.
+  # checkov:skip=CKV_AWS_30:Transit encryption is wired to var.redis_transit_encryption_enabled below (transit_encryption_enabled = local.redis_managed_tls_active), so this check passes for the caller who asks for it and fails only on the HA-only and CMK-only shapes, same "describing the design rather than a defect" reasoning as CKV2_AWS_50 above: a caller who wants transit encryption sets redis_transit_encryption_enabled = true, which is exactly what the input is for. On this module's own all-defaults path this resource does not even exist (count above), so the finding only ever describes a shape someone deliberately opted into.
+  # checkov:skip=CKV_AWS_31:Same rationale and same resource as CKV_AWS_30 immediately above: the AUTH token rides on transit encryption (auth_token below is non-null only once redis_transit_encryption_mode = "required"), so this finding and CKV_AWS_30 always move together and are accepted for the same reason.
   count = var.create_elasticache && local.redis_needs_replication_group ? 1 : 0
 
   # Deliberately NOT "<cluster_name>-redis", which is what the cluster above
@@ -262,8 +270,11 @@ resource "aws_elasticache_replication_group" "n8n" {
   # transit_encryption_enabled is Optional+Computed on this resource, so the
   # HA-only path writing an explicit `false` matches what the API already
   # reports and produces no diff for anyone who enabled HA before this variable
-  # existed.
-  transit_encryption_enabled = local.redis_tls_active
+  # existed. redis_managed_tls_active, not redis_tls_active: this argument
+  # describes a property of the replication group this module itself manages,
+  # and redis_tls_active also covers the external-Redis reporting path, which
+  # has nothing to do with what this resource's own attribute should be.
+  transit_encryption_enabled = local.redis_managed_tls_active
   auth_token                 = local.redis_auth_active ? random_password.redis_auth_token[0].result : null
 
   # Gated on the same variable as auth_token above, and for the same reason: the
@@ -381,14 +392,18 @@ check "redis_tuning_requires_module_managed_elasticache" {
       !var.redis_high_availability_enabled &&
       !var.redis_apply_immediately &&
       !var.redis_kms_encryption_enabled &&
-      var.redis_snapshot_retention_limit == 1
+      var.redis_snapshot_retention_limit == 1 &&
+      var.redis_transit_encryption_mode == "required"
     )
     error_message = join("", [
       "redis_node_type, redis_high_availability_enabled, redis_apply_immediately, ",
-      "redis_kms_encryption_enabled or redis_snapshot_retention_limit is set while ",
-      "create_elasticache = false. The module creates no ElastiCache in that mode, so none of them ",
-      "apply. Sizing, failover, modification timing, at-rest encryption and snapshot retention are ",
-      "properties of the Redis you supply via redis_host.",
+      "redis_kms_encryption_enabled, redis_snapshot_retention_limit or ",
+      "redis_transit_encryption_mode is set while create_elasticache = false. The module creates no ",
+      "ElastiCache in that mode, so none of them apply. Sizing, failover, modification timing, at-rest ",
+      "encryption, snapshot retention and the \"preferred\"/\"required\" migration lever are all ",
+      "properties of the replication group the module itself manages; the Redis you supply via ",
+      "redis_host has none of them. Its TLS and AUTH posture are controlled by ",
+      "redis_transit_encryption_enabled, redis_auth_token and redis_username instead.",
     ])
   }
 }
@@ -411,10 +426,13 @@ check "redis_tuning_requires_module_managed_elasticache" {
 # afterwards it is the only thing that would ever say so.
 check "redis_transit_encryption_mode_preferred_is_transitional" {
   assert {
-    # Gated on redis_tls_active, not on the mode alone. With transit encryption
-    # off the mode reaches nothing, so the sibling check below is the accurate
-    # complaint and this one would only pile noise on top of it.
-    condition = local.redis_tls_active ? (
+    # Gated on redis_managed_tls_active, not redis_tls_active: this check is
+    # about the module-managed replication group's migration lever
+    # specifically, which has no meaning against an external Redis. With
+    # transit encryption off, or on the external path, the mode reaches
+    # nothing, so the sibling checks are the accurate complaint and this one
+    # would only pile noise on top of them.
+    condition = local.redis_managed_tls_active ? (
       var.redis_transit_encryption_mode != "preferred"
     ) : true
     error_message = join("", [
@@ -430,15 +448,57 @@ check "redis_transit_encryption_mode_preferred_is_transitional" {
 
 check "redis_transit_encryption_mode_requires_transit_encryption" {
   assert {
-    condition = var.redis_transit_encryption_enabled ? true : (
-      var.redis_transit_encryption_mode == "required"
-    )
+    # Scoped to the module-managed path with the same nesting style as the
+    # sibling checks in this file: create_elasticache = false is the accurate
+    # complaint above (redis_tuning_requires_module_managed_elasticache), so
+    # this one stays silent there rather than piling a second, less specific
+    # warning on top of it.
+    condition = var.create_elasticache ? (
+      var.redis_transit_encryption_enabled ? true : (
+        var.redis_transit_encryption_mode == "required"
+      )
+    ) : true
     error_message = join("", [
       "redis_transit_encryption_mode is set while redis_transit_encryption_enabled = false, so it is ",
       "ignored and Redis stays plaintext. The mode selects which clients an ENCRYPTED endpoint ",
       "accepts; it does not turn encryption on. If you are staging the migration described in README ",
       "-> \"Adding TLS to an existing replication group\", set redis_transit_encryption_enabled = true ",
       "in the same apply that sets the mode to \"preferred\".",
+    ])
+  }
+}
+
+# The reverse of external_redis_inputs_require_create_elasticache_false: a
+# caller who supplies redis_auth_token expecting it to reach their own Redis
+# gets it silently discarded instead, because the module generates and manages
+# its own token on the ElastiCache it provisions and has no path to substitute
+# a caller-supplied value there.
+check "redis_auth_token_requires_external_redis" {
+  assert {
+    condition = var.create_elasticache ? var.redis_auth_token == null : true
+    error_message = join("", [
+      "redis_auth_token is set while create_elasticache = true, so it is ignored: the module generates ",
+      "and manages its own AUTH token on the ElastiCache it provisions (see ",
+      "redis_transit_encryption_enabled) and cannot put a caller-supplied credential on infrastructure ",
+      "it owns. Set create_elasticache = false to use an external Redis with your own AUTH token.",
+    ])
+  }
+}
+
+# Same shape again for the ACL username, with one difference worth stating: this
+# one is ignored because honouring it would be actively harmful, not merely
+# meaningless. ElastiCache AUTH authenticates as Redis's default user and the
+# service exposes no username, so sending one would break a connection that
+# works. local.redis_username_value resolves it to null on this path so it
+# reaches neither the chart nor the KEDA triggers.
+check "redis_username_requires_external_redis" {
+  assert {
+    condition = var.create_elasticache ? var.redis_username == null : true
+    error_message = join("", [
+      "redis_username is set while create_elasticache = true, so it is ignored: ElastiCache AUTH has no ",
+      "username concept, its token authenticates as Redis's default user, and passing a username on ",
+      "this path would break a working connection rather than tighten it. Set create_elasticache = ",
+      "false to use an external Redis 6+ endpoint that authenticates against a named ACL user.",
     ])
   }
 }

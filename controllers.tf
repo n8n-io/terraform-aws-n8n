@@ -1,120 +1,50 @@
-# ── AWS Load Balancer Controller ──────────────────────────────────────────────
-# The Helm chart creates its own ServiceAccount (aws-load-balancer-controller
-# in kube-system) and EKS Pod Identity binds it to the IAM role via iam.tf.
+# ── Cluster controllers ────────────────────────────────────────────────────────
+# LBC, Cluster Autoscaler, metrics-server, KEDA and the EBS CSI driver all live
+# in modules/controllers, extracted out of the root module so an advanced
+# caller deploying onto an existing cluster (create_eks = false) can invoke
+# that submodule directly with only the controllers they actually need,
+# instead of getting five root-level install_* booleans with no way to omit
+# the ones they will never touch. This call is what every existing deployment
+# still gets by default: every install_* / create_ebs_csi toggle here is the
+# same root-level variable, same name, same default, that existed before this
+# submodule did, so a greenfield deployment's plan is unchanged by this
+# refactor. See docs/customer-managed-infrastructure.md.
 #
-# Destroy ordering: n8n Helm depends_on this release, so during destroy the
-# n8n release and ingress are deleted FIRST (while LBC is still running to
-# clean up the ALB). LBC is destroyed only after all ingresses are gone.
-#
-# failurePolicy=Ignore on the webhook prevents the LBC admission webhook from
-# blocking Ingress mutations when LBC pods are unhealthy during destroy.
+# depends_on the node group and the Pod Identity Agent addon as a whole: every
+# controller resource inside this submodule needs schedulable nodes, and every
+# controller's Pod Identity association needs the agent DaemonSet already
+# running Pod Identity credentials into pods. Both are root-module resources
+# (eks.tf), gated on create_eks, so on the create_eks = false path they
+# contribute zero instances and this depends_on is a no-op, same as it was
+# when these were flat root resources depending on them directly.
+module "controllers" {
+  source = "./modules/controllers"
 
-resource "helm_release" "lbc" {
-  name            = "aws-load-balancer-controller"
-  repository      = "https://aws.github.io/eks-charts"
-  chart           = "aws-load-balancer-controller"
-  namespace       = "kube-system"
-  wait            = true
-  timeout         = 300
-  atomic          = true
-  cleanup_on_fail = true
+  cluster_name     = local.cluster_name
+  eks_cluster_name = local.eks_cluster_name
+  aws_region       = local.aws_region
+  vpc_id           = local.vpc_id
 
-  set = [
-    {
-      name  = "clusterName"
-      value = aws_eks_cluster.n8n.name
-    },
-    {
-      name  = "vpcId"
-      value = local.vpc_id
-    },
-    # Prevent the LBC validating webhook from blocking Ingress deletions when
-    # LBC pods are unhealthy during destroy. With failurePolicy=Ignore, the
-    # webhook is best-effort — if LBC can't respond, the API server proceeds.
-    {
-      name  = "webhookConfig.failurePolicy"
-      value = "Ignore"
-    },
-  ]
+  iam_permissions_boundary_arn = var.iam_permissions_boundary_arn
+  common_tags                  = local.common_tags
+
+  install_lbc                = var.install_lbc
+  install_cluster_autoscaler = var.install_cluster_autoscaler
+  install_metrics_server     = var.install_metrics_server
+  install_keda               = var.install_keda
+  create_ebs_csi             = var.create_ebs_csi
+
+  lbc_chart_repository                = var.lbc_chart_repository
+  lbc_chart_version                   = var.lbc_chart_version
+  cluster_autoscaler_chart_repository = var.cluster_autoscaler_chart_repository
+  cluster_autoscaler_chart_version    = var.cluster_autoscaler_chart_version
+  metrics_server_chart_repository     = var.metrics_server_chart_repository
+  metrics_server_chart_version        = var.metrics_server_chart_version
+  keda_chart_repository               = var.keda_chart_repository
+  keda_chart_version                  = var.keda_chart_version
 
   depends_on = [
     aws_eks_node_group.n8n,
-    aws_iam_role_policy_attachment.lbc,
-    aws_eks_pod_identity_association.lbc,
+    aws_eks_addon.pod_identity_agent,
   ]
-}
-
-# ── Cluster Autoscaler ────────────────────────────────────────────────────────
-# Watches for Pending pods that can't schedule due to insufficient node capacity
-# and adds nodes up to node_max. Removes underutilised nodes down to node_min.
-# Requires the auto-discovery tags on the node group (set in eks.tf).
-# The chart creates ServiceAccount `cluster-autoscaler` in kube-system, bound
-# to the IAM role via Pod Identity (iam.tf).
-
-resource "helm_release" "cluster_autoscaler" {
-  name            = "cluster-autoscaler"
-  repository      = "https://kubernetes.github.io/autoscaler"
-  chart           = "cluster-autoscaler"
-  namespace       = "kube-system"
-  wait            = true
-  timeout         = 300
-  atomic          = true
-  cleanup_on_fail = true
-
-  set = [
-    {
-      name  = "autoDiscovery.clusterName"
-      value = aws_eks_cluster.n8n.name
-    },
-    {
-      name  = "awsRegion"
-      value = local.aws_region
-    },
-    {
-      name  = "rbac.serviceAccount.name"
-      value = "cluster-autoscaler"
-    },
-  ]
-
-  depends_on = [
-    aws_eks_node_group.n8n,
-    aws_iam_role_policy_attachment.cluster_autoscaler,
-    aws_eks_pod_identity_association.cluster_autoscaler,
-  ]
-}
-
-# ── Metrics Server ────────────────────────────────────────────────────────────
-# Required for HPA to read pod CPU metrics. EKS does NOT ship with metrics-server
-# by default — without it every HPA target shows "cpu: <unknown>" and scale-up
-# never triggers regardless of actual load.
-#
-# --kubelet-insecure-tls: EKS kubelets present self-signed TLS certificates that
-#   metrics-server cannot verify. Without this flag, scrapes fail and all metrics
-#   remain unknown.
-# --kubelet-preferred-address-types=InternalIP: Tells metrics-server to reach
-#   kubelets via their VPC private IP rather than hostname, which may not resolve
-#   inside the VPC.
-
-resource "helm_release" "metrics_server" {
-  name            = "metrics-server"
-  repository      = "https://kubernetes-sigs.github.io/metrics-server/"
-  chart           = "metrics-server"
-  namespace       = "kube-system"
-  wait            = true
-  timeout         = 300
-  atomic          = true
-  cleanup_on_fail = true
-
-  set = [
-    {
-      name  = "args[0]"
-      value = "--kubelet-insecure-tls"
-    },
-    {
-      name  = "args[1]"
-      value = "--kubelet-preferred-address-types=InternalIP"
-    },
-  ]
-
-  depends_on = [aws_eks_node_group.n8n]
 }

@@ -1,0 +1,32 @@
+# Copy this file to terraform.tfvars and fill in your values.
+
+# Fully-qualified domain for n8n. The parent zone must be hosted in Route53.
+n8n_domain = "n8n.example.com"
+
+# Route53 hosted zone ID for the parent domain (e.g. example.com). The module
+# issues the ACM certificate, validates it, and creates the alias A-record
+# here.
+route53_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# n8n Enterprise license activation key. Get one at https://n8n.io/pricing.
+n8n_license_key = "your-enterprise-license-key-here"
+
+# AWS region. Change if you're deploying outside us-east-1.
+# aws_region = "eu-west-1"
+
+# EKS cluster name. Keep to 14 characters or fewer.
+# cluster_name = "n8n-cluster"
+
+# Node type of the stand-in customer-managed Redis this example creates.
+# customer_managed_redis_node_type = "cache.t3.micro"
+
+# AUTH token for the stand-in customer-managed Redis. Change this from the
+# insecure demo default before leaving this stack up for anything but a
+# throwaway test. Must be 16-128 characters (ElastiCache's own constraint).
+# customer_managed_redis_auth_token = "change-me-to-something-random-and-long"
+
+# Extra AWS tags applied to every resource this example creates.
+# tags = {
+#   Environment = "production"
+#   Owner       = "platform-team"
+# }

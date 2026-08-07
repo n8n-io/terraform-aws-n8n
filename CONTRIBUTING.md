@@ -75,4 +75,7 @@ Multi-AZ option`). Use the imperative mood ("add", not "added" or
 - All CI checks must be green before merge.
 
 See [`AGENTS.md`](./AGENTS.md) for details on adding inputs, adding
-resources, and what *not* to change.
+resources, and what *not* to change. See
+[`docs/customer-managed-infrastructure.md`](./docs/customer-managed-infrastructure.md)
+specifically before adding a new `create_<x>`/`install_<x>` toggle for a
+customer-managed layer.

@@ -181,7 +181,7 @@ data "aws_lb" "n8n" {
   count = local.dns_alias_managed ? 1 : 0
 
   tags = {
-    "elbv2.k8s.aws/cluster" = local.cluster_name
+    "elbv2.k8s.aws/cluster" = local.eks_cluster_name
     "ingress.k8s.aws/stack" = "${var.namespace}/n8n-ingress"
   }
 

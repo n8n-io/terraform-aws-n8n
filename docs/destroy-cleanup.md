@@ -358,7 +358,7 @@ terraform state list
 terraform state rm <resource_address>
 
 # Example: remove a namespace that was force-deleted via kubectl
-terraform state rm kubernetes_namespace.n8n
+terraform state rm kubernetes_namespace.n8n[0]
 ```
 
 After removing the resource from state, re-run `terraform destroy` for the remaining resources.

@@ -1,9 +1,12 @@
 # ── HPA: n8n webhook processor pods (CPU-based) ───────────────────────────────
 # The n8n Helm chart skips creating the webhook-processor HPA when keda.enabled
-# is true. Since we always use KEDA for workers, this external HPA is always
-# required to cover webhook processor scaling.
+# is true. Since we always use KEDA for workers, this external HPA is the only
+# thing that scales webhook processors, unless n8n_webhook_hpa_enabled = false
+# and the caller brings their own autoscaling policy for the same Deployment.
 
 resource "kubernetes_horizontal_pod_autoscaler_v2" "n8n_webhook" {
+  count = var.n8n_webhook_hpa_enabled ? 1 : 0
+
   metadata {
     name      = "n8n-webhook-processor"
     namespace = var.namespace
@@ -61,6 +64,22 @@ resource "kubernetes_horizontal_pod_autoscaler_v2" "n8n_webhook" {
   }
 
   depends_on = [helm_release.n8n]
+}
+
+# This HPA reads CPU utilization, which requires metrics-server (or an
+# equivalent metrics.k8s.io implementation) to exist somewhere in the cluster.
+# install_metrics_server = false does not remove the HPA above, it only skips
+# the module's own install of metrics-server, so the combination is accepted
+# and only warned about: the failure is silent (the HPA sits at its minimum
+# replica count reporting "cpu: <unknown>"), not a plan or apply error. Only
+# relevant when the HPA exists at all: with n8n_webhook_hpa_enabled = false
+# there is nothing here left to need metrics-server.
+
+check "webhook_hpa_needs_metrics_server_somewhere" {
+  assert {
+    condition     = var.n8n_webhook_hpa_enabled ? var.install_metrics_server : true
+    error_message = "install_metrics_server = false, but kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook reads CPU utilization, which needs metrics-server (or an equivalent metrics.k8s.io implementation) to exist somewhere in the cluster. Without one this HPA never scales: it silently stays at n8n_webhook_hpa_min_replicas reporting unknown CPU metrics rather than failing the apply. Make sure an equivalent is already installed before relying on this combination."
+  }
 }
 
 # ── Autoscaling capacity model ────────────────────────────────────────────────
@@ -301,10 +320,11 @@ check "autoscaling_maxima_fit_node_group_capacity" {
 # false, so most callers never hit this. See docs/troubleshooting.md.
 
 locals {
-  # can() turns an unparseable quantity (a caller's typo, or a form this module
-  # doesn't recognize) into "unreadable" rather than a plan-time error — this
-  # check exists to warn, not to validate the quantity syntax. Kubernetes itself
-  # rejects a bad quantity at apply.
+  # can() still turns an unparseable quantity into "unreadable" rather than a
+  # plan-time error, because this check exists to warn rather than to validate
+  # quantity syntax. The variables now carry that validation themselves, so the
+  # null branches below are unreachable for any value that reaches this far;
+  # they stay as the belt to the validation's braces.
   n8n_webhook_cpu_millis = {
     for name, quantity in {
       request = var.n8n_webhook_cpu_request
@@ -314,12 +334,33 @@ locals {
     ) : null
   }
 
+  # Mebibytes per Kubernetes memory suffix. Written out rather than computed so
+  # the decimal suffixes are visibly not their binary namesakes: 1G is
+  # 1,000,000,000 bytes, which is 953.674...Mi, not 1024Mi. Previously only Mi
+  # and Gi parsed, and every other valid suffix fell through to null, which
+  # silenced the advisory below on a configuration that was perfectly legal.
+  memory_mebibytes_per_suffix = {
+    "Ki" = 1 / 1024
+    "Mi" = 1
+    "Gi" = 1024
+    "Ti" = 1024 * 1024
+    "k"  = 1000 / 1048576
+    "M"  = 1000000 / 1048576
+    "G"  = 1000000000 / 1048576
+    "T"  = 1000000000000 / 1048576
+  }
+
   n8n_webhook_memory_mebibytes = {
     for name, quantity in {
       request = var.n8n_webhook_memory_request
       limit   = var.n8n_webhook_memory_limit
-      } : name => can(regex("^[0-9]+(\\.[0-9]+)?(Mi|Gi)$", quantity)) ? (
-      endswith(quantity, "Gi") ? tonumber(trimsuffix(quantity, "Gi")) * 1024 : tonumber(trimsuffix(quantity, "Mi"))
+      } : name => can(regex("^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$", quantity)) ? (
+      tonumber(regex("^[0-9]+(?:\\.[0-9]+)?", quantity)) * lookup(
+        local.memory_mebibytes_per_suffix,
+        replace(quantity, "/^[0-9]+(?:\\.[0-9]+)?/", ""),
+        # No suffix at all means plain bytes.
+        1 / 1048576,
+      )
     ) : null
   }
 

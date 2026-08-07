@@ -160,7 +160,7 @@ Three possibilities, in the order worth checking. The first two are specific to 
 
     Two preconditions have to hold, and by default neither does:
 
-    - The IngressClass must actually reference the params object through `spec.parameters`. The Helm chart this module installs (`aws-load-balancer-controller` 3.5.0) creates both an `alb` IngressClass and an `alb` `IngressClassParams`, but does not wire them together, and the params object it creates has an empty spec. Filling in the spec alone changes nothing until someone also adds the reference.
+    - The IngressClass must actually reference the params object through `spec.parameters`. The Helm chart this module installs (`aws-load-balancer-controller`, pinned to 3.5.0 by `lbc_chart_version`) creates both an `alb` IngressClass and an `alb` `IngressClassParams`, but does not wire them together, and the params object it creates has an empty spec. Filling in the spec alone changes nothing until someone also adds the reference. Everything below was verified against that version; a different `lbc_chart_version` may behave differently.
     - The Ingress must be classified through `spec.ingressClassName`. The controller checks the legacy `kubernetes.io/ingress.class` annotation first and returns as soon as it matches, so an Ingress carrying that annotation never has its IngressClass or params loaded.
 
     **The module-managed Ingress sets `kubernetes.io/ingress.class` (see `locals.tf`), so this cause cannot apply to it.** An `IngressClassParams` can be bound and populated and the module's `alb_inbound_cidrs` still wins. That immunity is incidental rather than designed, and it would disappear if the module ever dropped the legacy annotation, which is why the mechanism is documented here rather than left out.
@@ -244,7 +244,7 @@ Your resource had no dependency edge to the namespace, so Terraform scheduled it
 
 ### Fix
 
-Upgrade: `namespace` is now sourced from `kubernetes_namespace.n8n`, so consuming it orders your resources implicitly.
+Upgrade: `namespace` is now sourced from `kubernetes_namespace.n8n[0]` when the module creates the namespace (`create_namespace = true`, the default), so consuming it orders your resources implicitly. If you set `create_namespace = false` to deploy into a namespace you manage yourself, there is no module-owned namespace resource to order against; make sure that namespace already exists before applying this module.
 
 Also add an explicit dependency on the whole module for anything an ALB registers targets for:
 

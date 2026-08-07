@@ -69,7 +69,57 @@ this project adheres to the stability contract in
   Same `ignore_changes` caveat applies: this only affects newly-created
   clusters.
 
+- `create_eks` input (default `true`). Set to `false` to deploy onto an
+  existing EKS cluster (`existing_eks_cluster_name`) instead of the module
+  creating its own cluster, node group, node IAM role, and Pod Identity Agent
+  addon. RDS, ElastiCache, S3, the namespace, and the IAM roles and Pod
+  Identity associations for n8n and any `install_*` controller stay exactly as
+  they were either way; only the cluster and node group underneath them stop
+  being module-managed. Two facts about the existing cluster are checked at
+  plan time: it must be in `vpc_id` (a hard failure, since every security
+  group, subnet, and route this module writes assumes the cluster's ENIs live
+  there), and it must already have the `eks-pod-identity-agent` addon
+  installed (the AWS provider itself fails the plan if it does not, via
+  `data.aws_eks_addon`). A Kubernetes-version mismatch against
+  `kubernetes_version` only warns
+  (`check.existing_eks_cluster_kubernetes_version_matches`), since a control
+  plane one release ahead of or behind is frequently still fine. Everything
+  else, node capacity for the HPA/KEDA maxima, Cluster Autoscaler
+  auto-discovery tags, API server reachability, and naming/identity
+  collisions on a shared cluster, cannot be validated on infrastructure this
+  module does not own, so `existing_eks_cluster_prerequisites_confirmed` is a
+  required, explicit attestation enumerating each one rather than a silent
+  assumption. The EBS CSI addon and default `gp3` `StorageClass` are gated
+  separately, on their own `create_ebs_csi` input (see below), rather than
+  folded into this one. See README.md → "Bring your own EKS cluster".
+
+- `create_ebs_csi` input (default `true`). Set to `false` to skip installing
+  `aws_eks_addon.ebs_csi` and the default `gp3` `StorageClass` (`storage.tf`),
+  e.g. when `create_eks = false` and the existing cluster you are deploying
+  onto already runs its own CSI driver and default StorageClass: a second
+  `aws-ebs-csi-driver` addon install on a cluster that already has one fails
+  outright rather than degrading gracefully. Independent of `create_eks`,
+  since a freshly created cluster never has a CSI driver of its own and
+  should normally leave this at its default.
+  `check.existing_eks_cluster_needs_its_own_storage_toggle` now warns
+  specifically when `create_eks = false` and this is still left at its
+  default, rather than firing on every `create_eks = false` deployment
+  regardless of whether the caller has already opted out. Gated with `count`
+  and a `moved` block, same pattern as `create_eks` itself. This resolves the
+  storage open question the original `create_eks` proposal left undecided.
+
 ### Fixed
+
+- `create_elasticache`, `redis_host`, and `README.md`'s "Bring your own
+  Redis" (now "Customer-managed Redis") section all incorrectly stated that
+  an external Redis requiring AUTH or TLS was "not supported yet." AUTH
+  (`redis_auth_token` / `redis_auth_token_secret_ref`) and TLS
+  (`redis_transit_encryption_enabled`) have both worked on the
+  `create_elasticache = false` path for some time (`local.redis_auth_active`
+  and `local.redis_tls_active` in `locals.tf` are not gated on
+  `create_elasticache`); the docs were simply never updated when that
+  support landed. Corrected in both variable descriptions and the README
+  section, which now also carries a worked example.
 
 - `aws_eks_node_group.n8n` no longer fights the Cluster Autoscaler over
   `desired_size`. The node group is tagged for autoscaler auto-discovery
@@ -186,7 +236,194 @@ this project adheres to the stability contract in
   appear multiple times` while the plan looked clean. Verified against the live
   API before fixing.
 
+- **A caller-supplied `db_kms_key_arn` no longer encrypts the `postgresql` log
+  group.** CloudWatch Logs cannot use a CMK unless that key's policy grants
+  `logs.<region>.amazonaws.com` the `kms:Encrypt`, `kms:Decrypt`,
+  `kms:ReEncrypt*`, `kms:GenerateDataKey*` and `kms:DescribeKey` actions. A
+  centrally-owned key, which is the whole use case for the input, will not
+  carry that statement by default, so `CreateLogGroup` failed with
+  `InvalidParameterException` before the RDS instance was created, leaving a
+  half-built stack. Worse, no AWS provider data source returns a key policy
+  (`data.aws_kms_key` has no `policy` attribute and there is no
+  `aws_kms_key_policy` data source), so the prerequisite cannot be verified at
+  plan time and the failure could not be predicted.
+
+  The log group now resolves through its own local. On the module-managed path
+  nothing changes: the module wrote the CloudWatch Logs statement onto the CMK
+  it created, so the log group stays on that key. On the bring-your-own path
+  the log group falls back to CloudWatch's AWS-managed encryption unless
+  `db_logs_kms_key_arn` is set. A `check` block discloses that fallback on
+  every plan, because "I gave the module my CMK" and "everything the module
+  creates uses my CMK" are different claims and a reviewer will ask which is
+  true. Setting `db_logs_kms_key_arn` silences it.
+
+  Three things about a supplied key *are* checkable and are now checked, for
+  both `db_kms_key_arn` and `db_logs_kms_key_arn`: `key_state` is `Enabled`,
+  `key_usage` is `ENCRYPT_DECRYPT`, and `key_spec` is `SYMMETRIC_DEFAULT`.
+  That covers a mistyped, deleted, disabled, pending-deletion, asymmetric or
+  sign-only key. The describe adds no IAM requirement, since creating an
+  encrypted RDS instance already requires `kms:DescribeKey` and
+  `kms:CreateGrant` of the caller. The key's region is asserted from the ARN
+  string with no API call, so it holds even on paths where the key is unused.
+  `s3_kms_key_arn` deliberately gets no such probe: the module needs no
+  permission on that key, and describing it would invent an IAM requirement
+  that does not otherwise exist.
+
 ### Added
+
+- **Customer-managed infrastructure**, consolidated. Every layer this module
+  can provision (EKS, RDS, ElastiCache Redis, S3, the cluster controllers) can
+  also be pointed at infrastructure the caller already runs, following the
+  same `create_<x>` / reference-variable / `validation` shape throughout.
+  Most of these toggles already shipped individually across earlier releases;
+  what's new here is making the pattern discoverable as one thing:
+
+  - A new [`README.md` → "Customer-managed infrastructure"](./README.md#customer-managed-infrastructure)
+    section with a single state-matrix table (layer, toggle, reference
+    inputs) instead of the pattern being scattered across per-variable docs.
+  - A new [`docs/customer-managed-infrastructure.md`](./docs/customer-managed-infrastructure.md)
+    for contributors, documenting the convention itself: why a static
+    boolean rather than `x == null` inference, the checklist for adding a
+    new customer-managed layer, and why the module deliberately does not
+    add `data`-source checks of a caller-supplied resource's security
+    configuration (an AWS API call at plan time that hard-fails for anyone
+    whose credentials can't read that specific resource).
+  - Four new runnable examples,
+    [`examples/customer-managed-redis`](./examples/customer-managed-redis/),
+    [`examples/customer-managed-s3`](./examples/customer-managed-s3/),
+    [`examples/customer-managed-cluster`](./examples/customer-managed-cluster/),
+    and [`examples/customer-managed-everything`](./examples/customer-managed-everything/).
+    The first three each provision a plain-Terraform stand-in for one piece
+    of infrastructure a customer would already have and point the module at
+    it with `create_elasticache = false` / `create_s3_bucket = false` /
+    `create_eks = false`. `customer-managed-redis` also doubles as a
+    runnable demonstration that AUTH and TLS work on the customer-managed
+    Redis path (`redis_auth_token`, `redis_transit_encryption_enabled`),
+    which the module's own docs incorrectly described as unsupported until
+    this release (see Fixed, below). `customer-managed-everything` combines
+    all three stand-ins plus a direct `modules/controllers` invocation, so
+    every layer the module can create is customer-managed at once.
+    `customer-managed-cluster` and `customer-managed-everything` have no
+    full-plan `terraform test` coverage, unlike the other two: the module's
+    own `data.aws_eks_cluster.existing` read cannot be resolved to a known
+    value under `command = plan` with mocked providers once nested inside
+    an example's own `module "n8n"` call, confirmed by direct
+    experimentation rather than assumed. See each example's own
+    `tests/defaults.tftest.hcl` for the full writeup; the module's own
+    `create_eks = false` logic is unaffected and remains covered by the
+    repo root's own test suite.
+  - Terminology: user-facing docs now say "customer-managed" rather than
+    "bring your own"/"BYO" throughout (`create_ingress`, `redis_host`, the
+    two `n8n_*_service_name` outputs, the "Bring your own Redis" and "Bring
+    your own Ingress" `README.md` sections, now "Customer-managed Redis" and
+    "Customer-managed Ingress").
+
+  No variable names, defaults, or behavior changed as part of this: this is
+  a documentation and discoverability consolidation over toggles that
+  already existed. Tracked in [#88](https://github.com/n8n-io/terraform-aws-n8n/issues/88).
+
+- `modules/controllers` submodule. The AWS Load Balancer Controller,
+  Cluster Autoscaler, metrics-server, KEDA and the EBS CSI driver, previously
+  flat root-level resources, now live in a nested submodule that the root
+  module calls by default (`controllers.tf`), so every existing deployment's
+  plan is unchanged: same `install_*`/`create_ebs_csi` variables, same
+  names, same defaults, at the same `module "n8n" { ... }` call site. The
+  point of the extraction is for an advanced caller deploying onto an
+  existing cluster (`create_eks = false`) to be able to invoke
+  `modules/controllers` directly with only the controllers they actually
+  need, instead of the root module's five toggles being the only way in.
+  State-safe: every relocated resource has a `moved` block in
+  `refactoring.tf` chaining from its prior address, so upgrading is a no-op
+  plan for every existing deployment, not a destroy-and-recreate of live
+  Helm releases and IAM roles. The Load Balancer Controller's and Cluster
+  Autoscaler's IAM role, policy and Pod Identity association remain
+  unconditional regardless of `install_lbc`/`install_cluster_autoscaler`
+  (unchanged from before the extraction; see the "Cluster controllers"
+  comment above `install_lbc` in `variables.tf` for why that's deliberate,
+  not an oversight).
+
+- `n8n_encryption_key` input (default `null`, sensitive) overrides the
+  module-generated `N8N_ENCRYPTION_KEY`. Every deployment before this input
+  existed got a fresh `random_id` with no way to supply one, which silently
+  blocked disaster recovery: n8n encrypts stored credentials under this key,
+  so restoring an RDS snapshot into a new stack (a rebuilt cluster, a
+  cross-region standby, any fresh `terraform apply` against the same
+  database) generated a brand-new random key, leaving every credential the
+  restored database already held permanently undecryptable under it. Set this
+  to the original deployment's key, retrieved beforehand with
+  `terraform output -raw n8n_encryption_key`, to keep decrypting the same
+  database's credentials across a restore, a rebuild, or an adoption of this
+  input by a deployment that already has a `random_id`-generated key. Must be
+  exactly 64 hexadecimal characters (32 bytes), the shape `random_id` with
+  `byte_length = 32` has always produced; anything else is rejected at plan
+  time.
+
+  Left `null` (the default), behavior is unchanged: the module generates the
+  key exactly as it always has. Gating `random_id.n8n_encryption_key`'s
+  `count` on this input changes its resource address from `.n8n_encryption_key`
+  to `.n8n_encryption_key[0]`; a `moved` block in `refactoring.tf` absorbs
+  that, so upgrading onto this input without setting it is a no-op, verified
+  by `terraform plan` rather than by inspection.
+
+  **This is not a rotation mechanism.** n8n's own docs describe
+  `N8N_ENCRYPTION_KEY` as an instance master key that is set once and never
+  changes; a separate data encryption key, stored in the database and itself
+  encrypted by this one, is what n8n's own key-rotation feature
+  (`N8N_ENV_FEAT_ENCRYPTION_KEY_ROTATION`, a one-way operation with no
+  rollback) actually rotates. Setting this variable to a value other than the
+  one a database's existing credentials were encrypted under does not migrate
+  or re-encrypt anything: it just makes every one of those credentials
+  permanently unreadable, with no recovery path on n8n's side. The only
+  supported uses are a first deployment against an empty database, or
+  restoring the *exact original* key into a rebuilt stack pointed at a
+  database that already holds credentials encrypted under that same key.
+
+  There is deliberately no `check` block for this input. What separates the safe
+  uses from the destructive one is what the target database already holds, which
+  no Terraform expression can read, and the one plan-time proxy available turned
+  out to be backwards: warning whenever the input met `create_database = false`
+  fired on the *documented* use (`aws_db_instance.n8n` takes no
+  `snapshot_identifier`, so restoring a database into a rebuilt stack means
+  restoring outside the module and pointing at it) while staying silent on the
+  likeliest real mistake (editing the value on a live `create_database = true`
+  deployment whose credentials are already encrypted under the generated key,
+  which plans clean and destroys all of them). The guidance is on the variable,
+  the `n8n_encryption_key` output, and in README.md instead.
+
+- `redis_transit_encryption_enabled` and the new `redis_auth_token` input now
+  also apply on the external-Redis path (`create_elasticache = false`),
+  closing a gap left by the Redis BYO hook: that path previously required an
+  unauthenticated, plaintext endpoint outright, rejected at plan time if
+  `redis_transit_encryption_enabled` was set alongside it. Both inputs now
+  describe properties of the caller's own Redis instead of a migration lever
+  on infrastructure the module manages: `redis_transit_encryption_enabled =
+  true` declares that the supplied `redis_host` speaks TLS (the module does
+  not verify this: getting it backwards either way is a connection failure,
+  not a security hole), and `redis_auth_token` (sensitive, default `null`)
+  supplies the AUTH credential for a Redis that requires one. Either, both,
+  or neither may be set independently, since a plain external Redis can
+  require AUTH without TLS, unlike ElastiCache. Both are wired into n8n and
+  KEDA identically to the module-managed path: a Kubernetes Secret referenced
+  by name, never inlined into the Helm release values or the ScaledObject
+  manifest.
+
+  `redis_transit_encryption_mode` and `redis_apply_immediately` remain
+  properties of the module-managed replication group specifically and do not
+  reach the external path; the existing
+  `redis_tuning_requires_module_managed_elasticache` check now also warns on
+  `redis_transit_encryption_mode`, and a new
+  `redis_auth_token_requires_external_redis` check warns when
+  `redis_auth_token` is set while `create_elasticache = true` (ignored, the
+  module generates and manages its own token there and cannot substitute a
+  caller-supplied one on infrastructure it owns).
+
+  On the module-managed path, nothing changes: `redis_tls_active` still
+  requires `create_elasticache = true` to mean anything, the module still
+  generates and rotates its own AUTH token, and `redis_transit_encryption_mode`
+  /`redis_apply_immediately` still drive the same three-apply migration.
+  Verified at plan time across every combination (TLS only, AUTH only, both,
+  neither) on the external path, and that the full existing module-managed
+  test suite (HA, TLS, AUTH, and the staged migration) still passes unchanged.
 
 - `n8n_image_repository` input (default `null`) points the Helm release at a
   custom n8n application image instead of the chart's
@@ -646,11 +883,14 @@ this project adheres to the stability contract in
   on main, worker and webhook processor, and as a new sensitive
   `redis_auth_token` output (`terraform output -raw redis_auth_token`).
 
-  Not compatible with `create_elasticache = false`, and rejected at plan time
-  rather than applied. The module cannot put a token on a Redis it does not
-  manage, and the combination would otherwise render `tls = true` plus a
-  generated password against the caller's plaintext endpoint: an apply that
-  succeeds and then fails at runtime.
+  Everything above describes the module-managed path. `create_elasticache =
+  false` was initially rejected outright alongside this flag, on the grounds that
+  the module cannot put a token on a Redis it does not manage: true, but it left
+  a caller with their own TLS-only or authenticated Redis unable to use the BYO
+  hook at all. Later in this same release the external path gained its own
+  meaning for this flag plus a `redis_auth_token` input; see the
+  `redis_transit_encryption_enabled` / `redis_auth_token` entry above for what it
+  does there.
 
 - **Worker autoscaling follows the encryption flag.** Both KEDA Redis triggers
   gain `enableTLS` and `passwordFromEnv: QUEUE_BULL_REDIS_PASSWORD` when
@@ -723,9 +963,18 @@ this project adheres to the stability contract in
   the cross-region HA/DR design presumes, so both regions can point at one
   shared, replication-capable Redis.
 
-  The module wires host and port only: an external Redis requiring AUTH or TLS
-  is not supported on this path yet. Two `check` blocks warn when the inputs
-  and the toggle disagree, rather than silently discarding what was asked for.
+  As first written this hook wired host and port only, leaving an external Redis
+  that required AUTH or TLS unsupported. That gap is closed later in this same
+  release: `redis_transit_encryption_enabled` and `redis_auth_token` both apply on
+  this path now (see their entry above), so a TLS-only or authenticated external
+  Redis works. Two `check` blocks warn when the inputs and the toggle disagree,
+  rather than silently discarding what was asked for.
+
+  Still unsupported on this path: Redis 6+ ACL usernames. `redis_auth_token` is a
+  password only, which is all ElastiCache AUTH tokens ever are, but a self-hosted
+  Redis authenticating against a named ACL user needs a username too. The chart
+  exposes `redis.username` for exactly this, so surfacing it would be a small
+  additive input if someone needs it.
 
   Upgrade note: gating the Redis tier on `create_elasticache` adds `count` to
   `aws_elasticache_cluster.n8n`, `aws_elasticache_subnet_group.n8n`, and
@@ -914,6 +1163,291 @@ this project adheres to the stability contract in
   from `count` to `for_each` would move it from `[0]` to `["<domain>"]`, and a
   `moved` block cannot express that because its addresses must be static, so
   every existing deployment would destroy and recreate its alias record.
+- `db_kms_key_arn` input (default `null`) lets a caller supply the ARN of an
+  existing KMS key for RDS storage encryption, Performance Insights data, and
+  the postgresql CloudWatch log group, instead of the module minting its own
+  Customer Managed Key (`aws_kms_key.db`). For organizations with a security
+  team that centrally owns all KMS keys and does not permit Terraform modules
+  to create new ones, this was previously a hard blocker: the module's CMK was
+  unconditional whenever `db_storage_encrypted = true` (the default), with no
+  escape hatch.
+
+  `aws_kms_key.db` and `aws_kms_alias.db` now gate on
+  `var.create_database && var.db_storage_encrypted && var.db_kms_key_arn == null`,
+  one more static, plan-time-known condition added to the ternary that was
+  already there, not a change from an unconditional resource to a conditional
+  one. `local.db_kms_key_arn` prefers `var.db_kms_key_arn` over
+  `aws_kms_key.db[0].arn` when both could apply, and feeds `kms_key_id` on
+  `aws_db_instance.n8n`, `performance_insights_kms_key_id`, and
+  `aws_cloudwatch_log_group.rds_postgresql.kms_key_id` exactly as before. It is
+  also gated on `var.db_storage_encrypted`, which keeps that flag the single
+  switch deciding whether this module encrypts anything with a CMK: without the
+  gate a supplied key still reached the log group while
+  `db_storage_encrypted = false`, contradicting both that resource's
+  null-passthrough contract and the `check` block below. A `validation` block
+  requires the value to look like a KMS key ARN
+  (`arn:aws:kms:<region>:<account-id>:key/<key-id>`), rejecting an alias ARN or
+  a malformed string at plan time. A new `check` block,
+  `db_kms_key_arn_requires_module_managed_encrypted_database`, warns (does not
+  fail) when `db_kms_key_arn` is set alongside `create_database = false` or
+  `db_storage_encrypted = false`, where it would be silently ignored.
+
+  **The supplied key's policy must grant the regional CloudWatch Logs service
+  principal `kms:Encrypt`, `kms:Decrypt`, `kms:ReEncrypt*`,
+  `kms:GenerateDataKey*` and `kms:DescribeKey`, or the apply fails.** RDS reaches
+  the key through a grant, so storage and Performance Insights need nothing
+  beyond the default root statement, but CloudWatch Logs rejects
+  `CreateLogGroup` against a key it cannot use, with
+  `InvalidParameterException`, and it fails there, before the RDS instance is
+  created, leaving a half-built stack. This cannot be caught at plan time: no
+  AWS provider data source returns a key policy, so there is no `check` block to
+  write. README.md → "Bring your own KMS key for RDS" carries the exact
+  statement to add, which is the `AllowCloudWatchLogsEncrypt` statement the
+  module puts on its own CMK.
+
+  Left at its default `null`, behavior is unchanged: the module still creates
+  its own CMK exactly as before. No `moved` block was needed: verified by
+  planning both the pre-change and post-change code against identical default
+  variables (mock providers, `terraform test`) and confirming both plans
+  propose creating `aws_kms_key.db[0]` and `aws_kms_alias.db[0]` at the same
+  addresses with the same action; the added condition only changes the
+  expression's value when `db_kms_key_arn` is actually set, which no existing
+  deployment can do since the input did not previously exist. This was
+  validated at plan time only, against mocked providers; no real AWS apply was
+  performed.
+
+- **Default S3 server-side encryption.** `aws_s3_bucket_server_side_encryption_configuration.n8n`
+  is a genuinely new resource: the module-managed bucket previously had no
+  server-side encryption configuration at all (`grep -rn
+  server_side_encryption` across the repo turned up nothing before this
+  change). Defaults to SSE-S3 (`AES256`, AWS-managed key), which needs no new
+  input. Set the new `s3_kms_key_arn` input to a Customer Managed Key ARN to
+  switch to SSE-KMS instead.
+
+  `s3_kms_key_arn` also adds a second statement to `aws_iam_policy.s3` granting
+  the n8n Pod Identity role `kms:Decrypt`, `kms:GenerateDataKey` and
+  `kms:DescribeKey`, scoped to that one key. SSE-KMS requires this of the
+  *requesting* principal: S3 performs the crypto as the caller, so a `GetObject`
+  needs `kms:Decrypt` and a `PutObject` needs `kms:GenerateDataKey`, and without
+  it every n8n binary-data read and write returns `AccessDenied` while the
+  bucket, its encryption configuration and the S3 half of the IAM policy all read
+  as correct. Because of that grant the input is meaningful on **both** bucket
+  paths, including `create_s3_bucket = false`: the module does not encrypt a
+  bucket it did not create, but it does have to be told which key that bucket is
+  already encrypted with, and it cannot read the bucket's configuration to infer
+  it. Anyone supplying an SSE-KMS bucket via `existing_s3_bucket_name` must set
+  `s3_kms_key_arn` too. The `validation` block accepts key ARNs only, not alias
+  ARNs, since an IAM policy `Resource` element cannot reference a KMS alias and a
+  grant written against one would silently match nothing. Not verified against a real upgrade of a live
+  deployment (no live cluster was available for this change); the plan-time
+  test suite confirms the resource plans cleanly and that no other S3 resource
+  changes shape as a result of adding it. Since the resource is new rather than
+  a change to an existing one's arguments, it should attach without touching
+  the existing bucket, but treat that as reasoning rather than a measured
+  upgrade result until verified on a real cluster.
+
+- **Bring your own S3 bucket.** `create_s3_bucket` input (default `true`,
+  mirroring `create_database`) and `existing_s3_bucket_name` input (required
+  when `create_s3_bucket = false`) let a caller point n8n at an S3 bucket they
+  already manage instead of the module creating one. With
+  `create_s3_bucket = false` the module creates no `aws_s3_bucket`, no
+  `aws_s3_bucket_public_access_block`, and no server-side encryption
+  configuration (the supplied bucket is the caller's to secure) but still
+  attaches `aws_iam_policy.s3` and the `aws_iam_role.s3` Pod Identity
+  association to the bucket's ARN, so the `n8n-enterprise` service account can
+  read and write it exactly as it would a module-managed bucket. The
+  `s3_bucket_name` output and `local.s3_bucket_name` (consumed by the Helm
+  release's `s3.bucket.name` value in `n8n.tf`) both resolve to whichever
+  bucket is actually in play.
+
+  The input is named `existing_s3_bucket_name` rather than `s3_bucket_name` to
+  avoid reading as the same name as the pre-existing `s3_bucket_name` output:
+  Terraform's input and output namespaces don't collide, but the two would be
+  easy to confuse in a caller's `tfvars`, the same reasoning that keeps
+  `db_host` distinct from the `rds_endpoint` output.
+
+  `aws_s3_bucket.n8n` and `aws_s3_bucket_public_access_block.n8n` moved from
+  unconditional to `count`-gated, changing their state address from `.n8n` to
+  `.n8n[0]` for every deployment left at the default `create_s3_bucket = true`.
+  `moved` blocks in `refactoring.tf` cover both, following the same pattern as
+  `create_database`'s existing blocks for `aws_db_subnet_group.n8n` and
+  `aws_db_instance.n8n`.
+
+  A plan-time `check` block,
+  `existing_s3_bucket_name_requires_create_s3_bucket_false`, warns (without
+  failing) when `existing_s3_bucket_name` is set while `create_s3_bucket = true`,
+  where the module creates its own bucket and the supplied name is ignored. There
+  is deliberately no equivalent check for `s3_kms_key_arn` alongside
+  `create_s3_bucket = false`: that combination is now the supported way to use a
+  caller-supplied SSE-KMS bucket, so warning on it would steer people away from
+  the one setting that makes their deployment work. The inverse (an SSE-KMS
+  bucket supplied with no `s3_kms_key_arn`) is the remaining footgun and is not
+  checkable, since the module would have to read the bucket's encryption
+  configuration through a data source, adding an AWS call at plan time and a hard
+  failure for anyone whose credentials cannot read it.
+
+- `iam_permissions_boundary_arn` input (default `null`) sets
+  `permissions_boundary` on every IAM role this module creates:
+  `aws_iam_role.cluster` and `aws_iam_role.nodes` (`eks.tf`),
+  `aws_iam_role.s3` (`s3.tf`), `aws_iam_role.lbc`,
+  `aws_iam_role.cluster_autoscaler`, `aws_iam_role.ebs_csi` (`iam.tf`), and
+  `aws_iam_role.rds_enhanced_monitoring` (`database.tf`, which exists only when
+  `create_database = true`). Seven roles in total; in an account whose SCP
+  enforces a boundary, missing any single one is enough to fail the whole apply.
+  Many organizations enforce an SCP or IAM policy requiring every role created
+  in-account to carry a permissions boundary, and without this input those
+  accounts could not use the module at all. Validated against the shape of an
+  IAM policy ARN (`arn:aws:iam::<account-id>:policy/...`) so a typo fails at
+  plan time rather than surfacing as an opaque `AccessDenied` on `CreateRole`.
+
+  `permissions_boundary = null` is a documented no-op in the AWS provider (the
+  argument is simply omitted from the API call), so every role takes the
+  argument unconditionally with no `count` or conditional gating, and the
+  default leaves every role exactly as boundary-less as before this input
+  existed: no diff for existing deployments.
+
+  Verified at plan time only: `terraform test` asserts
+  `permissions_boundary` is `null` on all seven roles by default and equal to a
+  supplied ARN on all seven when set, and that an ARN failing the regex is
+  rejected by the variable's `validation` block. Those runs enumerate the roles by
+  hand, which is a known weakness: Terraform's test language cannot enumerate
+  resources, so a role added later and left unwired would keep the suite green.
+  `grep -c 'resource "aws_iam_role"' *.tf` is the manual check, and it must equal
+  seven. This has **not** been
+  applied against a real AWS account with an enforced permissions-boundary
+  SCP; that is the one behavior a mocked plan cannot exercise (the mock `aws`
+  provider does not model boundary enforcement or denial), so treat this as
+  confirmed wiring rather than a confirmed unblock. Anyone adopting this in an
+  SCP-enforced account should run a real `terraform plan`/`apply` against that
+  account before relying on it.
+
+- `db_logs_kms_key_arn` input (default `null`) encrypts the `postgresql`
+  CloudWatch log group when `db_kms_key_arn` is supplied. It exists because
+  the module cannot verify that a caller-supplied key's policy lets
+  CloudWatch Logs use it; setting this input is the caller asserting that it
+  does, and it can name a different key their organization has already
+  blessed for logs. Ignored, with a `check` block saying so, whenever
+  `db_kms_key_arn` is `null`, because on that path the module created the CMK
+  and wrote the CloudWatch Logs statement onto it itself. See the
+  corresponding entry under Fixed.
+
+- `redis_username` input (default `null`) authenticates against a named
+  Redis 6+ ACL user on an external Redis, passed through to the chart's
+  `redis.username`. `redis_auth_token` supplies a password only, which is all
+  an ElastiCache AUTH token ever is, so a self-hosted Redis that
+  authenticates against a named user could not be reached through the
+  bring-your-own hook even with the token input available. Relevant only when
+  `create_elasticache = false`; a `check` block warns when it is set on the
+  module-managed path, where ElastiCache AUTH has no username concept.
+
+  Queue-depth autoscaling survives it. KEDA's Redis scaler declares its
+  `Username` field with
+  `keda:"name=username, order=triggerMetadata;resolvedEnv;authParams"`, so
+  the module wires the username into the `ScaledObject` trigger metadata
+  alongside the existing TLS and password-from-env settings. n8n reads
+  `QUEUE_BULL_REDIS_USERNAME` in
+  `packages/@n8n/config/src/configs/scaling-mode.config.ts`, which notes that
+  Redis 6.0 or higher is required.
+
+- `db_snapshot_identifier` input (default `null`) stands the module-managed
+  database up from an existing RDS snapshot instead of creating an empty one.
+  It is the other half of `n8n_encryption_key`: that input exists so a
+  rebuilt stack can decrypt the credentials an existing database already
+  holds, yet the only way to reach that state was
+  `create_database = false`, which gives up the module's management of the
+  subnet group, security group, CMK, log group retention, Enhanced
+  Monitoring and Performance Insights. Ignored, with a `check` block, when
+  `create_database = false`.
+
+  Four behaviours govern whether a restore works, three verified against the
+  `RestoreDBInstanceFromDBSnapshot` API reference and one against the
+  provider source, and all but the last are now checked at plan time by
+  describing the snapshot with `data.aws_db_snapshot`:
+
+  - **`snapshot_identifier` is `ForceNew`.** Setting it on a deployment that
+    already has a database destroys that database and restores the snapshot
+    in its place. It is for standing up a fresh stack around existing data,
+    not for reloading a running one.
+  - **Encryption comes from the snapshot and cannot be set while restoring**,
+    and both `storage_encrypted` and `kms_key_id` are `ForceNew`. A
+    configuration that disagrees does not fail once: Terraform wants to
+    replace the instance on every apply and can never reconcile. So the
+    inputs have to describe the snapshot. An unencrypted snapshot needs
+    `db_storage_encrypted = false`; an encrypted one needs `db_kms_key_arn`
+    set to the snapshot's own key, since a module-created CMK can never match
+    a snapshot that predates it. The key is compared on its UUID rather than
+    by whole-string equality, because a snapshot's `kms_key_id` can come back
+    as either the full ARN or the bare ID and a false mismatch would be worse
+    than no check.
+  - **The engine must be `postgres`** and `db_allocated_storage` must be at
+    least the snapshot's size, which AWS requires or the restore fails.
+  - **RDS ignores `DBName` when restoring PostgreSQL** ("This parameter only
+    applies to RDS for Oracle and RDS for SQL Server DB instances"), so the
+    restored database keeps its own name while this module sets
+    `n8n_enterprise`, and `db_name` is `ForceNew` too. No data source exposes
+    a snapshot's database name, so this one is documented rather than
+    checked: restore from a snapshot taken of a module-managed instance.
+
+  The master password does apply, despite the restore API taking no password
+  parameter: the AWS provider issues a `ModifyDBInstance` with
+  `MasterUserPassword` immediately afterwards. Worth re-checking on a
+  provider major bump, because n8n silently cannot connect if that ever
+  changes.
+
+  A further `check` warns when `db_snapshot_identifier` is set and
+  `n8n_encryption_key` is not. That combination is the one restore mistake
+  neither Terraform nor AWS can see: the apply succeeds, the workflows come
+  back, and every credential in them is unreadable, because n8n encrypted
+  them under the key of the instance the snapshot was taken from. It stays a
+  warning rather than an error, since restoring for the workflow data while
+  treating the credentials as disposable is a legitimate thing to want.
+
+- **Four inputs for the n8n defaults that are scheduled to change.** n8n prints
+  a deprecation warning on every pod start for four settings whose defaults it
+  intends to move in a future version. The warnings fire because nothing sets
+  them, not because setting them is wrong: n8n is asking operators to pin
+  today's value before it changes.
+
+  `n8n_task_runner_timeout` (default `300`) maps to
+  `N8N_RUNNERS_TASK_TIMEOUT` and is **emitted unconditionally**, which is the
+  one place this group departs from the module's usual omit-when-null
+  convention. n8n has announced this default drops from 300 seconds to 60, and
+  that change is a pure functional regression: nothing about a Code node task
+  that runs for four minutes becomes unsafe when the ceiling drops, it simply
+  starts failing, in a deployment where nothing changed but the n8n version.
+  Since 300 is n8n's current default, pinning it changes nothing today. Set it
+  to `60` to adopt n8n's future default early. Not to be confused with the
+  existing `n8n_task_runner_request_timeout`, which governs how long n8n waits
+  for a runner to *accept* a task rather than how long the task may then run;
+  both descriptions now say so.
+
+  `n8n_unverified_packages_enabled`,
+  `n8n_compression_max_decompressed_size_bytes` and
+  `n8n_compression_max_zip_entries` (all default `null`, env var omitted) map
+  to the remaining three. These are deliberately **not** pinned. Each is n8n
+  tightening a security posture rather than changing behaviour arbitrarily:
+  unverified community packages, and two limits bounding what the Compression
+  node will expand a hostile archive into. Freezing the permissive value on
+  every deployment's behalf is not a decision this module should make, so it
+  leaves them to n8n and exposes the lever for callers whose workflows
+  genuinely need the larger limit.
+
+  All four names are reserved against `n8n_extra_env`
+  (`N8N_RUNNERS_TASK_TIMEOUT` via the existing `N8N_RUNNERS_` prefix, the other
+  three by name), so an override there is rejected at plan time rather than
+  silently unpinning the timeout or moving a limit with no input to show for
+  it.
+
+  Two other warnings on n8n's list are not the module's to fix, and are
+  documented as expected rather than chased: `WEBHOOK_URL` is superseded by
+  `N8N_WEBHOOK_URL`, but the chart writes `WEBHOOK_URL` itself from the ingress
+  host and has no support for the successor, so the warning survives anything
+  the module does; `N8N_AVAILABLE_BINARY_DATA_MODES` comes from the chart too.
+  Both need an upstream chart change. Two further deprecations in that file do
+  not fire here at all: the chart sets
+  `OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true`, and
+  `N8N_DEFAULT_BINARY_DATA_MODE` only warns on the literal value `default`,
+  which this module never sets.
 
 ### Changed
 
@@ -997,6 +1531,33 @@ this project adheres to the stability contract in
   alias gate are now asserted. Sourcing the keys from `local.acm_domain_names`
   is also what makes `n8n_additional_domains` work, since the record set and the
   certificate's name list now come from the same place and cannot drift.
+
+- **The licence key no longer reaches n8n through Helm values.**
+  `license.activationKey` was set inline to `var.n8n_license_key`, so it was
+  rendered into the Helm release values and stored in the release Secret
+  in-cluster, on top of Terraform state. Every other credential the module
+  handles (database password, Redis token, encryption key) already went
+  through a `kubernetes_secret` and an `existingSecret` chart value; the
+  license key was the exception. It is now a key in the existing
+  `kubernetes_secret.n8n`, referenced by name. The task runner auth token
+  stays a literal `taskRunners.authToken.value`, unchanged: it encrypts
+  nothing, so moving it into a Secret would add a resource for no security
+  benefit.
+
+  The chart template is `if .Values.license.activationKey / else if
+  .Values.license.existingSecret.name`, so `activationKey` had to be dropped
+  rather than merely supplemented: sending both silently keeps the inline
+  path.
+
+  Verified by rendering chart 1.10.0, the version this module pins, with the
+  exact value shape the module sends: `n8n-main`, `n8n-worker` and
+  `n8n-webhook-processor` all resolve `N8N_LICENSE_ACTIVATION_KEY` through
+  `secretKeyRef`, and no literal renders anywhere in the manifests.
+
+  This does not remove the licence key from Terraform state: it is a module
+  input either way, so it is in state regardless; what changes is that it
+  stops being copied into the Helm release as well. Callers see a pod
+  restart on the next apply.
 
 ### Security
 
@@ -1131,6 +1692,65 @@ this project adheres to the stability contract in
   AGENTS.md's banner table. The four EKS inputs sit in their own section rather
   than under `Foundation inputs`, which covers infrastructure the caller
   supplies rather than control-plane properties the module owns.
+
+### Added
+
+- `n8n_license_key_secret_ref`, `db_password_secret_ref`,
+  `redis_auth_token_secret_ref` and `n8n_encryption_key_secret_ref` inputs.
+  Each is its value-input counterpart plus `_secret_ref`, and takes
+  `{name, key}` (key optional, defaulting per credential) naming a Kubernetes
+  Secret the caller already manages, e.g. one synced by External Secrets
+  Operator, instead of a raw value the module has to put in Terraform state on
+  the way through. The module never reads the referenced Secret's contents: it
+  only wires the chart's `existingSecret` / `passwordSecret` value at the name
+  and key given, so the credential never reaches Terraform state through this
+  path. Null by default on all four, so leaving them unset is a no-op for
+  every existing deployment. The task runner auth token has no equivalent
+  input: it encrypts nothing and matches no external system, so there is
+  nothing a caller-supplied value or Secret reference would add; the module
+  always generates it, unchanged from before this release.
+
+  The mechanism differs by credential, and getting it backwards was the
+  likeliest way to break this on a first pass. `db_password_secret_ref` and
+  `redis_auth_token_secret_ref` gate `kubernetes_secret.n8n_db` /
+  `kubernetes_secret.n8n_redis` to zero; both are rejected at plan time with
+  `create_database = true` / `create_elasticache = true`, since
+  `aws_db_instance.n8n` (`database.tf:374`) and
+  `aws_elasticache_replication_group.n8n` (`redis.tf:190`) need the
+  credential's actual value to provision that infrastructure, which a Secret
+  name cannot supply. `kubernetes_secret.n8n` is shared with configuration the
+  module still computes (`N8N_HOST`, `N8N_PORT`, `N8N_PROTOCOL`, `WEBHOOK_URL`),
+  so `n8n_license_key_secret_ref` drops its one key from that Secret's `data`
+  instead of gating the resource; the Secret itself keeps existing on that
+  path.
+
+  `n8n_encryption_key_secret_ref` is the exception to that: the chart's
+  `secretRefs.existingSecret` names a single Secret that `n8n.coreSecretsEnv`
+  reads all four of `N8N_ENCRYPTION_KEY`, `N8N_HOST`, `N8N_PORT` and
+  `N8N_PROTOCOL` from, so setting it replaces `kubernetes_secret.n8n` entirely.
+  That leaves the license key with nowhere to live unless it is also supplied
+  through `n8n_license_key_secret_ref`, so the module requires it whenever
+  `n8n_encryption_key_secret_ref` is set, and rejects the plan otherwise. The
+  task runner auth token is unaffected, since it never lived in
+  `kubernetes_secret.n8n` to begin with. See README.md → "Consuming a Secret
+  you already manage instead" for the full mechanism and a worked
+  `ExternalSecret` example covering the four-key contract.
+
+  Setting a `*_secret_ref` input alongside its value counterpart is rejected at
+  plan time, naming both inputs, rather than one silently winning the way the
+  chart's `license.activationKey` precedence rule already did once before (see
+  Finding 1 above). `db_password_secret_ref` and `redis_auth_token_secret_ref`
+  gained `moved` blocks in `refactoring.tf` for `kubernetes_secret.n8n_db` and
+  `kubernetes_secret.n8n`, both of which carried no `count` before this change
+  and therefore change address for every deployment that leaves both inputs
+  null; `kubernetes_secret.n8n_redis` needed no equivalent block, since it was
+  already `count`-gated on `local.redis_auth_active` and only gained a second,
+  narrower condition.
+
+  The module does not verify that a referenced Secret exists or carries the
+  expected key: reading it to check would put the credential back in Terraform
+  state, which defeats the reason this input exists. A typo surfaces only as a
+  pod stuck in `CreateContainerConfigError`, not as a Terraform error.
 
 ## [0.2.0] - 2026-07-15
 
