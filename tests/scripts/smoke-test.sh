@@ -887,7 +887,12 @@ else
 
         info "Waiting for execution to complete..."
         exec_state="unknown"
-        for i in $(seq 1 15); do
+        # 30 x 2s = 60s. A freshly booted worker's first job pays a one-time
+        # cold-start cost connecting to Redis/the broker; observed taking
+        # ~30-40s on a brand-new cluster even though the job itself is
+        # trivial, so the old 15 x 2s = 30s budget produced a false warning
+        # on an execution that in fact went on to succeed seconds later.
+        for i in $(seq 1 30); do
           sleep 2
           exec_state=$(curl -sk \
             --max-time 10 \
@@ -905,8 +910,8 @@ else
               info "Check logs: kubectl logs $N8N_POD -n $NAMESPACE -c n8n --tail=50"
             fi
             break
-          elif [[ "$i" -eq 15 ]]; then
-            warn "Execution still in state '$exec_state' after 30s"
+          elif [[ "$i" -eq 30 ]]; then
+            warn "Execution still in state '$exec_state' after 60s"
             if [[ "$DEPLOY_MODE" == "multi" ]]; then
               info "May be slow to process — check: kubectl logs -n $NAMESPACE -l app.kubernetes.io/component=worker --tail=50"
             fi

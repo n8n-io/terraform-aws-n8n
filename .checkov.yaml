@@ -1,0 +1,26 @@
+# Repo-wide checkov config, auto-loaded from the working directory and also
+# passed explicitly by tests/scripts/check-checkov.sh, which is the single
+# invocation both contributors and the CI job (.github/workflows/terraform-tests.yml)
+# run. That script also enforces the pinned CHECKOV_VERSION, because which
+# checks even apply depends on the checkov version, not only on this file.
+#
+# Deliberately no `skip-check` here. Every finding this module accepts is
+# annotated at the resource that causes it with an inline
+# `checkov:skip=<ID>:<reason>` comment, so the reasoning sits next to the code
+# and the check stays live everywhere else. A repo-wide `skip-check` would also
+# silence the same ID on code written later, which is exactly what the
+# hard-fail gate is meant to prevent (see issue #27).
+#
+# skip-path excludes the tests/ directories, which hold nothing but Terraform
+# `.tftest.hcl` files and the shell wrappers in tests/scripts/. A .tftest.hcl
+# file declares run blocks and provider mocks, not infrastructure, so there is
+# nothing in one for checkov to assess. Checkov's HCL parser also fails outright
+# on examples/large/tests/defaults.tftest.hcl, and while a parsing error does
+# not affect the exit code, an unexplained error line in a gate that is supposed
+# to report clean is a trap for whoever reads the next CI failure. Verified this
+# hides no real terraform: the passed-check count is identical with and without
+# it, and only the parsing error goes away. (Suffix patterns such as
+# `.*\.tftest\.hcl$` do not work here; skip-path matches path prefixes and
+# directory names, so a bare directory name is the working form.)
+skip-path:
+  - "tests"

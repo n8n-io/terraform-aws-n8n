@@ -1,9 +1,69 @@
+# ── Customer Managed KMS key (optional) ───────────────────────────────────────
+# Encrypts the replication group's at-rest data (CKV_AWS_191) with a
+# module-created CMK instead of the AWS-managed key ElastiCache defaults to.
+# Same rotation and deletion-window shape as aws_kms_key.db in database.tf,
+# but without that key's CloudWatch Logs statement: ElastiCache does not write
+# through this key the way RDS writes its postgresql log group through
+# aws_kms_key.db, it only uses the key to encrypt the replication group's own
+# storage. AWS documents that ElastiCache creates the grant it needs on this
+# key itself at creation time, via the caller's own kms:CreateGrant
+# permission, so the EnableRootAccess statement below is enough. Unlike the
+# HA/TLS measurements elsewhere in this file, that is what AWS's documentation
+# says, not something exercised against a live replication group.
+#
+# kms_key_id only exists on aws_elasticache_replication_group, so this key
+# (like the resource it encrypts) only ever applies to the opt-in topology.
+# There is no way to give the default single-node aws_elasticache_cluster a
+# CMK: enabling this on a deployment that asked for neither HA nor TLS moves
+# it onto the replication group too, at the same one-node cost but a
+# different resource type. See var.redis_kms_encryption_enabled's description
+# in variables.tf.
+locals {
+  redis_kms_key_arn = try(aws_kms_key.redis[0].arn, null)
+}
+
+resource "aws_kms_key" "redis" {
+  # redis_kms_encryption_enabled is one of the three inputs OR'd into
+  # local.redis_needs_replication_group, so it being true already implies
+  # that local is true too; testing only the variable here avoids restating
+  # the implication.
+  count = var.create_elasticache && var.redis_kms_encryption_enabled ? 1 : 0
+
+  description             = "CMK for module-managed ElastiCache Redis ${local.cluster_name}"
+  enable_key_rotation     = true
+  deletion_window_in_days = 7
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "EnableRootAccess"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+    ]
+  })
+
+  tags = merge(local.common_tags, { Name = "n8n-redis-${local.cluster_name}" })
+}
+
+resource "aws_kms_alias" "redis" {
+  count = var.create_elasticache && var.redis_kms_encryption_enabled ? 1 : 0
+
+  name_prefix   = "alias/n8n-redis-${local.cluster_name}-"
+  target_key_id = aws_kms_key.redis[0].key_id
+}
+
 # ── Security group ────────────────────────────────────────────────────────────
 # Skipped along with the rest of the Redis tier when create_elasticache = false:
 # nothing in the module would attach to it, and the caller's own Redis carries
 # its own rules.
 
 resource "aws_security_group" "redis" {
+  # checkov:skip=CKV_AWS_382:Egress-all is intentional. ElastiCache does not originate arbitrary outbound traffic; restricting it risks silently breaking AWS API calls (KMS, CloudWatch) routed through the VPC without a matching VPC endpoint, for no real security benefit on a non-internet-facing managed service.
+  # checkov:skip=CKV2_AWS_5:This group IS attached: both Redis topologies reference it as security_group_ids = [aws_security_group.redis[0].id], aws_elasticache_cluster.n8n and aws_elasticache_replication_group.n8n below, and exactly one of the two exists for any given input. Checkov does not build the graph edge between two count-expanded resources, so it cannot see either attachment. Verified by deleting `count` from this resource alone, which makes the finding disappear while nothing else changes; the same artifact is documented on CKV2_AWS_30 in database.tf. The count has to stay, because create_elasticache = false means no Redis tier at all and nothing for this group to attach to.
   count = var.create_elasticache ? 1 : 0
 
   name        = "n8n-redis-sg-${local.cluster_name}"
@@ -19,6 +79,7 @@ resource "aws_security_group" "redis" {
   }
 
   egress {
+    description = "Allow all outbound"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -71,17 +132,19 @@ resource "random_password" "redis_auth_token" {
 #   - a replica with automatic failover exists only on the replication group
 #   - auth_token exists ONLY on the replication group, and AWS further requires
 #     transit encryption to be on before AUTH can be enabled at all
+#   - kms_key_id (a customer-managed key) exists ONLY on the replication group
 #
-# So redis_high_availability_enabled and redis_transit_encryption_enabled each
-# select the replication group, for unrelated reasons, and EITHER one being set
-# is enough. They are independent: TLS does not buy a replica, and HA does not
-# buy encryption. See the attributes below, each gated on its own variable.
+# So redis_high_availability_enabled, redis_transit_encryption_enabled and
+# redis_kms_encryption_enabled each select the replication group, for
+# unrelated reasons, and ANY ONE being set is enough. They are independent:
+# TLS does not buy a replica, HA does not buy encryption, and a CMK does not
+# buy either. See the attributes below, each gated on its own variable.
 #
 # Migrating everyone to the replication group would have been simpler to read,
 # but it replaces the cache for every existing deployment. The default path
 # therefore keeps the cluster resource it has always used, and only callers who
-# opt into one of the two features take the replacement. `moved` cannot bridge
-# resource types, and the queue goes with the node, so the flip is a
+# opt into one of the three features take the replacement. `moved` cannot
+# bridge resource types, and the queue goes with the node, so the flip is a
 # maintenance-window operation rather than a rolling change. See README →
 # "Redis high availability".
 #
@@ -93,7 +156,8 @@ resource "random_password" "redis_auth_token" {
 # writing it out now would be a gratuitous attribute change on every existing
 # deployment for a value that is already what it says.
 
-# Default: one node, no failover, no encryption. Cheapest, and a single point of
+# Default: one node, no failover, no encryption beyond the AWS-managed key
+# every ElastiCache resource already gets. Cheapest, and a single point of
 # failure for both the queue and multi-main leader election.
 resource "aws_elasticache_cluster" "n8n" {
   count = var.create_elasticache && !local.redis_needs_replication_group ? 1 : 0
@@ -108,15 +172,31 @@ resource "aws_elasticache_cluster" "n8n" {
   subnet_group_name  = aws_elasticache_subnet_group.n8n[0].name
   security_group_ids = [aws_security_group.redis[0].id]
 
+  # Daily snapshot (CKV_AWS_134). n8n uses this Redis as a BullMQ queue/cache,
+  # not a source of truth, so a snapshot only shortens recovery of in-flight
+  # queued executions after a failure - it's cheap insurance, not a durability
+  # requirement.
+  snapshot_retention_limit = var.redis_snapshot_retention_limit
+
   tags = merge(local.common_tags, { Name = "${local.cluster_name}-redis" })
 }
 
-# Opt-in, selected by EITHER feature. Each variable controls only its own
-# attributes below, so the three reachable shapes are:
+# Opt-in per feature. Each variable controls only its own attribute(s) below,
+# and none of the three interacts with another beyond all three sharing this
+# one resource, so every reachable combination is:
 #
-#   HA only   two nodes across two AZs, automatic failover, plaintext
-#   TLS only  one node, no failover, transit encryption + AUTH
-#   both      two nodes across two AZs, automatic failover, encryption + AUTH
+#   HA only         two nodes across two AZs, automatic failover, plaintext, AWS-managed key
+#   TLS only        one node, no failover, transit encryption + AUTH, AWS-managed key
+#   CMK only        one node, no failover, plaintext, customer-managed key
+#   HA + TLS        two nodes across two AZs, automatic failover, encryption + AUTH, AWS-managed key
+#   HA + CMK        two nodes across two AZs, automatic failover, plaintext, customer-managed key
+#   TLS + CMK       one node, no failover, transit encryption + AUTH, customer-managed key
+#   HA + TLS + CMK  two nodes across two AZs, automatic failover, encryption + AUTH, customer-managed key
+#
+# kms_key_id is the only line redis_kms_encryption_enabled touches: it never
+# changes node count, failover, or encryption/AUTH, it only ever swaps which
+# column of the AWS-managed/customer-managed pair applies to whatever the
+# other two produced.
 #
 # On the HA attributes: num_cache_clusters = 2 is the minimum topology
 # automatic_failover_enabled accepts and the cheapest that removes the single
@@ -137,6 +217,7 @@ resource "aws_elasticache_cluster" "n8n" {
 # left alone here. See README ->
 # "What this actually buys you, measured".
 resource "aws_elasticache_replication_group" "n8n" {
+  # checkov:skip=CKV2_AWS_50:Automatic failover and Multi-AZ are wired to var.redis_high_availability_enabled below, so this check passes for the caller who asks for high availability and fails only on the TLS-only shape, where it is describing the design rather than a defect. This one resource is selected by EITHER redis_high_availability_enabled OR redis_transit_encryption_enabled, and the two are deliberately independent: enabling transit encryption must not also add a second node and double the Redis bill. See the comment above this resource for the three reachable shapes. A caller who wants the failover this check asks for sets redis_high_availability_enabled = true, which is exactly what the input is for.
   count = var.create_elasticache && local.redis_needs_replication_group ? 1 : 0
 
   # Deliberately NOT "<cluster_name>-redis", which is what the cluster above
@@ -231,11 +312,22 @@ resource "aws_elasticache_replication_group" "n8n" {
   # default deployment is unaffected either way.
   #
   # This is at-rest only and is independent of transit encryption, which arrives
-  # with redis_transit_encryption_enabled (#41). Checkov CKV_AWS_191 additionally
-  # wants a customer-managed KMS key here; that is left unaddressed on purpose,
-  # matching how the module already treats RDS, and is a deliberate default for
-  # a getting-started template rather than an oversight.
+  # with redis_transit_encryption_enabled (#41).
   at_rest_encryption_enabled = true
+
+  # null (the AWS-managed key) unless redis_kms_encryption_enabled opts into a
+  # module-managed CMK. Defaults to false: at_rest_encryption_enabled above
+  # already encrypts every deployment, so a CMK is an upgrade over an
+  # already-secure baseline, not a gap this resource ships with. ForceNew,
+  # like replication_group_id above, so flipping it on an existing replication
+  # group replaces it and drops the queue. Clears Checkov finding CKV_AWS_191.
+  kms_key_id = local.redis_kms_key_arn
+
+  # Same knob and same reasoning as the single-node cluster above. Set here too
+  # so that turning on HA or TLS does not silently drop the daily snapshot the
+  # default topology takes: the two resources are independent, and a caller who
+  # left var.redis_snapshot_retention_limit alone did not ask for that.
+  snapshot_retention_limit = var.redis_snapshot_retention_limit
 
   subnet_group_name  = aws_elasticache_subnet_group.n8n[0].name
   security_group_ids = [aws_security_group.redis[0].id]
@@ -286,13 +378,16 @@ check "redis_tuning_requires_module_managed_elasticache" {
     condition = var.create_elasticache ? true : (
       var.redis_node_type == "cache.t3.medium" &&
       !var.redis_high_availability_enabled &&
-      !var.redis_apply_immediately
+      !var.redis_apply_immediately &&
+      !var.redis_kms_encryption_enabled &&
+      var.redis_snapshot_retention_limit == 1
     )
     error_message = join("", [
-      "redis_node_type, redis_high_availability_enabled or redis_apply_immediately is set while ",
+      "redis_node_type, redis_high_availability_enabled, redis_apply_immediately, ",
+      "redis_kms_encryption_enabled or redis_snapshot_retention_limit is set while ",
       "create_elasticache = false. The module creates no ElastiCache in that mode, so none of them ",
-      "apply. Sizing, failover and modification timing are properties of the Redis you supply via ",
-      "redis_host.",
+      "apply. Sizing, failover, modification timing, at-rest encryption and snapshot retention are ",
+      "properties of the Redis you supply via redis_host.",
     ])
   }
 }

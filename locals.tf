@@ -131,15 +131,23 @@ locals {
   )
 
   # ── Redis topology selection ───────────────────────────────────────────────
-  # Two independent features both require aws_elasticache_replication_group,
-  # for unrelated reasons: automatic failover and auth_token are each available
-  # only on that resource type. Naming the disjunction once keeps the two
-  # resources in redis.tf provably mutually exclusive. Written inline in both
-  # counts, the pair would be two expressions that have to be kept each other's
-  # exact negation by hand, and getting that wrong means either two caches or
-  # none.
+  # Three independent features all require aws_elasticache_replication_group,
+  # each for an unrelated reason: automatic failover and auth_token are only
+  # available on that resource type, and so is kms_key_id. Naming the
+  # disjunction once keeps the two resources in redis.tf provably mutually
+  # exclusive. Written inline in both counts, the pair would be two
+  # expressions that have to be kept each other's exact negation by hand, and
+  # getting that wrong means either two caches or none.
+  #
+  # None of the three drags in another: a caller who opts into a CMK does not
+  # also get a second node or transit encryption, and a caller who asks only
+  # for HA does not also get a CMK. See the doc comment above
+  # aws_elasticache_replication_group.n8n in redis.tf for every reachable
+  # combination.
   redis_needs_replication_group = (
-    var.redis_high_availability_enabled || var.redis_transit_encryption_enabled
+    var.redis_high_availability_enabled
+    || var.redis_transit_encryption_enabled
+    || var.redis_kms_encryption_enabled
   )
 
   # Chart fragment carrying QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD, merged into the

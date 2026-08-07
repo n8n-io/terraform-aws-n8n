@@ -26,6 +26,7 @@ data "aws_availability_zones" "available" {
 }
 
 module "vpc" {
+  # checkov:skip=CKV_TF_1:A commit hash cannot be expressed for a Terraform Registry source: this address takes a `version` constraint, and pinning a SHA would mean switching to a `git::` source, which is the weaker supply-chain posture the check exists to discourage. Registry releases are immutable per published version. Annotated per call rather than suppressed repo-wide, so the check still fires if a genuinely mutable git:: source is ever added.
   source  = "terraform-aws-modules/vpc/aws"
   version = "~> 5.0"
 

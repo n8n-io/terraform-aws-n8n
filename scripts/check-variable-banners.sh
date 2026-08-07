@@ -33,7 +33,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 FILES=(variables.tf outputs.tf)
-VARIABLE_BANNERS=("Common" "Foundation inputs" "Ingress" "Nodes" "n8n chart" "n8n resource requests and limits" "Execution settings" "Graceful shutdown" "Task runners" "RDS PostgreSQL" "ElastiCache Redis" "HPA: main pods" "HPA: webhook processor pods" "Observability" "Community packages" "KEDA: worker pods")
+VARIABLE_BANNERS=("Common" "Foundation inputs" "EKS cluster" "Ingress" "Nodes" "n8n chart" "n8n resource requests and limits" "Execution settings" "S3" "Graceful shutdown" "Task runners" "RDS PostgreSQL" "ElastiCache Redis" "HPA: main pods" "HPA: webhook processor pods" "Observability" "Community packages" "KEDA: worker pods")
 OUTPUT_BANNERS=("App DNS" "Secrets" "Infrastructure")
 BANNER_LOOSE_RE='^#[[:space:]]+[─—-]'
 BANNER_STRICT_RE='^# ── (.+) ─{2,}$'

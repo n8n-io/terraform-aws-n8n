@@ -8,6 +8,8 @@
 # Source: https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v3.2.1/docs/install/iam_policy.json
 
 data "aws_iam_policy_document" "lbc" {
+  # checkov:skip=CKV_AWS_111:Verbatim transcription of the upstream AWS Load Balancer Controller IAM policy (source URL above). Narrowing actions/resources diverges from the AWS-maintained policy and risks breaking the controller; track upstream for tightening instead.
+  # checkov:skip=CKV_AWS_356:Same rationale as CKV_AWS_111 above - several of these actions (e.g. elasticloadbalancing:Describe*, ec2:Describe*) do not support resource-level ARNs in IAM at all, so "*" is the only valid value regardless.
   statement {
     effect    = "Allow"
     actions   = ["iam:CreateServiceLinkedRole"]
@@ -308,6 +310,8 @@ resource "aws_eks_pod_identity_association" "lbc" {
 # ── Cluster Autoscaler IAM ────────────────────────────────────────────────────
 
 resource "aws_iam_policy" "cluster_autoscaler" {
+  # checkov:skip=CKV_AWS_290:The Describe* actions in the first statement don't support resource-level ARNs in IAM at all, so "*" is required. The write actions in the second statement are scoped via a ResourceTag condition to this cluster's own node group ASGs (see eks.tf's k8s.io/cluster-autoscaler tags) - AWS's own documented mitigation for Auto Scaling APIs, which likewise don't support resource-level ARNs.
+  # checkov:skip=CKV_AWS_355:Same rationale as CKV_AWS_290 above.
   name = "${local.cluster_name}-cluster-autoscaler-policy"
   tags = local.common_tags
 
@@ -337,6 +341,11 @@ resource "aws_iam_policy" "cluster_autoscaler" {
           "autoscaling:TerminateInstanceInAutoScalingGroup",
         ]
         Resource = "*"
+        Condition = {
+          StringEquals = {
+            "autoscaling:ResourceTag/k8s.io/cluster-autoscaler/${local.cluster_name}" = "owned"
+          }
+        }
       },
     ]
   })

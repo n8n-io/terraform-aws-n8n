@@ -91,6 +91,7 @@ resource "aws_kms_alias" "db" {
 # the database; nothing from the public internet can.
 
 resource "aws_security_group" "rds" {
+  # checkov:skip=CKV_AWS_382:Egress-all is intentional. RDS does not originate arbitrary outbound traffic; restricting it risks silently breaking AWS API calls (KMS, CloudWatch) routed through the VPC without a matching VPC endpoint, for no real security benefit on a non-internet-facing managed service.
   name        = "n8n-rds-sg-${local.cluster_name}"
   description = "Allow PostgreSQL access from within the VPC"
   vpc_id      = local.vpc_id
@@ -135,6 +136,7 @@ resource "aws_security_group" "rds" {
   }
 
   egress {
+    description = "Allow all outbound"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -209,12 +211,82 @@ resource "aws_cloudwatch_log_group" "rds_postgresql" {
   tags = merge(local.common_tags, { Name = "n8n-postgres-${local.cluster_name}-logs" })
 }
 
+# ── Parameter group (query logging + enforced TLS) ────────────────────────────
+# RDS's default parameter group logs no statements at all (log_statement =
+# none, log_min_duration_statement = -1), so the postgresql export configured on
+# the instance below carries only startup, error and checkpoint lines. This
+# group turns on the two settings that make that export useful for diagnosing a
+# slow or stuck n8n instance (CKV2_AWS_30) and requires TLS on every connection
+# (CKV2_AWS_69).
+#
+# Deliberately not log_statement = "all". n8n's queries carry workflow and
+# execution payloads, so logging every statement would copy customer data into
+# CloudWatch Logs and scale ingestion cost with execution volume. "ddl" logs
+# schema changes only (n8n runs migrations on startup, which is exactly what
+# you want in the log after an upgrade), and the 1000 ms threshold catches slow
+# queries without touching normal traffic.
+#
+# rds.force_ssl = 1 is already the RDS default for PostgreSQL 15 and later (it
+# is 0 on 14 and older), so at this module's default db_engine_version it
+# changes nothing and only closes the gap for callers who pin an older major.
+# It is safe against the module's own topology either way: n8n connects over
+# TLS by default (db_postgresdb_ssl_enabled), and the documented reason to set
+# that to false is an in-cluster pooler that terminates TLS on its own upstream
+# leg to the database.
+#
+# Operational note for existing deployments: switching an instance from the
+# default parameter group to a custom one takes effect only after a reboot, so
+# the new settings land in the next maintenance window (or on a manual reboot),
+# not at apply time. New deployments get them from the start.
+#
+# name_prefix plus create_before_destroy because a major-version bump changes
+# `family`, which forces replacement, and RDS refuses to delete a parameter
+# group that is still attached to an instance.
+#
+# `family` tracks var.db_engine_version directly, but the instance below
+# ignores changes to its own engine_version (see the lifecycle block there),
+# so bumping the major version in tfvars alone moves this group to the new
+# family before the instance has actually upgraded, and RDS rejects the
+# attachment. The check block below the instance warns about this mismatch
+# before that rejection happens. See README.md → "Bumping db_engine_version
+# across a major version" for the required out-of-band upgrade order.
+
+resource "aws_db_parameter_group" "n8n" {
+  count = var.create_database ? 1 : 0
+
+  name_prefix = "n8n-postgres-${local.cluster_name}-"
+  family      = "postgres${split(".", var.db_engine_version)[0]}"
+
+  parameter {
+    name  = "log_statement"
+    value = "ddl"
+  }
+
+  parameter {
+    name  = "log_min_duration_statement"
+    value = "1000"
+  }
+
+  parameter {
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = merge(local.common_tags, { Name = "n8n-postgres-${local.cluster_name}" })
+}
+
 # ── RDS PostgreSQL instance ───────────────────────────────────────────────────
 # Skipped when create_database = false — the caller provides an external
 # database (e.g. Amazon Aurora). n8n.tf uses db_host / db_password directly
 # in that case.
 
 resource "aws_db_instance" "n8n" {
+  # checkov:skip=CKV2_AWS_30:Query logging IS configured: aws_db_parameter_group.n8n above sets log_statement and log_min_duration_statement, and parameter_group_name below attaches it. Checkov reports this resource twice, once unexpanded and once as the count copy `[0]`, and only the count copy fails: checkov does not build the graph edge between two count-expanded resources, so the copy never sees its own parameter group. Verified by deleting `count` from the parameter group alone, which makes both copies pass while nothing else changes. Neither `one(aws_db_parameter_group.n8n[*].name)` nor any other reference form works around it, and the count has to stay because create_database = false means no database resources at all. Not a coverage gap: tests/defaults.tftest.hcl asserts the group's family and its full parameter set, so a regression there fails `terraform test`. The attachment itself is not plan-assertable, because name_prefix means the group's name is only known after apply.
   # checkov:skip=CKV_AWS_293:Deletion protection is intentionally left at the provider default (false) so `terraform destroy` works cleanly during evaluation and example teardown. Flip to `true` for production. See examples/*/README.md → "Production considerations" for the full set of teardown-friendly defaults to review before promoting any example to production.
   count = var.create_database ? 1 : 0
 
@@ -244,6 +316,10 @@ resource "aws_db_instance" "n8n" {
   enabled_cloudwatch_logs_exports     = ["postgresql"]
   copy_tags_to_snapshot               = true
   auto_minor_version_upgrade          = true
+
+  # DDL + slow-query logging, so the export above carries something useful.
+  # See the parameter group above for why it is not log_statement = "all".
+  parameter_group_name = aws_db_parameter_group.n8n[0].name
 
   # Performance Insights with the default 7-day retention window is included
   # in the AWS free tier. Setting the retention period explicitly prevents
@@ -282,12 +358,40 @@ resource "aws_db_instance" "n8n" {
   lifecycle {
     # auto_minor_version_upgrade = true lets AWS bump engine_version during the
     # maintenance window. Ignore the resulting drift here so the next
-    # `terraform apply` doesn't try to downgrade back to var.db_engine_version
-    # — RDS does not support minor-version downgrades and the apply would fail.
+    # `terraform apply` doesn't try to downgrade back to var.db_engine_version,
+    # since RDS does not support minor-version downgrades and the apply would fail.
     ignore_changes = [engine_version]
   }
 
   tags = merge(local.common_tags, { Name = "n8n-postgres-${local.cluster_name}" })
+}
+
+# ── Engine major-version upgrade diagnostic check ───────────────────────────
+# ignore_changes = [engine_version] above means bumping var.db_engine_version's
+# major version in tfvars never actually moves this instance: Terraform just
+# carries the instance's existing engine_version forward. aws_db_parameter_group.n8n's
+# family is not ignored, though, and tracks var.db_engine_version directly, so it
+# moves to the new family immediately. The next apply then tries to attach a
+# family-mismatched parameter group to an instance still on the old major, which
+# RDS rejects. Warn here, before that confusing provider-side rejection, rather
+# than after it. See README.md → "Bumping db_engine_version across a major
+# version" for the required out-of-band upgrade order.
+
+check "db_engine_version_major_matches_running_instance" {
+  assert {
+    condition = var.create_database ? (
+      split(".", var.db_engine_version)[0] == split(".", aws_db_instance.n8n[0].engine_version)[0]
+    ) : true
+    error_message = join("", [
+      "var.db_engine_version's major version (postgres", split(".", var.db_engine_version)[0],
+      ") does not match the RDS instance's actual running major (postgres",
+      try(split(".", aws_db_instance.n8n[0].engine_version)[0], "unknown"), "). ",
+      "aws_db_parameter_group.n8n's family already tracks var.db_engine_version and is about to move ",
+      "ahead of the instance, which RDS will reject. Upgrade the instance's major version out-of-band ",
+      "first (see README.md, \"Bumping db_engine_version across a major version\"), then update ",
+      "var.db_engine_version to match.",
+    ])
+  }
 }
 
 # ── Backup retention diagnostic check ──────────────────────────────────────
