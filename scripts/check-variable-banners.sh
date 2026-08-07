@@ -18,9 +18,16 @@ set -euo pipefail
 # The banner regexes below match the multibyte "─" (U+2500) used in
 # variables.tf/outputs.tf. Bash's [[ =~ ]] only resolves that against file
 # content under a UTF-8 locale; a C/POSIX locale (the default in minimal
-# shells and containers) makes every real banner fail the strict-format
-# check. Force UTF-8 so the result doesn't depend on the caller's locale.
-export LC_ALL=C.UTF-8
+# shells and containers, and whatever LC_ALL/LANG a CI image sets) makes
+# every real banner fail the strict-format check. Leave an already-UTF-8
+# locale alone; otherwise force C.UTF-8, the most widely available UTF-8
+# locale, via LC_ALL since it -- not a scoped LC_CTYPE -- is what a
+# non-UTF-8 LC_ALL in the environment would otherwise override.
+effective_locale="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+case "$effective_locale" in
+  *.[Uu][Tt][Ff]-8 | *.[Uu][Tt][Ff]8) ;;
+  *) export LC_ALL=C.UTF-8 ;;
+esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"

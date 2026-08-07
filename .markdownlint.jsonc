@@ -1,6 +1,7 @@
 {
-  // Allow repeated headings (e.g. "### Added") under different versions in
-  // CHANGELOG.md without tripping MD024.
+  // Allow repeated headings under different parents without tripping MD024,
+  // e.g. docs/troubleshooting.md repeats "### Symptom"/"### Cause"/"### Fix"
+  // under each unrelated "## <problem>" section.
   "MD024": { "siblings_only": true },
   // Line-length wrapping is impractical for the long, single-line variable
   // and output descriptions in variables.tf/outputs.tf and for the prose in
