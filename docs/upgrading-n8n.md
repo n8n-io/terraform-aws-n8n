@@ -6,7 +6,7 @@ This covers bumping the deployed n8n version on an existing deployment: `n8n_cha
 
 | Variable | Controls | Default |
 | --- | --- | --- |
-| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-helm-chart) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.10.0"`, pinned |
+| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.10.0"`, pinned |
 | `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the chart's own default applies (currently the floating `stable` tag) |
 
 Bumping the image tag alone gets you a new n8n version without changing the chart's templates or value schema. Bumping the chart version can also change what values the chart accepts, so treat it as the larger-blast-radius change of the two.
