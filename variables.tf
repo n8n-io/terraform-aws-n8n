@@ -1,17 +1,10 @@
-# ── Foundation inputs ─────────────────────────────────────────────────────────
-# Region, cluster naming, and the pre-built VPC + ACM certificate the module
-# deploys into. Supply these from a VPC module (e.g. terraform-aws-modules/vpc)
-# and an aws_acm_certificate_validation resource — see examples/small/.
-
-variable "aws_region" {
-  description = "AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1). Must match the region the AWS provider is configured for."
-  type        = string
-
-  validation {
-    condition     = can(regex("^[a-z]{2}-[a-z]+-[0-9]$", var.aws_region))
-    error_message = "Value must be a valid AWS region (e.g. us-east-1, eu-west-1)."
-  }
-}
+# ── Common ─────────────────────────────────────────────────────────────────────
+# Naming and tagging inputs threaded through every resource this module
+# creates, ahead of the product-specific settings below. The analog of the
+# friendly_name_prefix/common_tags block HVD modules lead with; ours is named
+# and shaped for this module's own resource-naming and tagging needs rather
+# than mirroring HVD's variable names, since renaming cluster_name/tags to
+# match would be a breaking change with no functional benefit (see #81).
 
 variable "cluster_name" {
   description = "Name for the EKS cluster. Keep to 14 characters or fewer — the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars."
@@ -21,6 +14,33 @@ variable "cluster_name" {
   validation {
     condition     = length(var.cluster_name) <= 14
     error_message = "cluster_name must be 14 characters or fewer (ElastiCache cluster ID <cluster_name>-redis must stay <= 20 chars)."
+  }
+}
+
+variable "tags" {
+  description = "Additional AWS tags to apply to all resources this module creates. Merged on top of the built-in ManagedBy/Project tags."
+  type        = map(string)
+  default     = {}
+}
+
+variable "namespace" {
+  description = "Kubernetes namespace to deploy n8n into"
+  type        = string
+  default     = "n8n"
+}
+
+# ── Foundation inputs ─────────────────────────────────────────────────────────
+# Region and the pre-built VPC + ACM certificate the module deploys into.
+# Supply these from a VPC module (e.g. terraform-aws-modules/vpc)
+# and an aws_acm_certificate_validation resource — see examples/small/.
+
+variable "aws_region" {
+  description = "AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1). Must match the region the AWS provider is configured for."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z]{2}-[a-z]+-[0-9]$", var.aws_region))
+    error_message = "Value must be a valid AWS region (e.g. us-east-1, eu-west-1)."
   }
 }
 
@@ -119,12 +139,6 @@ variable "route53_zone_id" {
   }
 }
 
-variable "tags" {
-  description = "Additional AWS tags to apply to all resources this module creates. Merged on top of the built-in ManagedBy/Project tags."
-  type        = map(string)
-  default     = {}
-}
-
 variable "kubernetes_version" {
   description = "Kubernetes version for the EKS cluster"
   type        = string
@@ -137,27 +151,21 @@ variable "kubernetes_version" {
 }
 
 variable "n8n_webhook_url" {
-  description = "Public HTTPS base URL used for webhook callbacks (e.g. https://webhooks.example.com). Defaults to https://<n8n_domain> when not set. Override when webhooks are served from a different host than the n8n UI."
+  description = "Public HTTPS base URL used for webhook callbacks (e.g. <https://webhooks.example.com>). Defaults to https://<n8n_domain> when not set. Override when webhooks are served from a different host than the n8n UI."
   type        = string
   default     = null
 }
 
 variable "n8n_license_key" {
-  description = "n8n Enterprise license activation key. Get one at https://n8n.io/pricing"
+  description = "n8n Enterprise license activation key. Get one at <https://n8n.io/pricing>"
   type        = string
   sensitive   = true
 }
 
 variable "n8n_license_detach_floating_on_shutdown" {
-  description = "Whether n8n main pods detach their floating license entitlement on shutdown. Maps to N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN. n8n's upstream default is true, which is safe for a single main but breaks multi-main (n8n_main_hpa_min_replicas > 1, the module default): the leader main detaches on shutdown and zeroes the shared floating cert in the database, so any fresh main pod that starts as a follower reads the zeroed cert, fails the init-time license gate, and crash-loops — which can push a Helm release with atomic = true into a stuck pending-rollback state (see docs/troubleshooting.md and https://github.com/n8n-io/terraform-aws-n8n/issues/49). The module defaults this to false, overriding n8n's own default, because all mains share the same device fingerprint: a single floating seat is reused across restarts and nothing leaks. Set to true only to restore n8n's upstream behavior, and only for single-main deployments."
+  description = "Whether n8n main pods detach their floating license entitlement on shutdown. Maps to N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN. n8n's upstream default is true, which is safe for a single main but breaks multi-main (n8n_main_hpa_min_replicas > 1, the module default): the leader main detaches on shutdown and zeroes the shared floating cert in the database, so any fresh main pod that starts as a follower reads the zeroed cert, fails the init-time license gate, and crash-loops — which can push a Helm release with atomic = true into a stuck pending-rollback state (see docs/troubleshooting.md and <https://github.com/n8n-io/terraform-aws-n8n/issues/49>). The module defaults this to false, overriding n8n's own default, because all mains share the same device fingerprint: a single floating seat is reused across restarts and nothing leaks. Set to true only to restore n8n's upstream behavior, and only for single-main deployments."
   type        = bool
   default     = false
-}
-
-variable "namespace" {
-  description = "Kubernetes namespace to deploy n8n into"
-  type        = string
-  default     = "n8n"
 }
 
 # ── Ingress ───────────────────────────────────────────────────────────────────
@@ -223,7 +231,7 @@ variable "ingress_annotations" {
 }
 
 variable "alb_ssl_policy" {
-  description = "TLS negotiation policy for the ALB HTTPS listener, wired to alb.ingress.kubernetes.io/ssl-policy. Defaults to a current, modern policy (ELBSecurityPolicy-TLS13-1-2-2021-06) so the negotiated policy is explicit and pinned in Terraform rather than left to whatever the ALB defaults to, which AWS can change without notice. Set this to any AWS-published ELB security policy name (e.g. one of the ELBSecurityPolicy-TLS13-1-2-* or ELBSecurityPolicy-FS-1-2-* families) to match a compliance baseline such as TLS 1.2 minimum or TLS 1.3-only. Ignored when create_ingress = false, or when ingress_annotations sets alb.ingress.kubernetes.io/ssl-policy directly (last write wins; the module warns when that happens)."
+  description = "TLS negotiation policy for the ALB HTTPS listener, wired to alb.ingress.kubernetes.io/ssl-policy. Defaults to a current, modern policy (ELBSecurityPolicy-TLS13-1-2-2021-06) so the negotiated policy is explicit and pinned in Terraform rather than left to whatever the ALB defaults to, which AWS can change without notice. Set this to any AWS-published ELB security policy name (e.g. one of the `ELBSecurityPolicy-TLS13-1-2-*` or `ELBSecurityPolicy-FS-1-2-*` families) to match a compliance baseline such as TLS 1.2 minimum or TLS 1.3-only. Ignored when create_ingress = false, or when ingress_annotations sets alb.ingress.kubernetes.io/ssl-policy directly (last write wins; the module warns when that happens)."
   type        = string
   default     = "ELBSecurityPolicy-TLS13-1-2-2021-06"
 
@@ -292,7 +300,7 @@ variable "n8n_chart_version" {
 }
 
 variable "n8n_image_tag" {
-  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). When it is null (the default), the Helm chart's own default applies — currently the floating `stable` tag, which resolves to whatever n8n version is latest at the time each pod starts. Pin this to a concrete version for reproducible, incremental upgrades and to avoid crossing major-version boundaries (e.g. the n8n 2.0 breaking changes) on an unplanned pod reschedule. See https://docs.n8n.io/2-0-breaking-changes/ for the n8n 2.x migration guide."
+  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). When it is null (the default), the Helm chart's own default applies — currently the floating `stable` tag, which resolves to whatever n8n version is latest at the time each pod starts. Pin this to a concrete version for reproducible, incremental upgrades and to avoid crossing major-version boundaries (e.g. the n8n 2.0 breaking changes) on an unplanned pod reschedule. See <https://docs.n8n.io/2-0-breaking-changes/> for the n8n 2.x migration guide."
   type        = string
   default     = null
 
@@ -548,7 +556,7 @@ variable "n8n_pruning_max_count" {
 }
 
 variable "n8n_execution_data_storage_mode" {
-  description = "Where n8n stores the data of each new execution. Maps to N8N_EXECUTION_DATA_STORAGE_MODE. \"database\" (the default) keeps execution data in PostgreSQL, matching n8n's own default, and emits no env var. \"s3\" offloads it to the module's S3 bucket, reusing the same bucket and N8N_EXTERNAL_STORAGE_S3_* connection that binary data mode already uses, so no extra bucket, IAM policy, or credentials are needed. Execution-data writes are usually the dominant write load on the n8n database at volume, so s3 is the main lever for relieving RDS pressure. Requires n8n >= 2.27 (pin n8n_image_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is a different entitlement from the feat:binaryDataS3 one the always-on binary data offload uses: n8n refuses to start in s3 mode without it. There is no backfill: existing executions stay readable where they were written, and only new executions go to S3, under workflows/{workflowId}/executions/{executionId}/execution_data/bundle.json. n8n prunes those objects itself as part of the executions hard-delete path (see n8n_pruning_max_age / n8n_pruning_max_count), so do NOT add an S3 lifecycle rule that can reach execution_data/ objects (see the S3 lifecycle section in the README). Note the durability trade-off: RDS gets automated backups and point-in-time recovery (db_backup_retention_period, default 7 days) while the bucket has no versioning, no backups, and force_destroy = true, so in s3 mode a terraform destroy takes execution history with it. See the durability section in the README. \"filesystem\" is deliberately not accepted: pod filesystems are ephemeral and unshared in this module's queue-mode topology, so execution data written there would be lost on reschedule and invisible to the other pods. See https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/use-external-storage."
+  description = "Where n8n stores the data of each new execution. Maps to N8N_EXECUTION_DATA_STORAGE_MODE. \"database\" (the default) keeps execution data in PostgreSQL, matching n8n's own default, and emits no env var. \"s3\" offloads it to the module's S3 bucket, reusing the same bucket and N8N_EXTERNAL_STORAGE_S3_* connection that binary data mode already uses, so no extra bucket, IAM policy, or credentials are needed. Execution-data writes are usually the dominant write load on the n8n database at volume, so s3 is the main lever for relieving RDS pressure. Requires n8n >= 2.27 (pin n8n_image_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is a different entitlement from the feat:binaryDataS3 one the always-on binary data offload uses: n8n refuses to start in s3 mode without it. There is no backfill: existing executions stay readable where they were written, and only new executions go to S3, under workflows/{workflowId}/executions/{executionId}/execution_data/bundle.json. n8n prunes those objects itself as part of the executions hard-delete path (see n8n_pruning_max_age / n8n_pruning_max_count), so do NOT add an S3 lifecycle rule that can reach execution_data/ objects (see the S3 lifecycle section in the README). Note the durability trade-off: RDS gets automated backups and point-in-time recovery (db_backup_retention_period, default 7 days) while the bucket has no versioning, no backups, and force_destroy = true, so in s3 mode a terraform destroy takes execution history with it. See the durability section in the README. \"filesystem\" is deliberately not accepted: pod filesystems are ephemeral and unshared in this module's queue-mode topology, so execution data written there would be lost on reschedule and invisible to the other pods. See <https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/use-external-storage>."
   type        = string
   default     = "database"
   nullable    = false
@@ -631,6 +639,12 @@ variable "n8n_task_runner_auto_shutdown_timeout" {
   description = "Seconds of inactivity before the runner process shuts down. Set to 0 to disable."
   type        = number
   default     = 15
+}
+
+variable "n8n_task_runner_request_timeout" {
+  description = "Seconds n8n waits for a task runner to accept a Code node task. Wired to the N8N_RUNNERS_TASK_REQUEST_TIMEOUT env var on the main pod. Increase if Code nodes fail with 'task request timed out' under high concurrency (many parallel Code nodes competing for the single runner sidecar)."
+  type        = number
+  default     = 300
 }
 
 variable "n8n_task_runner_python_enabled" {
@@ -946,12 +960,6 @@ variable "redis_port" {
   }
 }
 
-variable "n8n_task_runner_request_timeout" {
-  description = "Seconds n8n waits for a task runner to accept a Code node task. Wired to the N8N_RUNNERS_TASK_REQUEST_TIMEOUT env var on the main pod. Increase if Code nodes fail with 'task request timed out' under high concurrency (many parallel Code nodes competing for the single runner sidecar)."
-  type        = number
-  default     = 300
-}
-
 # ── HPA: main pods ────────────────────────────────────────────────────────────
 
 variable "n8n_main_hpa_min_replicas" {
@@ -1046,7 +1054,7 @@ variable "n8n_reinstall_missing_packages" {
 }
 
 variable "n8n_community_packages_registry" {
-  description = "npm registry community packages are installed from (e.g. https://npm.internal.example.com). Maps to N8N_COMMUNITY_PACKAGES_REGISTRY, which n8n gates behind a specific licensed feature rather than a license key alone: any value other than https://registry.npmjs.org makes installs throw FeatureNotLicensedError unless the instance is entitled to COMMUNITY_NODES_CUSTOM_REGISTRY (`getNpmRegistry` in community-packages.service.ts). Confirm that entitlement before setting this, since an unentitled instance breaks community-package installs instead of falling back to the public registry. Point this at a private mirror to install community nodes from an internal registry instead of the public npm one, e.g. when egress to registry.npmjs.org is blocked or packages are vendored. n8n defaults to https://registry.npmjs.org; when this is null (the default) the env var is omitted entirely so n8n's own default applies. A mirror that requires authentication also needs N8N_COMMUNITY_PACKAGES_AUTH_TOKEN, which this module does not manage; pass it via n8n_extra_env, keeping in mind that n8n_extra_env values are stored in plaintext in the Helm release and Terraform state. Baking packages into a custom image via n8n_image_repository avoids registry access at pod start entirely."
+  description = "npm registry community packages are installed from (e.g. <https://npm.internal.example.com>). Maps to N8N_COMMUNITY_PACKAGES_REGISTRY, which n8n gates behind a specific licensed feature rather than a license key alone: any value other than <https://registry.npmjs.org> makes installs throw FeatureNotLicensedError unless the instance is entitled to COMMUNITY_NODES_CUSTOM_REGISTRY (`getNpmRegistry` in community-packages.service.ts). Confirm that entitlement before setting this, since an unentitled instance breaks community-package installs instead of falling back to the public registry. Point this at a private mirror to install community nodes from an internal registry instead of the public npm one, e.g. when egress to registry.npmjs.org is blocked or packages are vendored. n8n defaults to <https://registry.npmjs.org>; when this is null (the default) the env var is omitted entirely so n8n's own default applies. A mirror that requires authentication also needs N8N_COMMUNITY_PACKAGES_AUTH_TOKEN, which this module does not manage; pass it via n8n_extra_env, keeping in mind that n8n_extra_env values are stored in plaintext in the Helm release and Terraform state. Baking packages into a custom image via n8n_image_repository avoids registry access at pod start entirely."
   type        = string
   default     = null
 
@@ -1241,13 +1249,13 @@ variable "n8n_community_packages_prevent_loading" {
 # n8n's own default applies. Only set the values you actually need to override.
 
 variable "n8n_otel_enabled" {
-  description = "Master switch for n8n's OpenTelemetry workflow + node tracing. When true, the module sets N8N_OTEL_ENABLED=true on all n8n containers (main, worker, webhook processor) via the Helm release's config.extraEnv block. When false (the default), no OpenTelemetry env vars are emitted and the SDK is not loaded. The OpenTelemetry collector / Jaeger receiver is out of scope for this module — deploy it separately and point n8n_otel_exporter_otlp_endpoint at it. See https://docs.n8n.io/hosting/logging-monitoring/opentelemetry/ for the underlying n8n contract."
+  description = "Master switch for n8n's OpenTelemetry workflow + node tracing. When true, the module sets N8N_OTEL_ENABLED=true on all n8n containers (main, worker, webhook processor) via the Helm release's config.extraEnv block. When false (the default), no OpenTelemetry env vars are emitted and the SDK is not loaded. The OpenTelemetry collector / Jaeger receiver is out of scope for this module — deploy it separately and point n8n_otel_exporter_otlp_endpoint at it. See <https://docs.n8n.io/hosting/logging-monitoring/opentelemetry/> for the underlying n8n contract."
   type        = bool
   default     = false
 }
 
 variable "n8n_otel_exporter_otlp_endpoint" {
-  description = "Base URL of the OTLP HTTP endpoint to export traces to (e.g. http://otel-collector.observability.svc.cluster.local:4318 for an in-cluster collector). When set, maps to N8N_OTEL_EXPORTER_OTLP_ENDPOINT. n8n appends /v1/traces to this value internally, so point at the base URL, not the traces path. Leave null to use n8n's default (http://localhost:4318), which only works if a sidecar collector is colocated in each n8n pod (this module does not deploy one). Ignored when n8n_otel_enabled = false."
+  description = "Base URL of the OTLP HTTP endpoint to export traces to (e.g. <http://otel-collector.observability.svc.cluster.local:4318> for an in-cluster collector). When set, maps to N8N_OTEL_EXPORTER_OTLP_ENDPOINT. n8n appends /v1/traces to this value internally, so point at the base URL, not the traces path. Leave null to use n8n's default (<http://localhost:4318>), which only works if a sidecar collector is colocated in each n8n pod (this module does not deploy one). Ignored when n8n_otel_enabled = false."
   type        = string
   default     = null
 
@@ -1263,7 +1271,7 @@ variable "n8n_otel_exporter_otlp_endpoint" {
 }
 
 variable "n8n_otel_exporter_otlp_headers" {
-  description = "Comma-separated list of key=value pairs sent as HTTP headers with each OTLP request (e.g. 'authorization=Bearer <token>,x-tenant=acme'). Use this for collector authentication or multi-tenant routing. Maps to N8N_OTEL_EXPORTER_OTLP_HEADERS. Leave null to send no extra headers. Marked sensitive so the value is redacted from CLI and plan output, but note it is still injected as a literal env var: it is persisted in plaintext in Terraform state and visible in the pod environment (kubectl describe / printenv). The chart's config.extraEnv does not support secretKeyRef, so restrict access to state and the n8n namespace accordingly. Ignored when n8n_otel_enabled = false."
+  description = "Comma-separated list of key=value pairs sent as HTTP headers with each OTLP request (e.g. `authorization=Bearer <token>,x-tenant=acme`). Use this for collector authentication or multi-tenant routing. Maps to N8N_OTEL_EXPORTER_OTLP_HEADERS. Leave null to send no extra headers. Marked sensitive so the value is redacted from CLI and plan output, but note it is still injected as a literal env var: it is persisted in plaintext in Terraform state and visible in the pod environment (kubectl describe / printenv). The chart's config.extraEnv does not support secretKeyRef, so restrict access to state and the n8n namespace accordingly. Ignored when n8n_otel_enabled = false."
   type        = string
   default     = null
   sensitive   = true
@@ -1325,13 +1333,13 @@ variable "n8n_otel_traces_production_only" {
 # must include the log streaming entitlement.
 
 variable "n8n_log_streaming_managed_by_env" {
-  description = "Manage n8n's Enterprise log streaming destinations from environment variables instead of the UI. Maps to N8N_LOG_STREAMING_MANAGED_BY_ENV. When true, n8n applies n8n_log_streaming_destinations on every startup and locks the Log Streaming UI controls read-only. When false (the default), no log streaming env vars are emitted and destinations stay UI-managed; flipping back to false keeps the last applied destinations but restores UI write access. Requires n8n >= 2.19.0 and an Enterprise license that includes log streaming. See https://docs.n8n.io/log-streaming/ for the underlying n8n contract."
+  description = "Manage n8n's Enterprise log streaming destinations from environment variables instead of the UI. Maps to N8N_LOG_STREAMING_MANAGED_BY_ENV. When true, n8n applies n8n_log_streaming_destinations on every startup and locks the Log Streaming UI controls read-only. When false (the default), no log streaming env vars are emitted and destinations stay UI-managed; flipping back to false keeps the last applied destinations but restores UI write access. Requires n8n >= 2.19.0 and an Enterprise license that includes log streaming. See <https://docs.n8n.io/log-streaming/> for the underlying n8n contract."
   type        = bool
   default     = false
 }
 
 variable "n8n_log_streaming_destinations" {
-  description = "List of log streaming destination objects, JSON-encoded into N8N_LOG_STREAMING_DESTINATIONS. Each entry must set type to webhook, syslog, or sentry, plus the type-specific fields documented at https://docs.n8n.io/log-streaming/#configure-using-environment-variables (common fields: label, enabled, subscribedEvents, anonymizeAuditMessages, circuitBreaker). Typed as any because the three destination shapes differ structurally. Marked sensitive because webhook headers and Sentry DSNs typically carry credentials — note the value is still injected as a literal env var: it is persisted in plaintext in Terraform state and visible in the pod environment (kubectl describe / printenv). Ignored when n8n_log_streaming_managed_by_env = false."
+  description = "List of log streaming destination objects, JSON-encoded into N8N_LOG_STREAMING_DESTINATIONS. Each entry must set type to webhook, syslog, or sentry, plus the type-specific fields documented at <https://docs.n8n.io/log-streaming/#configure-using-environment-variables> (common fields: label, enabled, subscribedEvents, anonymizeAuditMessages, circuitBreaker). Typed as any because the three destination shapes differ structurally. Marked sensitive because webhook headers and Sentry DSNs typically carry credentials — note the value is still injected as a literal env var: it is persisted in plaintext in Terraform state and visible in the pod environment (kubectl describe / printenv). Ignored when n8n_log_streaming_managed_by_env = false."
   type        = any
   default     = []
   nullable    = false

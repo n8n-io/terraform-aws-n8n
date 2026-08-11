@@ -35,14 +35,22 @@ terraform-docs --output-check .
 
 Repeat the `init / validate / test / tflint / terraform-docs` block
 under each example directory (`examples/small`, `examples/medium`,
-`examples/large`, `examples/cloudflare`, `examples/godaddy`) — that
-mirrors the CI matrix exactly. CI will run the same matrix on your PR.
+`examples/large`, `examples/cloudflare`, `examples/godaddy`,
+`examples/split-ingress`) — that mirrors the CI matrix exactly. CI will run
+the same matrix on your PR.
+
+If you have [`task`](https://taskfile.dev) installed (`brew install
+go-task`), `task ci` runs the same fmt/validate/test/lint/docs matrix
+across the module root and every example in one command. See
+[`Taskfile.yml`](./Taskfile.yml) for the individual targets (`task fmt`,
+`task validate`, `task test`, `task lint`, `task docs`,
+`task docs-generate`).
 
 ## Commit messages
 
 We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
-```
+```text
 <type>(<optional scope>): <imperative summary, <72 chars>
 
 <optional body explaining the why>

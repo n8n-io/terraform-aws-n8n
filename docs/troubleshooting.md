@@ -4,23 +4,23 @@ Issues observed in real deployments and how to resolve them. If you hit somethin
 
 ## `terraform apply`: `no cached repo found ... hashicorp-index.yaml`
 
-**Symptom**
+### Symptom
 
 One or more `helm_release` resources fail at create time with:
 
-```
+```text
 Error: could not download chart: no cached repo found.
 (try 'helm repo update'):
 open /Users/<you>/Library/Caches/helm/repository/<repo>-index.yaml: no such file or directory
 ```
 
-**Cause**
+### Cause
 
 The `hashicorp/helm` Terraform provider embeds the Helm SDK v3 and reuses the local Helm CLI's repository cache (`$HELM_REPOSITORY_CACHE`). This is still true on the `~> 3.0` provider line this module pins: provider 3.x is a Plugin Framework rewrite, but it continues to vendor `helm.sh/helm/v3` (v3.18.5 as of provider v3.2.0), so the embedded SDK is unchanged from the 2.x era. When the system Helm CLI is **Helm 4** (released 2025), the cache layout differs slightly from the v3 SDK's expectations and the SDK fails to find the index files even though the chart URL is hard-coded in the `helm_release` block.
 
 This is environmental, not a module bug — but anyone running Helm 4 on macOS will see it. The workaround below is unchanged under provider 3.x. (Note: if the repository cache is already populated — for example from earlier `helm repo add`/`helm repo update` runs — the apply succeeds without intervention; the failure only appears against an empty or Helm-4-only cache.)
 
-**Fix**
+### Fix
 
 Pre-populate the v3-compatible cache once before the first apply:
 
@@ -43,35 +43,35 @@ brew install helm@3
 
 ## `terraform apply`: KEDA install fails on AWS LBC webhook
 
-**Symptom**
+### Symptom
 
-```
+```text
 Error: release keda failed, and has been uninstalled due to atomic being set:
 Internal error occurred: failed calling webhook "mservice.elbv2.k8s.aws":
 no endpoints available for service "aws-load-balancer-webhook-service"
 ```
 
-**Cause**
+### Cause
 
 The AWS Load Balancer Controller registers a cluster-wide `MutatingWebhookConfiguration` (`mservice.elbv2.k8s.aws`) that intercepts **every** Service creation, not just ALB-targeted ones. If KEDA installs in parallel with LBC, the webhook may already be registered before LBC pods are Ready, so KEDA's metrics/admission Services are rejected.
 
-**Fix**
+### Fix
 
 The module serializes KEDA on `helm_release.lbc` (which has `wait = true`), so LBC pods are guaranteed Ready before KEDA installs. If you hit this on an older revision of the module, simply re-run `terraform apply` — by the time the second apply starts, LBC is up and KEDA installs cleanly.
 
 ## Smoke test reports `HTTP 000` after a recent destroy + re-apply
 
-**Symptom**
+### Symptom
 
 `tests/scripts/smoke-test.sh` fails the HTTP health, redirect, and API checks with `HTTP 000` against the n8n URL. Direct `dig n8n.example.com` resolves correctly, but `curl https://n8n.example.com/healthz` exits with code 6 (`CURLE_COULDNT_RESOLVE_HOST`).
 
-**Cause (macOS)**
+### Cause (macOS)
 
 `mDNSResponder` cached the NXDOMAIN response from the previous deployment's destroy phase and is serving it for 5–15 minutes even after Terraform re-created the Route 53 alias record. `dig` and `host` bypass `mDNSResponder`; `curl`, browsers, and anything else using `getaddrinfo()` do not.
 
 This only reproduces when the same FQDN is reused across consecutive `apply` → `destroy` → `apply` cycles on the same workstation, which is common during iterative development of this module but unusual in production.
 
-**Fix**
+### Fix
 
 Flush the macOS DNS cache:
 
@@ -83,13 +83,13 @@ Or wait for the negative cache to age out (typically 5–15 minutes). To avoid t
 
 ## Webhooks return HTTP 200 with an HTML body and never execute
 
-**Symptom**
+### Symptom
 
 A production webhook, Form Trigger, Wait-node resumption, or MCP Server Trigger URL returns `200` and a chunk of HTML instead of running the workflow. Nothing appears in the executions list. The caller logs a success, so the failure is silent on both ends.
 
 Most often seen on `/webhook-waiting`, `/form`, `/form-waiting`, and `/mcp`, while plain `/webhook` works.
 
-**Cause**
+### Cause
 
 The request reached the **main** pods rather than the webhook processors. This module runs the chart with `disableProductionWebhooksOnMainProcess = true`, which disables five endpoint families on the mains: `/webhook`, `/webhook-waiting`, `/form`, `/form-waiting`, and `/mcp`. When one of those paths hits a main pod, no handler is registered, so the request falls through to the editor's single-page-app handler, which answers `200` with the editor HTML.
 
@@ -98,7 +98,7 @@ Two ways to end up here:
 - **Module version `0.2.0` or earlier**, where the built-in Ingress routed only `/webhook` and the other four fell through to the catch-all. Upgrade; all five are routed now.
 - **A bring-your-own Ingress** (`create_ingress = false`) whose catch-all rule precedes or replaces the webhook prefixes. This bites the internal ALB of a two-ALB split especially easily, because it is natural to give it only a `/` rule.
 
-**Fix**
+### Fix
 
 Route every prefix in `n8n_webhook_path_prefixes` to `n8n_webhook_service_name`, declared **before** any catch-all, on *every* Ingress that fronts n8n, internal ones included. Iterate the output rather than hardcoding:
 
@@ -132,7 +132,7 @@ See [examples/split-ingress](../examples/split-ingress/) for a worked two-ALB co
 
 ## An inbound CIDR restriction applies cleanly but the ALB still answers everyone
 
-**Symptom**
+### Symptom
 
 A source restriction is configured, `terraform apply` succeeds with no warning, and the annotation is present on the Ingress. This covers both places the module offers one:
 
@@ -148,7 +148,7 @@ kubectl get ingress <name> -n n8n \
 
 The ALB's security group nevertheless allows `0.0.0.0/0`, or allows a range nobody configured here.
 
-**Cause**
+### Cause
 
 Three possibilities, in the order worth checking. The first two are specific to the module-managed Ingress and are warned about at plan time. The third cannot affect the module-managed Ingress at all, but can affect an Ingress you wrote yourself.
 
@@ -180,7 +180,7 @@ Three possibilities, in the order worth checking. The first two are specific to 
 
     Clear those fields to hand control back to the Ingress annotations, or manage the allow-list there instead and leave the Terraform inputs empty. Splitting it across both is the one arrangement guaranteed to confuse the next person.
 
-**Fix**
+### Fix
 
 Verify against the security group the controller actually owns, rather than against the annotation:
 
@@ -198,7 +198,7 @@ Note that hand-editing that security group is not a durable fix: the controller 
 
 ## A prefix-list restriction takes the ALB offline for every source
 
-**Symptom**
+### Symptom
 
 `terraform apply` succeeds after setting `alb_inbound_prefix_list_ids`, and then every source times out: the editor UI, the REST API, and inbound webhooks alike. The annotation is present on the Ingress, but the controller-managed security group has no ingress rules at all:
 
@@ -210,7 +210,7 @@ aws ec2 describe-security-groups --group-ids <sg-id> \
   --query 'SecurityGroups[].IpPermissions'   # returns []
 ```
 
-**Cause**
+### Cause
 
 A security group rule that references a managed prefix list counts against the rules-per-security-group quota by the list's max-entries weight, not as one rule. The quota defaults to 60 (`L-0EA8095F`, "Inbound or outbound rules per security group"), and the controller writes each source once per listen port; the module's ALB listens on 80 and 443, so everything counts twice. The AWS-managed CloudFront origin-facing list (`pl-3b927c52` in us-east-1) has a weight of 55: alongside a single CIDR, the controller needs 2 x (55 + 1) = 112 rules and the quota stops it at 60.
 
@@ -222,27 +222,27 @@ kubectl describe ingress n8n-ingress -n n8n | tail -5
 # The maximum number of rules per security group has been reached.
 ```
 
-**Fix**
+### Fix
 
 Make the restriction fit the quota: keep 2 x (combined prefix-list weight + number of `alb_inbound_cidrs` entries) at or under it, move the ranges into `alb_inbound_cidrs`, or request an increase on `L-0EA8095F` before referencing heavy lists. Then `terraform apply`; the controller's next reconcile authorizes the rules and the ALB comes back without recreating anything. Adding rules to the group by hand does not help: the controller reverts them on the next reconcile, the same as the previous entry.
 
 ## Caller-owned Ingress fails with `namespaces "n8n" not found`
 
-**Symptom**
+### Symptom
 
 On the first `terraform apply` with `create_ingress = false`, your own `kubernetes_ingress_v1` (or any other namespaced resource) fails:
 
-```
+```text
 Error: Failed to create Ingress 'n8n/my-ingress' because: namespaces "n8n" not found
 ```
 
 A re-apply then succeeds, because the namespace exists by that point.
 
-**Cause**
+### Cause
 
 Your resource had no dependency edge to the namespace, so Terraform scheduled it concurrently with the module rather than after it. In module versions where `output "namespace"` returned `var.namespace`, the output was a plan-time constant and consuming it created no ordering at all.
 
-**Fix**
+### Fix
 
 Upgrade: `namespace` is now sourced from `kubernetes_namespace.n8n`, so consuming it orders your resources implicitly.
 
@@ -259,7 +259,7 @@ The namespace edge alone is not sufficient. With `wait_for_load_balancer = true`
 
 ## Multi-main crash-loops after a rolling restart, Helm stuck in `pending-rollback`
 
-**Symptom**
+### Symptom
 
 After a Helm upgrade, a node rotation, or any other rolling restart of the main
 pods, fresh main pods crash-loop. Logs show a license failure at init time,
@@ -279,7 +279,7 @@ waiting for pods that never become ready. The release is left in
 `pending-rollback`, and any further `helm upgrade` or `terraform apply`
 fails immediately because Helm refuses to act on a release in that state.
 
-**Cause**
+### Cause
 
 n8n's upstream default for `N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN` is
 `true`. In a multi-main deployment (`n8n_main_hpa_min_replicas > 1`, the module
@@ -295,7 +295,7 @@ All mains share the same device fingerprint, so detaching on shutdown is
 unnecessary: a single floating seat is reused across restarts rather than
 released and re-acquired.
 
-**Fix**
+### Fix
 
 Module versions with `n8n_license_detach_floating_on_shutdown` default this
 to `false`, overriding n8n's own default, which prevents the crash-loop from
@@ -303,7 +303,7 @@ recurring. If you are already on a module version with the input, confirm it
 is not overridden to `true` unless you deliberately run a single main
 (`n8n_main_hpa_min_replicas = 1`).
 
-**Recovery from a stuck `pending-rollback` release**
+### Recovery from a stuck `pending-rollback` release
 
 1. Find the Helm release secret Kubernetes is stuck on:
 
@@ -333,11 +333,11 @@ is not overridden to `true` unless you deliberately run a single main
 
 ## Pods stay `Pending` with `Insufficient cpu` and the node group never grows
 
-**Symptom**
+### Symptom
 
 Some n8n pods never schedule. `kubectl describe pod` reports:
 
-```
+```text
 0/6 nodes are available: 6 Insufficient cpu
 ```
 
@@ -345,7 +345,7 @@ The Cluster Autoscaler adds no nodes, and its logs say the node group is already
 at its maximum size. It usually shows up during a rolling update, which stalls
 while the surging ReplicaSet competes for the same exhausted CPU.
 
-**Cause**
+### Cause
 
 An autoscaler ceiling is set above what the node group can ever schedule. The
 HPAs and KEDA scale toward their maxima regardless of whether the nodes exist,
@@ -361,7 +361,7 @@ kubectl get nodes -o custom-columns='NODE:.metadata.name,ALLOCATABLE_CPU:.status
 kubectl describe node <node> | sed -n '/Allocated resources/,/^Events/p'
 ```
 
-**Fix**
+### Fix
 
 Size the three coupled input groups together: the autoscaler ceilings, the
 per-pod CPU requests, and `node_instance_type` × `node_max`. See
@@ -380,7 +380,7 @@ See [destroy-cleanup.md](./destroy-cleanup.md).
 
 ## Webhook processor HPA thrashes, or pods OOMKill, with `n8n_reinstall_missing_packages = true`
 
-**Symptom**
+### Symptom
 
 With `n8n_reinstall_missing_packages = true`, every pod runs npm installs at
 boot, and n8n rebroadcasts installs to all pods via pubsub, so during a
@@ -405,14 +405,14 @@ produces two distinct failure modes:
 the `webhook_resources_sized_for_reinstall_missing_packages` check in
 `scaling.tf`.
 
-**Cause**
+### Cause
 
 `n8n_reinstall_missing_packages` is sized for the general case (occasional
 reinstall of a handful of packages), not for the CPU/memory burst every pod
 produces simultaneously during a rolling restart. The module's webhook
 processor defaults predate that toggle's production cost.
 
-**Fix**
+### Fix
 
 Raise the webhook processor's requests and limits above the module defaults.
 One operator's stable production values, reported in
