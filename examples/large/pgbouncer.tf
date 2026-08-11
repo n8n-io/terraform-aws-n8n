@@ -67,6 +67,7 @@ resource "kubernetes_secret" "pgbouncer" {
 }
 
 resource "kubernetes_deployment" "pgbouncer" {
+  # checkov:skip=CKV_K8S_22:The edoburu/pgbouncer image's entrypoint generates pgbouncer.ini from environment variables at container start, writing into the image filesystem. Forcing read_only_root_filesystem without verifying the image's actual write paths against a live deploy risks a boot failure; revisit once verified against a running cluster.
   metadata {
     name      = "pgbouncer"
     namespace = kubernetes_namespace.pgbouncer.metadata[0].name
@@ -97,8 +98,41 @@ resource "kubernetes_deployment" "pgbouncer" {
           }
         }
 
+        # CKV_K8S_29: presence of a pod-level security context.
+        security_context {
+          seccomp_profile {
+            type = "RuntimeDefault"
+          }
+        }
+
         container {
           name = "pgbouncer"
+
+          # CKV_K8S_10/11/12/13: pgbouncer is a lightweight connection pooler;
+          # these are generous enough to not throttle under the 2-replica
+          # pool_size=150 config above.
+          resources {
+            requests = {
+              cpu    = "100m"
+              memory = "128Mi"
+            }
+            limits = {
+              cpu    = "500m"
+              memory = "256Mi"
+            }
+          }
+
+          # CKV_K8S_28/30: drop all Linux capabilities (NET_RAW included) and
+          # block privilege escalation. Left run_as_non_root unset - the
+          # edoburu/pgbouncer image's runtime user hasn't been verified against
+          # a live deploy, and forcing it risks a boot failure if the image
+          # needs root for its entrypoint.
+          security_context {
+            allow_privilege_escalation = false
+            capabilities {
+              drop = ["ALL"]
+            }
+          }
           # Pinned to the multi-arch image-index digest so a re-tag upstream
           # cannot silently change what we deploy. Keep the tag for human
           # readability; the @sha256:... suffix is the immutable contract.

@@ -91,6 +91,7 @@ resource "aws_kms_alias" "db" {
 # the database; nothing from the public internet can.
 
 resource "aws_security_group" "rds" {
+  # checkov:skip=CKV_AWS_382:Egress-all is intentional. RDS does not originate arbitrary outbound traffic; restricting it risks silently breaking AWS API calls (KMS, CloudWatch) routed through the VPC without a matching VPC endpoint, for no real security benefit on a non-internet-facing managed service.
   name        = "n8n-rds-sg-${local.cluster_name}"
   description = "Allow PostgreSQL access from within the VPC"
   vpc_id      = local.vpc_id
@@ -135,6 +136,7 @@ resource "aws_security_group" "rds" {
   }
 
   egress {
+    description = "Allow all outbound"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -209,12 +211,75 @@ resource "aws_cloudwatch_log_group" "rds_postgresql" {
   tags = merge(local.common_tags, { Name = "n8n-postgres-${local.cluster_name}-logs" })
 }
 
+# ── Parameter group (query logging + enforced TLS) ────────────────────────────
+# RDS's default parameter group logs no statements at all (log_statement =
+# none, log_min_duration_statement = -1), so the postgresql export configured on
+# the instance below carries only startup, error and checkpoint lines. This
+# group turns on the two settings that make that export useful for diagnosing a
+# slow or stuck n8n instance (CKV2_AWS_30) and requires TLS on every connection
+# (CKV2_AWS_69).
+#
+# Deliberately not log_statement = "all". n8n's queries carry workflow and
+# execution payloads, so logging every statement would copy customer data into
+# CloudWatch Logs and scale ingestion cost with execution volume. "ddl" logs
+# schema changes only (n8n runs migrations on startup, which is exactly what
+# you want in the log after an upgrade), and the 1000 ms threshold catches slow
+# queries without touching normal traffic.
+#
+# rds.force_ssl = 1 is already the RDS default for PostgreSQL 15 and later (it
+# is 0 on 14 and older), so at this module's default db_engine_version it
+# changes nothing and only closes the gap for callers who pin an older major.
+# It is safe against the module's own topology either way: n8n connects over
+# TLS by default (db_postgresdb_ssl_enabled), and the documented reason to set
+# that to false is an in-cluster pooler that terminates TLS on its own upstream
+# leg to the database.
+#
+# Opt-in because engine_version is intentionally ignored on the instance. An
+# existing database can therefore still run PostgreSQL 16 while
+# var.db_engine_version is 18.4; attaching a postgres18 group to it fails at the
+# RDS API. Callers enable this only when the live major matches the configured
+# major. Switching from the default group takes effect after a reboot.
+#
+# name_prefix plus create_before_destroy because a major-version bump changes
+# `family`, which forces replacement, and RDS refuses to delete a parameter
+# group that is still attached to an instance.
+
+resource "aws_db_parameter_group" "n8n" {
+  count = var.create_database && var.db_query_logging_enabled ? 1 : 0
+
+  name_prefix = "n8n-postgres-${local.cluster_name}-"
+  family      = "postgres${split(".", var.db_engine_version)[0]}"
+
+  parameter {
+    name  = "log_statement"
+    value = "ddl"
+  }
+
+  parameter {
+    name  = "log_min_duration_statement"
+    value = "1000"
+  }
+
+  parameter {
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = merge(local.common_tags, { Name = "n8n-postgres-${local.cluster_name}" })
+}
+
 # ── RDS PostgreSQL instance ───────────────────────────────────────────────────
 # Skipped when create_database = false — the caller provides an external
 # database (e.g. Amazon Aurora). n8n.tf uses db_host / db_password directly
 # in that case.
 
 resource "aws_db_instance" "n8n" {
+  # checkov:skip=CKV2_AWS_30:Query logging is an explicit opt-in through db_query_logging_enabled. Enabling it creates aws_db_parameter_group.n8n with log_statement and log_min_duration_statement and attaches it below. It cannot safely default on because engine_version is ignored: an upgraded module can configure 18.4 while the live instance remains on 16, and RDS rejects a postgres18 group on that instance. Checkov also builds no graph edge between the two count-expanded resources, so it cannot see the attachment even on the enabled path. Tests assert both the safe default and the opt-in group's exact contents.
   # checkov:skip=CKV_AWS_293:Deletion protection is intentionally left at the provider default (false) so `terraform destroy` works cleanly during evaluation and example teardown. Flip to `true` for production. See examples/*/README.md → "Production considerations" for the full set of teardown-friendly defaults to review before promoting any example to production.
   count = var.create_database ? 1 : 0
 
@@ -244,6 +309,11 @@ resource "aws_db_instance" "n8n" {
   enabled_cloudwatch_logs_exports     = ["postgresql"]
   copy_tags_to_snapshot               = true
   auto_minor_version_upgrade          = true
+
+  # Opt-in DDL + slow-query logging. null preserves the instance's current
+  # default/custom group and, critically, avoids attaching a family derived
+  # from a newer configured engine version to an older live engine.
+  parameter_group_name = var.db_query_logging_enabled ? aws_db_parameter_group.n8n[0].name : null
 
   # Performance Insights with the default 7-day retention window is included
   # in the AWS free tier. Setting the retention period explicitly prevents

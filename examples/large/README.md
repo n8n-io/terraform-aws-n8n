@@ -156,6 +156,7 @@ The S3 `force_destroy` setting lives in the module and is not currently exposed 
 | Name | Type |
 | ---- | ---- |
 | [aws_cloudwatch_log_group.aurora_postgresql](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
+| [aws_db_parameter_group.aurora](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_parameter_group) | resource |
 | [aws_db_subnet_group.aurora](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_subnet_group) | resource |
 | [aws_eks_addon.vpc_cni](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_addon) | resource |
 | [aws_iam_role.rds_enhanced_monitoring](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
@@ -165,6 +166,7 @@ The S3 `force_destroy` setting lives in the module and is not currently exposed 
 | [aws_rds_cluster.n8n](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/rds_cluster) | resource |
 | [aws_rds_cluster_instance.reader](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/rds_cluster_instance) | resource |
 | [aws_rds_cluster_instance.writer](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/rds_cluster_instance) | resource |
+| [aws_rds_cluster_parameter_group.aurora](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/rds_cluster_parameter_group) | resource |
 | [aws_security_group.aurora](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group) | resource |
 | [kubernetes_deployment.pgbouncer](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/deployment) | resource |
 | [kubernetes_namespace.pgbouncer](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/namespace) | resource |
@@ -180,6 +182,7 @@ The S3 `force_destroy` setting lives in the module and is not currently exposed 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
 | <a name="input_aurora_instance_class"></a> [aurora\_instance\_class](#input\_aurora\_instance\_class) | Aurora PostgreSQL instance class for both the writer and reader. db.r6g.8xlarge (32 vCPU, 256 GB) is validated for this example's target throughput of ~50–60+M executions/day. Scale down for lower throughput targets or Reserved Instance pricing. | `string` | `"db.r6g.8xlarge"` | no |
+| <a name="input_aurora_query_logging_enabled"></a> [aurora\_query\_logging\_enabled](#input\_aurora\_query\_logging\_enabled) | Create and attach Aurora PostgreSQL 18 parameter groups that enforce rds.force\_ssl and log DDL plus queries slower than 1 second. Defaults to false so upgrading an existing example deployment retained on Aurora 16 by lifecycle.ignore\_changes does not try to attach incompatible Aurora 18 parameter groups. Enable only for a new deployment or after confirming the live cluster runs the configured 18.4 major. | `bool` | `false` | no |
 | <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1). | `string` | `"us-east-1"` | no |
 | <a name="input_certificate_arn"></a> [certificate\_arn](#input\_certificate\_arn) | ARN of a pre-validated ACM certificate covering n8n\_domain. Set this when you already manage your certificate lifecycle outside this example (for example a wildcard cert reused across multiple deployments). Set exactly one of route53\_zone\_id or certificate\_arn. | `string` | `null` | no |
 | <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | Name for the EKS cluster. Keep to 14 characters or fewer — the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. | `string` | `"n8n-large"` | no |

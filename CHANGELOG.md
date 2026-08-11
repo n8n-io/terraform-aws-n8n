@@ -7,6 +7,31 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+### Added
+
+- **New `redis_kms_encryption_enabled` variable** (default `false`) encrypts
+  the ElastiCache Redis tier at rest with a module-created Customer Managed
+  KMS Key (`aws_kms_key.redis`). Clears Checkov finding `CKV_AWS_191`.
+
+  Defaults to `false` to preserve the existing standalone
+  `aws_elasticache_cluster`, which Redis OSS cannot encrypt at rest. HA- or
+  TLS-selected replication groups are encrypted with the ElastiCache-managed
+  key; enabling this toggle selects the replication-group topology and uses the
+  module CMK instead.
+
+  `kms_key_id` only exists on `aws_elasticache_replication_group`, not on the
+  default single-node `aws_elasticache_cluster`, so this is a third variable
+  (alongside `redis_high_availability_enabled` and
+  `redis_transit_encryption_enabled`) that independently selects the
+  replication group. Enabling it on a deployment that asks for neither HA nor
+  TLS moves Redis onto the replication group at the same one-node cost, just a
+  different resource type. `kms_key_id` is `ForceNew`, so **flipping this on
+  an existing deployment replaces Redis and drops the queue**, the same trap
+  the other two Redis topology variables document; treat it as a
+  maintenance-window operation and drain the queue first. See README →
+  "Redis in-transit encryption and AUTH" for the full three-variable
+  interaction table.
+
 ### Changed
 
 - **`db_engine_version` now defaults to `18.4` instead of `16.9`.** n8n's
@@ -972,6 +997,140 @@ this project adheres to the stability contract in
   alias gate are now asserted. Sourcing the keys from `local.acm_domain_names`
   is also what makes `n8n_additional_domains` work, since the record set and the
   certificate's name list now come from the same place and cannot drift.
+
+### Security
+
+- checkov now runs with `soft_fail: false` in CI (`.github/workflows/terraform-tests.yml`):
+  every finding is curated instead of silently absorbed. Resolves
+  [#27](https://github.com/n8n-io/terraform-aws-n8n/issues/27). Highlights:
+
+  - EKS control-plane logging is now enabled for all five log types
+    (`aws_eks_cluster.n8n.enabled_cluster_log_types`), writing to an
+    explicit, retained CloudWatch log group instead of nothing.
+  - EKS Kubernetes Secrets are now envelope-encrypted with a module-created
+    KMS CMK by default (new `var.eks_secrets_encryption_enabled`, defaults
+    `true`). This is a real infrastructure change with an ongoing KMS cost;
+    set the variable to `false` to preserve unencrypted behavior on an
+    existing cluster before the first apply. The supported AWS provider adds
+    encryption to a live unencrypted cluster in place; disabling it afterwards
+    forces replacement because EKS cannot disassociate an encryption config.
+  - EKS API endpoint access is now configurable (new
+    `var.cluster_endpoint_public_access`,
+    `var.cluster_endpoint_public_access_cidrs`,
+    `var.cluster_endpoint_private_access`). Defaults preserve the existing
+    public-endpoint, unrestricted-CIDR posture.
+  - The Cluster Autoscaler IAM policy's write actions
+    (`SetDesiredCapacity`, `TerminateInstanceInAutoScalingGroup`) are now
+    scoped with a `ResourceTag` condition to this cluster's own node group
+    ASGs, instead of an unconditional `Resource = "*"`.
+  - ElastiCache Redis now takes a daily automatic snapshot by default (new
+    `var.redis_snapshot_retention_limit`, defaults `1`). Set on both Redis
+    topologies, so opting into `redis_high_availability_enabled` or
+    `redis_transit_encryption_enabled` or `redis_kms_encryption_enabled` does
+    not silently drop the snapshot the default single-node cluster takes.
+  - The S3 bucket's default encryption is now SSE-KMS with a module-created
+    CMK, with S3 Bucket Keys enabled so KMS is called per bucket rather than
+    per object (new `var.s3_kms_encryption_enabled`, defaults `true`). The n8n
+    pod role gains `kms:Decrypt` / `kms:GenerateDataKey` on that key, which
+    SSE-KMS requires for every read and write. This selects which key
+    encrypts objects, not whether they are encrypted: S3 encrypts everything
+    regardless, and `false` leaves the bucket on SSE-S3. It applies to objects
+    written afterwards, so existing objects keep the encryption they were
+    written with. The bucket encryption resource waits for the pod role's KMS
+    policy update before activating, avoiding an upgrade-time read/write race.
+    Changing the toggle from `true` to `false` while old objects still use the
+    CMK makes them immediately unreadable when KMS schedules key deletion.
+  - The module can optionally attach a module-managed parameter group
+    (`aws_db_parameter_group.n8n`) that logs DDL statements and queries slower
+    than 1s, and sets `rds.force_ssl = 1` (`db_query_logging_enabled`, default
+    `false`). Deliberately not
+    `log_statement = all`, which would copy workflow and execution payloads
+    into CloudWatch Logs. `rds.force_ssl = 1` is already the RDS default on
+    PostgreSQL 15 and later, and n8n connects over TLS by default, so it
+    changes nothing at the module's default `db_engine_version`. It defaults
+    off because `engine_version` is ignored on existing state: a live
+    PostgreSQL 16 instance may coexist with the configured 18.4 value, and RDS
+    rejects a postgres18 parameter group on that instance. Enable it for a new
+    deployment or after confirming the live major matches. Note that
+    moving an existing instance from the default parameter group to a custom
+    one takes effect only after a reboot, so these settings land in the next
+    maintenance window rather than at apply time.
+  - `examples/large` gains equivalent opt-in query logging for Aurora
+    (`aurora_query_logging_enabled`, default `false`), split
+    across two parameter groups because Aurora PostgreSQL requires it:
+    `rds.force_ssl` exists only in the DB *cluster* parameter family, and
+    `log_statement` / `log_min_duration_statement` only in the DB *instance*
+    family (verified with
+    `aws rds describe-engine-default-cluster-parameters --db-parameter-group-family aurora-postgresql18`,
+    which lists neither of the latter two among its 142 parameters; the same
+    holds for `aurora-postgresql16`). The opt-in default prevents an existing
+    Aurora 16 cluster retained by `ignore_changes` from receiving incompatible
+    Aurora 18 groups. When enabled, the example carries an
+    `aws_rds_cluster_parameter_group` for the TLS setting and an
+    `aws_db_parameter_group` attached to the writer and reader for the logging
+    settings. Checkov's `CKV2_AWS_27` asks for the log parameters on the
+    cluster group specifically, which is a configuration AWS rejects at apply
+    with "Could not find parameter with name: log_statement", so that finding
+    carries an annotated skip rather than a fix.
+  - Security group egress rules (RDS, Redis, `examples/large` Aurora) now
+    carry an explicit description.
+  - `examples/large`'s `kubernetes_deployment.pgbouncer` now sets container
+    resource requests/limits and a security context (dropped Linux
+    capabilities, no privilege escalation).
+
+  Findings that are intentional for this module's getting-started posture
+  (permissive security group egress, the public EKS endpoint by default,
+  the upstream-verbatim AWS Load Balancer Controller IAM policy, Terraform
+  Registry module sources carrying a `version` constraint rather than a
+  commit hash, S3 bucket versioning and lifecycle rules that would defeat
+  n8n's own data pruning, cross-region replication and access logging that
+  need buckets this module does not create, AWS Backup for the `examples/large`
+  Aurora cluster and Multi-AZ automatic failover on the replication group's
+  TLS-only shape)
+  each carry an inline `checkov:skip=<ID>:<reason>` annotation at the resource
+  that causes them. Two more are annotated because checkov reports them against
+  a resource that is in fact configured correctly: it builds no graph edge
+  between two `count`-expanded resources, so it cannot see the RDS instance's
+  parameter group (`CKV2_AWS_30`) or the Redis security group's attachment to
+  whichever cache topology is active (`CKV2_AWS_5`). Both skips record the
+  experiment that isolated the artifact, which in each case is that deleting
+  `count` from the one resource makes the finding disappear with nothing else
+  changed. No check is suppressed repo-wide: the new `.checkov.yaml` sets only
+  a `skip-path` for the `tests/` directories, so every check stays live on code
+  added later. See the annotations themselves for the reasoning behind each
+  one.
+
+- The checkov version is now pinned (`CHECKOV_VERSION` in
+  `.github/workflows/terraform-tests.yml`) and CI runs
+  `tests/scripts/check-checkov.sh`, the same script contributors run, instead
+  of `bridgecrewio/checkov-action`. The action bakes the checkov version into
+  its own image, so its `@v12` tag moved to a newer checkov on its own
+  schedule. That is not theoretical: 3.3.9 evaluates whole check families
+  (every `aws_s3_bucket` check, several `CKV2_*` graph checks) against
+  resources reached through a local module source that 3.3.0 skipped silently,
+  which is how a clean local run became ten CI failures. The script now
+  refuses to run against a version other than the pinned one, so a local pass
+  and a CI pass mean the same thing. Bumping the pin is a deliberate change
+  that curates whatever the new release reports. `task checkov` runs the same
+  script, and the `task ci` description no longer claims checkov is
+  soft-failed.
+
+  The `terraform-docs` pin in the same workflow had drifted the same way: it
+  sat at `v0.22.0` while the `brew` default its comment tracks had moved to
+  `v0.24.0`. It is now realigned. That drift happened to be harmless, because
+  the two versions render this repo's tables identically, but it was the same
+  trap one release away from producing spurious README diffs.
+
+- New `var.cluster_endpoint_public_access_cidrs` rejects a malformed CIDR and
+  an empty list at plan time, and `var.cluster_endpoint_private_access`
+  rejects the both-endpoints-disabled combination that EKS would refuse
+  minutes into an apply.
+
+- `variables.tf` gains two banner sections, `EKS cluster` (API server endpoint
+  access and Secrets encryption) and `S3` (bucket encryption), both recorded in
+  AGENTS.md's banner table. The four EKS inputs sit in their own section rather
+  than under `Foundation inputs`, which covers infrastructure the caller
+  supplies rather than control-plane properties the module owns.
 
 ## [0.2.0] - 2026-07-15
 

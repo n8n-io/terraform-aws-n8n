@@ -102,6 +102,79 @@ run "aurora_cluster_topology" {
   }
 }
 
+# Parameter groups default off because lifecycle.ignore_changes can retain an
+# existing Aurora 16 cluster while this configuration says 18.4. The groups are
+# safe only when the live and configured majors match.
+run "aurora_parameter_groups_default_to_absent" {
+  command = plan
+
+  assert {
+    condition     = length(aws_rds_cluster_parameter_group.aurora) == 0 && length(aws_db_parameter_group.aurora) == 0
+    error_message = "Aurora parameter groups must default off so an upgrade cannot attach Aurora 18 groups to a live Aurora 16 cluster."
+  }
+}
+
+# Both parameter groups' `family` has to track the cluster's major version, and
+# all three resources are separate, so local.aurora_engine_version is what keeps
+# them together. A mismatch is not caught until the apply fails against the RDS
+# API.
+#
+# The split between the two groups is not cosmetic and is the thing most likely
+# to be "tidied" back into one group by a later refactor: Aurora PostgreSQL
+# exposes rds.force_ssl only at cluster level and log_statement /
+# log_min_duration_statement only at instance level, so moving a parameter to
+# the other group produces a plan that looks fine and an apply that fails with
+# "Could not find parameter with name". These two run blocks pin each group's
+# exact contents so that refactor fails here instead. See aurora.tf for the
+# describe-engine-default-cluster-parameters call that establishes the split.
+run "aurora_cluster_parameter_group" {
+  command = plan
+
+  variables {
+    aurora_query_logging_enabled = true
+  }
+
+  assert {
+    condition     = aws_rds_cluster_parameter_group.aurora[0].family == "aurora-postgresql18"
+    error_message = "The cluster parameter group family must match the cluster's major engine version (18.x)."
+  }
+
+  assert {
+    condition = { for p in aws_rds_cluster_parameter_group.aurora[0].parameter : p.name => p.value } == {
+      "rds.force_ssl" = "1"
+    }
+    error_message = "The cluster parameter group must carry exactly rds.force_ssl. The query-logging parameters do not exist at Aurora cluster level and belong on aws_db_parameter_group.aurora."
+  }
+}
+
+run "aurora_instance_parameter_group" {
+  command = plan
+
+  variables {
+    aurora_query_logging_enabled = true
+  }
+
+  assert {
+    condition     = aws_db_parameter_group.aurora[0].family == "aurora-postgresql18"
+    error_message = "The instance parameter group family must match the cluster's major engine version (18.x)."
+  }
+
+  assert {
+    condition = { for p in aws_db_parameter_group.aurora[0].parameter : p.name => p.value } == {
+      "log_statement"              = "ddl"
+      "log_min_duration_statement" = "1000"
+    }
+    error_message = "The instance parameter group should log DDL and queries slower than 1s, and specifically not log_statement = all, which would copy workflow payloads into CloudWatch."
+  }
+
+  # Not asserted: that the writer and reader actually reference this group.
+  # db_parameter_group_name resolves to aws_db_parameter_group.aurora[0].name,
+  # which name_prefix leaves unknown until apply, so any comparison against it
+  # is an "Unknown condition value" at plan time. The attachment belongs on the
+  # live-validation checklist. Same gap as the module's own RDS parameter group
+  # in tests/defaults.tftest.hcl.
+}
+
 run "aurora_writer_and_reader_match_cluster_engine" {
   command = plan
 

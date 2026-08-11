@@ -1357,12 +1357,22 @@ run "redis_defaults_to_a_single_node_cluster" {
 
   assert {
     condition     = length(aws_elasticache_replication_group.n8n) == 0
-    error_message = "No replication group should be created unless redis_high_availability_enabled = true"
+    error_message = "No replication group should be created unless redis_high_availability_enabled, redis_transit_encryption_enabled or redis_kms_encryption_enabled is set"
   }
 
   assert {
     condition     = aws_elasticache_cluster.n8n[0].num_cache_nodes == 1
     error_message = "The default cluster should still be a single node"
+  }
+
+  assert {
+    condition     = aws_elasticache_cluster.n8n[0].snapshot_retention_limit == 1
+    error_message = "The default single-node cluster must retain one daily snapshot"
+  }
+
+  assert {
+    condition     = length(aws_kms_key.redis) == 0
+    error_message = "redis_kms_encryption_enabled must default to false so existing standalone clusters are not replaced by a replication group and lose their queue"
   }
 }
 
@@ -1407,6 +1417,11 @@ run "redis_high_availability_creates_a_failover_capable_replication_group" {
     error_message = "The replication group must honour redis_node_type"
   }
 
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].snapshot_retention_limit == 1
+    error_message = "The replication-group topology must retain one daily snapshot by default"
+  }
+
   # Existing HA deployments already carry this exact description in state.
   # Preserve it so adopting TLS support with every new input left at its default
   # does not produce an unrelated ElastiCache modification.
@@ -1440,6 +1455,16 @@ run "redis_high_availability_creates_a_failover_capable_replication_group" {
   }
 }
 
+run "redis_snapshot_retention_rejects_fractional_days" {
+  command = plan
+
+  variables {
+    redis_snapshot_retention_limit = 1.5
+  }
+
+  expect_failures = [var.redis_snapshot_retention_limit]
+}
+
 # The identifier collision is the one failure mode that cannot be recovered
 # inside a single apply: ElastiCache shares one namespace between cache cluster
 # IDs and replication group IDs, so if these two ever matched, the apply that
@@ -1456,6 +1481,114 @@ run "redis_topologies_use_distinct_elasticache_identifiers" {
   assert {
     condition     = aws_elasticache_replication_group.n8n[0].replication_group_id == "n8n-cluster-redis-rg"
     error_message = "The replication group ID must not collide with the single-node cluster_id, because ElastiCache shares one identifier namespace across both"
+  }
+}
+
+# ── Redis at-rest encryption with a customer-managed key (opt-in) ───────────
+# The third feature that selects the replication group, independent of the
+# other two: kms_key_id exists only on that resource type, same reason
+# auth_token does. Unlike HA and TLS, this one changes nothing about node
+# count, failover, or encryption/AUTH; it only ever swaps which key (AWS- or
+# customer-managed) protects whatever topology the other two variables chose.
+
+run "redis_kms_encryption_alone_selects_the_replication_group_with_a_cmk" {
+  command = plan
+
+  variables {
+    redis_kms_encryption_enabled = true
+  }
+
+  assert {
+    condition     = length(aws_elasticache_cluster.n8n) == 0
+    error_message = "The cluster resource has no kms_key_id argument, so opting into a CMK must move Redis onto the replication group"
+  }
+
+  assert {
+    condition     = length(aws_elasticache_replication_group.n8n) == 1
+    error_message = "The CMK-only path must create the replication group, the only ElastiCache resource that accepts kms_key_id"
+  }
+
+  # A CMK alone must not also buy a replica or TLS. Doubling the bill or
+  # changing the network posture on a caller who only asked to swap keys
+  # would be the same silent-side-effect defect HA and TLS already guard.
+  assert {
+    condition = (
+      aws_elasticache_replication_group.n8n[0].num_cache_clusters == 1 &&
+      aws_elasticache_replication_group.n8n[0].automatic_failover_enabled == false &&
+      aws_elasticache_replication_group.n8n[0].transit_encryption_enabled == false
+    )
+    error_message = "Enabling redis_kms_encryption_enabled alone must not also enable HA or transit encryption"
+  }
+
+  assert {
+    condition     = length(aws_kms_key.redis) == 1 && length(aws_kms_alias.redis) == 1
+    error_message = "redis_kms_encryption_enabled = true must create the CMK and its alias"
+  }
+
+  assert {
+    condition     = aws_kms_key.redis[0].enable_key_rotation == true
+    error_message = "The Redis CMK must rotate annually, matching aws_kms_key.db and aws_kms_key.eks"
+  }
+
+  # The ARN-linkage between aws_kms_key.redis[0].arn and the replication
+  # group's kms_key_id is not assertable here, for the same reason noted above
+  # the RDS CMK tests: the ARN is computed and unknown at plan time under the
+  # mock provider. That the CMK exists at all, with the right count and
+  # rotation, is what this run covers; the linkage itself needs a live apply.
+}
+
+run "redis_high_availability_without_kms_encryption_uses_the_aws_managed_key" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled = true
+  }
+
+  # This is the negative case for the assertion above: HA does not imply a
+  # CMK, so a caller who enables only HA must still see zero key resources.
+  assert {
+    condition     = length(aws_kms_key.redis) == 0 && length(aws_kms_alias.redis) == 0
+    error_message = "redis_high_availability_enabled alone must not create a CMK; the two variables are independent"
+  }
+}
+
+run "redis_high_availability_and_kms_encryption_compose" {
+  command = plan
+
+  variables {
+    redis_high_availability_enabled = true
+    redis_kms_encryption_enabled    = true
+  }
+
+  assert {
+    condition = (
+      aws_elasticache_replication_group.n8n[0].automatic_failover_enabled == true &&
+      aws_elasticache_replication_group.n8n[0].multi_az_enabled == true &&
+      length(aws_kms_key.redis) == 1
+    )
+    error_message = "HA and a CMK must compose on the same replication group without either one dropping the other"
+  }
+}
+
+run "redis_kms_encryption_disabled_skips_cmk_on_an_otherwise_opted_in_deployment" {
+  command = plan
+
+  variables {
+    redis_transit_encryption_enabled = true
+    redis_kms_encryption_enabled     = false
+  }
+
+  # Mirrors db_storage_encrypted_false_skips_cmk: turning the CMK off must
+  # never depend on which other feature put the deployment on the
+  # replication group in the first place.
+  assert {
+    condition     = length(aws_kms_key.redis) == 0 && length(aws_kms_alias.redis) == 0
+    error_message = "redis_kms_encryption_enabled = false must skip CMK creation even when TLS independently selects the replication group"
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].transit_encryption_enabled == true
+    error_message = "Disabling the CMK must not disturb transit encryption, which is what put this deployment on the replication group"
   }
 }
 
@@ -2354,6 +2487,30 @@ run "redis_tuning_with_create_elasticache_false_warns" {
     redis_host                      = "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
     redis_node_type                 = "cache.r6g.large"
     redis_high_availability_enabled = true
+  }
+
+  expect_failures = [check.redis_tuning_requires_module_managed_elasticache]
+}
+
+run "redis_kms_encryption_with_create_elasticache_false_warns" {
+  command = plan
+
+  variables {
+    create_elasticache           = false
+    redis_host                   = "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
+    redis_kms_encryption_enabled = true
+  }
+
+  expect_failures = [check.redis_tuning_requires_module_managed_elasticache]
+}
+
+run "redis_snapshot_retention_with_create_elasticache_false_warns" {
+  command = plan
+
+  variables {
+    create_elasticache             = false
+    redis_host                     = "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
+    redis_snapshot_retention_limit = 3
   }
 
   expect_failures = [check.redis_tuning_requires_module_managed_elasticache]
@@ -4800,4 +4957,293 @@ run "extra_env_rejects_execution_data_storage_mode_name" {
   }
 
   expect_failures = [var.n8n_extra_env]
+}
+
+# ── EKS control-plane hardening (issue #27) ───────────────────────────────────
+# These assertions exist because checkov no longer covers them. CKV_AWS_58
+# (secrets encryption) carries a checkov:skip in eks.tf: the check reads
+# encryption_config straight from the HCL and cannot expand the dynamic block
+# the conditional KMS key requires, so it reports a false negative either way.
+# Skipping it means nothing in CI would notice if the block were dropped, hence
+# the coverage here instead.
+
+run "eks_control_plane_hardening_defaults" {
+  command = plan
+
+  assert {
+    condition     = length(aws_eks_cluster.n8n.encryption_config) == 1
+    error_message = "eks_secrets_encryption_enabled defaults to true, so the cluster should plan with an encryption_config block."
+  }
+
+  assert {
+    condition     = aws_eks_cluster.n8n.encryption_config[0].resources == toset(["secrets"])
+    error_message = "encryption_config should envelope-encrypt secrets, the only resource type EKS supports here."
+  }
+
+  # All five types, so an audit trail exists from the first apply rather than
+  # being switched on after the incident that needed it.
+  assert {
+    condition = aws_eks_cluster.n8n.enabled_cluster_log_types == toset([
+      "api", "audit", "authenticator", "controllerManager", "scheduler",
+    ])
+    error_message = "All five EKS control-plane log types should be enabled by default."
+  }
+
+  # The log group is module-managed precisely so retention is not "Never
+  # expire", which is what EKS picks when it auto-creates the group.
+  assert {
+    condition     = aws_cloudwatch_log_group.eks_cluster.name == "/aws/eks/n8n-cluster/cluster"
+    error_message = "The control-plane log group must use the name EKS writes to, or EKS auto-creates its own alongside it."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_group.eks_cluster.retention_in_days == 365
+    error_message = "Control-plane log retention should be finite and explicit."
+  }
+
+  assert {
+    condition     = aws_eks_cluster.n8n.vpc_config[0].endpoint_public_access
+    error_message = "cluster_endpoint_public_access should default to true (kubectl works right after apply)."
+  }
+
+  assert {
+    condition     = aws_eks_cluster.n8n.vpc_config[0].public_access_cidrs == toset(["0.0.0.0/0"])
+    error_message = "cluster_endpoint_public_access_cidrs should default to unrestricted, preserving pre-#27 behavior."
+  }
+}
+
+# The opt-out has to actually opt out: the KMS key is what makes the cluster
+# unreplaceable-in-place, so a caller disabling it must get neither the key nor
+# the encryption_config block referencing it.
+run "eks_secrets_encryption_can_be_disabled" {
+  command = plan
+
+  variables {
+    eks_secrets_encryption_enabled = false
+  }
+
+  assert {
+    condition     = length(aws_eks_cluster.n8n.encryption_config) == 0
+    error_message = "eks_secrets_encryption_enabled = false should plan no encryption_config block."
+  }
+
+  assert {
+    condition     = length(aws_kms_key.eks) == 0
+    error_message = "eks_secrets_encryption_enabled = false should create no KMS key."
+  }
+}
+
+run "endpoint_access_cidrs_flow_through" {
+  command = plan
+
+  variables {
+    cluster_endpoint_public_access_cidrs = ["203.0.113.0/24"]
+    cluster_endpoint_private_access      = true
+  }
+
+  assert {
+    condition     = aws_eks_cluster.n8n.vpc_config[0].public_access_cidrs == toset(["203.0.113.0/24"])
+    error_message = "cluster_endpoint_public_access_cidrs should reach vpc_config.public_access_cidrs."
+  }
+
+  assert {
+    condition     = aws_eks_cluster.n8n.vpc_config[0].endpoint_private_access
+    error_message = "cluster_endpoint_private_access should reach vpc_config.endpoint_private_access."
+  }
+}
+
+run "endpoint_access_cidrs_reject_malformed_cidr" {
+  command = plan
+
+  variables {
+    cluster_endpoint_public_access_cidrs = ["203.0.113.0"]
+  }
+
+  expect_failures = [var.cluster_endpoint_public_access_cidrs]
+}
+
+# An empty list reads like "allow nothing" but EKS falls back to 0.0.0.0/0 when
+# the public endpoint is on and no CIDRs are given, so it is the one input value
+# whose plain meaning is the opposite of what it does.
+run "endpoint_access_cidrs_reject_empty_list" {
+  command = plan
+
+  variables {
+    cluster_endpoint_public_access_cidrs = []
+  }
+
+  expect_failures = [var.cluster_endpoint_public_access_cidrs]
+}
+
+# The empty-list rule only matters while the public endpoint is enabled. A
+# private-only caller may pass [] explicitly because EKS ignores public CIDRs
+# when public access is disabled.
+run "endpoint_access_cidrs_empty_list_accepted_when_public_access_is_off" {
+  command = plan
+
+  variables {
+    cluster_endpoint_public_access       = false
+    cluster_endpoint_private_access      = true
+    cluster_endpoint_public_access_cidrs = []
+  }
+
+  assert {
+    condition     = length(aws_eks_cluster.n8n.vpc_config[0].public_access_cidrs) == 0
+    error_message = "An empty CIDR list must reach the cluster's vpc_config when the public endpoint is disabled"
+  }
+}
+
+# Both endpoints off leaves an unreachable control plane. EKS refuses it, but
+# only several minutes into the apply.
+run "endpoint_access_requires_one_enabled_path" {
+  command = plan
+
+  variables {
+    cluster_endpoint_public_access  = false
+    cluster_endpoint_private_access = false
+  }
+
+  expect_failures = [var.cluster_endpoint_private_access]
+}
+
+# ── S3 bucket encryption (issue #27) ──────────────────────────────────────────
+# Covers the bucket side of SSE-KMS. The other half of it, the n8n pod role's
+# kms:Decrypt / kms:GenerateDataKey grant, is deliberately not asserted here:
+# aws_iam_policy.s3.policy is jsonencode()d from the bucket and key ARNs, so it
+# stays unknown through a mocked plan, and command = apply is not an option in
+# this suite (see the n8n_extra_env section above). That grant is the pairing
+# that breaks n8n at runtime rather than at plan time if it is ever dropped, so
+# it belongs on the live-validation checklist, not in a plan-time assertion.
+
+run "s3_kms_encryption_defaults" {
+  command = plan
+
+  assert {
+    condition     = length(aws_s3_bucket_server_side_encryption_configuration.n8n) == 1
+    error_message = "s3_kms_encryption_enabled defaults to true, so the bucket should plan a default-encryption configuration."
+  }
+
+  # rule and apply_server_side_encryption_by_default are both sets, so they have
+  # to be walked rather than indexed.
+  assert {
+    condition = one(flatten([
+      for r in aws_s3_bucket_server_side_encryption_configuration.n8n[0].rule :
+      [for d in r.apply_server_side_encryption_by_default : d.sse_algorithm]
+    ])) == "aws:kms"
+    error_message = "The bucket default should be SSE-KMS; SSE-S3 is what this setting exists to move away from."
+  }
+
+  # Without Bucket Keys, KMS is called once per object and the request bill
+  # scales with execution volume.
+  assert {
+    condition = one([
+      for r in aws_s3_bucket_server_side_encryption_configuration.n8n[0].rule : r.bucket_key_enabled
+    ])
+    error_message = "S3 Bucket Keys should be enabled so KMS is called per bucket, not per object."
+  }
+
+  assert {
+    condition     = length(aws_kms_key.s3) == 1
+    error_message = "s3_kms_encryption_enabled defaults to true, so the bucket CMK should be created."
+  }
+
+  assert {
+    condition     = aws_kms_key.s3[0].enable_key_rotation
+    error_message = "The bucket CMK should rotate, matching the module's other CMKs."
+  }
+}
+
+# The opt-out has to remove both halves: an SSE configuration left behind would
+# point at a key that no longer exists.
+run "s3_kms_encryption_can_be_disabled" {
+  command = plan
+
+  variables {
+    s3_kms_encryption_enabled = false
+  }
+
+  assert {
+    condition     = length(aws_s3_bucket_server_side_encryption_configuration.n8n) == 0
+    error_message = "s3_kms_encryption_enabled = false should leave the bucket on SSE-S3 with no encryption configuration resource."
+  }
+
+  assert {
+    condition     = length(aws_kms_key.s3) == 0
+    error_message = "s3_kms_encryption_enabled = false should create no bucket CMK."
+  }
+}
+
+# ── RDS parameter group (issue #27) ───────────────────────────────────────────
+# The safe default matters more than the logging default: engine_version is
+# ignored on the instance, so a live PostgreSQL 16 deployment can coexist with
+# var.db_engine_version = 18.4. Attaching the derived postgres18 group in that
+# state fails at the RDS API. The group is therefore an explicit opt-in.
+
+run "db_parameter_group_defaults_to_absent" {
+  command = plan
+
+  assert {
+    condition     = length(aws_db_parameter_group.n8n) == 0
+    error_message = "db_query_logging_enabled must default to false so module upgrades do not attach a parameter group from the wrong PostgreSQL major family."
+  }
+}
+
+run "db_parameter_group_opt_in" {
+  command = plan
+
+  variables {
+    db_query_logging_enabled = true
+  }
+
+  # Two assertions, and the literal one is deliberate rather than redundant.
+  # The first pins the coupling: the family has to be derived from
+  # db_engine_version, not hardcoded, so a version bump carries it along. The
+  # second pins what that derivation currently resolves to, which means bumping
+  # db_engine_version fails here on purpose. That is the point: a family only
+  # exists if AWS publishes it, so whoever bumps the version has to confirm the
+  # new one is real (`aws rds describe-db-engine-versions --engine postgres
+  # --engine-version <new> --query 'DBEngineVersions[].DBParameterGroupFamily'`)
+  # instead of finding out when the apply fails. postgres18 was confirmed that
+  # way for the current 18.4 default.
+  assert {
+    condition     = aws_db_parameter_group.n8n[0].family == "postgres${split(".", var.db_engine_version)[0]}"
+    error_message = "The parameter group family must be derived from db_engine_version, not hardcoded, or a version bump leaves it pointing at the wrong family."
+  }
+
+  assert {
+    condition     = aws_db_parameter_group.n8n[0].family == "postgres18"
+    error_message = "The parameter group family resolved to something other than postgres18. If db_engine_version was bumped deliberately, confirm the new family exists in the target region with `aws rds describe-db-engine-versions` and update this assertion."
+  }
+
+  assert {
+    condition = { for p in aws_db_parameter_group.n8n[0].parameter : p.name => p.value } == {
+      "log_statement"              = "ddl"
+      "log_min_duration_statement" = "1000"
+      "rds.force_ssl"              = "1"
+    }
+    error_message = "The parameter group should log DDL and slow queries and require TLS, and specifically not log_statement = all, which would copy workflow payloads into CloudWatch."
+  }
+
+  # The attachment itself is not assertable here: name_prefix means the group's
+  # name is generated at apply time, so both sides of the comparison are unknown
+  # through a mocked plan. What is checked above is the content that makes the
+  # attachment worth having.
+}
+
+# create_database = false means an external database, so none of the module's
+# own database resources should exist -- including this group.
+run "db_parameter_group_absent_without_module_database" {
+  command = plan
+
+  variables {
+    create_database          = false
+    db_host                  = "external.example.com"
+    db_password              = "external-password-not-real"
+    db_query_logging_enabled = true
+  }
+
+  assert {
+    condition     = length(aws_db_parameter_group.n8n) == 0
+    error_message = "create_database = false should create no parameter group."
+  }
 }

@@ -123,10 +123,15 @@ Concretely, in this repo:
   the CI matrix.
 - **`tflint`** against the module root and every example, with the AWS
   ruleset initialized via `tflint --init`.
-- **`checkov`** (`bridgecrewio/checkov-action@v12`) against the Terraform
-  framework. `soft_fail` is currently `true` — see the inline comment in the
-  workflow. **When you add new resources, do not regress curated findings;
-  prefer fixing them over adding suppressions.**
+- **`checkov`** against the Terraform framework, at the version pinned in
+  `CHECKOV_VERSION`. CI runs `tests/scripts/check-checkov.sh`, the same script
+  you run locally, and that script refuses to run against a different checkov
+  version, because results are not comparable across versions. Findings hard-fail the
+  build: every one is either fixed or annotated at its resource with an inline
+  `checkov:skip=<ID>:<reason>`, and `.checkov.yaml` suppresses no check
+  repo-wide. **When you add new resources, do not regress curated findings;
+  prefer fixing them over adding suppressions, and when a suppression is
+  genuinely right, say why at the resource.**
 
 ### 2. Unit + integration tests via `terraform test`
 
@@ -276,7 +281,7 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
   terraform-docs .
   ```
 
-  CI installs the same version (`v0.22.0`, tracking the brew default) and
+  CI installs the same version (`v0.24.0`, tracking the brew default) and
   runs `terraform-docs --output-check .` — see the `docs` job in
   `.github/workflows/terraform-tests.yml`. If your local version differs
   from CI's, the markdown table whitespace will drift and the check will
@@ -299,11 +304,13 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
   |---|---|
   | `Common` | Naming/tagging threaded through every resource (`cluster_name`, `tags`, `namespace`) |
   | `Foundation inputs` | Region, VPC, DNS/cert, k8s version, license — inputs the caller supplies from their own infra |
+  | `EKS cluster` | Control-plane properties the module owns: API server endpoint access and Secrets encryption |
   | `Ingress` | ALB / ingress-controller settings |
   | `Nodes` | EKS managed node group sizing |
   | `n8n chart` | Chart version, image tag, timeouts, logging |
   | `n8n resource requests and limits` | CPU/memory requests and limits, one set per pod role |
   | `Execution settings` | Worker concurrency, execution timeouts, pruning |
+  | `S3` | Binary/execution-data bucket encryption |
   | `Graceful shutdown` | Termination grace period, prestop sleep |
   | `Task runners` | Task runner sizing and lifecycle |
   | `RDS PostgreSQL` | Everything database-related |

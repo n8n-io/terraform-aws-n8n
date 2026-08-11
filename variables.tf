@@ -168,6 +168,59 @@ variable "n8n_license_detach_floating_on_shutdown" {
   default     = false
 }
 
+# ── EKS cluster ───────────────────────────────────────────────────────────────
+
+variable "eks_secrets_encryption_enabled" {
+  description = "When true (the default), envelope-encrypt Kubernetes Secrets and the EKS control-plane CloudWatch log group with a module-created Customer Managed KMS Key (aws_kms_key.eks). Clears Checkov findings CKV_AWS_58 and CKV_AWS_158. The supported AWS provider associates encryption with an existing unencrypted cluster in place; disabling it again is irreversible in EKS and therefore forces cluster replacement. Set to false before the first apply to preserve current behavior on a pre-existing cluster without secrets encryption. The CMK rotates annually and uses a 7-day deletion window (AWS minimum)."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
+variable "cluster_endpoint_public_access" {
+  description = "Whether the EKS API server endpoint is reachable from outside the VPC. Defaults to true so kubectl works immediately after apply. Set to false (with cluster_endpoint_private_access = true) to require VPN/peering/bastion access to the control plane."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
+variable "cluster_endpoint_public_access_cidrs" {
+  description = "CIDR blocks allowed to reach the EKS API server's public endpoint. Defaults to 0.0.0.0/0 (unrestricted) to preserve current behavior. Restrict to your office/VPN CIDRs to clear Checkov findings CKV_AWS_38/CKV_AWS_39 without disabling public access outright. Ignored when cluster_endpoint_public_access = false."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for c in var.cluster_endpoint_public_access_cidrs : can(cidrhost(c, 0))])
+    error_message = "Every entry must be a valid CIDR block (e.g. 203.0.113.0/24)."
+  }
+
+  # An empty list is not "deny all": with the public endpoint enabled and no
+  # CIDRs specified, EKS falls back to its own 0.0.0.0/0 default, which is the
+  # opposite of what an empty list looks like it does. The input is genuinely
+  # ignored when public access is disabled, so a private-only caller may pass an
+  # empty list explicitly.
+  validation {
+    condition     = var.cluster_endpoint_public_access ? length(var.cluster_endpoint_public_access_cidrs) > 0 : true
+    error_message = "cluster_endpoint_public_access_cidrs must contain at least one CIDR while cluster_endpoint_public_access = true. To close the public endpoint entirely, set cluster_endpoint_public_access = false (with cluster_endpoint_private_access = true) rather than passing an empty list."
+  }
+}
+
+variable "cluster_endpoint_private_access" {
+  description = "Whether the EKS API server endpoint is also reachable from inside the VPC. Defaults to false, matching the module's existing behavior. When false, in-VPC traffic (worker nodes' kubelet connections included) reaches the control plane over the public endpoint via NAT; when true, the endpoint resolves to private IPs inside the VPC and that traffic stays in the VPC. Set to true to keep kubectl working from inside the VPC/VPN while restricting or disabling public access. At least one of cluster_endpoint_public_access or cluster_endpoint_private_access must be true."
+  type        = bool
+  default     = false
+  nullable    = false
+
+  # EKS requires at least one endpoint access mode. Caught here rather than
+  # letting the apply fail against the AWS API several minutes in, or (worse)
+  # producing a cluster nothing can reach.
+  validation {
+    condition     = var.cluster_endpoint_public_access || var.cluster_endpoint_private_access
+    error_message = "At least one of cluster_endpoint_public_access or cluster_endpoint_private_access must be true; EKS requires the API server endpoint to be reachable by at least one path."
+  }
+}
+
 # ── Ingress ───────────────────────────────────────────────────────────────────
 
 variable "create_ingress" {
@@ -567,6 +620,15 @@ variable "n8n_execution_data_storage_mode" {
   }
 }
 
+# ── S3 ────────────────────────────────────────────────────────────────────────
+
+variable "s3_kms_encryption_enabled" {
+  description = "When true (the default), set the S3 bucket's default encryption to SSE-KMS with a module-created Customer Managed KMS Key (aws_kms_key.s3) and grant the n8n pod role kms:Decrypt / kms:GenerateDataKey on it. Clears Checkov finding CKV_AWS_145. This selects which key encrypts objects, not whether they are encrypted: S3 encrypts every object regardless, and setting this to false leaves new objects on SSE-S3 with S3-managed keys. S3 Bucket Keys are enabled alongside it so KMS is called per bucket rather than per object. The setting applies only to objects written afterwards: existing objects keep their original encryption. Do not change true to false while any retained object uses this CMK. Terraform immediately schedules the key for deletion, making those objects unreadable while the key is PendingDeletion and permanently unrecoverable after the 7-day window. See README → KMS key after terraform destroy for recovery."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 # ── Graceful shutdown ─────────────────────────────────────────────────────────
 
 variable "n8n_termination_grace_period" {
@@ -676,6 +738,13 @@ variable "db_engine_version" {
     condition     = can(regex("^[0-9]+\\.[0-9]+$", var.db_engine_version))
     error_message = "db_engine_version must be of the form MAJOR.MINOR (e.g. 18.4)."
   }
+}
+
+variable "db_query_logging_enabled" {
+  description = "Create and attach a custom RDS parameter group that logs DDL and queries slower than 1 second and enforces rds.force_ssl = 1. Defaults to false to preserve upgrade compatibility: aws_db_instance.n8n ignores engine_version drift, so an existing instance may still run an older PostgreSQL major than db_engine_version, and RDS rejects a parameter group from the wrong major family. Enable this for a new deployment, or only after confirming the live instance major matches db_engine_version. Changing the attached parameter group takes effect on reboot. Ignored when create_database = false."
+  type        = bool
+  default     = false
+  nullable    = false
 }
 
 variable "db_multi_az" {
@@ -815,6 +884,23 @@ variable "redis_high_availability_enabled" {
   nullable = false
 }
 
+variable "redis_snapshot_retention_limit" {
+  description = "Number of daily automatic ElastiCache snapshots to retain. 0 disables snapshots. Defaults to 1: this Redis backs n8n's BullMQ queue, not a source of truth, so a snapshot only shortens recovery of in-flight queued executions after a failure. Applies to both Redis topologies, the single-node cluster and the replication group selected by redis_high_availability_enabled, redis_transit_encryption_enabled, or redis_kms_encryption_enabled. Clears Checkov finding CKV_AWS_134."
+  type        = number
+  default     = 1
+  nullable    = false
+
+  validation {
+    condition     = var.redis_snapshot_retention_limit >= 0 && var.redis_snapshot_retention_limit <= 35
+    error_message = "redis_snapshot_retention_limit must be between 0 and 35 days."
+  }
+
+  validation {
+    condition     = var.redis_snapshot_retention_limit == floor(var.redis_snapshot_retention_limit)
+    error_message = "redis_snapshot_retention_limit must be a whole number of days."
+  }
+}
+
 variable "n8n_redis_timeout_threshold" {
   description = "Milliseconds n8n will keep trying to reach Redis before it gives up and exits the process, wired to QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD. Leave null (the default) to use the chart's 10000, which is n8n's own default and what every existing deployment already runs. Raise it when redis_high_availability_enabled = true and you would rather n8n rode a failover out than restarted: with the default, an ElastiCache promotion outlasts the budget and every main, worker and webhook pod exits and is restarted by Kubernetes. Pick the value deliberately, because the budget is coarser than it looks. n8n does not set ioredis's connectTimeout, so it stays at 10s, and a connect to a demoted primary hangs for that full 10s before failing. Each failed attempt therefore spends about 11.1s of this budget, making the effective values 11.1s, 33.2s and 66.4s for settings of 10s, 30s and 60s. 30000 was measured failing by 1.1 seconds against a 25 second outage; 60000 survived every case measured. 60000 is also confirmed against a real ElastiCache failover, where no container terminated and the endpoint stayed stale for 48 seconds, leaving about 20 seconds of headroom. That is one observed failover, so treat it as a good default rather than a guarantee. See README → \"Surviving a Redis failover without restarting\" for the measurements."
   type        = number
@@ -856,6 +942,17 @@ variable "redis_transit_encryption_enabled" {
   # would otherwise propagate null into local.redis_tls_active and the other
   # boolean expressions in locals.tf that key off this variable, and die with
   # an opaque "Invalid value for operand". See AGENTS.md on nullable.
+  nullable = false
+}
+
+variable "redis_kms_encryption_enabled" {
+  description = "When true, encrypt Redis at rest with a module-created Customer Managed KMS Key (aws_kms_key.redis). Defaults to false, which leaves the default standalone aws_elasticache_cluster unencrypted at rest: Redis OSS at-rest encryption is available only on aws_elasticache_replication_group. Existing replication-group paths selected by HA or TLS are encrypted with the ElastiCache-managed key because redis.tf sets at_rest_encryption_enabled = true there. kms_key_id is also replication-group-only, so this is one of three variables (alongside redis_high_availability_enabled and redis_transit_encryption_enabled) that independently select the replication group. Setting this true on a default deployment replaces the standalone cache with a one-node replication group and drops queued work; drain the queue and use a maintenance window. On an existing replication group, changing kms_key_id is also ForceNew. The CMK rotates annually and uses a 7-day deletion window (AWS minimum). Ignored when create_elasticache = false."
+  type        = bool
+  default     = false
+
+  # null is not meaningful here: a caller writing `x = null` in a module block
+  # would otherwise propagate null into the count expressions in redis.tf and
+  # die with an opaque "Invalid count argument". See AGENTS.md on nullable.
   nullable = false
 }
 

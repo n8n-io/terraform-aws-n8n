@@ -61,6 +61,16 @@ tasks:
           as: EXAMPLE
         cmd: cd examples/{{.EXAMPLE}} && tflint --init && tflint --format compact
 
+  checkov:
+    desc: >-
+      Static analysis, the same invocation CI runs. Requires the exact checkov
+      version CHECKOV_VERSION pins in .github/workflows/terraform-tests.yml;
+      the script refuses to run against any other, because which checks apply
+      is version-dependent. Install with
+      `pip install "checkov==<pinned version>"`.
+    cmds:
+      - ./tests/scripts/check-checkov.sh
+
   banners:
     desc: >-
       Check every variable/output block in variables.tf and outputs.tf sits under
@@ -94,10 +104,11 @@ tasks:
 
   ci:
     desc: >-
-      Run the full local loop (fmt, validate, test, lint, banners, docs, markdown)
-      - mirrors every CI job except checkov (soft_fail: true in CI, and not
-      installed as a local prerequisite here), plus banners and markdown
-      which CI does not gate on at all.
+      Run the full local loop (fmt, validate, test, lint, banners, docs, markdown).
+      Mirrors every CI job except checkov, which is a hard-fail gate in CI but is
+      left out here because it needs a pinned checkov install that the other tasks
+      do not: run `task checkov` separately once you have it. Also runs banners and
+      markdown, which CI does not gate on at all.
     cmds:
       - task: fmt
       - task: validate

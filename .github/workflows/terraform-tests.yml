@@ -13,6 +13,12 @@ permissions:
 env:
   TF_VERSION: "1.9.8"
   TFLINT_VERSION: "v0.53.0"
+  # checkov results are version-dependent, so this gate pins one version rather
+  # than tracking latest. tests/scripts/check-checkov.sh reads this value and
+  # refuses to run against a different local version, which makes this line the
+  # single source of truth for both. Bumping it is a deliberate change: expect a
+  # new release to report findings that need triaging in the same commit.
+  CHECKOV_VERSION: "3.3.9"
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
   # Shared provider plugin cache across the validate/test/tflint matrices.
@@ -42,9 +48,13 @@ jobs:
       # Tracks the version `brew install terraform-docs` installs on macOS, so
       # contributors don't need a special install path. Different terraform-docs
       # versions emit different markdown table whitespace, so any drift between
-      # CI and the version contributors actually use produces spurious diffs.
-      # Bump together with the brew default.
-      TERRAFORM_DOCS_VERSION: v0.22.0
+      # CI and the version contributors actually use produces spurious diffs in
+      # the --output-check steps below. Bump together with the brew default:
+      # this pin sat at v0.22.0 while brew moved to v0.24.0, which is the same
+      # trap the floating checkov version fell into (see CHECKOV_VERSION above).
+      # It happened to be harmless here, because the two versions render this
+      # repo's tables identically, but that was luck rather than design.
+      TERRAFORM_DOCS_VERSION: v0.24.0
     steps:
       - uses: actions/checkout@v4
 
@@ -199,15 +209,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: checkov
-        uses: bridgecrewio/checkov-action@v12
+      # 3.11 is the interpreter the pinned checkov was verified against, and the
+      # one bridgecrewio's own checkov:3.3.9 image ships.
+      - uses: actions/setup-python@v5
         with:
-          directory: .
-          framework: terraform
-          quiet: true
-          # Module surfaces low-severity findings (e.g. RDS deletion protection,
-          # encryption knobs) that are intentional defaults for a getting-started
-          # template. Flip soft_fail to false once we curate suppressions.
-          soft_fail: true
-          output_format: cli
-          output_file_path: console
+          python-version: "3.11"
+
+      # Installed at a pinned version instead of via bridgecrewio/checkov-action,
+      # which bakes the checkov version into its own image: the @v12 tag moves to
+      # newer checkov releases on its own schedule. That is not a theoretical
+      # problem. 3.3.9 evaluates whole check families (all the aws_s3_bucket
+      # checks, several CKV2_* graph checks) against resources reached through a
+      # local module source that 3.3.0 skipped silently, which turned a clean
+      # local run into ten CI failures on findings nobody had triaged. With this
+      # gate at hard-fail, the version has to move only in a deliberate commit
+      # that also curates whatever the new release reports.
+      - name: install checkov
+        run: pip install "checkov==${{ env.CHECKOV_VERSION }}"
+
+      # The same script contributors run, so "clean locally" and "clean in CI"
+      # cannot drift apart: it owns the flags, the config file and the exit code.
+      # Every finding is curated, either fixed or annotated at the resource with
+      # an inline `checkov:skip=<ID>:<reason>`. See issue #27 and CHANGELOG.md.
+      # checkov exits non-zero on any new finding, which fails the job.
+      - name: checkov
+        run: tests/scripts/check-checkov.sh
