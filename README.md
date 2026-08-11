@@ -44,7 +44,7 @@ for the failure mode this avoids and how to recover if you hit it anyway.
 
 Set exactly one of:
 
-- `route53_zone_id`: the module issues and validates the ACM certificate and manages the Route 53 alias record end to end.
+- `route53_zone_id`: the module issues and validates the ACM certificate and, when `create_ingress = true`, manages the Route 53 alias. With caller-owned ingress, the caller also owns its DNS record.
 - `certificate_arn`: a pre-validated certificate for any other DNS provider. See [`examples/cloudflare/`](./examples/cloudflare/) and [`examples/godaddy/`](./examples/godaddy/) for the pattern of issuing the cert outside the module and passing the ARN in.
 
 ### Secrets
@@ -585,7 +585,7 @@ A forced failover against a real ElastiCache replication group, with
 pod logged `Recovered Redis connection` rather than exiting. n8n's own counter
 shows the quantum predicted above, measured rather than inferred:
 
-```
+```text
 Lost Redis connection. Trying to reconnect in 1s... (18.1s/60s)
 Lost Redis connection. Trying to reconnect in 1s... (29.1s/60s)
 Lost Redis connection. Trying to reconnect in 1s... (40.1s/60s)
@@ -678,8 +678,8 @@ enables TLS in transit, generates an AUTH token, publishes it as a Kubernetes
 secret, and wires `QUEUE_BULL_REDIS_TLS` plus `QUEUE_BULL_REDIS_PASSWORD` onto
 every n8n container. Retrieve the token with:
 
-```console
-$ terraform output -raw redis_auth_token
+```bash
+terraform output -raw redis_auth_token
 ```
 
 The generated token respects ElastiCache's constraints: 16 to 128 characters,
@@ -750,7 +750,7 @@ runs `redis_high_availability_enabled = true` plans as a clean in-place modify
 and then **fails at apply**. AWS refuses a direct plaintext-to-encrypted
 transition:
 
-```
+```text
 InvalidParameterCombination: Direct transition from transit-encryption-disabled
 to transit-encryption-enabled is not allowed. Update the cluster to
 transit-encryption-mode preferred prior to enabling transit encryption.
@@ -801,7 +801,7 @@ mode change first, then the AUTH token behind it. That ordering is what makes it
 work at all, since AWS rejects a token supplied in the same call as the move to
 `required`, with the same message it uses in `preferred`:
 
-```
+```text
 InvalidParameterValue: The AUTH token modification is only supported when
 encryption-in-transit is enabled.
 ```

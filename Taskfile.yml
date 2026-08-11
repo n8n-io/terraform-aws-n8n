@@ -15,6 +15,16 @@ env:
   GODADDY_API_SECRET: stub
 
 tasks:
+  init:
+    internal: true
+    run: once
+    cmds:
+      - terraform init -backend=false
+      - for:
+          var: EXAMPLES
+          as: EXAMPLE
+        cmd: cd examples/{{.EXAMPLE}} && terraform init -backend=false
+
   fmt:
     desc: Check Terraform formatting across the module and all examples.
     cmds:
@@ -22,17 +32,17 @@ tasks:
 
   validate:
     desc: terraform init + validate for the module root and every example.
+    deps: [init]
     cmds:
-      - terraform init -backend=false
       - terraform validate
       - for:
           var: EXAMPLES
           as: EXAMPLE
-        cmd: |
-          cd examples/{{.EXAMPLE}} && terraform init -backend=false && terraform validate
+        cmd: cd examples/{{.EXAMPLE}} && terraform validate
 
   test:
     desc: terraform test (plan-time, mocked providers) for the module root and every example.
+    deps: [init]
     cmds:
       - terraform test -verbose
       - for:
@@ -42,6 +52,7 @@ tasks:
 
   lint:
     desc: tflint for the module root and every example.
+    deps: [init]
     cmds:
       - tflint --init
       - tflint --format compact

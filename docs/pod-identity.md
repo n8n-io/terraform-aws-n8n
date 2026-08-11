@@ -1,6 +1,6 @@
 # EKS Pod Identity
 
-This module uses [EKS Pod Identity](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html) exclusively for granting AWS permissions to pods, not IRSA (IAM Roles for Service Accounts). There is no OIDC provider, no `eks.amazonaws.com/role-arn` ServiceAccount annotation, and no static IAM keys anywhere in the module.
+This module uses [EKS Pod Identity](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html) exclusively for granting AWS permissions to pods, not IRSA (IAM Roles for Service Accounts). It creates no OIDC provider, IRSA trust policy, or static IAM keys. The chart-owned n8n ServiceAccount carries an inert `eks.amazonaws.com/role-arn` compatibility annotation because the chart requires `serviceAccount.awsRoleArn`; credentials still come from Pod Identity.
 
 ## Why Pod Identity instead of IRSA
 
@@ -15,7 +15,7 @@ Pod Identity is the newer of the two mechanisms and needs less wiring: no OIDC p
 | EBS CSI driver | `aws_iam_role.ebs_csi` | `kube-system` | `ebs-csi-controller-sa` | `AmazonEBSCSIDriverPolicy` (AWS-managed), for the default `gp3` StorageClass. |
 | n8n (S3 binary storage) | `aws_iam_role.s3` | `var.namespace` (default `n8n`) | `n8n-enterprise` by default, `n8n-enterprise-pull` when `n8n_image_pull_secrets` is set (`local.n8n_service_account_name`) | `s3:GetObject`/`PutObject`/`DeleteObject`/`ListBucket` scoped to the module-created bucket (`aws_s3_bucket.n8n`). |
 
-Every association depends on `aws_eks_addon.pod_identity_agent` and follows the same shape: an IAM role trusting `pods.eks.amazonaws.com` for `sts:AssumeRole` + `sts:TagSession`, a policy attachment, and an `aws_eks_pod_identity_association` binding the role to a `(namespace, service_account)` pair. `n8n.tf`'s `helm_release.n8n` sets `serviceAccount.awsRoleArn` to `aws_iam_role.s3.arn` only to satisfy the chart's template validation; the actual credentials come from the Pod Identity agent, not from that field.
+Every association depends on `aws_eks_addon.pod_identity_agent` and binds a role that trusts `pods.eks.amazonaws.com` to a namespace and ServiceAccount. Most use `aws_eks_pod_identity_association`; EBS CSI uses the addon's inline `pod_identity_association` block. `serviceAccount.awsRoleArn` only satisfies the n8n chart; it does not provide credentials.
 
 ## Extending Pod Identity for your own workloads
 

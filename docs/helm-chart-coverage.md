@@ -11,7 +11,8 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | Chart key(s) | Module coverage |
 | --- | --- |
 | `image.tag` | `n8n_image_tag` (null = chart default `stable`) |
-| `image.repository`, `image.pullPolicy` | Not exposed; chart default used |
+| `image.repository` | `n8n_image_repository` (null = chart default) |
+| `image.pullPolicy` | Not exposed; chart default used |
 | `commonLabels`, `commonAnnotations`, `podLabels` | Not exposed |
 | `queueMode.enabled/workerReplicaCount/workerConcurrency` | Hardcoded `true` / `n8n_worker_keda_min_replicas` / `n8n_worker_concurrency` |
 | `queueMode.workerExtraEnv` | Not exposed (worker-only env); use `n8n_extra_env` for env vars applied to *all* pods instead |
@@ -19,13 +20,15 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `multiMain.enabled/replicas/antiAffinity.type` | Hardcoded `true` / `n8n_main_hpa_min_replicas` / hardcoded `"preferred"` |
 | `multiMain.topologySpreadConstraints`, `multiMain.setup.keyTtl/checkInterval` | Not exposed; chart default used |
 | `taskRunners.enabled/nativePythonRunner/launcher.autoShutdownTimeout/resources` | `n8n_task_runners_enabled` / `n8n_task_runner_python_enabled` / `n8n_task_runner_auto_shutdown_timeout` / `n8n_task_runner_*_request`/`*_limit` |
-| `taskRunners.image`, `taskRunners.customConfig` | Not exposed; chart default used |
+| `taskRunners.image.tag` | `n8n_task_runner_image_tag` (null = application image tag) |
+| `taskRunners.image.repository/pullPolicy`, `taskRunners.customConfig` | Not exposed; chart default used |
 | `strategy` | Not exposed |
 | `service.type/port` | Hardcoded `ClusterIP` / `5678` |
 | `service.annotations`, `service.main.annotations`, `service.webhookProcessor.annotations`, `service.sessionAffinity` | Not exposed |
 | `ingress.*` | Never set by this module. The module manages its own `kubernetes_ingress_v1` (see `create_ingress`, `ingress_annotations`) outside the chart entirely, rather than through the chart's ingress block |
 | `persistence` | Not exposed. n8n itself is stateless and needs no PVC (see README) |
-| `extraVolumes`, `extraVolumeMounts`, `extraContainers`, `extraInitContainers` | Not exposed |
+| `extraVolumes`, `extraVolumeMounts` | `n8n_extra_volumes` / `n8n_extra_volume_mounts` |
+| `extraContainers`, `extraInitContainers` | Not exposed |
 | `dnsPolicy`, `dnsConfig` | Not exposed |
 | `resources.main/worker/webhookProcessor` | `n8n_{main,worker,webhook}_{cpu,memory}_{request,limit}` |
 | `nodeSelector`, `tolerations`, `affinity`, `nodePlacement` | Not exposed. Node-level placement is controlled at the EKS node group instead (`node_instance_type`, `node_min`/`node_max`), not per-pod scheduling within the chart |
@@ -56,9 +59,11 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `secretRefs.env` | Not used; the module injects core config through `existingSecret` plus `config.extraEnv` instead |
 | `database.{type,useExternal,host,port,database,schema,user,passwordSecret}` | Fully wired (module-managed RDS or caller-supplied `db_host`/`db_password`) |
 | `database.ssl.*` | Not set via this chart key; the module sets `DB_POSTGRESDB_SSL_ENABLED`/`DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED` environment variables directly, gated by `db_postgresdb_ssl_enabled` |
-| `redis.{enabled,useExternal,host,port}` | Fully wired to the module-managed ElastiCache cluster |
+| `redis.{enabled,useExternal,host,port}` | Module-managed ElastiCache or caller-supplied `redis_host`/`redis_port` |
 | `redis.tls` | Wired to `redis_transit_encryption_enabled` (default `false`, requires `create_elasticache = true`) |
-| `redis.username`, `redis.passwordSecret`, `redis.database`, `redis.timeout`, `redis.prefix`, `redis.dualstack`, `redis.clusterNodes`, `redis.worker.*`, `redis.healthCheck` | Not exposed; chart defaults used |
+| `redis.passwordSecret` | Module-managed when Redis AUTH is active |
+| `redis.timeout` | `n8n_redis_timeout_threshold` (null = chart default) |
+| `redis.username`, `redis.database`, `redis.prefix`, `redis.dualstack`, `redis.clusterNodes`, `redis.worker.*`, `redis.healthCheck` | Not exposed; chart defaults used |
 | `s3.enabled/bucket.name/bucket.region/auth.autoDetect/storage.mode/storage.availableModes` | Hardcoded `true` / module-managed bucket / hardcoded `true` (Pod Identity) / hardcoded `"s3"` / hardcoded `"filesystem,s3"` |
 | `s3.bucket.host`, `s3.storage.forcePathStyle`, `s3.storage.extraEnv`, `s3.auth.accessKeyId/secretAccessKeySecret` | Not exposed; not needed given `auth.autoDetect = true` |
 

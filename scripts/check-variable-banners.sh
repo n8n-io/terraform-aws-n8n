@@ -33,19 +33,23 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 FILES=(variables.tf outputs.tf)
-BANNER_LOOSE_RE='^#{1,2}[[:space:]]*(──|--|—)'
-BANNER_STRICT_RE='^# ── .+ ─{2,}$'
+VARIABLE_BANNERS=("Common" "Foundation inputs" "Ingress" "Nodes" "n8n chart" "n8n resource requests and limits" "Execution settings" "Graceful shutdown" "Task runners" "RDS PostgreSQL" "ElastiCache Redis" "HPA: main pods" "HPA: webhook processor pods" "Observability" "Community packages" "KEDA: worker pods")
+OUTPUT_BANNERS=("App DNS" "Secrets" "Infrastructure")
+BANNER_LOOSE_RE='^#[[:space:]]+[─—-]'
+BANNER_STRICT_RE='^# ── (.+) ─{2,}$'
 BLOCK_RE='^(variable|output) "'
 
 fail=0
 
 for file in "${FILES[@]}"; do
   if [[ ! -f "$file" ]]; then
-    echo "check-variable-banners: $file not found, skipping" >&2
+    echo "check-variable-banners: $file not found" >&2
+    fail=1
     continue
   fi
 
   banner=""
+  banners=()
   lineno=0
   while IFS= read -r line || [[ -n "$line" ]]; do
     lineno=$((lineno + 1))
@@ -54,8 +58,10 @@ for file in "${FILES[@]}"; do
       if [[ ! "$line" =~ $BANNER_STRICT_RE ]]; then
         echo "$file:$lineno: malformed banner (expected '# ── Section Name ──...──'): $line" >&2
         fail=1
+      else
+        banner="${BASH_REMATCH[1]}"
+        banners+=("$banner")
       fi
-      banner="$line"
     elif [[ "$line" =~ $BLOCK_RE ]]; then
       if [[ -z "$banner" ]]; then
         echo "$file:$lineno: no preceding '# ── Section ──' banner for: $line" >&2
@@ -63,6 +69,16 @@ for file in "${FILES[@]}"; do
       fi
     fi
   done < "$file"
+
+  if [[ "$file" == "variables.tf" ]]; then
+    expected=("${VARIABLE_BANNERS[@]}")
+  else
+    expected=("${OUTPUT_BANNERS[@]}")
+  fi
+  if [[ "${banners[*]}" != "${expected[*]}" ]]; then
+    echo "$file: section banners are missing, renamed, or out of order" >&2
+    fail=1
+  fi
 done
 
 if [[ "$fail" -ne 0 ]]; then
