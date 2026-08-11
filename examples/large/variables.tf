@@ -168,6 +168,13 @@ variable "aurora_instance_class" {
   }
 }
 
+variable "aurora_query_logging_enabled" {
+  description = "Create and attach Aurora PostgreSQL 18 parameter groups that enforce rds.force_ssl and log DDL plus queries slower than 1 second. Defaults to false so upgrading an existing example deployment retained on Aurora 16 by lifecycle.ignore_changes does not try to attach incompatible Aurora 18 parameter groups. Enable only for a new deployment or after confirming the live cluster runs the configured 18.4 major."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "n8n_execution_data_storage_mode" {
   description = "Where n8n stores the data of each new execution. Passed to the module's n8n_execution_data_storage_mode. \"database\" keeps execution data in PostgreSQL; \"s3\" offloads it to the S3 bucket the module already creates for binary data, which is the main lever for relieving write pressure on the database at this tier's volume. Requires n8n >= 2.27 (pin n8n_image_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is not the same one binary data offload uses. There is no backfill: existing executions stay readable where they were written. Read the execution data section of the root README before enabling it, in particular the durability trade-off and the S3 lifecycle constraint."
   type        = string

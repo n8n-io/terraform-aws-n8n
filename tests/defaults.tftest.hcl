@@ -1366,8 +1366,13 @@ run "redis_defaults_to_a_single_node_cluster" {
   }
 
   assert {
+    condition     = aws_elasticache_cluster.n8n[0].snapshot_retention_limit == 1
+    error_message = "The default single-node cluster must retain one daily snapshot"
+  }
+
+  assert {
     condition     = length(aws_kms_key.redis) == 0
-    error_message = "redis_kms_encryption_enabled must default to false. ElastiCache already encrypts at rest with an AWS-managed key regardless, so the default topology must not also create a CMK"
+    error_message = "redis_kms_encryption_enabled must default to false so existing standalone clusters are not replaced by a replication group and lose their queue"
   }
 }
 
@@ -1412,6 +1417,11 @@ run "redis_high_availability_creates_a_failover_capable_replication_group" {
     error_message = "The replication group must honour redis_node_type"
   }
 
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].snapshot_retention_limit == 1
+    error_message = "The replication-group topology must retain one daily snapshot by default"
+  }
+
   # Existing HA deployments already carry this exact description in state.
   # Preserve it so adopting TLS support with every new input left at its default
   # does not produce an unrelated ElastiCache modification.
@@ -1443,6 +1453,16 @@ run "redis_high_availability_creates_a_failover_capable_replication_group" {
     condition     = one(aws_security_group.redis[0].ingress).from_port == 6379
     error_message = "The HA path must still restrict Redis ingress to 6379"
   }
+}
+
+run "redis_snapshot_retention_rejects_fractional_days" {
+  command = plan
+
+  variables {
+    redis_snapshot_retention_limit = 1.5
+  }
+
+  expect_failures = [var.redis_snapshot_retention_limit]
 }
 
 # The identifier collision is the one failure mode that cannot be recovered
@@ -2467,6 +2487,30 @@ run "redis_tuning_with_create_elasticache_false_warns" {
     redis_host                      = "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
     redis_node_type                 = "cache.r6g.large"
     redis_high_availability_enabled = true
+  }
+
+  expect_failures = [check.redis_tuning_requires_module_managed_elasticache]
+}
+
+run "redis_kms_encryption_with_create_elasticache_false_warns" {
+  command = plan
+
+  variables {
+    create_elasticache           = false
+    redis_host                   = "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
+    redis_kms_encryption_enabled = true
+  }
+
+  expect_failures = [check.redis_tuning_requires_module_managed_elasticache]
+}
+
+run "redis_snapshot_retention_with_create_elasticache_false_warns" {
+  command = plan
+
+  variables {
+    create_elasticache             = false
+    redis_host                     = "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
+    redis_snapshot_retention_limit = 3
   }
 
   expect_failures = [check.redis_tuning_requires_module_managed_elasticache]
@@ -5031,6 +5075,24 @@ run "endpoint_access_cidrs_reject_empty_list" {
   expect_failures = [var.cluster_endpoint_public_access_cidrs]
 }
 
+# The empty-list rule only matters while the public endpoint is enabled. A
+# private-only caller may pass [] explicitly because EKS ignores public CIDRs
+# when public access is disabled.
+run "endpoint_access_cidrs_empty_list_accepted_when_public_access_is_off" {
+  command = plan
+
+  variables {
+    cluster_endpoint_public_access       = false
+    cluster_endpoint_private_access      = true
+    cluster_endpoint_public_access_cidrs = []
+  }
+
+  assert {
+    condition     = length(aws_eks_cluster.n8n.vpc_config[0].public_access_cidrs) == 0
+    error_message = "An empty CIDR list must reach the cluster's vpc_config when the public endpoint is disabled"
+  }
+}
+
 # Both endpoints off leaves an unreachable control plane. EKS refuses it, but
 # only several minutes into the apply.
 run "endpoint_access_requires_one_enabled_path" {
@@ -5112,13 +5174,26 @@ run "s3_kms_encryption_can_be_disabled" {
 }
 
 # ── RDS parameter group (issue #27) ───────────────────────────────────────────
-# CKV2_AWS_30 carries a checkov:skip on aws_db_instance because checkov builds
-# no graph edge between two count-expanded resources, so the count copy of the
-# instance never sees this group. These assertions are what actually holds the
-# configuration in place.
+# The safe default matters more than the logging default: engine_version is
+# ignored on the instance, so a live PostgreSQL 16 deployment can coexist with
+# var.db_engine_version = 18.4. Attaching the derived postgres18 group in that
+# state fails at the RDS API. The group is therefore an explicit opt-in.
 
-run "db_parameter_group_defaults" {
+run "db_parameter_group_defaults_to_absent" {
   command = plan
+
+  assert {
+    condition     = length(aws_db_parameter_group.n8n) == 0
+    error_message = "db_query_logging_enabled must default to false so module upgrades do not attach a parameter group from the wrong PostgreSQL major family."
+  }
+}
+
+run "db_parameter_group_opt_in" {
+  command = plan
+
+  variables {
+    db_query_logging_enabled = true
+  }
 
   # Two assertions, and the literal one is deliberate rather than redundant.
   # The first pins the coupling: the family has to be derived from
@@ -5161,9 +5236,10 @@ run "db_parameter_group_absent_without_module_database" {
   command = plan
 
   variables {
-    create_database = false
-    db_host         = "external.example.com"
-    db_password     = "external-password-not-real"
+    create_database          = false
+    db_host                  = "external.example.com"
+    db_password              = "external-password-not-real"
+    db_query_logging_enabled = true
   }
 
   assert {

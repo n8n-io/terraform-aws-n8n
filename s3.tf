@@ -108,6 +108,12 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "n8n" {
 
     bucket_key_enabled = true
   }
+
+  # On upgrades, install kms:Decrypt / kms:GenerateDataKey on the existing pod
+  # role before the bucket starts encrypting new writes with this key. Without
+  # this edge Terraform may update the managed policy and bucket in parallel,
+  # briefly breaking binary and execution-data reads/writes.
+  depends_on = [aws_iam_role_policy_attachment.s3]
 }
 
 # ── IAM policy for S3 access ──────────────────────────────────────────────────

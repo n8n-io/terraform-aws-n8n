@@ -184,6 +184,8 @@ locals {
 # setting it pins current behavior rather than changing it.
 
 resource "aws_rds_cluster_parameter_group" "aurora" {
+  count = var.aurora_query_logging_enabled ? 1 : 0
+
   name_prefix = "${var.cluster_name}-aurora-"
   family      = local.aurora_parameter_group_family
 
@@ -212,6 +214,8 @@ resource "aws_rds_cluster_parameter_group" "aurora" {
 # slow queries without logging normal traffic.
 
 resource "aws_db_parameter_group" "aurora" {
+  count = var.aurora_query_logging_enabled ? 1 : 0
+
   name_prefix = "${var.cluster_name}-aurora-instance-"
   family      = local.aurora_parameter_group_family
 
@@ -237,7 +241,7 @@ resource "aws_db_parameter_group" "aurora" {
 
 resource "aws_rds_cluster" "n8n" {
   # checkov:skip=CKV_AWS_139:Deletion protection is intentionally disabled in this reference example so `terraform destroy` works cleanly during evaluation and load testing. Flip to `true` for production use. See README.md → "Production considerations".
-  # checkov:skip=CKV2_AWS_27:Query logging IS configured, on the only group that can carry it. This check requires log_statement and log_min_duration_statement to be parameters of the attached aws_rds_cluster_parameter_group, and Aurora PostgreSQL does not expose either one at cluster level: neither appears among the 142 parameters of the aurora-postgresql18 DB cluster parameter family (nor of aurora-postgresql16), and both live in the DB instance parameter family instead. Satisfying the check as written therefore produces a configuration AWS rejects at apply with "Could not find parameter with name: log_statement". Both parameters are set on aws_db_parameter_group.aurora above and attached to the writer and the reader below, which is where Aurora reads them from. Not a coverage gap: tests/defaults.tftest.hcl asserts the family and full parameter set of both groups, so a regression fails `terraform test`. See the comment above the two parameter groups for the API call that establishes the split.
+  # checkov:skip=CKV2_AWS_27:Query logging is an opt-in because this example ignores engine_version drift: an existing Aurora 16 cluster can coexist with the configured 18.4 value, and attaching an Aurora 18 group would fail. When aurora_query_logging_enabled is true, log_statement and log_min_duration_statement are configured on the DB instance group and attached to both instances. They cannot go on the cluster group this check requires because Aurora exposes neither parameter there; AWS rejects that shape with "Could not find parameter with name: log_statement". Tests pin the safe default and both opt-in groups' contents.
   # checkov:skip=CKV2_AWS_8:AWS Backup is deliberately not wired up here. The cluster already takes automated backups with point-in-time recovery over a 7-day window (backup_retention_period below). An AWS Backup plan adds a vault, a plan, a selection and an IAM role whose retention, lifecycle-to-cold-storage and cross-account copy policy belong to an organization's backup standard rather than to a reference example, and it would bill separately for snapshots of the same data.
   cluster_identifier = "${var.cluster_name}-aurora"
   engine             = "aurora-postgresql"
@@ -272,7 +276,7 @@ resource "aws_rds_cluster" "n8n" {
   iam_database_authentication_enabled = true
   enabled_cloudwatch_logs_exports     = ["postgresql"]
 
-  db_cluster_parameter_group_name = aws_rds_cluster_parameter_group.aurora.name
+  db_cluster_parameter_group_name = var.aurora_query_logging_enabled ? aws_rds_cluster_parameter_group.aurora[0].name : null
 
   backup_retention_period = 7
   skip_final_snapshot     = true
@@ -348,7 +352,7 @@ resource "aws_rds_cluster_instance" "writer" {
   # aws_db_parameter_group.aurora comment above. On an existing deployment,
   # moving an instance off the default parameter group takes effect only after a
   # reboot, the same caveat the module's own RDS parameter group carries.
-  db_parameter_group_name = aws_db_parameter_group.aurora.name
+  db_parameter_group_name = var.aurora_query_logging_enabled ? aws_db_parameter_group.aurora[0].name : null
 
   # CKV_AWS_226: pick up Aurora-PostgreSQL minor releases during the maintenance
   # window. See the cluster's lifecycle.ignore_changes above — it also covers
@@ -385,7 +389,7 @@ resource "aws_rds_cluster_instance" "reader" {
 
   # Same group as the writer, so a read replica logs what the writer logs. See
   # the writer above for the reboot caveat on existing deployments.
-  db_parameter_group_name = aws_db_parameter_group.aurora.name
+  db_parameter_group_name = var.aurora_query_logging_enabled ? aws_db_parameter_group.aurora[0].name : null
 
   # CKV_AWS_226: pick up Aurora-PostgreSQL minor releases during the maintenance
   # window. See the cluster's lifecycle.ignore_changes above — it also covers

@@ -11,15 +11,13 @@ this project adheres to the stability contract in
 
 - **New `redis_kms_encryption_enabled` variable** (default `false`) encrypts
   the ElastiCache Redis tier at rest with a module-created Customer Managed
-  KMS Key (`aws_kms_key.redis`) instead of the AWS-managed key ElastiCache
-  already uses. Clears Checkov finding `CKV_AWS_191`, previously carried as a
-  documented skip.
+  KMS Key (`aws_kms_key.redis`). Clears Checkov finding `CKV_AWS_191`.
 
-  Defaults to `false` rather than mirroring `db_storage_encrypted`'s
-  default-`true` posture: `at_rest_encryption_enabled` is unconditional
-  already, so every deployment is encrypted at rest regardless of this
-  variable, and a customer-managed key on top of that is an upgrade over an
-  already-secure baseline, not a gap the default needs to close.
+  Defaults to `false` to preserve the existing standalone
+  `aws_elasticache_cluster`, which Redis OSS cannot encrypt at rest. HA- or
+  TLS-selected replication groups are encrypted with the ElastiCache-managed
+  key; enabling this toggle selects the replication-group topology and uses the
+  module CMK instead.
 
   `kms_key_id` only exists on `aws_elasticache_replication_group`, not on the
   default single-node `aws_elasticache_cluster`, so this is a third variable
@@ -1013,8 +1011,9 @@ this project adheres to the stability contract in
     KMS CMK by default (new `var.eks_secrets_encryption_enabled`, defaults
     `true`). This is a real infrastructure change with an ongoing KMS cost;
     set the variable to `false` to preserve unencrypted behavior on an
-    existing cluster, since enabling it on a live cluster may force
-    replacement depending on the AWS provider version in use.
+    existing cluster before the first apply. The supported AWS provider adds
+    encryption to a live unencrypted cluster in place; disabling it afterwards
+    forces replacement because EKS cannot disassociate an encryption config.
   - EKS API endpoint access is now configurable (new
     `var.cluster_endpoint_public_access`,
     `var.cluster_endpoint_public_access_cidrs`,
@@ -1027,8 +1026,8 @@ this project adheres to the stability contract in
   - ElastiCache Redis now takes a daily automatic snapshot by default (new
     `var.redis_snapshot_retention_limit`, defaults `1`). Set on both Redis
     topologies, so opting into `redis_high_availability_enabled` or
-    `redis_transit_encryption_enabled` does not silently drop the snapshot the
-    default single-node cluster takes.
+    `redis_transit_encryption_enabled` or `redis_kms_encryption_enabled` does
+    not silently drop the snapshot the default single-node cluster takes.
   - The S3 bucket's default encryption is now SSE-KMS with a module-created
     CMK, with S3 Bucket Keys enabled so KMS is called per bucket rather than
     per object (new `var.s3_kms_encryption_enabled`, defaults `true`). The n8n
@@ -1037,25 +1036,36 @@ this project adheres to the stability contract in
     encrypts objects, not whether they are encrypted: S3 encrypts everything
     regardless, and `false` leaves the bucket on SSE-S3. It applies to objects
     written afterwards, so existing objects keep the encryption they were
-    written with.
-  - The module's RDS instance now attaches a module-managed parameter group
+    written with. The bucket encryption resource waits for the pod role's KMS
+    policy update before activating, avoiding an upgrade-time read/write race.
+    Changing the toggle from `true` to `false` while old objects still use the
+    CMK makes them immediately unreadable when KMS schedules key deletion.
+  - The module can optionally attach a module-managed parameter group
     (`aws_db_parameter_group.n8n`) that logs DDL statements and queries slower
-    than 1s, and sets `rds.force_ssl = 1`. Deliberately not
+    than 1s, and sets `rds.force_ssl = 1` (`db_query_logging_enabled`, default
+    `false`). Deliberately not
     `log_statement = all`, which would copy workflow and execution payloads
     into CloudWatch Logs. `rds.force_ssl = 1` is already the RDS default on
     PostgreSQL 15 and later, and n8n connects over TLS by default, so it
-    changes nothing at the module's default `db_engine_version`. Note that
+    changes nothing at the module's default `db_engine_version`. It defaults
+    off because `engine_version` is ignored on existing state: a live
+    PostgreSQL 16 instance may coexist with the configured 18.4 value, and RDS
+    rejects a postgres18 parameter group on that instance. Enable it for a new
+    deployment or after confirming the live major matches. Note that
     moving an existing instance from the default parameter group to a custom
     one takes effect only after a reboot, so these settings land in the next
     maintenance window rather than at apply time.
-  - `examples/large` gains the equivalent query logging for Aurora, split
+  - `examples/large` gains equivalent opt-in query logging for Aurora
+    (`aurora_query_logging_enabled`, default `false`), split
     across two parameter groups because Aurora PostgreSQL requires it:
     `rds.force_ssl` exists only in the DB *cluster* parameter family, and
     `log_statement` / `log_min_duration_statement` only in the DB *instance*
     family (verified with
     `aws rds describe-engine-default-cluster-parameters --db-parameter-group-family aurora-postgresql18`,
     which lists neither of the latter two among its 142 parameters; the same
-    holds for `aurora-postgresql16`). So the example now carries an
+    holds for `aurora-postgresql16`). The opt-in default prevents an existing
+    Aurora 16 cluster retained by `ignore_changes` from receiving incompatible
+    Aurora 18 groups. When enabled, the example carries an
     `aws_rds_cluster_parameter_group` for the TLS setting and an
     `aws_db_parameter_group` attached to the writer and reader for the logging
     settings. Checkov's `CKV2_AWS_27` asks for the log parameters on the
@@ -1075,8 +1085,8 @@ this project adheres to the stability contract in
   commit hash, S3 bucket versioning and lifecycle rules that would defeat
   n8n's own data pruning, cross-region replication and access logging that
   need buckets this module does not create, AWS Backup for the `examples/large`
-  Aurora cluster, a customer-managed KMS key on the Redis replication group,
-  and Multi-AZ automatic failover on the replication group's TLS-only shape)
+  Aurora cluster and Multi-AZ automatic failover on the replication group's
+  TLS-only shape)
   each carry an inline `checkov:skip=<ID>:<reason>` annotation at the resource
   that causes them. Two more are annotated because checkov reports them against
   a resource that is in fact configured correctly: it builds no graph edge

@@ -156,9 +156,11 @@ resource "random_password" "redis_auth_token" {
 # writing it out now would be a gratuitous attribute change on every existing
 # deployment for a value that is already what it says.
 
-# Default: one node, no failover, no encryption beyond the AWS-managed key
-# every ElastiCache resource already gets. Cheapest, and a single point of
-# failure for both the queue and multi-main leader election.
+# Default: one node, no failover, and no at-rest or transit encryption. Redis
+# OSS at-rest encryption is only available on a replication group; the
+# standalone aws_elasticache_cluster resource exposes no encryption argument.
+# Cheapest, and a single point of failure for both the queue and multi-main
+# leader election.
 resource "aws_elasticache_cluster" "n8n" {
   count = var.create_elasticache && !local.redis_needs_replication_group ? 1 : 0
 
@@ -185,17 +187,17 @@ resource "aws_elasticache_cluster" "n8n" {
 # and none of the three interacts with another beyond all three sharing this
 # one resource, so every reachable combination is:
 #
-#   HA only         two nodes across two AZs, automatic failover, plaintext, AWS-managed key
-#   TLS only        one node, no failover, transit encryption + AUTH, AWS-managed key
+#   HA only         two nodes across two AZs, automatic failover, plaintext, ElastiCache-managed key
+#   TLS only        one node, no failover, transit encryption + AUTH, ElastiCache-managed key
 #   CMK only        one node, no failover, plaintext, customer-managed key
-#   HA + TLS        two nodes across two AZs, automatic failover, encryption + AUTH, AWS-managed key
+#   HA + TLS        two nodes across two AZs, automatic failover, encryption + AUTH, ElastiCache-managed key
 #   HA + CMK        two nodes across two AZs, automatic failover, plaintext, customer-managed key
 #   TLS + CMK       one node, no failover, transit encryption + AUTH, customer-managed key
 #   HA + TLS + CMK  two nodes across two AZs, automatic failover, encryption + AUTH, customer-managed key
 #
 # kms_key_id is the only line redis_kms_encryption_enabled touches: it never
 # changes node count, failover, or encryption/AUTH, it only ever swaps which
-# column of the AWS-managed/customer-managed pair applies to whatever the
+# column of the ElastiCache-managed/customer-managed pair applies to whatever the
 # other two produced.
 #
 # On the HA attributes: num_cache_clusters = 2 is the minimum topology
@@ -307,7 +309,7 @@ resource "aws_elasticache_replication_group" "n8n" {
   # Set here, in the commit that introduces this resource, precisely because it
   # is ForceNew. Adding it later would replace the cache for everyone who had
   # already enabled HA, which is the same trap replication_group_id above
-  # carries. It costs nothing (AWS-managed key, no KMS charge) and the
+  # carries. It costs nothing (ElastiCache-managed key, no KMS charge) and the
   # single-node aws_elasticache_cluster path has no equivalent argument, so the
   # default deployment is unaffected either way.
   #
@@ -315,12 +317,11 @@ resource "aws_elasticache_replication_group" "n8n" {
   # with redis_transit_encryption_enabled (#41).
   at_rest_encryption_enabled = true
 
-  # null (the AWS-managed key) unless redis_kms_encryption_enabled opts into a
-  # module-managed CMK. Defaults to false: at_rest_encryption_enabled above
-  # already encrypts every deployment, so a CMK is an upgrade over an
-  # already-secure baseline, not a gap this resource ships with. ForceNew,
-  # like replication_group_id above, so flipping it on an existing replication
-  # group replaces it and drops the queue. Clears Checkov finding CKV_AWS_191.
+  # null (the ElastiCache-managed key) unless redis_kms_encryption_enabled opts
+  # into a module-managed CMK. This resource is always encrypted at rest; the
+  # default standalone aws_elasticache_cluster above is not. ForceNew, like
+  # replication_group_id above, so changing it on an existing replication group
+  # replaces that group and drops the queue. Clears Checkov finding CKV_AWS_191.
   kms_key_id = local.redis_kms_key_arn
 
   # Same knob and same reasoning as the single-node cluster above. Set here too
@@ -378,13 +379,16 @@ check "redis_tuning_requires_module_managed_elasticache" {
     condition = var.create_elasticache ? true : (
       var.redis_node_type == "cache.t3.medium" &&
       !var.redis_high_availability_enabled &&
-      !var.redis_apply_immediately
+      !var.redis_apply_immediately &&
+      !var.redis_kms_encryption_enabled &&
+      var.redis_snapshot_retention_limit == 1
     )
     error_message = join("", [
-      "redis_node_type, redis_high_availability_enabled or redis_apply_immediately is set while ",
+      "redis_node_type, redis_high_availability_enabled, redis_apply_immediately, ",
+      "redis_kms_encryption_enabled or redis_snapshot_retention_limit is set while ",
       "create_elasticache = false. The module creates no ElastiCache in that mode, so none of them ",
-      "apply. Sizing, failover and modification timing are properties of the Redis you supply via ",
-      "redis_host.",
+      "apply. Sizing, failover, modification timing, at-rest encryption and snapshot retention are ",
+      "properties of the Redis you supply via redis_host.",
     ])
   }
 }
