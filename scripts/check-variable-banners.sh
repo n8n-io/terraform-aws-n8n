@@ -75,7 +75,18 @@ for file in "${FILES[@]}"; do
   else
     expected=("${OUTPUT_BANNERS[@]}")
   fi
-  if [[ "${banners[*]}" != "${expected[*]}" ]]; then
+  banners_match=true
+  if [[ "${#banners[@]}" -ne "${#expected[@]}" ]]; then
+    banners_match=false
+  else
+    for ((i = 0; i < ${#expected[@]}; i++)); do
+      if [[ "${banners[$i]}" != "${expected[$i]}" ]]; then
+        banners_match=false
+        break
+      fi
+    done
+  fi
+  if [[ "$banners_match" != true ]]; then
     echo "$file: section banners are missing, renamed, or out of order" >&2
     fail=1
   fi
