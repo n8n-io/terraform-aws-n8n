@@ -96,6 +96,39 @@ this project adheres to the stability contract in
 
 ### Changed
 
+- **`examples/customer-managed-everything` orders n8n after the controllers it
+  installs directly.** The n8n chart renders a KEDA `ScaledObject`
+  unconditionally, and with `install_keda = false` on `module "n8n"` there was
+  no resource for Terraform to infer an ordering edge from, so the release
+  could be applied before KEDA's CRDs existed. The example's `kubernetes` and
+  `helm` providers now read the stand-in cluster resource directly instead of
+  `module.n8n`'s outputs, which is what makes `depends_on = [module.controllers]`
+  declarable rather than a cycle. `modules/controllers/keda.tf` states the
+  contract for anyone else invoking that submodule directly.
+
+- **`N8N_REDIS_KEY_PREFIX` is reserved in `n8n_extra_env`.** `redis_key_prefix`
+  is documented as the single source of truth for the Redis namespace, setting
+  n8n's own prefix, Bull's (`QUEUE_BULL_PREFIX`, already reserved via the
+  `QUEUE_` family) and the KEDA trigger's `listName` together. Without the
+  reservation an `n8n_extra_env` entry could move one of the three on its own,
+  leaving KEDA watching a list nothing writes to.
+
+- **`create_db_kms_key`, `db_logs_kms_key_enabled` and `create_s3_kms_key`
+  replace inferring "bring your own key" from an ARN being null.** The three
+  KMS ARN inputs were each compared against null inside a `count`, which meant
+  `db_kms_key_arn = aws_kms_key.mine.arn`, a key created in the same
+  configuration, failed the plan outright with "The count value depends on
+  resource attributes that cannot be determined until apply". A `string`
+  variable with a static default still arrives unknown if the caller wires a
+  resource attribute into it, so nullness was never safe to gate on. The
+  module now gates on a boolean the caller writes as a literal, leaving the ARN
+  beside it free to be computed. Each boolean carries a `validation` rejecting
+  the incomplete half and a `check` warning on the ignored half, the same
+  three-part shape as every other customer-managed toggle. All three ARN inputs
+  are new in this same unreleased range, so no released configuration is
+  affected; `docs/customer-managed-infrastructure.md` uses the episode as the
+  worked example under "Why a static boolean, not `x == null` inference".
+
 - **Documentation only, no behavior change: three limitations found during
   live validation of the customer-managed paths are now written down instead
   of being discovered at apply time.**
@@ -200,6 +233,86 @@ this project adheres to the stability contract in
   storage open question the original `create_eks` proposal left undecided.
 
 ### Fixed
+
+- **State migration for every newly `count`-gated resource.** `create_eks`,
+  `create_s3_bucket`, `create_ebs_csi`, `n8n_encryption_key_secret_ref` and
+  `db_password_secret_ref` each put a `count` on resources that were
+  unconditional in every released version, moving them from `.n8n` to
+  `.n8n[0]`, and the `modules/controllers` extraction moved four more into a
+  child module. Eighteen addresses had no `moved` block covering that change,
+  so an upgrade would have planned a destroy and recreate of, among others,
+  the live EKS cluster and node group, the S3 bucket holding n8n's binary
+  execution data, and the Kubernetes Secrets the running pods are mounted
+  against. Four existing blocks were also unreachable, sourcing the EBS CSI
+  addon, IAM role, policy attachment and gp3 StorageClass from a `[0]` index
+  that no released version ever wrote. All of it now resolves from a released
+  state to its current address (`refactoring.tf`).
+
+- **The Load Balancer Controller and Cluster Autoscaler IAM roles and policies
+  are gated with their associations**, on the same `create_eks || install_<x>`
+  predicate, instead of being created unconditionally. Left unconditional they
+  were, on the `create_eks = false` plus `install_<x> = false` path, roles
+  carrying `AWSLoadBalancerControllerIAMPolicy` and the cluster-autoscaler
+  policy that nothing could assume, since the association that binds them to a
+  ServiceAccount is skipped there. Their names are derived from `cluster_name`
+  alone, so two `modules/controllers` calls sharing a cluster also collided on
+  `EntityAlreadyExists` at apply time: `examples/customer-managed-everything`
+  invokes the submodule directly *and* calls `module "n8n"`, whose own
+  controllers call is always instantiated, and is exactly that shape.
+
+- **The Cluster Autoscaler's IAM condition keys on the real cluster name.** The
+  `autoscaling:ResourceTag/k8s.io/cluster-autoscaler/<name>` condition on
+  `SetDesiredCapacity` and `TerminateInstanceInAutoScalingGroup` was built from
+  `cluster_name`, while the chart auto-discovers node group ASGs by
+  `eks_cluster_name`. The two are the same string when the module creates the
+  cluster, and differ on `create_eks = false`, where the autoscaler would come
+  up healthy and silently hold no write permission on any ASG it could see.
+
+- **The AWS Load Balancer Controller webhook failure policy is actually
+  applied.** The module set `webhookConfig.failurePolicy`, which chart 3.5.0
+  does not read; Helm accepts unknown `--set` paths silently, so the webhook
+  stayed on its chart default of `Fail` and could still block Ingress deletion
+  during teardown when LBC pods are unhealthy. The key the chart reads is
+  `webhookConfig.ingressValdationFailurePolicy`, upstream's typo and all.
+
+- **`n8n_external_secrets_aws_enabled` grants `kms:Decrypt`.** An allow-listed
+  secret encrypted with a customer managed KMS key was unreadable: Secrets
+  Manager decrypts as the calling principal, so `GetSecretValue` returned
+  `AccessDenied` no matter how the secret's own policy read. Scoped by a
+  `kms:ViaService` condition rather than a key ARN list, because
+  `DescribeSecret` returns the key as an ID, an alias, an alias ARN or nothing
+  at all, and only one of those is usable in an IAM `Resource`.
+
+- **Minimum Terraform version raised to `>= 1.11`**, from `>= 1.9`, in every
+  `versions.tf`: the module root, `modules/controllers`, and all ten examples.
+  This is a breaking change for anyone pinned below 1.11. Two things forced it.
+  `override_resource`'s `override_during` attribute, which three of the
+  customer-managed examples' test suites need, arrived in 1.11 and is silently
+  ignored before it. And CI had already moved to a single 1.15.8 pin, which
+  left `>= 1.9` as a claim nothing exercised, on a repo that has been bitten
+  before by exactly that kind of untested floor (`check` blocks did not
+  short-circuit `&&`/`||` before Terraform 1.10, a hazard invisible on any
+  newer local CLI). The floor and the CI pin are now consistent, and 1.15.8
+  sits above both. The `check` blocks keep their `guard ? body : true` shape,
+  which is now a consistency convention rather than a correctness requirement;
+  `AGENTS.md` records why, so nobody "simplifies" one back into the form that
+  used to break.
+
+  **Upgrade note.** Per the stability contract in
+  [README.md → Stability & versioning](README.md#stability--versioning), a
+  raised version floor is a minor-boundary change. Nothing in your
+  configuration needs editing: upgrade the Terraform CLI to 1.11 or newer and
+  re-run `terraform init`. On an older CLI, `init` fails immediately with an
+  unsupported-version error rather than planning anything, so there is no
+  half-applied state to recover from. There is no state migration, no resource
+  replacement, and no input or output changed by this.
+
+- **`examples/customer-managed-redis`, `-s3` and `-cluster` declare the
+  Terraform floor their own test suites need.** All three use
+  `override_resource`'s `override_during`, which arrived in Terraform 1.11 and
+  is silently ignored before it, so the documented `terraform test` command
+  failed with a confusing assertion error rather than a version error on any
+  1.9 or 1.10 their `versions.tf` claimed to support.
 
 - **The Load Balancer Controller and Cluster Autoscaler Pod Identity
   associations are now gated, so `create_eks = false` no longer collides with
@@ -473,11 +586,14 @@ this project adheres to the stability contract in
   `refactoring.tf` chaining from its prior address, so upgrading is a no-op
   plan for every existing deployment, not a destroy-and-recreate of live
   Helm releases and IAM roles. The Load Balancer Controller's and Cluster
-  Autoscaler's IAM role, policy and Pod Identity association remain
-  unconditional regardless of `install_lbc`/`install_cluster_autoscaler`
-  (unchanged from before the extraction; see the "Cluster controllers"
-  comment above `install_lbc` in `variables.tf` for why that's deliberate,
-  not an oversight).
+  Autoscaler's IAM role, policy and Pod Identity association are all gated
+  together on `create_eks || install_<x>`, rather than on the `install_<x>`
+  toggle alone: a freshly created cluster (`create_eks = true`, the default)
+  gets all three regardless of the toggle, so an externally installed
+  controller still receives its IAM binding, and an existing cluster with the
+  toggle off gets none of them, so nothing collides with an association that
+  cluster may already carry. See the "Cluster controllers" comment above
+  `install_lbc` in `variables.tf`, and the "Fixed" entry below.
 
 - `n8n_encryption_key` input (default `null`, sensitive) overrides the
   module-generated `N8N_ENCRYPTION_KEY`. Every deployment before this input
@@ -1357,9 +1473,14 @@ this project adheres to the stability contract in
   is a genuinely new resource: the module-managed bucket previously had no
   server-side encryption configuration at all (`grep -rn
   server_side_encryption` across the repo turned up nothing before this
-  change). Defaults to SSE-S3 (`AES256`, AWS-managed key), which needs no new
-  input. Set the new `s3_kms_key_arn` input to a Customer Managed Key ARN to
-  switch to SSE-KMS instead.
+  change). Defaults to SSE-KMS (`aws:kms`) with a module-created Customer
+  Managed Key, driven by the new `s3_kms_encryption_enabled` input, which
+  defaults to `true`. Set that input to `false` to fall back to SSE-S3
+  (`AES256`, AWS-managed key) instead. `s3_kms_key_arn` is a separate input
+  and does not choose the algorithm: it swaps a key you already own in for
+  the module-created CMK on a bucket that is SSE-KMS either way. Supplying it
+  skips `aws_kms_key.s3`, not this encryption configuration, which is still
+  written and simply names your key.
 
   `s3_kms_key_arn` also adds a second statement to `aws_iam_policy.s3` granting
   the n8n Pod Identity role `kms:Decrypt`, `kms:GenerateDataKey` and

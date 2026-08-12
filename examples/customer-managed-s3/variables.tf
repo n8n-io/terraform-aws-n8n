@@ -2,16 +2,30 @@ variable "aws_region" {
   description = "AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1)."
   type        = string
   default     = "us-east-1"
+  nullable    = false
 }
 
 variable "cluster_name" {
-  description = "Name for the EKS cluster. Keep to 14 characters or fewer: the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars."
+  description = "Name for the EKS cluster. Keep to 14 characters or fewer: the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. Also embedded in the stand-in bucket's name (main.tf), which is then handed to the module as existing_s3_bucket_name, so it is additionally held to S3's lowercase naming rules here."
   type        = string
   default     = "n8n-cluster"
+  nullable    = false
 
   validation {
-    condition     = length(var.cluster_name) <= 14
-    error_message = "cluster_name must be 14 characters or fewer."
+    condition     = length(var.cluster_name) >= 1 && length(var.cluster_name) <= 14
+    error_message = "cluster_name must be 1-14 characters."
+  }
+
+  # Not just a length cap, unlike the other examples': this one interpolates
+  # cluster_name into "customer-managed-n8n-${var.cluster_name}-${account_id}"
+  # (main.tf) and passes the result to the module as existing_s3_bucket_name,
+  # whose own validation requires a lowercase S3 bucket name. Without this,
+  # "N8N-Cluster" or "prod_cluster" passes here and then fails deep inside
+  # module "n8n" with an "existing_s3_bucket_name must be a valid S3 bucket
+  # name" error that names an input this example's caller never set.
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9.-]*[a-z0-9]$", var.cluster_name)) || can(regex("^[a-z0-9]$", var.cluster_name))
+    error_message = "cluster_name must be lowercase alphanumerics, dots and hyphens, starting and ending with an alphanumeric (e.g. \"n8n-cluster\"). This example builds its stand-in S3 bucket name from it, and S3 bucket names accept nothing else."
   }
 }
 
@@ -56,6 +70,7 @@ variable "n8n_image_pull_secrets" {
   description = "Names of existing Kubernetes secrets of type kubernetes.io/dockerconfigjson, in the n8n namespace, that the pods authenticate to their image registry with. Leave empty (the default) unless n8n_image_repository points somewhere the node group's IAM role cannot already reach: a public registry and an ECR repository in this account both pull without credentials. Setting it hands ownership of the n8n ServiceAccount from the Helm chart to the module, which is how the secrets reach the pods at all, since the pinned chart renders imagePullSecrets nowhere. Create and rotate the secrets yourself; the module takes names, not credentials, so none of them land in Terraform state. Cross-account ECR is the exception and should not use this: its authorization tokens expire after 12 hours, so add the node group role to the source repository's policy instead."
   type        = list(string)
   default     = []
+  nullable    = false
 
   validation {
     condition = alltrue([
@@ -118,6 +133,11 @@ variable "n8n_custom_extensions_path" {
   }
 
   validation {
+    condition     = var.n8n_custom_extensions_path == null ? true : (var.n8n_custom_extensions_path == "/" || !endswith(var.n8n_custom_extensions_path, "/"))
+    error_message = "n8n_custom_extensions_path must not end in a trailing slash (e.g. \"/opt/n8n-nodes\", not \"/opt/n8n-nodes/\"). Same reason as the canonical-path rule above: the two spellings are the same directory to the container but different strings to the coverage check in n8n.tf, which compares this path against n8n_extra_volume_mounts entries literally."
+  }
+
+  validation {
     condition = var.n8n_custom_extensions_path == null ? true : !(
       var.n8n_custom_extensions_path == "/home/node/.n8n" ||
       startswith(var.n8n_custom_extensions_path, "/home/node/.n8n/")
@@ -130,6 +150,7 @@ variable "n8n_additional_domains" {
   description = "Extra hostnames n8n should answer on, beyond n8n_domain. Each is added to the module-issued ACM certificate as a subject alternative name, given a Route 53 validation record and alias A-record, and routed by the module's Ingress. Leave empty for a single hostname."
   type        = list(string)
   default     = []
+  nullable    = false
 }
 
 variable "n8n_execution_data_storage_mode" {
@@ -148,6 +169,7 @@ variable "tags" {
   description = "Additional AWS tags to apply to every resource this example creates."
   type        = map(string)
   default     = {}
+  nullable    = false
 }
 
 # ── Customer-managed S3 bucket stand-in ──────────────────────────────────────
@@ -162,4 +184,5 @@ variable "customer_managed_s3_force_destroy" {
   description = "Whether the stand-in bucket this example creates can be destroyed while it still holds objects. true here only so `terraform destroy` doesn't fail on a demo bucket; a real customer-managed bucket's lifecycle, including whether it can be force-destroyed, is that bucket owner's decision, not this module's or this example's."
   type        = bool
   default     = true
+  nullable    = false
 }

@@ -28,18 +28,21 @@ Unlike the four attestation items above, the `eks-pod-identity-agent` addon is n
 
 ## Adapting to your real infrastructure
 
-To point this at a cluster you actually run instead of the stand-in:
+To point this at a cluster you actually run instead of the stand-in. Every reference to the stand-in has to go, not just the resources themselves: steps 1 to 3 are a set, and doing only the first leaves `outputs.tf` and the `module "n8n"` call pointing at resources and variables that no longer exist, which `terraform validate` rejects outright with "Reference to undeclared resource".
 
-1. Delete the entire "Customer-managed EKS cluster (stand-in)" section from `main.tf` (both IAM roles and their policy attachments, the `aws_eks_cluster`, `aws_eks_node_group`, and `aws_eks_addon` resources), and the `kubernetes_version` / `customer_managed_node_*` variables it used.
-2. In `module "n8n"`, replace the values wired to those deleted resources with your own cluster's identity:
+1. Delete the entire "Customer-managed EKS cluster (stand-in)" section from `main.tf` (both IAM roles and their policy attachments, the `aws_eks_cluster`, `aws_eks_node_group`, and `aws_eks_addon` resources), and the `customer_managed_node_*` variables it used.
+2. Delete the `customer_managed_cluster_name` output from `outputs.tf`. It reads `aws_eks_cluster.customer_managed.name`, which step 1 just removed.
+3. In `module "n8n"`, replace the values wired to those deleted resources with your own cluster's identity, and drop the `kubernetes_version` argument along with the variable that backed it. On the `create_eks = false` path the module uses that input only to warn when it disagrees with the cluster's real version, and your cluster's version is not yours to declare here:
    ```hcl
    create_eks                                   = false
    existing_eks_cluster_name                    = "your-existing-cluster-name"
    existing_eks_cluster_prerequisites_confirmed = true # only after you've verified the four items above yourself
    ```
-3. Confirm the `eks-pod-identity-agent` addon is already installed on that cluster; the plan fails outright if it isn't.
-4. Confirm your cluster's node group already carries the Cluster Autoscaler auto-discovery tags, or that you're intentionally leaving `install_cluster_autoscaler = false` because a platform-managed autoscaler already runs there.
-5. Your cluster must be in the same VPC as `vpc_id`; the module hard-fails the plan on a mismatch, rather than producing infrastructure that looks correct and silently can't reach it.
+   Keep `kubernetes_version` only if you want that mismatch warning, in which case set it to the version your cluster actually runs.
+4. Leave `providers.tf` alone. It reads `module.n8n.cluster_endpoint` / `cluster_certificate_authority_data` rather than the stand-in resources, and on the `create_eks = false` path those outputs already resolve through the module's own `data.aws_eks_cluster` read of whatever `existing_eks_cluster_name` names, so they point at your cluster the moment step 3 is done. (`examples/customer-managed-everything` deliberately does *not* do this, because it invokes `modules/controllers` directly and needs an ordering edge that provider wiring would turn into a cycle; that constraint does not apply here.)
+5. Confirm the `eks-pod-identity-agent` addon is already installed on that cluster; the plan fails outright if it isn't.
+6. Confirm your cluster's node group already carries the Cluster Autoscaler auto-discovery tags, or that you're intentionally leaving `install_cluster_autoscaler = false` because a platform-managed autoscaler already runs there.
+7. Your cluster must be in the same VPC as `vpc_id`; the module hard-fails the plan on a mismatch, rather than producing infrastructure that looks correct and silently can't reach it.
 
 See the root [README.md → "Customer-managed infrastructure"](../../README.md#customer-managed-infrastructure) for the full state matrix, and [`docs/customer-managed-infrastructure.md`](../../docs/customer-managed-infrastructure.md) for the convention behind every toggle like this one.
 
@@ -68,7 +71,7 @@ Unlike [`customer-managed-redis`](../customer-managed-redis/) and [`customer-man
 
 | Name | Version |
 | ---- | ------- |
-| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.9 |
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.11 |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.0 |
 | <a name="requirement_helm"></a> [helm](#requirement\_helm) | ~> 3.0 |
 | <a name="requirement_kubernetes"></a> [kubernetes](#requirement\_kubernetes) | ~> 2.0 |

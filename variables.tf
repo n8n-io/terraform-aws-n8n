@@ -216,6 +216,7 @@ variable "create_eks" {
   description = "When true (the default), the module creates its own EKS cluster, node group, node IAM role, and Pod Identity Agent addon. Set to false to deploy onto an existing cluster named by existing_eks_cluster_name instead, e.g. one a platform team already provisions and runs company-wide. On that path the module still creates everything it always has around n8n itself (RDS, Redis, S3, the namespace, IAM roles and Pod Identity associations for n8n and the controllers it installs), it just stops owning the cluster and node group underneath all of that. Gated with count and a moved block, same pattern as create_database and create_s3_bucket. The EBS CSI driver addon and default gp3 StorageClass (modules/controllers/storage.tf) are gated separately, on their own create_ebs_csi input, since a shared existing cluster may already run a CSI driver while a freshly created one never does."
   type        = bool
   default     = true
+  nullable    = false
 }
 
 variable "existing_eks_cluster_name" {
@@ -237,6 +238,7 @@ variable "existing_eks_cluster_prerequisites_confirmed" {
   description = "Required to be true when create_eks = false. An explicit attestation, not a rubber stamp: setting it to true is a claim that you have personally verified every item below, because none of them is checkable at plan time the way the cluster's Kubernetes version and VPC are. (1) Node capacity: the HPA/KEDA maxima this module computes (scaling.tf) assume the node group it creates itself; on an existing cluster running Karpenter, self-managed ASGs, Fargate, or any topology other than a plain EKS-managed node group, this module cannot see or validate schedulable capacity at all. (2) Cluster Autoscaler auto-discovery tags: aws_eks_node_group.n8n normally carries k8s.io/cluster-autoscaler/<cluster>=owned and k8s.io/cluster-autoscaler/enabled=true; an existing node group has no guarantee of carrying them, and this module cannot tag infrastructure it does not own. (3) API server reachability: this module sets no endpoint_private_access or endpoint_public_access, so it cannot tell you whether the existing cluster's API is reachable from wherever `terraform apply` runs, e.g. a private-only endpoint reachable only from inside the VPC or over a VPN. (4) Naming and identity collisions: the IAM role names, kube-system ServiceAccount names, and Pod Identity associations this module creates for n8n and any install_* controller it installs are not checked against what may already exist on a shared cluster. Storage is deliberately not on this list: create_ebs_csi (default true) lets you opt the EBS CSI addon and gp3 StorageClass out entirely if the existing cluster already provides its own, rather than asking you to merely attest to the risk. Ingress is also not on this list, for the opposite reason: there is currently no toggle that lets create_ingress = true trust an already-working LBC on the existing cluster the way create_ebs_csi trusts an already-working CSI driver -- install_lbc = false is hard-rejected whenever create_ingress = true, full stop, regardless of this attestation. See docs/customer-managed-infrastructure.md's \"create_eks = false + create_ingress = true\" section."
   type        = bool
   default     = false
+  nullable    = false
 
   validation {
     condition     = var.create_eks ? true : var.existing_eks_cluster_prerequisites_confirmed
@@ -248,6 +250,7 @@ variable "create_ebs_csi" {
   description = "When true (the default), the module installs the aws-ebs-csi-driver addon and a default gp3 StorageClass (modules/controllers/storage.tf), so any PVC-using workload deployed beside n8n has working persistence out of the box. Set to false to skip both, e.g. when create_eks = false and the existing cluster you are deploying onto already runs its own CSI driver and default StorageClass: installing a second aws-ebs-csi-driver addon on a cluster that already has one fails outright rather than degrading gracefully. Also gates the CSI driver's IAM role and its AmazonEBSCSIDriverPolicy attachment (modules/controllers/iam.tf), whose only consumer is the addon's Pod Identity association, so false leaves behind no role that nothing can assume. Independent of create_eks; a freshly created cluster (create_eks = true, the default) never has a CSI driver of its own, so leave this at its default in that case. check.existing_eks_cluster_needs_its_own_storage_toggle warns if create_eks = false and this is still left at its default."
   type        = bool
   default     = true
+  nullable    = false
 }
 
 variable "n8n_webhook_url" {
@@ -390,6 +393,7 @@ variable "create_namespace" {
   description = "When true (the default), the module creates the Kubernetes namespace named by var.namespace. Set to false to deploy into a namespace that already exists, e.g. one a platform team created with its own resource quotas, labels, or network policies. The module does not validate that the namespace exists; the apply fails on the first resource that references it if it does not. Kept as a static boolean rather than checking for the namespace's existence because count expressions cannot depend on values computed at apply time."
   type        = bool
   default     = true
+  nullable    = false
 }
 
 # ── Ingress ───────────────────────────────────────────────────────────────────
@@ -554,7 +558,7 @@ variable "node_max" {
 # breaks and how.
 
 variable "install_lbc" {
-  description = "When true (the default), the module installs the AWS Load Balancer Controller via Helm. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps. The IAM role and policy this module creates for the aws-load-balancer-controller ServiceAccount in kube-system are unaffected by this toggle, but the Pod Identity association is not: it's created whenever this is true OR create_eks is true, and skipped when both are false. On create_eks = true (a freshly created cluster), nothing can already be bound to that ServiceAccount, so the association is created regardless of this toggle, which is what lets an externally-installed LBC on the new cluster still get its IAM binding. On create_eks = false (an existing cluster), that assumption doesn't hold: the ServiceAccount may already carry an association, e.g. one from a previous invocation of this exact module against the same cluster, and EKS hard-rejects a second association for a ServiceAccount that already has one. Setting this to false on that path is read as an attestation that an association already exists there. Must stay true whenever create_ingress = true: kubernetes_ingress_v1.n8n waits for LBC to provision an ALB (wait_for_load_balancer = true) and that wait times out the apply if no controller is running to service it. Disabling this while an external LBC is not yet Ready can also race helm_release.keda; see the ordering note in modules/controllers/keda.tf."
+  description = "When true (the default), the module installs the AWS Load Balancer Controller via Helm. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps. The IAM role, policy and Pod Identity association this module creates for the aws-load-balancer-controller ServiceAccount in kube-system are all created whenever this is true OR create_eks is true, and all skipped when both are false, so this toggle never strands an IAM role nothing can assume. On create_eks = true (a freshly created cluster), nothing can already be bound to that ServiceAccount, so the association is created regardless of this toggle, which is what lets an externally-installed LBC on the new cluster still get its IAM binding. On create_eks = false (an existing cluster), that assumption doesn't hold: the ServiceAccount may already carry an association, e.g. one from a previous invocation of this exact module against the same cluster, and EKS hard-rejects a second association for a ServiceAccount that already has one. Setting this to false on that path is read as an attestation that an association already exists there. Must stay true whenever create_ingress = true: kubernetes_ingress_v1.n8n waits for LBC to provision an ALB (wait_for_load_balancer = true) and that wait times out the apply if no controller is running to service it. Disabling this while an external LBC is not yet Ready can also race helm_release.keda; see the ordering note in modules/controllers/keda.tf."
   type        = bool
   default     = true
 
@@ -565,7 +569,7 @@ variable "install_lbc" {
 }
 
 variable "install_cluster_autoscaler" {
-  description = "When true (the default), the module installs the Kubernetes Cluster Autoscaler via Helm. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps, or when node_desired = node_max and the node group is meant to stay a fixed size. The IAM role and policy for the cluster-autoscaler ServiceAccount are unaffected by this toggle, but its Pod Identity association follows the same create_eks-aware rule as install_lbc's association (see that variable's description): created when this is true or create_eks is true, skipped only when both are false, since an existing cluster may already carry this ServiceAccount's association from elsewhere and a second one would collide with it. With no autoscaler running at all, node_max is not enforced automatically: nodes stay at whatever desired_size last converged to, and the autoscaling capacity check in scaling.tf still assumes an autoscaler will eventually add nodes up to node_max, so a caller relying on this toggle to go without one entirely should also lower the HPA/KEDA maxima to what the fixed node count can actually schedule."
+  description = "When true (the default), the module installs the Kubernetes Cluster Autoscaler via Helm. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps, or when node_desired = node_max and the node group is meant to stay a fixed size. The IAM role, policy and Pod Identity association for the cluster-autoscaler ServiceAccount all follow the same create_eks-aware rule as install_lbc's (see that variable's description): created when this is true or create_eks is true, skipped only when both are false, since an existing cluster may already carry this ServiceAccount's association from elsewhere and a second one would collide with it. With no autoscaler running at all, node_max is not enforced automatically: nodes stay at whatever desired_size last converged to, and the autoscaling capacity check in scaling.tf still assumes an autoscaler will eventually add nodes up to node_max, so a caller relying on this toggle to go without one entirely should also lower the HPA/KEDA maxima to what the fixed node count can actually schedule."
   type        = bool
   default     = true
 }
@@ -1253,8 +1257,20 @@ variable "db_storage_encrypted" {
   default     = true
 }
 
+variable "create_db_kms_key" {
+  description = "When true (the default), the module creates and manages its own Customer Managed KMS Key for the RDS instance's storage, Performance Insights data and postgresql log group. Set to false to encrypt with a key you already own, which db_kms_key_arn must then supply. A static boolean rather than inferring the same thing from db_kms_key_arn being null, for the reason docs/customer-managed-infrastructure.md gives: the module gates aws_kms_key.db on this, a count cannot depend on a value Terraform only learns during apply, and inferring from the ARN would mean a key created in the same configuration (aws_kms_key.mine.arn) fails the plan outright. With this boolean the ARN is free to be computed. Ignored when db_storage_encrypted = false or create_database = false, where no CMK is used at all."
+  type        = bool
+  default     = true
+  nullable    = false
+
+  validation {
+    condition     = var.create_db_kms_key || var.db_kms_key_arn != null
+    error_message = "create_db_kms_key = false requires db_kms_key_arn: with the module not creating a key and no key supplied, there is nothing to encrypt the RDS instance with. Either leave create_db_kms_key = true, or set db_kms_key_arn to a key you own."
+  }
+}
+
 variable "db_kms_key_arn" {
-  description = "ARN of an existing KMS key to use for RDS storage encryption and Performance Insights data, instead of the module provisioning its own Customer Managed Key (aws_kms_key.db). Set this when a central security team owns all KMS keys and Terraform modules are not permitted to create new ones. When null (the default), the module creates and manages its own CMK exactly as before, so this is a purely additive escape hatch with no change to current behavior. This key is deliberately NOT used for the postgresql CloudWatch log group: CloudWatch Logs rejects a key whose policy does not grant the regional service principal (logs.<region>.amazonaws.com) kms:Encrypt, kms:Decrypt, kms:ReEncrypt*, kms:GenerateDataKey* and kms:DescribeKey, no AWS provider data source exposes a key policy, so the module cannot verify yours does, and the resulting failure lands while creating the log group before the RDS instance exists. The log group therefore falls back to CloudWatch's AWS-managed encryption, and a plan-time check says so; add that statement to your key policy and set db_logs_kms_key_arn to put the log group on your key too. RDS itself needs nothing beyond the default root statement, because it reaches the key through a grant. The module describes the key while planning, which requires kms:DescribeKey (already required of anyone creating an encrypted RDS instance, alongside kms:CreateGrant), so a key that is missing, disabled, pending deletion, asymmetric or not an encryption key fails the plan instead of the apply. The key must be in the same region this module deploys into; a key in another account is fine. Must be a KMS key ARN (arn:aws:kms:<region>:<account-id>:key/<key-id>), not an alias ARN. Ignored when db_storage_encrypted = false (nothing is encrypted with a CMK) or create_database = false (no module-managed RDS instance exists to encrypt); see the db_kms_key_arn_requires_module_managed_encrypted_database check for that footgun."
+  description = "ARN of an existing KMS key to use for RDS storage encryption and Performance Insights data, instead of the module provisioning its own Customer Managed Key (aws_kms_key.db). Set this together with create_db_kms_key = false, which is the input that actually stops the module minting its own key; supplying the ARN alone changes nothing and raises the db_kms_key_arn_requires_module_managed_encrypted_database check. Set both when a central security team owns all KMS keys and Terraform modules are not permitted to create new ones. Left at its null default with create_db_kms_key = true, the module creates and manages its own CMK exactly as before, so the pair is a purely additive escape hatch with no change to current behavior. Because the module gates on the boolean and never on this value, the ARN itself may be computed, e.g. a KMS key created in the same configuration. This key is deliberately NOT used for the postgresql CloudWatch log group: CloudWatch Logs rejects a key whose policy does not grant the regional service principal (logs.<region>.amazonaws.com) kms:Encrypt, kms:Decrypt, kms:ReEncrypt*, kms:GenerateDataKey* and kms:DescribeKey, no AWS provider data source exposes a key policy, so the module cannot verify yours does, and the resulting failure lands while creating the log group before the RDS instance exists. The log group therefore falls back to CloudWatch's AWS-managed encryption, and a plan-time check says so; add that statement to your key policy and set db_logs_kms_key_arn to put the log group on your key too. RDS itself needs nothing beyond the default root statement, because it reaches the key through a grant. The module describes the key while planning, which requires kms:DescribeKey (already required of anyone creating an encrypted RDS instance, alongside kms:CreateGrant), so a key that is missing, disabled, pending deletion, asymmetric or not an encryption key fails the plan instead of the apply. The key must be in the same region this module deploys into; a key in another account is fine. Must be a KMS key ARN (arn:aws:kms:<region>:<account-id>:key/<key-id>), not an alias ARN. Ignored when db_storage_encrypted = false (nothing is encrypted with a CMK) or create_database = false (no module-managed RDS instance exists to encrypt); see the db_kms_key_arn_requires_module_managed_encrypted_database check for that footgun."
   type        = string
   default     = null
 
@@ -1269,8 +1285,25 @@ variable "db_kms_key_arn" {
   }
 }
 
+variable "db_logs_kms_key_enabled" {
+  description = "When true, the postgresql CloudWatch log group is encrypted with db_logs_kms_key_arn, which must then be set. Only meaningful alongside create_db_kms_key = false: on the module-managed key path the module's own CMK already carries the CloudWatch Logs statement and already encrypts the log group, so there is nothing to opt into. Defaults to false, which is what leaves the log group on CloudWatch's AWS-managed key on the bring-your-own-key path, still encrypted at rest but not with your CMK, and the db_kms_key_arn_does_not_encrypt_postgresql_logs check says so on every plan. A static boolean for the same reason as create_db_kms_key: data.aws_kms_key.db_logs_byo is gated on it, and a count cannot depend on an ARN computed during apply."
+  type        = bool
+  default     = false
+  nullable    = false
+
+  validation {
+    condition     = !var.db_logs_kms_key_enabled || var.db_logs_kms_key_arn != null
+    error_message = "db_logs_kms_key_enabled = true requires db_logs_kms_key_arn: there is no key to put the postgresql log group on otherwise."
+  }
+
+  validation {
+    condition     = !var.db_logs_kms_key_enabled || !var.create_db_kms_key
+    error_message = "db_logs_kms_key_enabled = true requires create_db_kms_key = false. On the module-managed key path the module's own CMK already carries the AllowCloudWatchLogsEncrypt statement and already encrypts the postgresql log group, so there is nothing this toggle could add."
+  }
+}
+
 variable "db_logs_kms_key_arn" {
-  description = "ARN of an existing KMS key to encrypt the postgresql CloudWatch log group with, on the bring-your-own-key path only. Setting this is your assertion that the key's policy grants logs.<region>.amazonaws.com kms:Encrypt, kms:Decrypt, kms:ReEncrypt*, kms:GenerateDataKey* and kms:DescribeKey; CloudWatch Logs rejects a key without that statement (InvalidParameterException on CreateLogGroup) and no AWS provider data source exposes a key policy, so the module cannot check on your behalf. See README.md -> \"Bring your own KMS key for RDS\" for the exact statement. Set this to the same ARN as db_kms_key_arn once that statement is in place, to keep the log group on the same key as the instance's storage, or to a different key your organization has already blessed for CloudWatch Logs. When null (the default) while db_kms_key_arn is set, the log group is encrypted with CloudWatch's AWS-managed key instead: still encrypted at rest, just not with your CMK, and the db_kms_key_arn_does_not_encrypt_postgresql_logs check states that out loud on every plan. Ignored when db_kms_key_arn is null, because the module's own CMK already carries the statement and already encrypts the log group, and ignored when create_database = false or db_storage_encrypted = false for the same reasons db_kms_key_arn is. Subject to the same plan-time checks as db_kms_key_arn: same region, key usage ENCRYPT_DECRYPT, spec SYMMETRIC_DEFAULT, Enabled state, and a key ARN rather than an alias ARN."
+  description = "ARN of an existing KMS key to encrypt the postgresql CloudWatch log group with, on the bring-your-own-key path only. Setting this is your assertion that the key's policy grants logs.<region>.amazonaws.com kms:Encrypt, kms:Decrypt, kms:ReEncrypt*, kms:GenerateDataKey* and kms:DescribeKey; CloudWatch Logs rejects a key without that statement (InvalidParameterException on CreateLogGroup) and no AWS provider data source exposes a key policy, so the module cannot check on your behalf. See README.md -> \"Bring your own KMS key for RDS\" for the exact statement. Set this to the same ARN as db_kms_key_arn once that statement is in place, together with db_logs_kms_key_enabled = true, which is the input that actually opts the log group onto it; supplying the ARN alone changes nothing and raises the db_logs_kms_key_arn_requires_db_kms_key_arn check. Or point it at a different key your organization has already blessed for CloudWatch Logs. Left off (the default) while create_db_kms_key = false, the log group is encrypted with CloudWatch's AWS-managed key instead: still encrypted at rest, just not with your CMK, and the db_kms_key_arn_does_not_encrypt_postgresql_logs check states that out loud on every plan. Ignored when create_db_kms_key = true, because the module's own CMK already carries the statement and already encrypts the log group, and ignored when create_database = false or db_storage_encrypted = false for the same reasons db_kms_key_arn is. Subject to the same plan-time checks as db_kms_key_arn: same region, key usage ENCRYPT_DECRYPT, spec SYMMETRIC_DEFAULT, Enabled state, and a key ARN rather than an alias ARN."
   type        = string
   default     = null
 
@@ -1677,6 +1710,7 @@ variable "create_s3_bucket" {
   description = "When true (the default), the module creates and manages an Amazon S3 bucket for n8n binary storage (and execution data, when n8n_execution_data_storage_mode = \"s3\"). Set to false to use an existing bucket you manage yourself: existing_s3_bucket_name must then be supplied. Kept as a static boolean rather than `existing_s3_bucket_name == null` because count expressions cannot depend on values computed at apply time."
   type        = bool
   default     = true
+  nullable    = false
 }
 
 variable "existing_s3_bucket_name" {
@@ -1702,8 +1736,20 @@ variable "s3_kms_encryption_enabled" {
   nullable    = false
 }
 
+variable "create_s3_kms_key" {
+  description = "When true (the default), the module creates and manages its own Customer Managed KMS Key for the S3 bucket it creates. Set to false to encrypt that bucket with a key you already own, which s3_kms_key_arn must then supply. A static boolean rather than inferring the same thing from s3_kms_key_arn being null, for the reason docs/customer-managed-infrastructure.md gives: aws_kms_key.s3 is gated on this, and a count cannot depend on a value Terraform only learns during apply. Ignored when s3_kms_encryption_enabled = false (the bucket uses SSE-S3 and no CMK exists) or create_s3_bucket = false (there is no module-managed bucket to encrypt, though s3_kms_key_arn still matters on that path: it is what grants the n8n pod role kms:Decrypt on your bucket's key)."
+  type        = bool
+  default     = true
+  nullable    = false
+
+  validation {
+    condition     = var.create_s3_kms_key || var.s3_kms_key_arn != null
+    error_message = "create_s3_kms_key = false requires s3_kms_key_arn: with the module not creating a key and no key supplied, the bucket has no CMK to encrypt with. Either leave create_s3_kms_key = true, or set s3_kms_key_arn to a key you own, or set s3_kms_encryption_enabled = false for SSE-S3."
+  }
+}
+
 variable "s3_kms_key_arn" {
-  description = "ARN of an existing Customer Managed KMS Key to use for S3 bucket encryption, instead of the module provisioning its own CMK (aws_kms_key.s3). Does two things, and which of them apply depends on create_s3_bucket and s3_kms_encryption_enabled. When create_s3_bucket = true and s3_kms_encryption_enabled = true (both defaults), the module encrypts the bucket it creates with this key instead of creating its own CMK; set this when a central security team owns all KMS keys and Terraform modules are not permitted to create new ones. On both the module-managed and the caller-supplied bucket path it also grants the n8n Pod Identity role kms:Decrypt, kms:GenerateDataKey and kms:DescribeKey on the key, which SSE-KMS requires of the requesting principal: without it every binary-data read and write returns AccessDenied even though the bucket policy and IAM policy both look correct. So set this whenever the bucket n8n uses is SSE-KMS encrypted, including a bucket you supplied yourself via existing_s3_bucket_name. Leave null (the default) and the module-managed bucket is encrypted with a module-created CMK (s3_kms_encryption_enabled = true) or SSE-S3 (s3_kms_encryption_enabled = false); a caller-supplied bucket with no override is assumed to need no key permissions of its own. Must be a KMS key ARN, not an alias ARN: an IAM policy Resource element does not accept an alias, so a grant written against one would silently match nothing."
+  description = "ARN of an existing Customer Managed KMS Key to use for S3 bucket encryption, instead of the module provisioning its own CMK (aws_kms_key.s3). Does two things, and which of them apply depends on create_s3_bucket and s3_kms_encryption_enabled. When create_s3_bucket = true and s3_kms_encryption_enabled = true (both defaults), the module encrypts the bucket it creates with this key instead of creating its own CMK, but only alongside create_s3_kms_key = false, which is the input that actually stops the module minting one; supplying the ARN alone changes nothing there and raises the s3_kms_key_arn_requires_create_s3_kms_key_false check. Set both when a central security team owns all KMS keys and Terraform modules are not permitted to create new ones. Because the module gates on the boolean and never on this value, the ARN itself may be computed, e.g. a KMS key created in the same configuration. On both the module-managed and the caller-supplied bucket path it also grants the n8n Pod Identity role kms:Decrypt, kms:GenerateDataKey and kms:DescribeKey on the key, which SSE-KMS requires of the requesting principal: without it every binary-data read and write returns AccessDenied even though the bucket policy and IAM policy both look correct. So set this whenever the bucket n8n uses is SSE-KMS encrypted, including a bucket you supplied yourself via existing_s3_bucket_name. Leave null (the default) and the module-managed bucket is encrypted with a module-created CMK (s3_kms_encryption_enabled = true) or SSE-S3 (s3_kms_encryption_enabled = false); a caller-supplied bucket with no override is assumed to need no key permissions of its own. The create_s3_kms_key toggle is irrelevant on the create_s3_bucket = false path: there is no module-managed bucket to encrypt, and this ARN is read for the IAM grant either way. Must be a KMS key ARN, not an alias ARN: an IAM policy Resource element does not accept an alias, so a grant written against one would silently match nothing."
   type        = string
   default     = null
 
@@ -1762,6 +1808,7 @@ variable "n8n_webhook_hpa_enabled" {
   description = "When true (the default), the module creates kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook, a CPU-based HPA for the webhook processor deployment. The n8n Helm chart skips creating its own webhook HPA whenever keda.enabled is true, which this module always sets, so this module-managed HPA is otherwise the only thing that scales webhook processors at all. Set to false to bring your own autoscaling policy (e.g. a VPA, a custom-metrics HPA, or one managed outside Terraform) for the n8n-webhook-processor Deployment instead. With this false and nothing else targeting that Deployment, it stays fixed at n8n_webhook_hpa_min_replicas: the chart renders webhookProcessor.replicaCount from that same variable unconditionally, so disabling this HPA does not leave the deployment without a replica count, only without anything that changes it."
   type        = bool
   default     = true
+  nullable    = false
 }
 
 variable "n8n_webhook_hpa_min_replicas" {
@@ -1877,6 +1924,11 @@ variable "n8n_custom_extensions_path" {
     # container filesystem, and rewrites separators on Windows.
     condition     = var.n8n_custom_extensions_path == null ? true : !can(regex("//|/\\.\\.?(/|$)", var.n8n_custom_extensions_path))
     error_message = "n8n_custom_extensions_path must be a canonical path: no repeated slashes and no \".\" or \"..\" components (e.g. \"/opt/n8n-nodes\"). Those spellings resolve to the same directory inside the container but would slip past the /home/node/.n8n shadowing check."
+  }
+
+  validation {
+    condition     = var.n8n_custom_extensions_path == null ? true : (var.n8n_custom_extensions_path == "/" || !endswith(var.n8n_custom_extensions_path, "/"))
+    error_message = "n8n_custom_extensions_path must not end in a trailing slash (e.g. \"/opt/n8n-nodes\", not \"/opt/n8n-nodes/\"). Same reason as the canonical-path rule above: the two spellings are the same directory to the container but different strings to the coverage check in n8n.tf, which compares this path against n8n_extra_volume_mounts entries literally."
   }
 
   validation {
@@ -2286,6 +2338,7 @@ variable "n8n_external_secrets_aws_enabled" {
   description = "Grants the n8n pod's existing Pod Identity role (aws_iam_role.s3) permission to read AWS Secrets Manager, so n8n's own External Secrets feature can use authMethod = autoDetect with no static AWS keys. Default false: no IAM policy, no attachment, no plan diff for an existing deployment. This only prepares the IAM plumbing; connecting the AWS Secrets Manager provider itself is a manual step in the n8n UI (Settings -> External Secrets), and ingested secrets are also governed by n8n_external_secrets_enabled and the feat:externalSecrets licence entitlement."
   type        = bool
   default     = false
+  nullable    = false
 }
 
 variable "n8n_external_secrets_aws_secret_names" {

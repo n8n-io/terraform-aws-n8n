@@ -25,9 +25,11 @@ mock_provider "aws" {
   # block applies during apply only (the default), and silently has no effect
   # on a plan-only run, which is why this was unknown the first time this test
   # was written despite the override being present. override_during needs
-  # Terraform >= 1.11 (confirmed against hashicorp/terraform#36312, which
-  # introduced it targeting v1.11); this repo's CI is pinned above that
-  # floor specifically so this block works (see terraform-tests.yml).
+  # Terraform >= 1.11: the attribute was added by hashicorp/terraform#36227
+  # and shipped in v1.11 (#36312 is only the docs update for it, and is the
+  # wrong thing to cite when tracing the requirement). This example's own
+  # versions.tf declares that floor, and CI's single pinned Terraform version
+  # sits above it (see terraform-tests.yml).
   # command = apply is not a substitute at any Terraform version: this
   # example still creates a real EKS cluster (create_eks defaults to true
   # here), and a full mocked apply makes every computed AWS attribute in

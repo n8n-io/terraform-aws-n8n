@@ -2,16 +2,22 @@ variable "aws_region" {
   description = "AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1)."
   type        = string
   default     = "us-east-1"
+  nullable    = false
 }
 
 variable "cluster_name" {
   description = "Name for the EKS cluster. Keep to 14 characters or fewer: the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars."
   type        = string
   default     = "n8n-cluster"
+  nullable    = false
 
+  # The lower bound is not decoration. Empty passes a bare "<= 14" check, and
+  # then every identifier this example derives from it, the stand-in cluster's
+  # own name and the module's ElastiCache cluster ID among them, is malformed,
+  # so the failure lands mid-apply on AWS's own naming rules instead of here.
   validation {
-    condition     = length(var.cluster_name) <= 14
-    error_message = "cluster_name must be 14 characters or fewer."
+    condition     = length(var.cluster_name) >= 1 && length(var.cluster_name) <= 14
+    error_message = "cluster_name must be 1-14 characters."
   }
 }
 
@@ -56,6 +62,7 @@ variable "n8n_image_pull_secrets" {
   description = "Names of existing Kubernetes secrets of type kubernetes.io/dockerconfigjson, in the n8n namespace, that the pods authenticate to their image registry with. Leave empty (the default) unless n8n_image_repository points somewhere the node group's IAM role cannot already reach: a public registry and an ECR repository in this account both pull without credentials. Setting it hands ownership of the n8n ServiceAccount from the Helm chart to the module, which is how the secrets reach the pods at all, since the pinned chart renders imagePullSecrets nowhere. Create and rotate the secrets yourself; the module takes names, not credentials, so none of them land in Terraform state. Cross-account ECR is the exception and should not use this: its authorization tokens expire after 12 hours, so add the node group role to the source repository's policy instead."
   type        = list(string)
   default     = []
+  nullable    = false
 
   validation {
     condition = alltrue([
@@ -118,6 +125,11 @@ variable "n8n_custom_extensions_path" {
   }
 
   validation {
+    condition     = var.n8n_custom_extensions_path == null ? true : (var.n8n_custom_extensions_path == "/" || !endswith(var.n8n_custom_extensions_path, "/"))
+    error_message = "n8n_custom_extensions_path must not end in a trailing slash (e.g. \"/opt/n8n-nodes\", not \"/opt/n8n-nodes/\"). Same reason as the canonical-path rule above: the two spellings are the same directory to the container but different strings to the coverage check in n8n.tf, which compares this path against n8n_extra_volume_mounts entries literally."
+  }
+
+  validation {
     condition = var.n8n_custom_extensions_path == null ? true : !(
       var.n8n_custom_extensions_path == "/home/node/.n8n" ||
       startswith(var.n8n_custom_extensions_path, "/home/node/.n8n/")
@@ -130,6 +142,7 @@ variable "n8n_additional_domains" {
   description = "Extra hostnames n8n should answer on, beyond n8n_domain. Each is added to the module-issued ACM certificate as a subject alternative name, given a Route 53 validation record and alias A-record, and routed by the module's Ingress. Leave empty for a single hostname."
   type        = list(string)
   default     = []
+  nullable    = false
 }
 
 variable "n8n_execution_data_storage_mode" {
@@ -148,6 +161,7 @@ variable "tags" {
   description = "Additional AWS tags to apply to every resource this example creates."
   type        = map(string)
   default     = {}
+  nullable    = false
 }
 
 # ── Customer-managed EKS cluster stand-in ────────────────────────────────────
@@ -163,6 +177,7 @@ variable "kubernetes_version" {
   description = "Kubernetes version for the stand-in cluster this example creates, and the value passed to the module's own kubernetes_version input (which the module uses only to warn if it does not match the existing cluster's actual version on the create_eks = false path). Matches the module's own default so the two agree with no extra configuration."
   type        = string
   default     = "1.35"
+  nullable    = false
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+$", var.kubernetes_version))
@@ -174,22 +189,51 @@ variable "customer_managed_node_instance_type" {
   description = "EC2 instance type for the stand-in cluster's node group. Matches the module's own node_instance_type default (t3.xlarge), not a cheaper demo size: the module's own variable description warns that a full multi-main n8n workload (main x2, worker x2, webhook x2 pods at minimum replicas) needs at least this much headroom for HPA to have room to scale. A real customer-managed cluster would be sized for its own broader workload, which may already be larger than this."
   type        = string
   default     = "t3.xlarge"
+  nullable    = false
+
+  # Mirrors the module's own node_instance_type validation. These four inputs
+  # feed aws_eks_node_group.customer_managed directly rather than going through
+  # module "n8n", so nothing else in this configuration checks them: without
+  # these, a typo or an out-of-bounds desired/min/max combination is only
+  # rejected by AWS, on the first apply, after the cluster is already up.
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9]*\\.[a-z0-9]+$", var.customer_managed_node_instance_type))
+    error_message = "customer_managed_node_instance_type must be a valid EC2 instance type (e.g. t3.xlarge, m5.large)."
+  }
 }
 
 variable "customer_managed_node_desired" {
   description = "Initial number of worker nodes in the stand-in node group. Matches examples/small's implicit sizing (the module's own node_desired default). Only applies at creation: the node group's desired_size ignores changes afterward so the Cluster Autoscaler this example installs can own it without fighting plans/applies."
   type        = number
   default     = 3
+  nullable    = false
+
+  validation {
+    condition     = var.customer_managed_node_desired == floor(var.customer_managed_node_desired) && var.customer_managed_node_desired >= var.customer_managed_node_min && var.customer_managed_node_desired <= var.customer_managed_node_max
+    error_message = "customer_managed_node_desired must be a whole number of nodes within [customer_managed_node_min, customer_managed_node_max]. AWS rejects a managed node group whose desiredSize sits outside its own scaling bounds, and because desired_size only applies at creation, getting it wrong fails the first apply rather than a later one."
+  }
 }
 
 variable "customer_managed_node_min" {
   description = "Minimum number of worker nodes in the stand-in node group. Matches examples/small's implicit sizing (the module's own node_min default)."
   type        = number
   default     = 3
+  nullable    = false
+
+  validation {
+    condition     = var.customer_managed_node_min == floor(var.customer_managed_node_min) && var.customer_managed_node_min >= 1
+    error_message = "customer_managed_node_min must be a whole number of nodes, 1 or greater."
+  }
 }
 
 variable "customer_managed_node_max" {
   description = "Maximum number of worker nodes the Cluster Autoscaler can scale the stand-in node group to. Matches examples/small's implicit sizing (the module's own node_max default)."
   type        = number
   default     = 6
+  nullable    = false
+
+  validation {
+    condition     = var.customer_managed_node_max == floor(var.customer_managed_node_max) && var.customer_managed_node_max >= var.customer_managed_node_min
+    error_message = "customer_managed_node_max must be a whole number of nodes, and at least customer_managed_node_min."
+  }
 }

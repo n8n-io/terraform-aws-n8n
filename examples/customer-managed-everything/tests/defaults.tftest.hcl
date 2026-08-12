@@ -23,13 +23,15 @@
 # name. This example tested that same variable, plus three more, directly
 # (not assumed) and found a broader, empirically consistent pattern:
 #
-#   - cluster_name, customer_managed_redis_auth_token, and
-#     customer_managed_db_password ALL pass cleanly as expect_failures runs.
-#     What the three have in common: each feeds a root-level stand-in
-#     resource's argument DIRECTLY (aws_eks_cluster.customer_managed.name,
+#   - cluster_name, customer_managed_redis_auth_token,
+#     customer_managed_db_password, and
+#     customer_managed_node_instance_type/desired/min ALL pass cleanly as
+#     expect_failures runs. What they have in common: each feeds a root-level
+#     stand-in resource's argument DIRECTLY (aws_eks_cluster.customer_managed.name,
 #     aws_elasticache_replication_group.customer_managed.auth_token,
-#     aws_db_instance.customer_managed.password), not only a pass-through
-#     into module.n8n's own identically-named input.
+#     aws_db_instance.customer_managed.password, and
+#     aws_eks_node_group.customer_managed's instance_types / scaling_config),
+#     not only a pass-through into module.n8n's own identically-named input.
 #   - n8n_image_tag does NOT have this property, tested directly the same
 #     way examples/customer-managed-cluster tested it: it is consumed only
 #     as a module.n8n argument in this example (nothing at the root level
@@ -38,14 +40,18 @@
 #     does, which fails the run even though the expected failure also
 #     occurred.
 #
-# The mechanism behind this split was not traced further than these four data
+# The mechanism behind this split was not traced further than these data
 # points; treat it as an empirical rule for this file, not a general claim
 # about Terraform. Do not add a run block for n8n_execution_data_storage_mode,
-# customer_managed_node_instance_type/desired/min/max, or any other variable
-# whose only consumer is a module.n8n argument (not also a root-level
-# resource argument) without testing it directly first, the same way these
-# four were tested, via `terraform test -filter=...` against a throwaway
+# or any other variable whose only consumer is a module.n8n argument (not also
+# a root-level resource argument) without testing it directly first, the same
+# way these were tested, via `terraform test -filter=...` against a throwaway
 # probe file. Assume it will fail until proven otherwise.
+#
+# The customer_managed_node_* group was in that do-not-add list until it was
+# actually measured: it is consumed only by aws_eks_node_group.customer_managed
+# and never passed to module.n8n at all, so it always satisfied the rule above
+# rather than contradicting it. The runs are below.
 #
 # What this leaves uncovered: an automated proof that a *successful* plan of
 # this example's own wiring, across every customer-managed toggle at once,
@@ -108,4 +114,59 @@ run "customer_managed_db_password_rejects_too_short" {
   }
 
   expect_failures = [var.customer_managed_db_password]
+}
+
+run "customer_managed_db_password_rejects_rds_banned_characters" {
+  command = plan
+
+  variables {
+    customer_managed_db_password = "has/a/slash/in/it"
+  }
+
+  expect_failures = [var.customer_managed_db_password]
+}
+
+run "customer_managed_redis_auth_token_rejects_disallowed_characters" {
+  command = plan
+
+  variables {
+    customer_managed_redis_auth_token = "sixteen_plus_chars_but_underscored"
+  }
+
+  expect_failures = [var.customer_managed_redis_auth_token]
+}
+
+# The customer_managed_node_* group. See the header comment: these feed
+# aws_eks_node_group.customer_managed directly, which is what makes an
+# expect_failures run reachable here at all.
+
+run "customer_managed_node_instance_type_rejects_malformed_type" {
+  command = plan
+
+  variables {
+    customer_managed_node_instance_type = "NotAnInstanceType"
+  }
+
+  expect_failures = [var.customer_managed_node_instance_type]
+}
+
+run "customer_managed_node_min_rejects_zero" {
+  command = plan
+
+  variables {
+    customer_managed_node_min     = 0
+    customer_managed_node_desired = 0
+  }
+
+  expect_failures = [var.customer_managed_node_min]
+}
+
+run "customer_managed_node_desired_rejects_above_max" {
+  command = plan
+
+  variables {
+    customer_managed_node_desired = 99
+  }
+
+  expect_failures = [var.customer_managed_node_desired]
 }

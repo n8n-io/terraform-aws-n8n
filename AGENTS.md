@@ -211,7 +211,8 @@ file. Use `command = plan` unless you specifically need apply semantics.
   block, `x = null` means *unset*: the variable takes its default and no error is
   raised. A real caller writing `x = null` in a `module` block is different:
   null **propagates into the module** rather than falling back to the default,
-  unless the variable declares `nullable = false`. Measured on 1.9.8, one module
+  unless the variable declares `nullable = false`. Measured on 1.9.8 (before the
+  floor moved; the behaviour is unchanged since), one module
   with `default = 6` invoked three ways: no argument sees `6`; `n = null` on a
   nullable variable sees `null`; `n = null` on a `nullable = false` variable sees
   `6`, silently, with no error. Only the middle case can break anything, and it
@@ -230,31 +231,52 @@ file. Use `command = plan` unless you specifically need apply semantics.
   question only a real `module` block answers, which means a live plan against a
   caller configuration rather than the mocked suite.
 
-#### `check` conditions must short-circuit on Terraform 1.9
-
-`required_version` is `>= 1.9` and CI pins `TF_VERSION: 1.9.8`, the floor.
-Terraform 1.10 added short-circuit evaluation for `&&` and `||`; **1.9 does
-not have it**. In 1.9 both operands are evaluated, so `known_true || unknown`
-is *unknown*, and a `check` block whose condition is unknown at plan fails
-`terraform test` with "Check block assertion known after apply".
-
-This bites specifically on the guard shape these diagnostic checks use, where
-the left side is a toggle and the right side reads inputs a caller may wire
-from a resource attribute:
+#### Write guard-style `check` conditions as `guard ? body : true`
 
 ```hcl
-# Breaks on 1.9.8 when var.db_password comes from random_password.
-condition = !var.create_database || (var.db_host == null && var.db_password == null)
-
-# Correct: the conditional only evaluates the branch it takes.
+# Preferred.
 condition = var.create_database ? (var.db_host == null && var.db_password == null) : true
+
+# Avoid.
+condition = !var.create_database || (var.db_host == null && var.db_password == null)
 ```
 
-Always write guard-style `check` conditions as `guard ? body : true`, never
-`!guard || body`, and nest rather than chaining `||` inside the body. A local
-Terraform newer than 1.9 will short-circuit and pass, so **this class of bug
-is invisible locally and only fails in CI**. `examples/large` is the canary,
-it wires `db_password` from `random_password.aurora.result`.
+Both forms behave identically on the versions this module now supports, so
+this is a consistency rule rather than a correctness one, and the existing
+`check` blocks all use the first form. Keep matching them: nest rather than
+chaining `||` inside the body.
+
+It used to be a correctness rule, and the history is worth knowing before
+anyone "simplifies" one of these back. `required_version` was `>= 1.9` and CI
+pinned 1.9.8. Short-circuit evaluation of `&&` and `||` arrived in Terraform
+1.10, so on 1.9 both operands were always evaluated, making
+`known_true || unknown` *unknown*, and a `check` whose condition is unknown at
+plan fails `terraform test` with "Check block assertion known after apply".
+The `!guard || body` shape therefore broke whenever the right side read an
+input a caller wired from a resource attribute, `examples/large` being the
+canary because it wires `db_password` from `random_password.aurora.result`.
+Worse, any local Terraform newer than 1.9 short-circuited and passed, so the
+whole class of bug was invisible locally and only ever failed in CI.
+
+The floor is now `>= 1.11` (every `versions.tf`, and CI's `TF_VERSION`), which
+is above the 1.10 that fixed it, so the hazard is retired. It is written down
+because "this reads more naturally as `!guard || body`" is a reasonable
+instinct that was, for a long stretch of this repo's history, wrong.
+
+#### The floor is `>= 1.11`
+
+Declared in every `versions.tf` (root, `modules/controllers`, all ten
+examples) and matched by CI's single `TF_VERSION` pin. It moved up from
+`>= 1.9` because `override_resource`'s `override_during` attribute, which
+`examples/customer-managed-redis`, `-s3` and `-cluster` need to assert a
+plan-time value on a resource the same configuration creates, arrived in 1.11
+(hashicorp/terraform#36227) and is silently ignored before it. A silently
+ignored override does not error; it turns the documented `terraform test`
+command into a confusing assertion failure, which is the worst way to learn
+about a version constraint.
+
+Keep all twelve declarations and the CI pin in step when bumping. A floor the
+CI does not exercise is a claim nobody is checking.
 
 **Recommended pattern** when end-to-end wiring cannot be tested under mocks:
 

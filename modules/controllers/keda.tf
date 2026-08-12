@@ -2,12 +2,35 @@
 # Kubernetes Event-Driven Autoscaling — scales n8n workers based on Redis queue
 # depth rather than CPU, so workers appear only when there is work to do.
 #
-# Destroy ordering: helm_release.n8n (root module) depends_on module.controllers
-# as a whole, so during destroy the n8n release (including its ScaledObjects)
-# is deleted FIRST while the KEDA operator is still running. KEDA processes the
-# ScaledObject deletions and removes its own "finalizer.keda.sh" finalizer.
-# KEDA is then uninstalled only after all ScaledObjects are gone, no orphaned
-# finalizers.
+# Ordering contract for direct callers: whatever deploys n8n must be ordered
+# AFTER this module, in both directions. The root module already does this
+# (helm_release.n8n depends_on module.controllers), so a caller going through
+# module "n8n" gets it for free and can stop reading here. A caller invoking
+# modules/controllers directly (examples/customer-managed-everything) owns
+# that edge itself and must declare depends_on = [module.controllers] on its
+# own n8n call. Both halves of the contract need it:
+#
+#   Install: the n8n chart renders its worker ScaledObject unconditionally,
+#   with no regard for who installed KEDA. Applied before this release, it
+#   fails outright with `no matches for kind "ScaledObject" in version
+#   "keda.sh/v1alpha1"`, because the CRD this chart owns does not exist yet.
+#   Nothing infers that edge: an n8n module told install_keda = false creates
+#   no KEDA resources to depend on, so without an explicit depends_on the two
+#   Helm releases are unordered and Terraform is free to apply them in either
+#   order.
+#
+#   Destroy: the n8n release (and its ScaledObjects) must be deleted FIRST,
+#   while the KEDA operator is still running, so KEDA can process the
+#   deletions and remove its own "finalizer.keda.sh" finalizer. KEDA is then
+#   uninstalled only after all ScaledObjects are gone, leaving no orphaned
+#   finalizers. Terraform reverses depends_on edges on destroy, so the same
+#   declaration covers this case.
+#
+# A caller who wires providers for this submodule from their n8n module's own
+# outputs cannot declare that edge without creating a cycle. Configure the
+# kubernetes/helm providers against the cluster resource (or data source)
+# directly instead; examples/customer-managed-everything/providers.tf shows
+# the shape.
 #
 # Install ordering: depends_on helm_release.lbc. The AWS Load Balancer
 # Controller registers a cluster-wide MutatingWebhookConfiguration

@@ -29,15 +29,15 @@ output "keda_helm_release" {
 # warning to every consumer of this module for an attribute nothing here sets
 # or reads.
 output "lbc_iam_role" {
-  value = {
-    permissions_boundary = aws_iam_role.lbc.permissions_boundary
-  }
+  value = [for r in aws_iam_role.lbc : {
+    permissions_boundary = r.permissions_boundary
+  }]
 }
 
 output "cluster_autoscaler_iam_role" {
-  value = {
-    permissions_boundary = aws_iam_role.cluster_autoscaler.permissions_boundary
-  }
+  value = [for r in aws_iam_role.cluster_autoscaler : {
+    permissions_boundary = r.permissions_boundary
+  }]
 }
 
 output "lbc_pod_identity_association" {

@@ -278,13 +278,41 @@ data "aws_iam_policy_document" "lbc" {
   }
 }
 
+# Role, policy and attachment carry the same create_eks || install_lbc gate as
+# the Pod Identity association below, rather than being created
+# unconditionally. Three reasons, all of which only bite on the
+# customer-managed path this submodule exists to serve:
+#
+#   1. Nothing consumes them when the gate is false. The association is the
+#      only thing that binds this role to a ServiceAccount, and it is skipped
+#      on exactly that combination, so an unconditional role would be an IAM
+#      role carrying AWSLoadBalancerControllerIAMPolicy that no principal in
+#      the account can assume. Same defect create_ebs_csi already avoids for
+#      the EBS CSI role below.
+#   2. The names are deterministic and derived from cluster_name alone, so two
+#      calls of this submodule sharing a cluster_name collide on apply with
+#      EntityAlreadyExists. That is not hypothetical: examples/customer-managed-
+#      everything invokes this submodule directly AND calls module "n8n", whose
+#      own controllers call is always instantiated. The n8n call's toggles are
+#      all false there, so this gate is what keeps it from racing the direct
+#      call for the same role name.
+#   3. It keeps "which resources does install_lbc = false actually skip" a
+#      single answer instead of two.
+#
+# create_eks = true still creates them regardless of install_lbc, preserving
+# the externally-installed-controller-on-a-new-cluster case the association's
+# own comment below describes: that case needs the role to exist.
 resource "aws_iam_policy" "lbc" {
+  count = var.create_eks || var.install_lbc ? 1 : 0
+
   name   = "AWSLoadBalancerControllerIAMPolicy-${var.cluster_name}"
   policy = data.aws_iam_policy_document.lbc.json
   tags   = var.common_tags
 }
 
 resource "aws_iam_role" "lbc" {
+  count = var.create_eks || var.install_lbc ? 1 : 0
+
   name = "AmazonEKSLoadBalancerControllerRole-${var.cluster_name}"
 
   assume_role_policy = jsonencode({
@@ -302,8 +330,10 @@ resource "aws_iam_role" "lbc" {
 }
 
 resource "aws_iam_role_policy_attachment" "lbc" {
-  role       = aws_iam_role.lbc.name
-  policy_arn = aws_iam_policy.lbc.arn
+  count = var.create_eks || var.install_lbc ? 1 : 0
+
+  role       = aws_iam_role.lbc[0].name
+  policy_arn = aws_iam_policy.lbc[0].arn
 }
 
 # Gated on create_eks || install_lbc, not left unconditional: on a freshly
@@ -323,7 +353,7 @@ resource "aws_eks_pod_identity_association" "lbc" {
   cluster_name    = var.eks_cluster_name
   namespace       = "kube-system"
   service_account = "aws-load-balancer-controller"
-  role_arn        = aws_iam_role.lbc.arn
+  role_arn        = aws_iam_role.lbc[0].arn
 
   tags = var.common_tags
 }
@@ -338,6 +368,8 @@ resource "aws_eks_pod_identity_association" "lbc" {
 resource "aws_iam_policy" "cluster_autoscaler" {
   # checkov:skip=CKV_AWS_290:The Describe* actions in the first statement don't support resource-level ARNs in IAM at all, so "*" is required. The write actions in the second statement are scoped via a ResourceTag condition to this cluster's own node group ASGs (see eks.tf's k8s.io/cluster-autoscaler tags) - AWS's own documented mitigation for Auto Scaling APIs, which likewise don't support resource-level ARNs.
   # checkov:skip=CKV_AWS_355:Same rationale as CKV_AWS_290 above.
+  count = var.create_eks || var.install_cluster_autoscaler ? 1 : 0
+
   name = "${var.cluster_name}-cluster-autoscaler-policy"
   tags = var.common_tags
 
@@ -369,7 +401,21 @@ resource "aws_iam_policy" "cluster_autoscaler" {
         Resource = "*"
         Condition = {
           StringEquals = {
-            "autoscaling:ResourceTag/k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
+            # eks_cluster_name, not cluster_name: this condition has to match
+            # the ASG tag the Cluster Autoscaler actually auto-discovers by,
+            # and the chart is configured with autoDiscovery.clusterName =
+            # var.eks_cluster_name (controllers.tf). The two inputs are the
+            # same string on the create_eks = true path (the module names the
+            # cluster it creates after cluster_name), so this changes nothing
+            # for a greenfield deployment. They diverge on create_eks = false,
+            # where cluster_name is only this module's own resource-naming
+            # prefix and the real cluster (and therefore the k8s.io/cluster-
+            # autoscaler/<name> tag on its node group ASGs) carries a
+            # different name entirely. Keyed on cluster_name there, the
+            # condition matches no ASG and Cluster Autoscaler silently loses
+            # SetDesiredCapacity/TerminateInstanceInAutoScalingGroup while
+            # still appearing installed and healthy.
+            "autoscaling:ResourceTag/k8s.io/cluster-autoscaler/${var.eks_cluster_name}" = "owned"
           }
         }
       },
@@ -378,6 +424,8 @@ resource "aws_iam_policy" "cluster_autoscaler" {
 }
 
 resource "aws_iam_role" "cluster_autoscaler" {
+  count = var.create_eks || var.install_cluster_autoscaler ? 1 : 0
+
   name = "${var.cluster_name}-cluster-autoscaler-role"
 
   assume_role_policy = jsonencode({
@@ -395,8 +443,10 @@ resource "aws_iam_role" "cluster_autoscaler" {
 }
 
 resource "aws_iam_role_policy_attachment" "cluster_autoscaler" {
-  role       = aws_iam_role.cluster_autoscaler.name
-  policy_arn = aws_iam_policy.cluster_autoscaler.arn
+  count = var.create_eks || var.install_cluster_autoscaler ? 1 : 0
+
+  role       = aws_iam_role.cluster_autoscaler[0].name
+  policy_arn = aws_iam_policy.cluster_autoscaler[0].arn
 }
 
 resource "aws_eks_pod_identity_association" "cluster_autoscaler" {
@@ -405,7 +455,7 @@ resource "aws_eks_pod_identity_association" "cluster_autoscaler" {
   cluster_name    = var.eks_cluster_name
   namespace       = "kube-system"
   service_account = "cluster-autoscaler"
-  role_arn        = aws_iam_role.cluster_autoscaler.arn
+  role_arn        = aws_iam_role.cluster_autoscaler[0].arn
 
   tags = var.common_tags
 }

@@ -510,15 +510,22 @@ module "n8n" {
 
   tags = local.common_tags
 
-  # Deliberately no module.controllers here: the kubernetes/helm providers
-  # (providers.tf) are configured against this module's own cluster_endpoint/
-  # cluster_certificate_authority_data outputs, and module.controllers uses
-  # those same providers, so module.controllers already depends on this
-  # module implicitly through the provider configuration. Adding the reverse
-  # dependency here would be a genuine cycle (confirmed: terraform validate
-  # reports one if this list includes module.controllers), not just redundant.
+  # module.controllers is the load-bearing entry here, not a formality. This
+  # module's Helm release renders a KEDA ScaledObject unconditionally, even
+  # with install_keda = false above, so it has to be applied after the KEDA
+  # operator's CRDs exist and destroyed before they are removed. Nothing
+  # infers that edge: install_keda = false means this module creates no KEDA
+  # resource for module.controllers' release to be inferred against. See
+  # modules/controllers/keda.tf for the full contract.
+  #
+  # This is only declarable because providers.tf configures the kubernetes and
+  # helm providers against aws_eks_cluster.customer_managed directly rather
+  # than against this module's own outputs. Sourced from the outputs, every
+  # module.controllers resource would depend on module.n8n through the
+  # provider config and this line would be a cycle.
   depends_on = [
     module.vpc,
+    module.controllers,
     aws_db_instance.customer_managed,
     aws_elasticache_replication_group.customer_managed,
     aws_s3_bucket.customer_managed,

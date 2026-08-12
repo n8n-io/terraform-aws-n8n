@@ -393,7 +393,7 @@ locals {
   # is not actually the bucket's default encryption key.
   s3_kms_key_arn = (
     !var.create_s3_bucket ? var.s3_kms_key_arn :
-    var.s3_kms_encryption_enabled ? (var.s3_kms_key_arn != null ? var.s3_kms_key_arn : try(aws_kms_key.s3[0].arn, null)) : null
+    var.s3_kms_encryption_enabled ? (var.create_s3_kms_key ? try(aws_kms_key.s3[0].arn, null) : var.s3_kms_key_arn) : null
   )
 
   # ── n8n service account ────────────────────────────────────────────────────
@@ -506,6 +506,14 @@ locals {
     "N8N_COMMUNITY_PACKAGES_PREVENT_LOADING",
     "N8N_COMMUNITY_PACKAGES_REGISTRY",
     "N8N_CUSTOM_EXTENSIONS",
+    # Owned by redis_key_prefix, which is the single source of truth for the
+    # Redis namespace: it sets this, the chart's redis.prefix (QUEUE_BULL_PREFIX)
+    # and the KEDA ScaledObject's listName together. QUEUE_BULL_PREFIX is
+    # already covered by the QUEUE_ prefix below; without this entry the two
+    # halves could be set independently, leaving n8n's pub/sub channel and
+    # Bull's job keys under different namespaces, and KEDA watching a list
+    # nothing writes to.
+    "N8N_REDIS_KEY_PREFIX",
     # Owned by the four "n8n defaults scheduled to change" inputs. Listed even
     # though three of them are only emitted when set: an extraEnv override would
     # move a limit the module deliberately leaves to n8n, or unpin the task

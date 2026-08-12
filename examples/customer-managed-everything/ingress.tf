@@ -28,6 +28,24 @@ resource "kubernetes_ingress_v1" "n8n" {
       # customer-managed Ingress negotiates the same TLS policy the
       # module-managed one would have.
       "alb.ingress.kubernetes.io/ssl-policy" = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+
+      # Same three the module's own Ingress sets (locals.tf's
+      # ingress_default_annotations), carried over so a caller who takes over
+      # the Ingress does not silently lose behaviour the module treats as part
+      # of running n8n rather than as Ingress styling:
+      #
+      # stickiness.enabled pins each browser to the same main pod for 3 hours.
+      # Without it the ALB round-robins across the multi-main Deployment and
+      # editor WebSocket connections break on every reconnect.
+      # deregistration_delay keeps a rolling update from holding connections
+      # open for the ELB default of 300s.
+      "alb.ingress.kubernetes.io/target-group-attributes" = "stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=10800,deregistration_delay.timeout_seconds=30"
+
+      # n8n keeps long-lived editor connections open; the ALB default idle
+      # timeout of 60s cuts them.
+      "alb.ingress.kubernetes.io/load-balancer-attributes" = "idle_timeout.timeout_seconds=300"
+
+      "alb.ingress.kubernetes.io/healthcheck-path" = "/healthz"
     }
   }
 
@@ -35,7 +53,11 @@ resource "kubernetes_ingress_v1" "n8n" {
     ingress_class_name = "alb"
 
     rule {
-      host = var.n8n_domain
+      # Lowercased for the same reason the module lowercases it (locals.tf's
+      # acm_domain_names): Kubernetes rejects an Ingress whose rule host is
+      # not a lowercase RFC 1123 subdomain, so a mixed-case n8n_domain that
+      # applies fine through the module's own Ingress would fail here.
+      host = lower(var.n8n_domain)
       http {
         # Webhook, form, waiting and MCP traffic must reach the dedicated
         # webhook processors, taken from the module output rather than

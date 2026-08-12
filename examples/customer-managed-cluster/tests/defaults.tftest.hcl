@@ -103,3 +103,49 @@ run "cluster_name_length_validation_rejects_long_names" {
 
   expect_failures = [var.cluster_name]
 }
+
+run "cluster_name_length_validation_rejects_empty" {
+  command = plan
+
+  variables {
+    cluster_name = ""
+  }
+
+  expect_failures = [var.cluster_name]
+}
+
+# The customer_managed_node_* group is reachable here for the same reason
+# cluster_name is, and for the reason examples/customer-managed-everything's
+# header comment sets out: these feed aws_eks_node_group.customer_managed
+# directly rather than passing through module "n8n". Measured, not assumed.
+
+run "customer_managed_node_instance_type_rejects_malformed_type" {
+  command = plan
+
+  variables {
+    customer_managed_node_instance_type = "NotAnInstanceType"
+  }
+
+  expect_failures = [var.customer_managed_node_instance_type]
+}
+
+run "customer_managed_node_min_rejects_zero" {
+  command = plan
+
+  variables {
+    customer_managed_node_min     = 0
+    customer_managed_node_desired = 0
+  }
+
+  expect_failures = [var.customer_managed_node_min]
+}
+
+run "customer_managed_node_desired_rejects_above_max" {
+  command = plan
+
+  variables {
+    customer_managed_node_desired = 99
+  }
+
+  expect_failures = [var.customer_managed_node_desired]
+}

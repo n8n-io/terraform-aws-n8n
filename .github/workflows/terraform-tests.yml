@@ -11,16 +11,20 @@ permissions:
   pull-requests: write
 
 env:
-  # Bumped from 1.9.8: examples/customer-managed-redis and
-  # examples/customer-managed-s3 need override_resource's override_during
-  # attribute to assert a plan-time value on a resource this same
-  # configuration creates, and that attribute needs Terraform >= 1.11
-  # (confirmed against hashicorp/terraform#36312, which introduced it
-  # targeting v1.11). This only changes the Terraform version CI tests
-  # with; the module's own required_version constraint (variables.tf) stays
-  # ">= 1.9" for consumers. Pinned to the current latest stable release
-  # rather than the minimum that satisfies the >= 1.11 floor, so there's one
-  # deliberately-tracked version to bump, not a moving target.
+  # Every job runs this one version: the current latest stable, so there is one
+  # deliberately tracked version to bump rather than a moving target.
+  #
+  # Bumped from 1.9.8 because examples/customer-managed-redis, -s3 and -cluster
+  # need override_resource's override_during attribute to assert a plan-time
+  # value on a resource the same configuration creates, and that attribute
+  # arrived in Terraform 1.11 (hashicorp/terraform#36227).
+  #
+  # The module's own floor moved with it: every versions.tf in the repo now
+  # declares required_version = ">= 1.11" rather than the ">= 1.9" that no job
+  # here exercised. Keep the two in step. A floor CI never runs is a claim
+  # nobody is checking, and this repo has already been bitten by the specific
+  # version-skew hazard that hides behind one (`check` blocks did not
+  # short-circuit && / || before Terraform 1.10; see AGENTS.md).
   TF_VERSION: "1.15.8"
   TFLINT_VERSION: "v0.53.0"
   # checkov results are version-dependent, so this gate pins one version rather

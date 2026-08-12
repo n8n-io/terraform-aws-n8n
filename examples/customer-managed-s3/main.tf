@@ -134,7 +134,14 @@ module "n8n" {
   tags = local.common_tags
 
   # Explicit module-level dependency ensures the ENTIRE VPC (including NAT
-  # gateway routes, IGW, etc.) and the stand-in bucket both stay up until n8n
-  # is fully destroyed.
-  depends_on = [module.vpc, aws_s3_bucket.customer_managed]
+  # gateway routes, IGW, etc.) stays up until n8n is fully destroyed.
+  #
+  # aws_s3_bucket.customer_managed is deliberately NOT listed. It does not need
+  # to be: existing_s3_bucket_name above already references it, which is an
+  # implicit dependency covering both create and destroy ordering. Listing it
+  # explicitly would only make this example's own README wrong, since the
+  # "Adapting to your real infrastructure" steps have you delete the stand-in
+  # bucket and point existing_s3_bucket_name at a real one, and a leftover
+  # depends_on entry naming a deleted resource fails validate outright.
+  depends_on = [module.vpc]
 }

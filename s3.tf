@@ -80,7 +80,7 @@ resource "aws_s3_bucket_public_access_block" "n8n" {
 # path, though: see the IAM policy below.
 
 resource "aws_kms_key" "s3" {
-  count = var.create_s3_bucket && var.s3_kms_encryption_enabled && var.s3_kms_key_arn == null ? 1 : 0
+  count = var.create_s3_bucket && var.s3_kms_encryption_enabled && var.create_s3_kms_key ? 1 : 0
 
   description             = "CMK for module-managed S3 bucket ${local.s3_bucket_name} (n8n binary and execution data)"
   enable_key_rotation     = true
@@ -106,7 +106,7 @@ resource "aws_kms_key" "s3" {
 }
 
 resource "aws_kms_alias" "s3" {
-  count = var.create_s3_bucket && var.s3_kms_encryption_enabled && var.s3_kms_key_arn == null ? 1 : 0
+  count = var.create_s3_bucket && var.s3_kms_encryption_enabled && var.create_s3_kms_key ? 1 : 0
 
   name_prefix   = "alias/${local.s3_bucket_name}-"
   target_key_id = aws_kms_key.s3[0].key_id
@@ -279,6 +279,35 @@ resource "aws_iam_policy" "external_secrets" {
         Resource = [for s in data.aws_secretsmanager_secret.external_secrets : s.arn]
       },
       {
+        # Without this, an allow-listed secret encrypted with a customer
+        # managed KMS key is unreadable: Secrets Manager decrypts through the
+        # *caller's* credentials, so GetSecretValue on such a secret fails
+        # with AccessDenied on kms:Decrypt no matter how the secret's own
+        # resource policy reads. Secrets left on the AWS-managed
+        # aws/secretsmanager key never needed it, which is why the gap only
+        # shows up once someone points n8n at a properly key-managed secret.
+        #
+        # Scoped by condition rather than by resource. Deriving key ARNs from
+        # data.aws_secretsmanager_secret.external_secrets is not reliable:
+        # DescribeSecret returns kms_key_id as whatever was set at creation
+        # (a key ID, an alias, an alias ARN, or nothing at all for the
+        # AWS-managed key), and only one of those four spellings is usable as
+        # an IAM Resource. kms:ViaService is exact where an ARN list would be
+        # a guess: it permits Decrypt only when Secrets Manager itself is the
+        # caller, in this region. That leaves GetSecretValue above as the
+        # only way to reach any ciphertext at all, and it is already pinned
+        # to the resolved ARNs of the allow list, so the effective grant is
+        # "decrypt exactly the allow-listed secrets" and nothing wider.
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "secretsmanager.${local.aws_region}.amazonaws.com"
+          }
+        }
+      },
+      {
         # This module keeps its own secrets (DB password, Redis AUTH token,
         # N8N_ENCRYPTION_KEY, task runner token, licence key) in Kubernetes
         # Secrets, never in AWS Secrets Manager, so nothing in this account
@@ -399,6 +428,29 @@ check "existing_s3_bucket_name_requires_create_s3_bucket_false" {
 # both paths. Account is deliberately not asserted: a CMK shared from a central
 # security account is a legitimate setup, and cross-account SSE-KMS works as long
 # as the key policy allows the pod role.
+
+# The "X is ignored when Y" half of create_s3_kms_key's contract, matching
+# database.tf's db_kms_key_arn check. With the module creating its own bucket
+# and its own CMK, local.s3_kms_key_arn (locals.tf) resolves to that CMK and
+# this input is read nowhere at all, so a caller who set it and expected their
+# key to be used gets told rather than left to find out from the bucket's
+# encryption configuration. Warn rather than fail: staging the ARN in tfvars
+# ahead of flipping create_s3_kms_key is a legitimate thing to do, and on the
+# create_s3_bucket = false path the ARN is meaningful on its own (it is what
+# grants the pod role kms:Decrypt on your bucket's key), so this deliberately
+# does not fire there.
+check "s3_kms_key_arn_requires_create_s3_kms_key_false" {
+  assert {
+    condition = (var.s3_kms_key_arn != null && var.create_s3_bucket && var.s3_kms_encryption_enabled) ? (
+      !var.create_s3_kms_key
+    ) : true
+    error_message = join("", [
+      "s3_kms_key_arn is set but ignored: with create_s3_kms_key left at its default the module mints its own ",
+      "Customer Managed Key and encrypts the bucket it creates with that, never reading this ARN. Set ",
+      "create_s3_kms_key = false to encrypt with the key you supplied instead.",
+    ])
+  }
+}
 
 check "s3_kms_key_arn_region_matches" {
   assert {

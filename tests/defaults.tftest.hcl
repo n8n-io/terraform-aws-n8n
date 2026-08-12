@@ -1009,7 +1009,7 @@ run "rds_hardened_defaults" {
   # documented in README.md → "Upgrading from a pre-CMK apply" rather than at
   # plan time: the ARN is computed and would require terraform >= 1.11's
   # `override_during = plan` to assert against under the mock provider, which
-  # exceeds the module's `required_version = ">= 1.9"` floor.
+  # exceeds the module's `required_version = ">= 1.11"` floor.
 }
 
 run "db_storage_encrypted_false_skips_cmk" {
@@ -1153,6 +1153,7 @@ run "db_snapshot_restore_accepts_a_matching_encrypted_snapshot" {
 
   variables {
     db_snapshot_identifier = "n8n-postgres-pre-rebuild"
+    create_db_kms_key      = false
     db_kms_key_arn         = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
     n8n_encryption_key     = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
   }
@@ -1192,6 +1193,7 @@ run "db_snapshot_restore_rejects_a_key_that_is_not_the_snapshots" {
 
   variables {
     db_snapshot_identifier = "n8n-postgres-pre-rebuild"
+    create_db_kms_key      = false
     db_kms_key_arn         = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
     n8n_encryption_key     = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
   }
@@ -1404,7 +1406,8 @@ run "db_kms_key_arn_suppresses_module_managed_cmk" {
   command = plan
 
   variables {
-    db_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
   }
 
   assert {
@@ -1447,8 +1450,10 @@ run "db_logs_kms_key_arn_encrypts_the_postgresql_log_group" {
   command = plan
 
   variables {
-    db_kms_key_arn      = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
-    db_logs_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    create_db_kms_key       = false
+    db_kms_key_arn          = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    db_logs_kms_key_enabled = true
+    db_logs_kms_key_arn     = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
   }
 
   assert {
@@ -1463,16 +1468,18 @@ run "db_logs_kms_key_arn_encrypts_the_postgresql_log_group" {
   }
 }
 
-run "db_logs_kms_key_arn_is_ignored_without_db_kms_key_arn" {
+run "db_logs_kms_key_arn_is_ignored_without_the_toggle" {
   command = plan
 
   variables {
     db_logs_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
   }
 
-  # No db_kms_key_arn, so the module mints its own CMK and that is what the log
-  # group gets. The supplied logs key is ignored (and the
-  # db_logs_kms_key_arn_requires_db_kms_key_arn check warns about it).
+  # The ARN alone changes nothing: db_logs_kms_key_enabled is what opts the log
+  # group onto a caller key, and create_db_kms_key is still at its default, so
+  # the module mints its own CMK and that is what the log group gets. The check
+  # says so rather than failing, since staging the ARN in tfvars ahead of
+  # flipping both toggles is a legitimate thing to do.
   assert {
     condition     = length(aws_kms_key.db) == 1
     error_message = "db_logs_kms_key_arn alone must not suppress the module-managed CMK"
@@ -1485,6 +1492,102 @@ run "db_logs_kms_key_arn_is_ignored_without_db_kms_key_arn" {
   expect_failures = [check.db_logs_kms_key_arn_requires_db_kms_key_arn]
 }
 
+# ── The KMS toggles' own validations ──────────────────────────────────────────
+# create_db_kms_key / db_logs_kms_key_enabled / create_s3_kms_key exist so the
+# module never gates a `count` on whether a caller-supplied ARN is null: an ARN
+# wired from a KMS key created in the same configuration is unknown until apply,
+# and an unknown count fails the plan outright. See the comment above
+# aws_kms_key.db in database.tf. These runs pin the incomplete-configuration
+# half of each toggle's contract.
+
+run "create_db_kms_key_false_without_an_arn_is_rejected" {
+  command = plan
+
+  variables {
+    create_db_kms_key = false
+  }
+
+  expect_failures = [var.create_db_kms_key]
+}
+
+run "db_logs_kms_key_enabled_without_an_arn_is_rejected" {
+  command = plan
+
+  variables {
+    create_db_kms_key       = false
+    db_kms_key_arn          = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    db_logs_kms_key_enabled = true
+  }
+
+  expect_failures = [var.db_logs_kms_key_enabled]
+}
+
+# The log-group toggle is meaningless while the module owns the key: its own
+# CMK already carries AllowCloudWatchLogsEncrypt and already encrypts the log
+# group, so there is nothing to opt into.
+run "db_logs_kms_key_enabled_requires_create_db_kms_key_false" {
+  command = plan
+
+  variables {
+    db_logs_kms_key_enabled = true
+    db_logs_kms_key_arn     = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+  }
+
+  expect_failures = [var.db_logs_kms_key_enabled]
+}
+
+run "create_s3_kms_key_false_without_an_arn_is_rejected" {
+  command = plan
+
+  variables {
+    create_s3_kms_key = false
+  }
+
+  expect_failures = [var.create_s3_kms_key]
+}
+
+run "create_s3_kms_key_false_with_an_arn_suppresses_the_module_cmk" {
+  command = plan
+
+  variables {
+    create_s3_kms_key = false
+    s3_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+  }
+
+  assert {
+    condition     = length(aws_kms_key.s3) == 0
+    error_message = "create_s3_kms_key = false must suppress the module-managed S3 CMK"
+  }
+
+  assert {
+    condition     = length(aws_kms_alias.s3) == 0
+    error_message = "create_s3_kms_key = false must also suppress the module-managed S3 CMK alias"
+  }
+
+  assert {
+    # rule is a set, so it is iterated rather than indexed.
+    condition = alltrue([
+      for r in aws_s3_bucket_server_side_encryption_configuration.n8n[0].rule :
+      alltrue([
+        for d in r.apply_server_side_encryption_by_default :
+        d.kms_master_key_id == "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d" && d.sse_algorithm == "aws:kms"
+      ])
+    ])
+    error_message = "The bucket's encryption configuration must stay SSE-KMS and name the caller-supplied key"
+  }
+}
+
+# The point of the whole exercise: the ARN is now free to be a value Terraform
+# cannot know until apply, because nothing gates a count on it any more.
+run "create_s3_kms_key_true_still_creates_the_module_cmk" {
+  command = plan
+
+  assert {
+    condition     = length(aws_kms_key.s3) == 1
+    error_message = "create_s3_kms_key defaults to true, so the module must still create its own CMK (unchanged default behavior)"
+  }
+}
+
 # An unusable key is caught while planning rather than part-way through the
 # apply. Only key_state is exercised here: key_usage and key_spec take the same
 # code path through local.db_byo_kms_keys and the same mock_data override, so a
@@ -1493,7 +1596,8 @@ run "a_key_pending_deletion_is_reported_at_plan_time" {
   command = plan
 
   variables {
-    db_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
   }
 
   override_data {
@@ -1517,7 +1621,8 @@ run "a_key_in_another_region_is_reported_at_plan_time" {
   command = plan
 
   variables {
-    db_kms_key_arn = "arn:aws:kms:eu-west-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:eu-west-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
   }
 
   expect_failures = [
@@ -1540,7 +1645,8 @@ run "db_logs_kms_key_arn_validator_rejects_alias_arn" {
   command = plan
 
   variables {
-    db_logs_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:alias/my-key"
+    db_logs_kms_key_enabled = true
+    db_logs_kms_key_arn     = "arn:aws:kms:us-east-1:123456789012:alias/my-key"
   }
 
   expect_failures = [var.db_logs_kms_key_arn]
@@ -1561,7 +1667,8 @@ run "db_kms_key_arn_validator_rejects_alias_arn" {
 
   variables {
     # An alias ARN, not a key ARN: the validator requires the latter.
-    db_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:alias/my-key"
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:alias/my-key"
   }
 
   expect_failures = [var.db_kms_key_arn]
@@ -1571,6 +1678,7 @@ run "db_kms_key_arn_set_with_storage_encryption_disabled_warns" {
   command = plan
 
   variables {
+    create_db_kms_key    = false
     db_kms_key_arn       = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
     db_storage_encrypted = false
   }
@@ -1606,7 +1714,8 @@ run "db_kms_key_arn_reaches_storage_and_pi_but_not_the_log_group" {
   command = plan
 
   variables {
-    db_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
   }
 
   # local.db_kms_key_arn for the same reason as the run above: the instance's own
@@ -1629,10 +1738,11 @@ run "db_kms_key_arn_set_with_create_database_false_warns" {
   command = plan
 
   variables {
-    db_kms_key_arn  = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
-    create_database = false
-    db_host         = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
-    db_password     = "external-db-password"
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    create_database   = false
+    db_host           = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password       = "external-db-password"
   }
 
   expect_failures = [check.db_kms_key_arn_requires_module_managed_encrypted_database]
@@ -1645,7 +1755,8 @@ run "db_kms_key_arn_with_defaults_trips_only_the_log_group_disclosure" {
   command = plan
 
   variables {
-    db_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
   }
 
   assert {
@@ -4224,7 +4335,13 @@ run "s3_sse_kms_input_switches_algorithm" {
   command = plan
 
   variables {
-    s3_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    # create_s3_kms_key = false is what tells the module not to mint its own
+    # CMK; the ARN alone is ignored (and warned about by
+    # check.s3_kms_key_arn_requires_create_s3_kms_key_false). See the comment
+    # above aws_kms_key.db in database.tf for why the toggle is a boolean
+    # rather than an inference from this ARN being non-null.
+    create_s3_kms_key = false
+    s3_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
   }
 
   assert {
@@ -4504,10 +4621,24 @@ run "external_secrets_aws_grant_enabled_creates_the_expected_policy_shape" {
     error_message = "GetSecretValue must be scoped to exactly the resolved ARNs of the named secrets, never a wildcard"
   }
 
+  # Without this statement an allow-listed secret encrypted with a customer
+  # managed KMS key is unreadable: Secrets Manager decrypts as the calling
+  # principal, so GetSecretValue fails on kms:Decrypt regardless of the
+  # secret's own policy. The ViaService condition is what keeps the wildcard
+  # resource honest, so it is asserted rather than just the action.
   assert {
     condition = (
-      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[2].Effect == "Deny" &&
-      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[2].Condition.StringEquals["aws:ResourceTag/ManagedBy"] == "terraform"
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[2].Effect == "Allow" &&
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[2].Action == ["kms:Decrypt"] &&
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[2].Condition.StringEquals["kms:ViaService"] == "secretsmanager.us-east-1.amazonaws.com"
+    )
+    error_message = "The policy must grant kms:Decrypt scoped by kms:ViaService to Secrets Manager in this region, or a CMK-encrypted allow-listed secret returns AccessDenied at runtime"
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[3].Effect == "Deny" &&
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[3].Condition.StringEquals["aws:ResourceTag/ManagedBy"] == "terraform"
     )
     error_message = "The policy must carry an explicit Deny on anything tagged ManagedBy = terraform, so the grant can never widen to cover a module-managed secret"
   }
@@ -7317,12 +7448,12 @@ run "iam_permissions_boundary_defaults_to_null_on_every_role" {
   }
 
   assert {
-    condition     = module.controllers.lbc_iam_role.permissions_boundary == null
+    condition     = module.controllers.lbc_iam_role[0].permissions_boundary == null
     error_message = "aws_iam_role.lbc must have no permissions_boundary by default"
   }
 
   assert {
-    condition     = module.controllers.cluster_autoscaler_iam_role.permissions_boundary == null
+    condition     = module.controllers.cluster_autoscaler_iam_role[0].permissions_boundary == null
     error_message = "aws_iam_role.cluster_autoscaler must have no permissions_boundary by default"
   }
 
@@ -7371,12 +7502,12 @@ run "iam_permissions_boundary_propagates_to_every_role" {
   }
 
   assert {
-    condition     = module.controllers.lbc_iam_role.permissions_boundary == "arn:aws:iam::123456789012:policy/ExamplePermissionsBoundary"
+    condition     = module.controllers.lbc_iam_role[0].permissions_boundary == "arn:aws:iam::123456789012:policy/ExamplePermissionsBoundary"
     error_message = "aws_iam_role.lbc must carry the configured permissions boundary"
   }
 
   assert {
-    condition     = module.controllers.cluster_autoscaler_iam_role.permissions_boundary == "arn:aws:iam::123456789012:policy/ExamplePermissionsBoundary"
+    condition     = module.controllers.cluster_autoscaler_iam_role[0].permissions_boundary == "arn:aws:iam::123456789012:policy/ExamplePermissionsBoundary"
     error_message = "aws_iam_role.cluster_autoscaler must carry the configured permissions boundary"
   }
 
@@ -7624,6 +7755,48 @@ run "create_eks_false_install_lbc_false_skips_lbc_pod_identity_association" {
     condition     = length(module.controllers.lbc_pod_identity_association) == 0
     error_message = "create_eks = false with install_lbc = false must skip the LBC Pod Identity association, not collide with one that may already exist on the shared cluster"
   }
+
+  # The role goes with the association. Left unconditional it would be an IAM
+  # role carrying AWSLoadBalancerControllerIAMPolicy that no principal can
+  # assume, since the association is the only thing that binds it to a
+  # ServiceAccount, and its deterministic cluster_name-derived name would
+  # collide with a second modules/controllers call sharing that cluster_name
+  # (examples/customer-managed-everything is exactly that shape).
+  assert {
+    condition     = length(module.controllers.lbc_iam_role) == 0
+    error_message = "create_eks = false with install_lbc = false must skip the LBC IAM role too, not strand a role nothing can assume"
+  }
+
+  # The gate is per-controller, so leaving install_cluster_autoscaler at its
+  # default here proves the LBC gate does not drag its neighbour with it.
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_iam_role) == 1
+    error_message = "install_lbc = false must not gate the Cluster Autoscaler IAM role: each controller's resources follow its own toggle"
+  }
+}
+
+# The Cluster Autoscaler half of the run above.
+run "create_eks_false_install_cluster_autoscaler_false_skips_its_iam_role" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+    create_ebs_csi                               = false
+    install_cluster_autoscaler                   = false
+    create_ingress                               = false
+  }
+
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_pod_identity_association) == 0
+    error_message = "create_eks = false with install_cluster_autoscaler = false must skip the Cluster Autoscaler Pod Identity association"
+  }
+
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_iam_role) == 0
+    error_message = "create_eks = false with install_cluster_autoscaler = false must skip the Cluster Autoscaler IAM role too, not strand a role nothing can assume"
+  }
 }
 
 # Complements the run above: create_eks = false does not, on its own, skip
@@ -7643,6 +7816,36 @@ run "create_eks_false_install_lbc_true_still_creates_lbc_pod_identity_associatio
   assert {
     condition     = length(module.controllers.lbc_pod_identity_association) == 1
     error_message = "create_eks = false with install_lbc = true must still create the LBC Pod Identity association: this invocation owns installing LBC on the existing cluster"
+  }
+
+  assert {
+    condition     = length(module.controllers.lbc_iam_role) == 1
+    error_message = "create_eks = false with install_lbc = true must create the LBC IAM role: the association it is bound to exists on this path"
+  }
+}
+
+# The default path, stated explicitly so the gate's other half is covered:
+# create_eks = true creates the LBC and Cluster Autoscaler IAM roles whether
+# or not the module installs the controllers itself. Nothing can already be
+# bound to those ServiceAccounts on a cluster this apply just created, so the
+# roles exist for an externally installed controller to use.
+run "create_eks_true_creates_controller_iam_roles_regardless_of_install_toggles" {
+  command = plan
+
+  variables {
+    install_lbc                = false
+    install_cluster_autoscaler = false
+    create_ingress             = false
+  }
+
+  assert {
+    condition     = length(module.controllers.lbc_iam_role) == 1
+    error_message = "create_eks = true must create the LBC IAM role even with install_lbc = false, so an externally installed controller still gets its IAM binding"
+  }
+
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_iam_role) == 1
+    error_message = "create_eks = true must create the Cluster Autoscaler IAM role even with install_cluster_autoscaler = false"
   }
 }
 

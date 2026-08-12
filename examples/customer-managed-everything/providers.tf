@@ -2,34 +2,46 @@ provider "aws" {
   region = var.aws_region
 }
 
-# The kubernetes and helm providers are configured against the stand-in
-# cluster this example creates (main.tf), not one module.n8n creates: unlike
-# examples/small, create_eks = false here, so module.n8n.cluster_endpoint /
-# cluster_certificate_authority_data resolve through the module's
-# create_eks = false path (a data.aws_eks_cluster.existing read of the
-# stand-in cluster below) rather than a resource it manages itself. Either
-# way the outputs are the right thing to configure these providers against.
+# The kubernetes and helm providers are configured against the stand-in cluster
+# resource in main.tf directly, NOT against module.n8n's cluster_endpoint /
+# cluster_certificate_authority_data outputs (which is what examples/small and
+# examples/split-ingress do).
+#
+# The distinction matters here and nowhere else. This example invokes
+# modules/controllers directly to install KEDA, and the n8n Helm release
+# renders a KEDA ScaledObject unconditionally, so module.n8n must be ordered
+# after module.controllers (see main.tf's depends_on, and modules/controllers/
+# keda.tf for the full contract). Sourcing the provider config from module.n8n
+# outputs would make every resource using these providers, module.controllers
+# included, depend on module.n8n, and that depends_on would then be a genuine
+# cycle. Reading the same values off aws_eks_cluster.customer_managed, a
+# resource this configuration owns outright, breaks that: the providers depend
+# only on the cluster, and the controllers-then-n8n ordering is free to exist.
+#
+# The values are identical either way. module.n8n's outputs resolve through its
+# own create_eks = false path, which is a data.aws_eks_cluster read of this
+# very cluster.
 
 provider "kubernetes" {
-  host                   = module.n8n.cluster_endpoint
-  cluster_ca_certificate = base64decode(module.n8n.cluster_certificate_authority_data)
+  host                   = aws_eks_cluster.customer_managed.endpoint
+  cluster_ca_certificate = base64decode(aws_eks_cluster.customer_managed.certificate_authority[0].data)
 
   exec {
     api_version = "client.authentication.k8s.io/v1beta1"
     command     = "aws"
-    args        = ["eks", "get-token", "--cluster-name", module.n8n.cluster_name, "--region", var.aws_region]
+    args        = ["eks", "get-token", "--cluster-name", aws_eks_cluster.customer_managed.name, "--region", var.aws_region]
   }
 }
 
 provider "helm" {
   kubernetes = {
-    host                   = module.n8n.cluster_endpoint
-    cluster_ca_certificate = base64decode(module.n8n.cluster_certificate_authority_data)
+    host                   = aws_eks_cluster.customer_managed.endpoint
+    cluster_ca_certificate = base64decode(aws_eks_cluster.customer_managed.certificate_authority[0].data)
 
     exec = {
       api_version = "client.authentication.k8s.io/v1beta1"
       command     = "aws"
-      args        = ["eks", "get-token", "--cluster-name", module.n8n.cluster_name, "--region", var.aws_region]
+      args        = ["eks", "get-token", "--cluster-name", aws_eks_cluster.customer_managed.name, "--region", var.aws_region]
     }
   }
 }

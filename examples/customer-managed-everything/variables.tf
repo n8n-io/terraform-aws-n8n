@@ -2,16 +2,21 @@ variable "aws_region" {
   description = "AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1)."
   type        = string
   default     = "us-east-1"
+  nullable    = false
 }
 
 variable "cluster_name" {
   description = "Name for the EKS cluster. Keep to 14 characters or fewer: the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars."
   type        = string
   default     = "n8n-cluster"
+  nullable    = false
 
+  # Lower bound included: empty passes a bare "<= 14" check and then makes
+  # every identifier this example derives from it malformed, so the failure
+  # would land mid-apply on AWS's naming rules instead of here.
   validation {
-    condition     = length(var.cluster_name) <= 14
-    error_message = "cluster_name must be 14 characters or fewer."
+    condition     = length(var.cluster_name) >= 1 && length(var.cluster_name) <= 14
+    error_message = "cluster_name must be 1-14 characters."
   }
 }
 
@@ -56,6 +61,7 @@ variable "n8n_image_pull_secrets" {
   description = "Names of existing Kubernetes secrets of type kubernetes.io/dockerconfigjson, in the n8n namespace, that the pods authenticate to their image registry with. Leave empty (the default) unless n8n_image_repository points somewhere the node group's IAM role cannot already reach: a public registry and an ECR repository in this account both pull without credentials. Setting it hands ownership of the n8n ServiceAccount from the Helm chart to the module, which is how the secrets reach the pods at all, since the pinned chart renders imagePullSecrets nowhere. Create and rotate the secrets yourself; the module takes names, not credentials, so none of them land in Terraform state. Cross-account ECR is the exception and should not use this: its authorization tokens expire after 12 hours, so add the node group role to the source repository's policy instead."
   type        = list(string)
   default     = []
+  nullable    = false
 
   validation {
     condition = alltrue([
@@ -118,6 +124,11 @@ variable "n8n_custom_extensions_path" {
   }
 
   validation {
+    condition     = var.n8n_custom_extensions_path == null ? true : (var.n8n_custom_extensions_path == "/" || !endswith(var.n8n_custom_extensions_path, "/"))
+    error_message = "n8n_custom_extensions_path must not end in a trailing slash (e.g. \"/opt/n8n-nodes\", not \"/opt/n8n-nodes/\"). Same reason as the canonical-path rule above: the two spellings are the same directory to the container but different strings to the coverage check in n8n.tf, which compares this path against n8n_extra_volume_mounts entries literally."
+  }
+
+  validation {
     condition = var.n8n_custom_extensions_path == null ? true : !(
       var.n8n_custom_extensions_path == "/home/node/.n8n" ||
       startswith(var.n8n_custom_extensions_path, "/home/node/.n8n/")
@@ -130,6 +141,7 @@ variable "n8n_additional_domains" {
   description = "Extra hostnames n8n should answer on, beyond n8n_domain. Each is added to the module-issued ACM certificate as a subject alternative name. Leave empty for a single hostname: this example's own ingress.tf routes one hostname only, so an entry here would be issued a certificate name with no Ingress rule serving it."
   type        = list(string)
   default     = []
+  nullable    = false
 }
 
 variable "n8n_execution_data_storage_mode" {
@@ -148,6 +160,7 @@ variable "tags" {
   description = "Additional AWS tags to apply to every resource this example creates."
   type        = map(string)
   default     = {}
+  nullable    = false
 }
 
 # ── Customer-managed EKS cluster stand-in ────────────────────────────────────
@@ -158,6 +171,7 @@ variable "kubernetes_version" {
   description = "Kubernetes version for the stand-in cluster this example creates, and the value passed to the module's own kubernetes_version input (which the module uses only to warn if it does not match the existing cluster's actual version on the create_eks = false path). Matches the module's own default so the two agree with no extra configuration."
   type        = string
   default     = "1.35"
+  nullable    = false
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+$", var.kubernetes_version))
@@ -169,24 +183,51 @@ variable "customer_managed_node_instance_type" {
   description = "EC2 instance type for the stand-in cluster's node group. Matches the module's own node_instance_type default (t3.xlarge), not a cheaper demo size: the module's own variable description warns that a full multi-main n8n workload (main x2, worker x2, webhook x2 pods at minimum replicas) needs at least this much headroom for HPA to have room to scale."
   type        = string
   default     = "t3.xlarge"
+  nullable    = false
+
+  # Mirrors the module's own node_instance_type validation. These four inputs
+  # feed aws_eks_node_group.customer_managed directly rather than going through
+  # module "n8n", so nothing else in this configuration checks them.
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9]*\\.[a-z0-9]+$", var.customer_managed_node_instance_type))
+    error_message = "customer_managed_node_instance_type must be a valid EC2 instance type (e.g. t3.xlarge, m5.large)."
+  }
 }
 
 variable "customer_managed_node_desired" {
   description = "Initial number of worker nodes in the stand-in node group. Matches examples/small's implicit sizing (the module's own node_desired default). Only applies at creation: the node group's desired_size ignores changes afterward so the Cluster Autoscaler this example installs directly (via module.controllers) can own it without fighting plans/applies."
   type        = number
   default     = 3
+  nullable    = false
+
+  validation {
+    condition     = var.customer_managed_node_desired == floor(var.customer_managed_node_desired) && var.customer_managed_node_desired >= var.customer_managed_node_min && var.customer_managed_node_desired <= var.customer_managed_node_max
+    error_message = "customer_managed_node_desired must be a whole number of nodes within [customer_managed_node_min, customer_managed_node_max]. AWS rejects a managed node group whose desiredSize sits outside its own scaling bounds, and because desired_size only applies at creation, getting it wrong fails the first apply rather than a later one."
+  }
 }
 
 variable "customer_managed_node_min" {
   description = "Minimum number of worker nodes in the stand-in node group. Matches examples/small's implicit sizing (the module's own node_min default)."
   type        = number
   default     = 3
+  nullable    = false
+
+  validation {
+    condition     = var.customer_managed_node_min == floor(var.customer_managed_node_min) && var.customer_managed_node_min >= 1
+    error_message = "customer_managed_node_min must be a whole number of nodes, 1 or greater."
+  }
 }
 
 variable "customer_managed_node_max" {
   description = "Maximum number of worker nodes the Cluster Autoscaler can scale the stand-in node group to. Matches examples/small's implicit sizing (the module's own node_max default)."
   type        = number
   default     = 6
+  nullable    = false
+
+  validation {
+    condition     = var.customer_managed_node_max == floor(var.customer_managed_node_max) && var.customer_managed_node_max >= var.customer_managed_node_min
+    error_message = "customer_managed_node_max must be a whole number of nodes, and at least customer_managed_node_min."
+  }
 }
 
 # ── Customer-managed RDS stand-in ────────────────────────────────────────────
@@ -201,12 +242,14 @@ variable "customer_managed_db_instance_class" {
   description = "RDS instance class for the stand-in database this example creates. Matches the module's own db_instance_class default (db.t3.small); a real customer-managed database would be sized for its own workload."
   type        = string
   default     = "db.t3.small"
+  nullable    = false
 }
 
 variable "customer_managed_db_engine_version" {
   description = "PostgreSQL engine version for the stand-in database this example creates. Matches the module's own db_engine_version default."
   type        = string
   default     = "18.4"
+  nullable    = false
 }
 
 variable "customer_managed_db_password" {
@@ -214,10 +257,19 @@ variable "customer_managed_db_password" {
   type        = string
   sensitive   = true
   default     = "customer-managed-demo-db-password-change-me-1234"
+  nullable    = false
 
   validation {
     condition     = length(var.customer_managed_db_password) >= 8
     error_message = "customer_managed_db_password must be at least 8 characters, the RDS PostgreSQL master password minimum."
+  }
+
+  # RDS bans four characters outright in a master password. Caught here rather
+  # than at apply, where it surfaces as a CreateDBInstance failure after the
+  # rest of the stack has already been planned.
+  validation {
+    condition     = !can(regex("[/\"@ ]", var.customer_managed_db_password))
+    error_message = "customer_managed_db_password must not contain a forward slash, a double quote, an at sign, or a space. RDS rejects all four in a PostgreSQL master password."
   }
 }
 
@@ -231,6 +283,7 @@ variable "customer_managed_redis_node_type" {
   description = "ElastiCache node type for the stand-in replication group this example creates. cache.t3.micro is the cheapest node type that supports encryption in transit; a real customer-managed Redis would be sized for its own workload, not this example's."
   type        = string
   default     = "cache.t3.micro"
+  nullable    = false
 }
 
 variable "customer_managed_redis_auth_token" {
@@ -238,10 +291,21 @@ variable "customer_managed_redis_auth_token" {
   type        = string
   sensitive   = true
   default     = "customer-managed-demo-auth-token-change-me-1234"
+  nullable    = false
 
   validation {
     condition     = length(var.customer_managed_redis_auth_token) >= 16 && length(var.customer_managed_redis_auth_token) <= 128
     error_message = "customer_managed_redis_auth_token must be 16-128 characters, the ElastiCache AUTH token length constraint."
+  }
+
+  # The character set matters as much as the length, and only this validation
+  # catches it at plan time. ElastiCache rejects anything else while creating
+  # the replication group, which is late: by then the plan has already staged
+  # the VPC, the EKS cluster and everything else this example stands up, and
+  # the apply fails on the one resource the example exists to demonstrate.
+  validation {
+    condition     = can(regex("^[A-Za-z0-9!&#$^<>-]+$", var.customer_managed_redis_auth_token))
+    error_message = "customer_managed_redis_auth_token must contain only alphanumerics and the characters ! & # $ ^ < > - , the ElastiCache AUTH token character set. Common choices such as _ @ + / % = are rejected by AWS at create time. https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth.html"
   }
 }
 
@@ -253,4 +317,5 @@ variable "customer_managed_s3_force_destroy" {
   description = "Whether the stand-in bucket this example creates can be destroyed while it still holds objects. true here only so `terraform destroy` doesn't fail on a demo bucket; a real customer-managed bucket's lifecycle, including whether it can be force-destroyed, is that bucket owner's decision, not this module's or this example's."
   type        = bool
   default     = true
+  nullable    = false
 }

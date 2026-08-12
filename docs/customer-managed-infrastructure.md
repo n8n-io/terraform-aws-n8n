@@ -45,6 +45,30 @@ is always knowable at plan time, no matter what expression backs
 `variables.tf`) as the reference implementation: it's the oldest of
 these toggles and the one every later one was modeled on.
 
+The KMS key inputs are the worked example of what the inference costs, and
+of why the boolean is worth its extra line in the interface. `db_kms_key_arn`
+and `s3_kms_key_arn` briefly decided, through an `== null` comparison in a
+`count`, whether the module minted its own Customer Managed Key. That is the
+inference this section argues against, and it had exactly the consequence
+predicted: `db_kms_key_arn = aws_kms_key.mine.arn`, a key created in the same
+configuration, is unknown until apply, so the comparison was unknown, so the
+`count` was unresolvable and the plan failed outright with "The count value
+depends on resource attributes that cannot be determined until apply".
+
+The point worth keeping is *why* the ARN's nullness looked safe. Both inputs
+are plain `string` variables with static defaults, which reads like a
+plan-time-known value. It is not: an input is only as known as the caller's
+expression for it, and nothing stops a caller wiring a resource attribute
+into a plain string variable. Any variable can arrive unknown, so no variable
+is safe to compare against null inside a `count`.
+
+`create_db_kms_key`, `db_logs_kms_key_enabled` and `create_s3_kms_key` are
+the fix: the caller writes a literal boolean, the module gates on that, and
+the ARN beside it is free to be computed. Each pairs with a `validation`
+rejecting the incomplete half (toggle says bring-your-own, no ARN supplied)
+and a `check` warning on the ignored half (ARN supplied, toggle still says
+module-managed), which is the three-part shape at the top of this document.
+
 ## Adding a new customer-managed layer
 
 1. Add the boolean and reference variable(s) to `variables.tf`, following
@@ -151,7 +175,15 @@ that specific resource (a cross-account bucket, a Redis in another
 account entirely), and it only ever proves presence, not that the
 protection is configured the way the caller intends. Where a security
 property genuinely can be checked from the caller's own inputs, this
-module does check it (e.g. warning when `redis_auth_token` is empty on
-the customer-managed Redis path). Where it can't be checked without a
+module does check it. The Redis checks are the shape to copy: they compare
+the caller's own inputs against each other and warn when a supplied
+`redis_auth_token` or `redis_username` will be silently discarded because
+`create_elasticache` is still `true`
+(`redis_auth_token_requires_external_redis`,
+`redis_username_requires_external_redis` in `redis.tf`). Note which direction
+that runs. There is deliberately no warning for an *empty* `redis_auth_token`
+on the `create_elasticache = false` path, because an external Redis that
+accepts unauthenticated connections on a private subnet is a legitimate
+configuration the module has no standing to second-guess. Where it can't be checked without a
 plan-time AWS call, the module documents the expectation instead of
 asserting it.

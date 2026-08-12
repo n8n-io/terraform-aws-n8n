@@ -15,6 +15,101 @@
 # Gating a resource on a `create_*` toggle changes its address from `.n8n` to
 # `.n8n[0]`. Without these, existing deployments plan a destroy and recreate.
 
+# create_eks. Skipped when the caller points the module at a cluster they
+# already run (existing_eks_cluster_name). Every resource below existed
+# unconditionally in every released version, so without these blocks an
+# upgrading deployment plans a destroy and recreate of its own live EKS
+# cluster: the node group and its running pods, the control-plane IAM roles,
+# the Pod Identity Agent addon, and the control-plane log group. Recreating
+# the cluster is also not something AWS would let happen cleanly, since the
+# replacement carries the same name as the one still being destroyed.
+moved {
+  from = aws_iam_role.cluster
+  to   = aws_iam_role.cluster[0]
+}
+
+moved {
+  from = aws_iam_role_policy_attachment.cluster_policy
+  to   = aws_iam_role_policy_attachment.cluster_policy[0]
+}
+
+moved {
+  from = aws_iam_role.nodes
+  to   = aws_iam_role.nodes[0]
+}
+
+moved {
+  from = aws_iam_role_policy_attachment.nodes_worker
+  to   = aws_iam_role_policy_attachment.nodes_worker[0]
+}
+
+moved {
+  from = aws_iam_role_policy_attachment.nodes_cni
+  to   = aws_iam_role_policy_attachment.nodes_cni[0]
+}
+
+moved {
+  from = aws_iam_role_policy_attachment.nodes_ecr
+  to   = aws_iam_role_policy_attachment.nodes_ecr[0]
+}
+
+moved {
+  from = aws_cloudwatch_log_group.eks_cluster
+  to   = aws_cloudwatch_log_group.eks_cluster[0]
+}
+
+moved {
+  from = aws_eks_cluster.n8n
+  to   = aws_eks_cluster.n8n[0]
+}
+
+moved {
+  from = aws_eks_node_group.n8n
+  to   = aws_eks_node_group.n8n[0]
+}
+
+moved {
+  from = aws_eks_addon.pod_identity_agent
+  to   = aws_eks_addon.pod_identity_agent[0]
+}
+
+# No blocks for aws_kms_key.eks / aws_kms_alias.eks: both were already gated on
+# eks_secrets_encryption_enabled before create_eks existed, and the new
+# create_eks conjunct only ever takes an existing [0] to [0] or to nothing.
+
+# create_s3_bucket. Skipped when the caller supplies existing_s3_bucket_name.
+# The bucket holds n8n's binary execution data, so a destroy and recreate here
+# is data loss, not just churn (and would most likely fail first on the
+# bucket name still being taken by the instance being destroyed).
+moved {
+  from = aws_s3_bucket.n8n
+  to   = aws_s3_bucket.n8n[0]
+}
+
+moved {
+  from = aws_s3_bucket_public_access_block.n8n
+  to   = aws_s3_bucket_public_access_block.n8n[0]
+}
+
+# No blocks for aws_kms_key.s3 / aws_kms_alias.s3 /
+# aws_s3_bucket_server_side_encryption_configuration.n8n: same reasoning as the
+# EKS KMS pair above, all three were already count-gated before create_s3_bucket
+# was added to their conditions.
+
+# n8n_encryption_key_secret_ref and db_password_secret_ref. Skipped when the
+# caller points n8n at a Kubernetes Secret they manage themselves rather than
+# letting the module write one. Recreating these would roll the credentials
+# n8n's running pods are mounted against.
+moved {
+  from = kubernetes_secret.n8n
+  to   = kubernetes_secret.n8n[0]
+}
+
+moved {
+  from = kubernetes_secret.n8n_db
+  to   = kubernetes_secret.n8n_db[0]
+}
+
 # create_database (0.2.0). Skipped when the caller supplies an external
 # database, e.g. an Aurora cluster created in the example folder.
 moved {
@@ -142,22 +237,27 @@ moved {
   to   = module.controllers.helm_release.keda[0]
 }
 
-# LBC and Cluster Autoscaler IAM: never previously gated by count (see
-# variables.tf → "Cluster controllers" for why), so these move straight across
-# with no index change.
+# LBC and Cluster Autoscaler IAM: never gated by count at the root, and gated
+# on create_eks || install_<x> inside the submodule (modules/controllers/iam.tf
+# explains why the toggle alone is not enough). Both halves of that change
+# landed in the same unreleased branch, so no released version ever put a
+# consumer on an intermediate address and each of these is one hop straight
+# from the un-indexed root address to the submodule's [0]. On the default path
+# create_eks is true, so the gate is satisfied and [0] is where every existing
+# deployment lands.
 moved {
   from = aws_iam_policy.lbc
-  to   = module.controllers.aws_iam_policy.lbc
+  to   = module.controllers.aws_iam_policy.lbc[0]
 }
 
 moved {
   from = aws_iam_role.lbc
-  to   = module.controllers.aws_iam_role.lbc
+  to   = module.controllers.aws_iam_role.lbc[0]
 }
 
 moved {
   from = aws_iam_role_policy_attachment.lbc
-  to   = module.controllers.aws_iam_role_policy_attachment.lbc
+  to   = module.controllers.aws_iam_role_policy_attachment.lbc[0]
 }
 
 # Combined with the controllers-submodule extraction move below: this
@@ -173,17 +273,17 @@ moved {
 
 moved {
   from = aws_iam_policy.cluster_autoscaler
-  to   = module.controllers.aws_iam_policy.cluster_autoscaler
+  to   = module.controllers.aws_iam_policy.cluster_autoscaler[0]
 }
 
 moved {
   from = aws_iam_role.cluster_autoscaler
-  to   = module.controllers.aws_iam_role.cluster_autoscaler
+  to   = module.controllers.aws_iam_role.cluster_autoscaler[0]
 }
 
 moved {
   from = aws_iam_role_policy_attachment.cluster_autoscaler
-  to   = module.controllers.aws_iam_role_policy_attachment.cluster_autoscaler
+  to   = module.controllers.aws_iam_role_policy_attachment.cluster_autoscaler[0]
 }
 
 # Same reasoning as the lbc moved block above: no released version ever had
@@ -193,24 +293,29 @@ moved {
   to   = module.controllers.aws_eks_pod_identity_association.cluster_autoscaler[0]
 }
 
-# EBS CSI driver: already gated on create_ebs_csi before this extraction, so
-# the index carries straight across.
+# EBS CSI driver: create_ebs_csi is new in this same unreleased branch, so
+# these four were un-indexed root resources in every released version, not
+# already-gated ones. Sourcing them from [0] would have matched nothing in any
+# real state file and left the un-indexed originals to be destroyed and
+# recreated inside the submodule, taking the addon and the default gp3
+# StorageClass with them. One hop from the un-indexed address for the same
+# reason as the LBC/Cluster Autoscaler blocks above.
 moved {
-  from = aws_eks_addon.ebs_csi[0]
+  from = aws_eks_addon.ebs_csi
   to   = module.controllers.aws_eks_addon.ebs_csi[0]
 }
 
 moved {
-  from = aws_iam_role.ebs_csi[0]
+  from = aws_iam_role.ebs_csi
   to   = module.controllers.aws_iam_role.ebs_csi[0]
 }
 
 moved {
-  from = aws_iam_role_policy_attachment.ebs_csi[0]
+  from = aws_iam_role_policy_attachment.ebs_csi
   to   = module.controllers.aws_iam_role_policy_attachment.ebs_csi[0]
 }
 
 moved {
-  from = kubernetes_storage_class_v1.gp3[0]
+  from = kubernetes_storage_class_v1.gp3
   to   = module.controllers.kubernetes_storage_class_v1.gp3[0]
 }

@@ -11,9 +11,16 @@
 # more robust than parsing the hostname (whose format varies between LBC
 # versions). wait_for_load_balancer = true on the Ingress guarantees the ALB
 # exists by the time this evaluates.
+#
+# The cluster tag is the stand-in cluster's own name, not var.cluster_name.
+# LBC stamps elbv2.k8s.aws/cluster with whatever clusterName it was installed
+# with, and module.controllers installs it with eks_cluster_name =
+# aws_eks_cluster.customer_managed.name (main.tf), which is
+# "${var.cluster_name}-cm". Keyed on var.cluster_name this data source matches
+# no load balancer at all and the apply fails here rather than at the record.
 data "aws_lb" "n8n" {
   tags = {
-    "elbv2.k8s.aws/cluster" = var.cluster_name
+    "elbv2.k8s.aws/cluster" = aws_eks_cluster.customer_managed.name
     "ingress.k8s.aws/stack" = "${module.n8n.namespace}/n8n-ingress"
   }
 

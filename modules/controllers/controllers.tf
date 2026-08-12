@@ -33,10 +33,19 @@ resource "helm_release" "lbc" {
       value = var.vpc_id
     },
     # Prevent the LBC validating webhook from blocking Ingress deletions when
-    # LBC pods are unhealthy during destroy. With failurePolicy=Ignore, the
-    # webhook is best-effort — if LBC can't respond, the API server proceeds.
+    # LBC pods are unhealthy during destroy. With the policy set to Ignore the
+    # webhook is best-effort: if LBC can't respond, the API server proceeds.
+    #
+    # The key really is spelled "ingressValdationFailurePolicy", missing an
+    # "i". That typo is upstream's, in the chart's own values.yaml (verified
+    # against aws-load-balancer-controller chart 3.5.0, this module's
+    # lbc_chart_version default), and the template reads only that spelling.
+    # Helm silently accepts unknown --set paths, so the corrected spelling
+    # applies cleanly and does nothing, leaving the webhook on its chart
+    # default of Fail. Keep this matching whatever the pinned chart version
+    # actually reads when bumping lbc_chart_version.
     {
-      name  = "webhookConfig.failurePolicy"
+      name  = "webhookConfig.ingressValdationFailurePolicy"
       value = "Ignore"
     },
   ]

@@ -28,10 +28,12 @@ mock_provider "aws" {
   # directly, which a `command = plan` run can't do with an unknown value.
   # override_during = plan is required: without it, an override_resource
   # block only applies during apply (the default), and silently has no effect
-  # on a plan-only run. override_during needs Terraform >= 1.11 (confirmed
-  # against hashicorp/terraform#36312, which introduced it targeting v1.11);
-  # this repo's CI is pinned above that floor specifically so this block
-  # works (see terraform-tests.yml). command = apply is not a substitute at
+  # on a plan-only run. override_during needs Terraform >= 1.11: the
+  # attribute was added by hashicorp/terraform#36227 and shipped in v1.11
+  # (#36312 is only the docs update for it, and is the wrong thing to cite
+  # when tracing the requirement). This example's own versions.tf declares
+  # that floor, and CI's single pinned Terraform version sits above it (see
+  # terraform-tests.yml). command = apply is not a substitute at
   # any Terraform version: this example still creates a real EKS cluster
   # (create_eks defaults to true here), and a full mocked apply makes every
   # computed AWS attribute in that graph, not just this one, come back as a

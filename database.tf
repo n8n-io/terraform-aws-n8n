@@ -15,12 +15,22 @@ resource "random_password" "db_password" {
 # encryption triggers (AWS does not support flipping storage_encrypted in
 # place — see README.md → "Upgrading from a pre-CMK apply").
 #
-# Also gated on var.db_kms_key_arn == null: when a caller supplies their own
-# KMS key (e.g. a centrally-managed CMK a security team already owns), the
-# module must not mint a second one. Both var.db_storage_encrypted and
-# var.db_kms_key_arn are plan-time-known static inputs, not values computed
-# from a resource, so this stays a valid count expression under the same
-# reasoning as create_database / create_elasticache elsewhere in this module.
+# Also gated on var.create_db_kms_key: when a caller supplies their own KMS key
+# (e.g. a centrally-managed CMK a security team already owns), the module must
+# not mint a second one.
+#
+# The toggle is a boolean rather than `var.db_kms_key_arn == null`, even though
+# the ARN's nullness looks like it carries the same information. It does not,
+# for count purposes. An input is only plan-time-known if the *caller's*
+# expression for it is, and `db_kms_key_arn = aws_kms_key.mine.arn` is a
+# perfectly reasonable thing to write and completely unknown until apply.
+# Comparing that to null yields an unknown, and an unknown count fails the plan
+# outright with "The count value depends on resource attributes that cannot be
+# determined until apply". A boolean the caller writes as a literal sidesteps
+# it, and lets the ARN beside it be computed. Same reasoning as
+# create_database / create_elasticache elsewhere in this module; see
+# docs/customer-managed-infrastructure.md → "Why a static boolean, not
+# `x == null` inference".
 #
 # enable_key_rotation     = true → annual rotation, no operator action.
 # deletion_window_in_days = 7    → AWS minimum so `terraform destroy` recycles
@@ -51,7 +61,7 @@ locals {
   # null-passthrough contract and the db_kms_key_arn check block further down
   # telling the caller their key was unused.
   db_kms_key_arn = var.db_storage_encrypted ? (
-    var.db_kms_key_arn != null ? var.db_kms_key_arn : try(aws_kms_key.db[0].arn, null)
+    var.create_db_kms_key ? try(aws_kms_key.db[0].arn, null) : var.db_kms_key_arn
   ) : null
 
   # The postgresql log group's key, deliberately not local.db_kms_key_arn.
@@ -66,12 +76,12 @@ locals {
   # AWS-managed encryption unless the caller opts in by setting
   # db_logs_kms_key_arn, which is their assertion that the key can be used.
   db_logs_kms_key_arn = var.db_storage_encrypted ? (
-    var.db_kms_key_arn != null ? var.db_logs_kms_key_arn : try(aws_kms_key.db[0].arn, null)
+    var.create_db_kms_key ? try(aws_kms_key.db[0].arn, null) : (var.db_logs_kms_key_enabled ? var.db_logs_kms_key_arn : null)
   ) : null
 }
 
 resource "aws_kms_key" "db" {
-  count = var.create_database && var.db_storage_encrypted && var.db_kms_key_arn == null ? 1 : 0
+  count = var.create_database && var.db_storage_encrypted && var.create_db_kms_key ? 1 : 0
 
   description             = "CMK for module-managed RDS ${local.cluster_name} (storage + Performance Insights + postgresql logs)"
   enable_key_rotation     = true
@@ -112,7 +122,7 @@ resource "aws_kms_key" "db" {
 }
 
 resource "aws_kms_alias" "db" {
-  count = var.create_database && var.db_storage_encrypted && var.db_kms_key_arn == null ? 1 : 0
+  count = var.create_database && var.db_storage_encrypted && var.create_db_kms_key ? 1 : 0
 
   name_prefix   = "alias/n8n-rds-${local.cluster_name}-"
   target_key_id = aws_kms_key.db[0].key_id
@@ -142,13 +152,13 @@ resource "aws_kms_alias" "db" {
 # the key actually reaches a resource.
 
 data "aws_kms_key" "db_byo" {
-  count = var.create_database && var.db_storage_encrypted && var.db_kms_key_arn != null ? 1 : 0
+  count = var.create_database && var.db_storage_encrypted && !var.create_db_kms_key ? 1 : 0
 
   key_id = var.db_kms_key_arn
 }
 
 data "aws_kms_key" "db_logs_byo" {
-  count = var.create_database && var.db_storage_encrypted && var.db_kms_key_arn != null && var.db_logs_kms_key_arn != null ? 1 : 0
+  count = var.create_database && var.db_storage_encrypted && !var.create_db_kms_key && var.db_logs_kms_key_enabled ? 1 : 0
 
   key_id = var.db_logs_kms_key_arn
 }
@@ -548,13 +558,15 @@ check "db_backup_retention_disabled" {
 check "db_kms_key_arn_requires_module_managed_encrypted_database" {
   assert {
     condition = var.db_kms_key_arn != null ? (
-      var.create_database && var.db_storage_encrypted
+      var.create_database && var.db_storage_encrypted && !var.create_db_kms_key
     ) : true
     error_message = join("", [
       "db_kms_key_arn is set but ignored: it only encrypts a module-managed RDS instance ",
-      "(create_database = true) with storage encryption enabled (db_storage_encrypted = true). ",
-      "With create_database = false the module creates no RDS instance to encrypt; with ",
-      "db_storage_encrypted = false the instance is left unencrypted and no KMS key of any kind is used.",
+      "(create_database = true) with storage encryption enabled (db_storage_encrypted = true) and the ",
+      "module's own CMK turned off (create_db_kms_key = false). With create_database = false the module ",
+      "creates no RDS instance to encrypt; with db_storage_encrypted = false the instance is left ",
+      "unencrypted and no KMS key of any kind is used; with create_db_kms_key left at its default the ",
+      "module mints and uses its own key and never reads this ARN.",
     ])
   }
 }
@@ -562,14 +574,14 @@ check "db_kms_key_arn_requires_module_managed_encrypted_database" {
 check "db_logs_kms_key_arn_requires_db_kms_key_arn" {
   assert {
     condition = var.db_logs_kms_key_arn != null ? (
-      var.db_kms_key_arn != null && var.create_database && var.db_storage_encrypted
+      var.db_logs_kms_key_enabled && var.create_database && var.db_storage_encrypted
     ) : true
     error_message = join("", [
-      "db_logs_kms_key_arn is set but ignored: it only applies on the bring-your-own-key path, where ",
-      "db_kms_key_arn supplies a key the module did not create (and where create_database = true and ",
-      "db_storage_encrypted = true, so a log group and a CMK both exist). With db_kms_key_arn left null the ",
-      "module creates its own CMK, already carrying the CloudWatch Logs statement, and encrypts the postgresql ",
-      "log group with it.",
+      "db_logs_kms_key_arn is set but ignored: it only applies on the bring-your-own-key path, with ",
+      "db_logs_kms_key_enabled = true to opt the log group onto it (and with create_database = true and ",
+      "db_storage_encrypted = true, so a log group and a CMK both exist). Setting the ARN alone changes ",
+      "nothing. With create_db_kms_key left at its default the module creates its own CMK, already carrying ",
+      "the CloudWatch Logs statement, and encrypts the postgresql log group with it.",
     ])
   }
 }
@@ -659,8 +671,8 @@ check "db_byo_kms_key_regions_match" {
 
 check "db_kms_key_arn_does_not_encrypt_postgresql_logs" {
   assert {
-    condition = (var.create_database && var.db_storage_encrypted && var.db_kms_key_arn != null) ? (
-      var.db_logs_kms_key_arn != null
+    condition = (var.create_database && var.db_storage_encrypted && !var.create_db_kms_key) ? (
+      var.db_logs_kms_key_enabled
     ) : true
     error_message = join("", [
       "db_kms_key_arn encrypts the RDS instance's storage and Performance Insights data, but NOT the postgresql ",
@@ -668,7 +680,8 @@ check "db_kms_key_arn_does_not_encrypt_postgresql_logs" {
       "key whose policy does not name logs.${local.aws_region}.amazonaws.com, and no data source lets the module ",
       "check whether yours does, so it does not assume it. To put the log group on your key too: add the ",
       "AllowCloudWatchLogsEncrypt statement from README.md -> \"Bring your own KMS key for RDS\" to the key ",
-      "policy, then set db_logs_kms_key_arn to the same ARN. Nothing is unencrypted either way.",
+      "policy, then set db_logs_kms_key_arn to the same ARN and db_logs_kms_key_enabled = true. Nothing is ",
+      "unencrypted either way.",
     ])
   }
 }
