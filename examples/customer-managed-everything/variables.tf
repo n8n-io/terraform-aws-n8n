@@ -189,7 +189,7 @@ variable "customer_managed_node_instance_type" {
   # feed aws_eks_node_group.customer_managed directly rather than going through
   # module "n8n", so nothing else in this configuration checks them.
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]*\\.[a-z0-9-]+$", var.customer_managed_node_instance_type))
+    condition     = can(regex("^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z0-9]+(-[a-z0-9]+)*$", var.customer_managed_node_instance_type))
     error_message = "customer_managed_node_instance_type must be a valid EC2 instance type (e.g. t3.xlarge, m5.large)."
   }
 }

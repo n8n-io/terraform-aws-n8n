@@ -4589,7 +4589,10 @@ run "external_secrets_aws_grant_disabled_by_default" {
   command = plan
 
   assert {
-    condition     = length(aws_iam_policy.external_secrets) == 0 && length(aws_iam_role_policy_attachment.external_secrets) == 0
+    condition = (
+      length(aws_iam_policy.external_secrets) == 0 && length(aws_iam_role_policy_attachment.external_secrets) == 0 &&
+      length(aws_iam_policy.external_secrets_kms) == 0 && length(aws_iam_role_policy_attachment.external_secrets_kms) == 0
+    )
     error_message = "n8n_external_secrets_aws_enabled = false must create no IAM policy and no attachment, so an existing deployment plans unchanged"
   }
 }
@@ -4603,13 +4606,19 @@ run "external_secrets_aws_grant_enabled_creates_the_expected_policy_shape" {
   }
 
   assert {
-    condition     = length(aws_iam_policy.external_secrets) == 1 && length(aws_iam_role_policy_attachment.external_secrets) == 1
-    error_message = "n8n_external_secrets_aws_enabled = true must create exactly one policy and one attachment"
+    condition = (
+      length(aws_iam_policy.external_secrets) == 1 && length(aws_iam_role_policy_attachment.external_secrets) == 1 &&
+      length(aws_iam_policy.external_secrets_kms) == 1 && length(aws_iam_role_policy_attachment.external_secrets_kms) == 1
+    )
+    error_message = "n8n_external_secrets_aws_enabled = true must create exactly one Secrets Manager policy, one KMS policy, and one attachment each"
   }
 
   assert {
-    condition     = aws_iam_role_policy_attachment.external_secrets[0].role == aws_iam_role.s3.name
-    error_message = "The External Secrets policy must attach to the same Pod Identity role S3 already uses, not a second role"
+    condition = (
+      aws_iam_role_policy_attachment.external_secrets[0].role == aws_iam_role.s3.name &&
+      aws_iam_role_policy_attachment.external_secrets_kms[0].role == aws_iam_role.s3.name
+    )
+    error_message = "Both the External Secrets policy and its KMS policy must attach to the same Pod Identity role S3 already uses, not a second role"
   }
 
   assert {
@@ -4631,26 +4640,30 @@ run "external_secrets_aws_grant_enabled_creates_the_expected_policy_shape" {
     error_message = "GetSecretValue must be scoped to exactly the resolved ARNs of the named secrets, never a wildcard"
   }
 
+  assert {
+    condition = (
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[2].Effect == "Deny" &&
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[2].Condition.StringEquals["aws:ResourceTag/ManagedBy"] == "terraform"
+    )
+    error_message = "The policy must carry an explicit Deny on anything tagged ManagedBy = terraform, so the grant can never widen to cover a module-managed secret"
+  }
+
   # Without this statement an allow-listed secret encrypted with a customer
   # managed KMS key is unreadable: Secrets Manager decrypts as the calling
   # principal, so GetSecretValue fails on kms:Decrypt regardless of the
-  # secret's own policy. The ViaService condition is what keeps the wildcard
-  # resource honest, so it is asserted rather than just the action.
+  # secret's own policy. Lives in its own policy document (external_secrets_kms),
+  # not as a fourth statement on aws_iam_policy.external_secrets above, so the
+  # allow-listed ARNs embedded here (via kms:EncryptionContext:SecretARN) don't
+  # count against the same 6,144-character policy-size cap as the ARNs already
+  # embedded in that policy's own GetSecretValue statement.
   assert {
     condition = (
-      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[2].Effect == "Allow" &&
-      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[2].Action == ["kms:Decrypt"] &&
-      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[2].Condition.StringEquals["kms:ViaService"] == "secretsmanager.us-east-1.amazonaws.com"
+      jsondecode(aws_iam_policy.external_secrets_kms[0].policy).Statement[0].Effect == "Allow" &&
+      jsondecode(aws_iam_policy.external_secrets_kms[0].policy).Statement[0].Action == ["kms:Decrypt"] &&
+      jsondecode(aws_iam_policy.external_secrets_kms[0].policy).Statement[0].Condition.StringEquals["kms:ViaService"] == "secretsmanager.us-east-1.amazonaws.com" &&
+      jsondecode(aws_iam_policy.external_secrets_kms[0].policy).Statement[0].Condition.StringEquals["kms:EncryptionContext:SecretARN"] == ["arn:aws:secretsmanager:us-east-1:123456789012:secret:mock-AbCdEf"]
     )
-    error_message = "The policy must grant kms:Decrypt scoped by kms:ViaService to Secrets Manager in this region, or a CMK-encrypted allow-listed secret returns AccessDenied at runtime"
-  }
-
-  assert {
-    condition = (
-      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[3].Effect == "Deny" &&
-      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[3].Condition.StringEquals["aws:ResourceTag/ManagedBy"] == "terraform"
-    )
-    error_message = "The policy must carry an explicit Deny on anything tagged ManagedBy = terraform, so the grant can never widen to cover a module-managed secret"
+    error_message = "The KMS policy must grant kms:Decrypt scoped by kms:ViaService AND kms:EncryptionContext:SecretARN pinned to the resolved allow-list, or a CMK-encrypted allow-listed secret returns AccessDenied at runtime, or KMS enforces a wider boundary than GetSecretValue's own Resource list does"
   }
 }
 

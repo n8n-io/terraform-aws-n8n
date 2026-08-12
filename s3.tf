@@ -279,6 +279,57 @@ resource "aws_iam_policy" "external_secrets" {
         Resource = [for s in data.aws_secretsmanager_secret.external_secrets : s.arn]
       },
       {
+        # This module keeps its own secrets (DB password, Redis AUTH token,
+        # N8N_ENCRYPTION_KEY, task runner token, licence key) in Kubernetes
+        # Secrets, never in AWS Secrets Manager, so nothing in this account
+        # carries the ManagedBy = terraform tag from local.common_tags today
+        # and this statement matches zero resources. It is written anyway,
+        # unconditionally, because an explicit Deny costs nothing to hold in
+        # reserve and beats every Allow, including a wildcard some other
+        # policy attaches to this role later: if the module ever gains an
+        # AWS-Secrets-Manager-backed credential of its own, this statement is
+        # what keeps a workflow builder's vault connection from reading it,
+        # with no change required here.
+        Effect   = "Deny"
+        Action   = ["secretsmanager:GetSecretValue", "secretsmanager:BatchGetSecretValue"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/ManagedBy" = "terraform"
+          }
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "external_secrets" {
+  count = var.n8n_external_secrets_aws_enabled ? 1 : 0
+
+  role       = aws_iam_role.s3.name
+  policy_arn = aws_iam_policy.external_secrets[0].arn
+}
+
+# Separate managed policy for the KMS grant below, rather than a fourth
+# statement on aws_iam_policy.external_secrets above. Both policies embed the
+# same resolved secret ARNs once each (the GetSecretValue Resource list there,
+# the kms:EncryptionContext:SecretARN condition value here), and a customer
+# managed policy is capped at 6,144 characters. Combined into one document,
+# every allow-listed secret's ARN would count against that cap twice; split,
+# each policy only carries its own copy, which roughly doubles how many
+# secrets n8n_external_secrets_aws_secret_names can actually hold before an
+# apply fails on policy size instead of failing at plan time on something
+# this module can check for itself.
+resource "aws_iam_policy" "external_secrets_kms" {
+  count = var.n8n_external_secrets_aws_enabled ? 1 : 0
+
+  name = "n8n-external-secrets-kms-policy-${local.cluster_name}"
+  tags = local.common_tags
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
         # Without this, an allow-listed secret encrypted with a customer
         # managed KMS key is unreadable: Secrets Manager decrypts through the
         # *caller's* credentials, so GetSecretValue on such a secret fails
@@ -316,36 +367,15 @@ resource "aws_iam_policy" "external_secrets" {
           }
         }
       },
-      {
-        # This module keeps its own secrets (DB password, Redis AUTH token,
-        # N8N_ENCRYPTION_KEY, task runner token, licence key) in Kubernetes
-        # Secrets, never in AWS Secrets Manager, so nothing in this account
-        # carries the ManagedBy = terraform tag from local.common_tags today
-        # and this statement matches zero resources. It is written anyway,
-        # unconditionally, because an explicit Deny costs nothing to hold in
-        # reserve and beats every Allow, including a wildcard some other
-        # policy attaches to this role later: if the module ever gains an
-        # AWS-Secrets-Manager-backed credential of its own, this statement is
-        # what keeps a workflow builder's vault connection from reading it,
-        # with no change required here.
-        Effect   = "Deny"
-        Action   = ["secretsmanager:GetSecretValue", "secretsmanager:BatchGetSecretValue"]
-        Resource = "*"
-        Condition = {
-          StringEquals = {
-            "aws:ResourceTag/ManagedBy" = "terraform"
-          }
-        }
-      },
     ]
   })
 }
 
-resource "aws_iam_role_policy_attachment" "external_secrets" {
+resource "aws_iam_role_policy_attachment" "external_secrets_kms" {
   count = var.n8n_external_secrets_aws_enabled ? 1 : 0
 
   role       = aws_iam_role.s3.name
-  policy_arn = aws_iam_policy.external_secrets[0].arn
+  policy_arn = aws_iam_policy.external_secrets_kms[0].arn
 }
 
 # Best-effort plan-time echo of the Deny statement above. ListSecrets' own

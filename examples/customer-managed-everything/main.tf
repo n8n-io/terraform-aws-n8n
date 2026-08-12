@@ -276,14 +276,6 @@ resource "aws_db_instance" "customer_managed" {
   # with db_name = "n8n" until an end-to-end apply of this example surfaced
   # the mismatch, which no plan-time check catches because the module has no
   # way to inspect what database actually exists inside a caller-supplied host.
-  # Must be n8n_enterprise, not a more example-flavored name: the module
-  # hardcodes the database it connects to (n8n.tf, database = "n8n_enterprise")
-  # regardless of create_database, so a BYO database's initial database has to
-  # carry this exact name or every n8n pod fails at startup with "database
-  # \"n8n_enterprise\" does not exist". Confirmed live: this stand-in shipped
-  # with db_name = "n8n" until an end-to-end apply of this example surfaced
-  # the mismatch, which no plan-time check catches because the module has no
-  # way to inspect what database actually exists inside a caller-supplied host.
   db_name  = "n8n_enterprise"
   username = "n8n"
   password = var.customer_managed_db_password

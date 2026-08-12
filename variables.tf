@@ -480,7 +480,7 @@ variable "node_instance_type" {
   nullable    = false
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]*\\.[a-z0-9-]+$", var.node_instance_type))
+    condition     = can(regex("^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z0-9]+(-[a-z0-9]+)*$", var.node_instance_type))
     error_message = "Value must be a valid EC2 instance type (e.g. t3.xlarge, m5.large)."
   }
 }
