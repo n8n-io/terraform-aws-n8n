@@ -315,10 +315,10 @@ variable "n8n_encryption_key_secret_ref" {
     error_message = "Both n8n_encryption_key and n8n_encryption_key_secret_ref are set. Only one may supply the encryption key: remove n8n_encryption_key to consume the referenced Secret, or remove n8n_encryption_key_secret_ref to keep passing the value directly."
   }
 
-  # Written as a nested ternary rather than `== null ||`: Terraform 1.9, which
-  # CI pins, does not short-circuit `||`, so an unconditional `.key` access
-  # would still be attempted, and error, when the variable itself is null. See
-  # AGENTS.md.
+  # Written as a nested ternary rather than `== null ||`, per AGENTS.md's
+  # consistency rule for guard-style conditions: the null guard gates the
+  # `.key` access structurally rather than relying on short-circuit
+  # evaluation.
   validation {
     condition     = var.n8n_encryption_key_secret_ref == null ? true : coalesce(var.n8n_encryption_key_secret_ref.key, "N8N_ENCRYPTION_KEY") == "N8N_ENCRYPTION_KEY"
     error_message = "n8n_encryption_key_secret_ref.key must be \"N8N_ENCRYPTION_KEY\" or unset. The chart's coreSecretsEnv helper reads this exact key name from secretRefs.existingSecret and takes no override, unlike the other three secret-reference inputs, whose key the chart does honor."
@@ -1669,10 +1669,10 @@ variable "redis_username" {
 
   # Blank is rejected as well as null, for the same reason redis_host rejects it:
   # an empty string satisfies "is set" and then reaches n8n and KEDA as an empty
-  # username, which authenticates as nobody. Nested ternaries rather than `&&`
-  # because Terraform 1.9 does not short-circuit and trimspace(null) is a hard
-  # error, so the null test has to gate the blank test structurally. See
-  # AGENTS.md.
+  # username, which authenticates as nobody. Nested ternaries rather than `&&`,
+  # per AGENTS.md's consistency rule for guard-style conditions: the null test
+  # gates the blank test structurally (trimspace(null) is a hard error) rather
+  # than relying on short-circuit evaluation.
   validation {
     condition     = var.redis_username != null ? trimspace(var.redis_username) != "" : true
     error_message = "redis_username must not be blank. Leave it null to authenticate as Redis's default user."

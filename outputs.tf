@@ -42,7 +42,7 @@ output "n8n_url" {
 # Both values are sensitive — retrieve them with terraform output -raw <name>
 
 output "n8n_encryption_key" {
-  description = "n8n encryption key, back this up in a password manager. Losing it makes all stored credentials unreadable. Also the value to pass as var.n8n_encryption_key when restoring this database (e.g. an RDS snapshot) into a new stack, so the new deployment can still decrypt it."
+  description = "n8n encryption key, back this up in a password manager. Losing it makes all stored credentials unreadable. Also the value to pass as var.n8n_encryption_key when restoring this database (e.g. an RDS snapshot) into a new stack, so the new deployment can still decrypt it. Null when n8n_encryption_key_secret_ref is set: the key then lives in a Secret the module never reads, so backing it up is the owner of that Secret's job."
   value       = local.n8n_encryption_key
   sensitive   = true
 }

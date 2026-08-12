@@ -7,13 +7,17 @@
 # dependency at plan time and works in air-gapped environments.
 # Source: https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v3.2.1/docs/install/iam_policy.json
 #
-# Deliberately NOT gated on var.install_lbc: an externally-installed LBC (e.g.
-# one a platform team manages through GitOps, the case install_lbc = false
-# documents) still needs an IAM role bound via Pod Identity to the same
-# aws-load-balancer-controller ServiceAccount in kube-system, and this module
-# has no way to tell whether that external install already brought its own.
-# install_lbc only controls whether this submodule installs the *chart*; it
-# always provisions the credential wiring a standard-named install expects.
+# Everything below is gated on `create_eks || install_lbc`, not on install_lbc
+# alone: install_lbc only controls whether this submodule installs the *chart*,
+# while the credential wiring follows the compound gate. On a freshly created
+# cluster (create_eks = true) an externally-installed LBC (e.g. one a platform
+# team manages through GitOps, the case install_lbc = false documents) still
+# gets the IAM role bound via Pod Identity to the standard-named
+# aws-load-balancer-controller ServiceAccount in kube-system. Only when both
+# are false is the wiring skipped entirely, because the existing cluster may
+# already carry that ServiceAccount's association. See the comment above
+# aws_iam_policy.lbc for the full reasoning, and the association's own comment
+# for the create_eks = false collision it avoids.
 
 data "aws_iam_policy_document" "lbc" {
   # checkov:skip=CKV_AWS_111:Verbatim transcription of the upstream AWS Load Balancer Controller IAM policy (source URL above). Narrowing actions/resources diverges from the AWS-maintained policy and risks breaking the controller; track upstream for tightening instead.
