@@ -28,20 +28,24 @@ Features we may want to address along the way:
 - Custom ENV variables via templates (SSO, Owner, etc.). The variables
   themselves are documented; what is missing is a worked example in
   `examples/`, so this stays open until one lands.
-- Bring your own Secrets Manager. Scoped on 2026-08-05 to n8n's own External
-  Secrets feature: workflow credentials resolved from a vault at runtime, which
-  is Enterprise-gated and inert on Community. The module's part is the IAM
-  policy and the Pod Identity wiring that let n8n reach AWS Secrets Manager
-  without a static access key, plus a boundary that keeps the module's own
-  credentials out of reach. The vault connection itself is created in the n8n
-  UI and cannot be set from Terraform. Sourcing the module's own credentials
-  (encryption key, DB password, Redis token, licence key) from Secrets Manager
-  is a separate question and is not part of this item.
 
 ## Already shipped
 
 Previously listed as candidates, now covered by the module or by n8n itself:
 
+- **Bring your own Secrets Manager**, at the scope this item was narrowed to on
+  2026-08-05: n8n's own External Secrets feature, workflow credentials resolved
+  from a vault at runtime, which is Enterprise-gated and inert on Community.
+  `n8n_external_secrets_enabled` and `n8n_external_secrets_update_interval`
+  drive the feature itself; `n8n_external_secrets_aws_enabled` and
+  `n8n_external_secrets_aws_secret_names` add the IAM policy and Pod Identity
+  wiring that let n8n reach AWS Secrets Manager without a static access key,
+  with an explicit, wildcard-free allow-list as the boundary (n8n's AWS
+  provider has no server-side filter of its own, so IAM is the only one). The
+  vault connection itself is still created in the n8n UI and cannot be set from
+  Terraform. Sourcing the module's *own* credentials (encryption key, DB
+  password, Redis token, licence key) from Secrets Manager was never part of
+  this item and remains out of scope.
 - **Install community packages via API.** `n8n_reinstall_missing_packages`,
   `n8n_community_packages_registry` and
   `n8n_community_packages_prevent_loading` expose the relevant n8n settings,

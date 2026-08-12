@@ -3414,6 +3414,72 @@ run "redis_username_rejects_a_padded_value" {
   expect_failures = [var.redis_username]
 }
 
+# redis_key_prefix: N8N_REDIS_KEY_PREFIX/QUEUE_BULL_PREFIX/KEDA listName all
+# live inside helm_release.n8n's single yamlencode'd values string (like the
+# OTEL block above), so these assert at the variable/local contract level
+# rather than parsing that string.
+run "redis_key_prefix_defaults_to_null_and_keeps_bulls_own_prefix" {
+  command = plan
+
+  assert {
+    condition     = var.redis_key_prefix == null
+    error_message = "redis_key_prefix must default to null: n8n and Bull keep their own default prefixes unless a caller opts in."
+  }
+
+  assert {
+    condition     = local.redis_key_prefix_value == "bull"
+    error_message = "local.redis_key_prefix_value must fall back to Bull's own default prefix (\"bull\") when redis_key_prefix is null, so the KEDA listName values stay byte-identical to before this variable existed."
+  }
+}
+
+run "redis_key_prefix_resolves_into_the_shared_local" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = "redis.example.internal"
+    redis_key_prefix   = "tenant-a"
+  }
+
+  assert {
+    condition     = local.redis_key_prefix_value == "tenant-a"
+    error_message = "local.redis_key_prefix_value must resolve to the caller-supplied prefix, which n8n.tf's env var, redis.prefix, and both KEDA listName values all read from"
+  }
+}
+
+run "redis_key_prefix_rejects_a_blank_value" {
+  command = plan
+
+  variables {
+    redis_key_prefix = "   "
+  }
+
+  expect_failures = [var.redis_key_prefix]
+}
+
+run "redis_key_prefix_rejects_a_colon" {
+  command = plan
+
+  variables {
+    # ":" is n8n's and Bull's own key-segment delimiter (e.g.
+    # "<prefix>:n8n.commands"), so a prefix containing one would produce a
+    # confusing or malformed key namespace rather than a clean second segment.
+    redis_key_prefix = "tenant:a"
+  }
+
+  expect_failures = [var.redis_key_prefix]
+}
+
+run "redis_key_prefix_rejects_whitespace" {
+  command = plan
+
+  variables {
+    redis_key_prefix = "tenant a"
+  }
+
+  expect_failures = [var.redis_key_prefix]
+}
+
 run "redis_mode_tuning_ignored_on_external_redis_warns" {
   command = plan
 
@@ -4509,13 +4575,17 @@ run "external_secrets_allow_list_check_fires_on_intersection" {
 run "pod_identity_bindings_use_correct_service_accounts" {
   command = plan
 
+  # create_eks and install_lbc/install_cluster_autoscaler are all left at
+  # their true defaults on this run, so both associations exist (count = 1)
+  # and [0] is safe; see the create_eks_false_* runs below for the skipped
+  # (count = 0) case this compound gate exists for.
   assert {
-    condition     = module.controllers.lbc_pod_identity_association.namespace == "kube-system"
+    condition     = module.controllers.lbc_pod_identity_association[0].namespace == "kube-system"
     error_message = "LBC pod identity binding must target kube-system"
   }
 
   assert {
-    condition     = module.controllers.lbc_pod_identity_association.service_account == "aws-load-balancer-controller"
+    condition     = module.controllers.lbc_pod_identity_association[0].service_account == "aws-load-balancer-controller"
     error_message = "LBC pod identity must bind to the aws-load-balancer-controller SA"
   }
 
@@ -4525,7 +4595,7 @@ run "pod_identity_bindings_use_correct_service_accounts" {
   }
 
   assert {
-    condition     = module.controllers.cluster_autoscaler_pod_identity_association.service_account == "cluster-autoscaler"
+    condition     = module.controllers.cluster_autoscaler_pod_identity_association[0].service_account == "cluster-autoscaler"
     error_message = "Cluster autoscaler pod identity must bind to the cluster-autoscaler SA"
   }
 }
@@ -7509,6 +7579,16 @@ run "install_lbc_false_creates_no_lbc_release" {
     condition     = length(module.controllers.lbc_helm_release) == 0
     error_message = "No LBC Helm release should be created when install_lbc = false"
   }
+
+  # create_eks is left at its true default here: on a freshly created
+  # cluster, nothing can already be bound to the aws-load-balancer-controller
+  # ServiceAccount, so the association is still created even with
+  # install_lbc = false, letting an externally-installed LBC on the new
+  # cluster still get its IAM binding.
+  assert {
+    condition     = length(module.controllers.lbc_pod_identity_association) == 1
+    error_message = "LBC Pod Identity association must still be created on create_eks = true even when install_lbc = false, so an externally-installed LBC on the new cluster gets its IAM binding"
+  }
 }
 
 run "install_lbc_false_rejects_create_ingress_true" {
@@ -7522,6 +7602,50 @@ run "install_lbc_false_rejects_create_ingress_true" {
   expect_failures = [var.install_lbc]
 }
 
+# Regression test for the 409 ResourceInUseException confirmed in live
+# testing: create_eks = false against an existing cluster that already
+# carries the aws-load-balancer-controller ServiceAccount's Pod Identity
+# association (e.g. from a previous invocation of this exact module) must
+# not attempt to create a second one when install_lbc = false attests that
+# an association already exists there.
+run "create_eks_false_install_lbc_false_skips_lbc_pod_identity_association" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+    create_ebs_csi                               = false
+    install_lbc                                  = false
+    create_ingress                               = false
+  }
+
+  assert {
+    condition     = length(module.controllers.lbc_pod_identity_association) == 0
+    error_message = "create_eks = false with install_lbc = false must skip the LBC Pod Identity association, not collide with one that may already exist on the shared cluster"
+  }
+}
+
+# Complements the run above: create_eks = false does not, on its own, skip
+# the association -- only install_lbc = false alongside it does. This is the
+# "this invocation owns installing LBC on the existing cluster" case.
+run "create_eks_false_install_lbc_true_still_creates_lbc_pod_identity_association" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+    create_ebs_csi                               = false
+    install_lbc                                  = true
+  }
+
+  assert {
+    condition     = length(module.controllers.lbc_pod_identity_association) == 1
+    error_message = "create_eks = false with install_lbc = true must still create the LBC Pod Identity association: this invocation owns installing LBC on the existing cluster"
+  }
+}
+
 run "install_cluster_autoscaler_false_creates_no_release" {
   command = plan
 
@@ -7530,8 +7654,48 @@ run "install_cluster_autoscaler_false_creates_no_release" {
   }
 
   assert {
+    condition     = length(module.controllers.cluster_autoscaler_pod_identity_association) == 1
+    error_message = "Cluster Autoscaler Pod Identity association must still be created on create_eks = true even when install_cluster_autoscaler = false, so an externally-installed Cluster Autoscaler on the new cluster gets its IAM binding"
+  }
+
+  assert {
     condition     = length(module.controllers.cluster_autoscaler_helm_release) == 0
     error_message = "No Cluster Autoscaler Helm release should be created when install_cluster_autoscaler = false"
+  }
+}
+
+# Same regression pair as the LBC runs above, for Cluster Autoscaler.
+run "create_eks_false_install_cluster_autoscaler_false_skips_pod_identity_association" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+    create_ebs_csi                               = false
+    install_cluster_autoscaler                   = false
+  }
+
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_pod_identity_association) == 0
+    error_message = "create_eks = false with install_cluster_autoscaler = false must skip the Cluster Autoscaler Pod Identity association, not collide with one that may already exist on the shared cluster"
+  }
+}
+
+run "create_eks_false_install_cluster_autoscaler_true_still_creates_pod_identity_association" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+    create_ebs_csi                               = false
+    install_cluster_autoscaler                   = true
+  }
+
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_pod_identity_association) == 1
+    error_message = "create_eks = false with install_cluster_autoscaler = true must still create the Cluster Autoscaler Pod Identity association: this invocation owns installing it on the existing cluster"
   }
 }
 

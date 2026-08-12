@@ -9,6 +9,68 @@ this project adheres to the stability contract in
 
 ### Added
 
+- **Support for n8n's own External Secrets feature**, via four new variables.
+  This is the roadmap's "Bring your own Secrets Manager" item, at the scope it
+  was narrowed to on 2026-08-05, and it concerns *workflow credential* values
+  resolved from a vault at runtime. The module's own secrets (DB password,
+  Redis AUTH token, encryption key, task runner token, licence key) are
+  unaffected and stay Kubernetes Secrets.
+
+  `n8n_external_secrets_enabled` (default `true`) is an opt-*out*: setting it
+  to `false` appends `external-secrets` to `N8N_DISABLED_MODULES`, removing the
+  feature and its Settings UI even under a licence that includes it. Left at
+  the default, no env var is emitted at all and n8n's own behavior applies, so
+  Community deployments, where the feature is inert without the
+  `feat:externalSecrets` entitlement, need not set it.
+  `n8n_external_secrets_update_interval` (default `null`) maps to
+  `N8N_EXTERNAL_SECRETS_UPDATE_INTERVAL`.
+
+  `n8n_external_secrets_aws_enabled` (default `false`) is a separate, opt-in
+  IAM layer: it grants the n8n pod's existing Pod Identity role
+  (`aws_iam_role.s3`) read access to AWS Secrets Manager, so an admin
+  connecting n8n's AWS provider in the UI can choose `authMethod = autoDetect`
+  instead of pasting static IAM user keys. It does nothing for n8n's five other
+  vault providers.
+
+  `n8n_external_secrets_aws_secret_names` is **required and non-empty** when
+  that grant is on, and rejects wildcards. This is deliberate rather than
+  fussy: n8n's AWS provider calls `secretsmanager:ListSecrets` with no name,
+  path, or tag filter and then reads every name it finds, so IAM is the only
+  boundary on what a vault connection can read. An empty list or a `*` would be
+  a silent full-account grant. A `check` block additionally warns when a named
+  secret carries this module's own `ManagedBy = terraform` tag.
+
+  Connecting the vault provider itself remains a manual step in the n8n UI in
+  every case; Terraform cannot create that connection.
+
+- **New `redis_key_prefix` variable** (default `null`) namespaces every Redis
+  key a deployment uses, so two n8n deployments can share one external Redis
+  without interfering with each other. Left at `null`, nothing changes: n8n
+  keeps its own defaults on both prefixes, exactly today's behavior.
+
+  n8n has *two* independent Redis key prefixes, and both have to move together
+  or the split is incomplete. `N8N_REDIS_KEY_PREFIX` (n8n's default `"n8n"`)
+  scopes the scaling-mode pub/sub command channel, `<prefix>:n8n.commands`;
+  `QUEUE_BULL_PREFIX` (n8n's default `"bull"`) scopes Bull's own job-queue
+  keys. This one input sets both. The n8n Helm chart exposes only the second,
+  as `redis.prefix`, so the first is set as a literal `extraEnv` entry.
+
+  The failure this fixes was confirmed live, not inferred: with two
+  deployments pointed at the same `redis_host` (`create_elasticache = false`),
+  activating a workflow on one produced `webhook not registered` on the other,
+  because both were publishing to and consuming from the same unscoped
+  `<prefix>:n8n.commands` channel. Subscribing to that channel directly and
+  matching the `senderId` against pod names confirmed the crossed wires.
+
+  Changing the queue prefix also moves the Redis list KEDA watches, so
+  `scaling.tf`'s worker `ScaledObject` `listName` metadata now tracks it
+  (`"<prefix>:jobs:wait"` / `"<prefix>:jobs:active"`) instead of being
+  hardcoded to `bull:jobs:*`. Without that, setting a prefix would have left
+  KEDA polling an empty list and silently frozen worker autoscaling at its
+  minimum. **Changing this on a live deployment abandons whatever is already
+  queued under the old prefix**: drain the queue first, the same way the Redis
+  topology variables are treated.
+
 - **New `redis_kms_encryption_enabled` variable** (default `false`) encrypts
   the ElastiCache Redis tier at rest with a module-created Customer Managed
   KMS Key (`aws_kms_key.redis`). Clears Checkov finding `CKV_AWS_191`.
@@ -33,6 +95,35 @@ this project adheres to the stability contract in
   interaction table.
 
 ### Changed
+
+- **Documentation only, no behavior change: three limitations found during
+  live validation of the customer-managed paths are now written down instead
+  of being discovered at apply time.**
+
+  `docs/troubleshooting.md` gains two entries. The first covers the AWS Load
+  Balancer Controller failing with `couldn't auto-discover subnets: ... are
+  tagged for other clusters` when a second n8n stack is deployed into a VPC
+  another deployment already uses: LBC treats another cluster's
+  `kubernetes.io/cluster/<name>=shared` subnet tag as disqualifying rather
+  than shareable, and the fix is to name the subnets explicitly through
+  `ingress_annotations`. The second covers two deployments sharing one
+  external Redis interfering with each other's workflow activation, now
+  fixable with the new `redis_key_prefix` above.
+
+  `docs/customer-managed-infrastructure.md` gains a section on `create_eks =
+  false` + `create_ingress = true`, which today has exactly two paths and not
+  the third one most callers on a shared cluster would reach for: `install_lbc
+  = false` is hard-rejected whenever `create_ingress = true`, with no
+  exception for an existing cluster that already runs a healthy LBC. Recorded
+  as a known limitation with the reasoning, rather than fixed in the same pass
+  as the Pod Identity gating above, since relaxing it changes the module's
+  plan-time validation contract.
+
+  `db_host`'s description now states that `create_database = false` shares the
+  exact database and tables, not just the host: there is no `db_name` input, so
+  the database name is fixed at `n8n_enterprise`. Two deployments pointed at
+  one customer-managed Postgres share one n8n instance's data. The
+  migration/cutover case works; true multi-tenant sharing does not.
 
 - **`db_engine_version` now defaults to `18.4` instead of `16.9`.** n8n's
   Postgres version policy supports the latest two actively-maintained majors
@@ -109,6 +200,52 @@ this project adheres to the stability contract in
   storage open question the original `create_eks` proposal left undecided.
 
 ### Fixed
+
+- **The Load Balancer Controller and Cluster Autoscaler Pod Identity
+  associations are now gated, so `create_eks = false` no longer collides with
+  an association the existing cluster already carries.** Both associations
+  (`modules/controllers/iam.tf`) were fully unconditional, on the deliberate
+  and, for a freshly created cluster, correct reasoning that an
+  externally-installed controller still needs its IAM binding. That reasoning
+  does not survive `create_eks = false`: pointed at an existing cluster whose
+  `aws-load-balancer-controller` ServiceAccount is already bound, e.g. by a
+  previous invocation of this exact module against the same cluster, EKS
+  rejects the second association with `409 ResourceInUseException` and the
+  apply fails. Confirmed live, not inferred.
+
+  The gate is `count = var.create_eks || var.install_<x> ? 1 : 0`, not a bare
+  `var.install_<x>`, which keeps the original fresh-cluster behavior intact:
+  on `create_eks = true` nothing can already be bound, so the association is
+  still created regardless of the toggle. On `create_eks = false`,
+  `install_lbc = false` / `install_cluster_autoscaler = false` is now read as
+  an attestation that the binding already exists there. Existing deployments
+  are unaffected: every one of them has `create_eks = true` or the matching
+  `install_*` toggle at its default `true`, so the gate evaluates true and the
+  association stays exactly where it is. `refactoring.tf`'s `moved` blocks
+  target the new `[0]` addresses.
+
+  `modules/controllers` takes a new `create_eks` input for this, defaulting to
+  `true`. The default matters: that submodule is a documented direct-invocation
+  point for advanced callers (see `examples/customer-managed-everything`), and
+  `true` reproduces its original unconditional behavior, so the new input is
+  additive rather than a breaking change to its contract.
+
+- **`Taskfile.yml`'s `EXAMPLES` list, and the per-example command blocks in
+  `AGENTS.md` and `CONTRIBUTING.md`, had drifted four examples behind the CI
+  matrix.** All three still enumerated only `small`, `medium`, `large`,
+  `cloudflare`, `godaddy` and `split-ingress`, while
+  `.github/workflows/terraform-tests.yml` also runs `customer-managed-redis`,
+  `customer-managed-s3`, `customer-managed-cluster` and
+  `customer-managed-everything`. `task ci` therefore reported green on changes
+  it had never validated, and `CONTRIBUTING.md`'s claim that the documented
+  loop "mirrors the CI matrix exactly" was false. This is not hypothetical: it
+  is how a change to `modules/controllers`' input contract passed a full local
+  run while breaking `examples/customer-managed-everything`, the one root
+  module that invokes that submodule directly. All three lists now match the
+  CI matrix, and `AGENTS.md`'s block is a loop over that list rather than
+  hand-maintained per-example lines (which also fixes a latent bug in it: the
+  lines chained bare `cd examples/<x>` commands that were relative to the
+  previous example's directory, so only the first could ever have run).
 
 - `create_elasticache`, `redis_host`, and `README.md`'s "Bring your own
   Redis" (now "Customer-managed Redis") section all incorrectly stated that
