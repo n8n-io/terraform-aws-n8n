@@ -350,6 +350,12 @@ locals {
   # connection that works.
   redis_username_value = var.create_elasticache ? null : var.redis_username
 
+  # Bull's own default prefix, mirrored here (rather than left as a literal
+  # at each of the two KEDA listName call sites) so n8n.tf's env var, the
+  # chart's redis.prefix value, and KEDA's listName all read from one
+  # resolved value instead of three separately-maintained literals.
+  redis_key_prefix_value = coalesce(var.redis_key_prefix, "bull")
+
   common_tags = merge(
     {
       ManagedBy = "terraform"

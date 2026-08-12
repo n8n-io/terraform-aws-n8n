@@ -63,7 +63,9 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `redis.tls` | Wired to `redis_transit_encryption_enabled` (default `false`, requires `create_elasticache = true`) |
 | `redis.passwordSecret` | Module-managed when Redis AUTH is active |
 | `redis.timeout` | `n8n_redis_timeout_threshold` (null = chart default) |
-| `redis.username`, `redis.database`, `redis.prefix`, `redis.dualstack`, `redis.clusterNodes`, `redis.worker.*`, `redis.healthCheck` | Not exposed; chart defaults used |
+| `redis.username` | `redis_username` (null = chart default, Redis's default user) |
+| `redis.prefix` | `redis_key_prefix` (null = chart default `"bull"`; also sets `N8N_REDIS_KEY_PREFIX` directly, since the chart has no key for it: see [README → Two deployments on one Redis](../README.md#two-deployments-on-one-redis-need-redis_key_prefix)) |
+| `redis.database`, `redis.dualstack`, `redis.clusterNodes`, `redis.worker.*`, `redis.healthCheck` | Not exposed; chart defaults used |
 | `s3.enabled/bucket.name/bucket.region/auth.autoDetect/storage.mode/storage.availableModes` | Hardcoded `true` / module-managed bucket / hardcoded `true` (Pod Identity) / hardcoded `"s3"` / hardcoded `"filesystem,s3"` |
 | `s3.bucket.host`, `s3.storage.forcePathStyle`, `s3.storage.extraEnv`, `s3.auth.accessKeyId/secretAccessKeySecret` | Not exposed; not needed given `auth.autoDetect = true` |
 

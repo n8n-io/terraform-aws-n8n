@@ -436,3 +436,88 @@ n8n_webhook_hpa_scale_up_stabilization_window_seconds = 300
 If pods already have corrupted package directories from an interrupted
 install, a rolling restart after raising the resources above resolves it —
 n8n rewrites the directory from scratch on the next successful install.
+
+## LBC fails with `couldn't auto-discover subnets: ... are tagged for other clusters`, deploying a second stack into a VPC another n8n deployment already uses
+
+### Symptom
+
+`helm_release.lbc` (or the standalone `aws-load-balancer-controller` release
+on an existing cluster) fails to provision an ALB for the module-managed
+Ingress, with:
+
+```text
+couldn't auto-discover subnets: unable to resolve at least one subnet.
+Evaluated 2 subnets: 2 are tagged for other clusters, and 0 have
+insufficient available IP addresses
+```
+
+This shows up specifically when reusing another deployment's VPC/subnets,
+for example pointing `redis_host` at another module-managed deployment's
+real ElastiCache endpoint (ElastiCache is VPC-scoped, unlike S3's IAM-based
+cross-account/cross-VPC access, so sharing that layer means sharing the VPC
+too). Confirmed live for this module.
+
+### Cause
+
+The AWS Load Balancer Controller's own subnet auto-discovery looks for
+`kubernetes.io/role/elb` / `kubernetes.io/role/internal-elb` tags, but a
+subnet already carrying `kubernetes.io/cluster/<other-cluster-name>=shared`
+(which every EKS-managed VPC module sets, including this module's own
+examples) is treated by LBC as **ineligible for this cluster**, not
+shareable, even though it still carries the role tags LBC's own docs
+describe as sufficient on their own.
+
+### Fix
+
+Bypass auto-discovery entirely rather than re-tagging the other
+deployment's already-running subnets, via `ingress_annotations`:
+
+```hcl
+ingress_annotations = {
+  "alb.ingress.kubernetes.io/subnets" = "subnet-0123456789abcdef0,subnet-0fedcba9876543210"
+}
+```
+
+## Two n8n deployments sharing one external Redis interfere with each other's workflow activation
+
+### Symptom
+
+Activating a workflow on one deployment fails with `webhook not
+registered`, even immediately after a fresh `terraform apply` and even
+after repeated activate/deactivate retries, while a second, independent
+n8n deployment elsewhere is live and pointed at the **same** Redis (e.g.
+via `create_elasticache = false` + `redis_host` pointed at another module-
+managed deployment's real ElastiCache endpoint).
+
+### Cause
+
+n8n's scaling-mode pub/sub command channel (`<prefix>:n8n.commands`,
+prefixed by `N8N_REDIS_KEY_PREFIX`, which defaults to `"n8n"` for every
+deployment) is not scoped per deployment. One deployment's
+`add-webhooks-triggers-and-pollers` broadcast is received by every other
+main pod subscribed to that same channel on the same Redis, each of which
+looks the workflow up in *its own* database, fails to find it, and
+publishes a `display-workflow-activation-error` back onto the same shared
+channel, which is what breaks the *other* deployment's own activation.
+Confirmed live by subscribing to the channel directly and matching the
+broadcasting pod's `senderId` against the other deployment's own pod name.
+This has nothing to do with which deployment created the Redis: it affects
+any two n8n installs (from this module or otherwise) sharing one Redis
+instance, module-managed ElastiCache instances are exempt only because each
+one is dedicated to a single deployment by default.
+
+### Fix
+
+Set `redis_key_prefix` to a distinct value on every deployment that shares
+a Redis instance with another:
+
+```hcl
+redis_key_prefix = "tenant-a" # a different value on every deployment sharing this Redis
+```
+
+This scopes both `N8N_REDIS_KEY_PREFIX` and the Bull queue's own key prefix
+(`QUEUE_BULL_PREFIX`) to the value given, and keeps KEDA's queue-depth
+triggers reading from the matching, non-default queue keys. Leave it unset
+on the module-managed ElastiCache path (`create_elasticache = true`, the
+default): each such instance is already dedicated to one deployment, so
+there's nothing to scope.

@@ -331,8 +331,18 @@ resource "helm_release" "n8n" {
       useExternal = true
       # Module-managed RDS when create_database = true, otherwise the caller-supplied
       # db_host (which may point at an external DB or an in-cluster connection pooler).
-      host     = var.create_database ? aws_db_instance.n8n[0].address : var.db_host
-      port     = 5432
+      host = var.create_database ? aws_db_instance.n8n[0].address : var.db_host
+      port = 5432
+      # Hardcoded on both the create_database = true and = false paths: there
+      # is no db_name variable. On create_database = false this means
+      # db_host is shared down to the exact database and tables, not merely
+      # the RDS instance/host -- confirmed live, see db_host's description.
+      # This supports "point a new stack at the same RDS instance a previous
+      # stack used" (a migration/cutover pattern: stop the old writer first,
+      # then cut over) but not true concurrent multi-tenant sharing of one
+      # RDS instance across logically separate n8n deployments, which would
+      # need a caller-chosen database name on both paths and does not exist
+      # today.
       database = "n8n_enterprise"
       schema   = "public"
       user     = "n8n"
@@ -375,7 +385,14 @@ resource "helm_release" "n8n" {
           name = var.redis_auth_token_secret_ref != null ? var.redis_auth_token_secret_ref.name : kubernetes_secret.n8n_redis[0].metadata[0].name
           key  = var.redis_auth_token_secret_ref != null ? local.redis_auth_token_secret_ref_key : "password"
         }
-      } : {}
+      } : {},
+      # Sets QUEUE_BULL_PREFIX (configmap.yaml's `if .Values.redis.prefix`
+      # guard omits it entirely when unset, so n8n's own "bull" default
+      # applies exactly as before on the null path). The matching
+      # N8N_REDIS_KEY_PREFIX env var lives in config.extraEnv below, and the
+      # KEDA listName values a few blocks down are kept in sync with this same
+      # variable: all three have to move together, see redis_key_prefix.
+      var.redis_key_prefix != null ? { prefix = var.redis_key_prefix } : {}
     )
 
     s3 = {
@@ -459,7 +476,7 @@ resource "helm_release" "n8n" {
             type = "redis"
             metadata = merge({
               address    = "${local.redis_host}:${local.redis_port}"
-              listName   = "bull:jobs:wait"
+              listName   = "${local.redis_key_prefix_value}:jobs:wait"
               listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
             }, local.keda_redis_auth_metadata)
             authenticationRef = { name = "" }
@@ -468,7 +485,7 @@ resource "helm_release" "n8n" {
             type = "redis"
             metadata = merge({
               address    = "${local.redis_host}:${local.redis_port}"
-              listName   = "bull:jobs:active"
+              listName   = "${local.redis_key_prefix_value}:jobs:active"
               listLength = tostring(var.n8n_worker_keda_jobs_per_replica)
             }, local.keda_redis_auth_metadata)
             authenticationRef = { name = "" }
@@ -539,6 +556,16 @@ resource "helm_release" "n8n" {
           # Keeps ElastiCache from dropping idle Redis subscriber connections under sustained load.
           # Without this, Bull detects dropped connections, emits queue errors, and pods crash.
           { name = "QUEUE_BULL_REDIS_KEEP_ALIVE", value = "true" },
+        ],
+        # Scopes n8n's scaling-mode pub/sub command channel ("<prefix>:n8n.commands")
+        # to this deployment. The chart has no dedicated field for this env var
+        # (unlike QUEUE_BULL_PREFIX, wired via redis.prefix above), so it's a
+        # literal extraEnv entry here. Omitted entirely on the null path,
+        # leaving n8n's own "n8n" default exactly as before. See redis_key_prefix.
+        var.redis_key_prefix != null ? [
+          { name = "N8N_REDIS_KEY_PREFIX", value = var.redis_key_prefix },
+        ] : [],
+        [
           { name = "DB_POSTGRESDB_POOL_SIZE", value = tostring(var.db_postgresdb_pool_size) },
           # n8n's upstream default (true) makes the leader main detach its floating
           # license entitlement on shutdown, zeroing the shared cert in the database.

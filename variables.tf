@@ -234,7 +234,7 @@ variable "existing_eks_cluster_name" {
 # attestation gate.
 # tflint-ignore: terraform_unused_declarations
 variable "existing_eks_cluster_prerequisites_confirmed" {
-  description = "Required to be true when create_eks = false. An explicit attestation, not a rubber stamp: setting it to true is a claim that you have personally verified every item below, because none of them is checkable at plan time the way the cluster's Kubernetes version and VPC are. (1) Node capacity: the HPA/KEDA maxima this module computes (scaling.tf) assume the node group it creates itself; on an existing cluster running Karpenter, self-managed ASGs, Fargate, or any topology other than a plain EKS-managed node group, this module cannot see or validate schedulable capacity at all. (2) Cluster Autoscaler auto-discovery tags: aws_eks_node_group.n8n normally carries k8s.io/cluster-autoscaler/<cluster>=owned and k8s.io/cluster-autoscaler/enabled=true; an existing node group has no guarantee of carrying them, and this module cannot tag infrastructure it does not own. (3) API server reachability: this module sets no endpoint_private_access or endpoint_public_access, so it cannot tell you whether the existing cluster's API is reachable from wherever `terraform apply` runs, e.g. a private-only endpoint reachable only from inside the VPC or over a VPN. (4) Naming and identity collisions: the IAM role names, kube-system ServiceAccount names, and Pod Identity associations this module creates for n8n and any install_* controller it installs are not checked against what may already exist on a shared cluster. Storage is deliberately not on this list: create_ebs_csi (default true) lets you opt the EBS CSI addon and gp3 StorageClass out entirely if the existing cluster already provides its own, rather than asking you to merely attest to the risk."
+  description = "Required to be true when create_eks = false. An explicit attestation, not a rubber stamp: setting it to true is a claim that you have personally verified every item below, because none of them is checkable at plan time the way the cluster's Kubernetes version and VPC are. (1) Node capacity: the HPA/KEDA maxima this module computes (scaling.tf) assume the node group it creates itself; on an existing cluster running Karpenter, self-managed ASGs, Fargate, or any topology other than a plain EKS-managed node group, this module cannot see or validate schedulable capacity at all. (2) Cluster Autoscaler auto-discovery tags: aws_eks_node_group.n8n normally carries k8s.io/cluster-autoscaler/<cluster>=owned and k8s.io/cluster-autoscaler/enabled=true; an existing node group has no guarantee of carrying them, and this module cannot tag infrastructure it does not own. (3) API server reachability: this module sets no endpoint_private_access or endpoint_public_access, so it cannot tell you whether the existing cluster's API is reachable from wherever `terraform apply` runs, e.g. a private-only endpoint reachable only from inside the VPC or over a VPN. (4) Naming and identity collisions: the IAM role names, kube-system ServiceAccount names, and Pod Identity associations this module creates for n8n and any install_* controller it installs are not checked against what may already exist on a shared cluster. Storage is deliberately not on this list: create_ebs_csi (default true) lets you opt the EBS CSI addon and gp3 StorageClass out entirely if the existing cluster already provides its own, rather than asking you to merely attest to the risk. Ingress is also not on this list, for the opposite reason: there is currently no toggle that lets create_ingress = true trust an already-working LBC on the existing cluster the way create_ebs_csi trusts an already-working CSI driver -- install_lbc = false is hard-rejected whenever create_ingress = true, full stop, regardless of this attestation. See docs/customer-managed-infrastructure.md's \"create_eks = false + create_ingress = true\" section."
   type        = bool
   default     = false
 
@@ -449,7 +449,7 @@ variable "alb_inbound_prefix_list_ids" {
 }
 
 variable "ingress_annotations" {
-  description = "Extra annotations for the module-managed Ingress, merged over the module's defaults (last write wins). Use this for AWS Load Balancer Controller features the module has no opinion on: alb.ingress.kubernetes.io/wafv2-acl-arn, subnets, security-groups, load-balancer-name, group.name, access log settings. Overriding alb.ingress.kubernetes.io/target-group-attributes drops the session stickiness that keeps WebSocket connections pinned to one main pod; re-include stickiness.enabled=true if you set it. Prefer ingress_scheme over setting alb.ingress.kubernetes.io/scheme here, alb_ssl_policy over setting alb.ingress.kubernetes.io/ssl-policy here, and alb_inbound_cidrs / alb_inbound_prefix_list_ids over setting alb.ingress.kubernetes.io/inbound-cidrs or security-group-prefix-lists here, because setting both raises a plan-time warning. Ignored when create_ingress = false."
+  description = "Extra annotations for the module-managed Ingress, merged over the module's defaults (last write wins). Use this for AWS Load Balancer Controller features the module has no opinion on: alb.ingress.kubernetes.io/wafv2-acl-arn, subnets, security-groups, load-balancer-name, group.name, access log settings. Overriding alb.ingress.kubernetes.io/target-group-attributes drops the session stickiness that keeps WebSocket connections pinned to one main pod; re-include stickiness.enabled=true if you set it. Prefer ingress_scheme over setting alb.ingress.kubernetes.io/scheme here, alb_ssl_policy over setting alb.ingress.kubernetes.io/ssl-policy here, and alb_inbound_cidrs / alb_inbound_prefix_list_ids over setting alb.ingress.kubernetes.io/inbound-cidrs or security-group-prefix-lists here, because setting both raises a plan-time warning. Ignored when create_ingress = false. Also the fix for a real subnet auto-discovery gap when two deployments of this module share one VPC (e.g. redis_host / db_host / existing_s3_bucket_name pointed at another deployment's real infrastructure, per docs/customer-managed-infrastructure.md): the Load Balancer Controller's own auto-discovery treats a subnet already tagged kubernetes.io/cluster/<other-name>=shared as ineligible for THIS cluster, not shareable, even though the same subnet still carries the kubernetes.io/role/elb / role/internal-elb tags LBC's docs describe as sufficient -- confirmed live (\"couldn't auto-discover subnets: ... N are tagged for other clusters\"). Set alb.ingress.kubernetes.io/subnets = \"<id>,<id>\" here to bypass auto-discovery entirely rather than re-tagging the other deployment's already-running subnets."
   type        = map(string)
   default     = {}
 }
@@ -554,18 +554,18 @@ variable "node_max" {
 # breaks and how.
 
 variable "install_lbc" {
-  description = "When true (the default), the module installs the AWS Load Balancer Controller via Helm. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps. The IAM role, policy and Pod Identity association this module creates for the aws-load-balancer-controller ServiceAccount in kube-system are unaffected by this toggle, since an externally-installed LBC still needs them. Must stay true whenever create_ingress = true: kubernetes_ingress_v1.n8n waits for LBC to provision an ALB (wait_for_load_balancer = true) and that wait times out the apply if no controller is running to service it. Disabling this while an external LBC is not yet Ready can also race helm_release.keda; see the ordering note in modules/controllers/keda.tf."
+  description = "When true (the default), the module installs the AWS Load Balancer Controller via Helm. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps. The IAM role and policy this module creates for the aws-load-balancer-controller ServiceAccount in kube-system are unaffected by this toggle, but the Pod Identity association is not: it's created whenever this is true OR create_eks is true, and skipped when both are false. On create_eks = true (a freshly created cluster), nothing can already be bound to that ServiceAccount, so the association is created regardless of this toggle, which is what lets an externally-installed LBC on the new cluster still get its IAM binding. On create_eks = false (an existing cluster), that assumption doesn't hold: the ServiceAccount may already carry an association, e.g. one from a previous invocation of this exact module against the same cluster, and EKS hard-rejects a second association for a ServiceAccount that already has one. Setting this to false on that path is read as an attestation that an association already exists there. Must stay true whenever create_ingress = true: kubernetes_ingress_v1.n8n waits for LBC to provision an ALB (wait_for_load_balancer = true) and that wait times out the apply if no controller is running to service it. Disabling this while an external LBC is not yet Ready can also race helm_release.keda; see the ordering note in modules/controllers/keda.tf."
   type        = bool
   default     = true
 
   validation {
     condition     = var.install_lbc || !var.create_ingress
-    error_message = "install_lbc = false is incompatible with create_ingress = true: the module-managed Ingress waits for the Load Balancer Controller to provision an ALB, and with no controller installed that wait times out the apply. Either leave install_lbc = true, or set create_ingress = false and point your own Ingress resources at an LBC you install another way."
+    error_message = "install_lbc = false is incompatible with create_ingress = true: the module-managed Ingress waits for the Load Balancer Controller to provision an ALB, and with no controller installed that wait times out the apply. Either leave install_lbc = true, or set create_ingress = false and point your own Ingress resources at an LBC you install another way. There is no exception for create_eks = false against a cluster whose LBC already works: see docs/customer-managed-infrastructure.md's \"create_eks = false + create_ingress = true\" section for why, and what the two supported options are."
   }
 }
 
 variable "install_cluster_autoscaler" {
-  description = "When true (the default), the module installs the Kubernetes Cluster Autoscaler via Helm. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps, or when node_desired = node_max and the node group is meant to stay a fixed size. The IAM role, policy and Pod Identity association for the cluster-autoscaler ServiceAccount are unaffected by this toggle. With no autoscaler running at all, node_max is not enforced automatically: nodes stay at whatever desired_size last converged to, and the autoscaling capacity check in scaling.tf still assumes an autoscaler will eventually add nodes up to node_max, so a caller relying on this toggle to go without one entirely should also lower the HPA/KEDA maxima to what the fixed node count can actually schedule."
+  description = "When true (the default), the module installs the Kubernetes Cluster Autoscaler via Helm. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps, or when node_desired = node_max and the node group is meant to stay a fixed size. The IAM role and policy for the cluster-autoscaler ServiceAccount are unaffected by this toggle, but its Pod Identity association follows the same create_eks-aware rule as install_lbc's association (see that variable's description): created when this is true or create_eks is true, skipped only when both are false, since an existing cluster may already carry this ServiceAccount's association from elsewhere and a second one would collide with it. With no autoscaler running at all, node_max is not enforced automatically: nodes stay at whatever desired_size last converged to, and the autoscaling capacity check in scaling.tf still assumes an autoscaler will eventually add nodes up to node_max, so a caller relying on this toggle to go without one entirely should also lower the HPA/KEDA maxima to what the fixed node count can actually schedule."
   type        = bool
   default     = true
 }
@@ -1091,15 +1091,6 @@ variable "n8n_execution_data_storage_mode" {
   }
 }
 
-# ── S3 ────────────────────────────────────────────────────────────────────────
-
-variable "s3_kms_encryption_enabled" {
-  description = "When true (the default), set the S3 bucket's default encryption to SSE-KMS with a KMS key: a module-created Customer Managed KMS Key (aws_kms_key.s3) unless s3_kms_key_arn supplies an existing one, and grant the n8n pod role kms:Decrypt / kms:GenerateDataKey / kms:DescribeKey on it. Clears Checkov finding CKV_AWS_145. This selects which key encrypts objects, not whether they are encrypted: S3 encrypts every object regardless, and setting this to false leaves new objects on SSE-S3 with S3-managed keys. S3 Bucket Keys are enabled alongside it so KMS is called per bucket rather than per object. Ignored when create_s3_bucket = false: the module creates no bucket to set a default encryption configuration on, though s3_kms_key_arn still matters there for the IAM grant. The setting applies only to objects written afterwards: existing objects keep their original encryption. Do not change true to false while any retained object uses the module-created CMK. Terraform immediately schedules that key for deletion, making those objects unreadable while the key is PendingDeletion and permanently unrecoverable after the 7-day window. See README → KMS key after terraform destroy for recovery."
-  type        = bool
-  default     = true
-  nullable    = false
-}
-
 # ── Graceful shutdown ─────────────────────────────────────────────────────────
 
 variable "n8n_termination_grace_period" {
@@ -1364,7 +1355,7 @@ variable "create_database" {
 }
 
 variable "db_host" {
-  description = "External database host. Required when create_database = false. Ignored otherwise. Use this to pass in an Amazon Aurora cluster endpoint or any external PostgreSQL host."
+  description = "External database host. Required when create_database = false. Ignored otherwise. Use this to pass in an Amazon Aurora cluster endpoint or any external PostgreSQL host. The database name n8n connects to on this host is not configurable -- it is hardcoded to \"n8n_enterprise\" on both the create_database = true and = false paths (n8n.tf), so pointing this at a host that already runs an n8n deployment from this module shares the exact database and tables, not merely the RDS instance. This is the supported \"migrate to a new stack, keep the same RDS instance\" pattern (stop the old writer first, then cut over) confirmed live for this PR -- it is not true concurrent multi-tenant sharing of one instance across logically separate deployments, which this module does not support today."
   type        = string
   default     = null
 
@@ -1658,6 +1649,28 @@ variable "redis_username" {
   }
 }
 
+variable "redis_key_prefix" {
+  description = "Prefix for every Redis key this n8n deployment uses: both n8n's own key prefix (N8N_REDIS_KEY_PREFIX, n8n's default is \"n8n\") and the Bull queue's own key prefix (QUEUE_BULL_PREFIX, n8n's default is \"bull\"), which this module sets to the same value so a single input keeps both in sync. Leave null (the default) to keep n8n's own defaults on both -- exactly today's behavior. Set this to a value unique per deployment whenever two or more n8n deployments (from this module or otherwise) point at the SAME external Redis (create_elasticache = false with redis_host shared across deployments), which the module cannot itself detect or prevent: without distinct prefixes, n8n's scaling-mode pub/sub command channel (\"<prefix>:n8n.commands\") is not scoped per deployment, and one deployment's workflow-activation broadcast is received by every other deployment sharing that Redis, each of which looks the workflow up in its own database, fails, and publishes an error back onto the same shared channel -- confirmed live, not theoretical. Each module-managed ElastiCache instance (create_elasticache = true, the default) is already dedicated to one deployment, so this has no effect worth setting there. Also updates the KEDA worker ScaledObject's listName metadata (scaling.tf) to \"<prefix>:jobs:wait\" / \"<prefix>:jobs:active\": leaving those at the literal \"bull:jobs:*\" while Bull itself writes under a different prefix would leave KEDA reading an empty list and queue-depth autoscaling permanently frozen at zero."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.redis_key_prefix != null ? trimspace(var.redis_key_prefix) != "" : true
+    error_message = "redis_key_prefix must not be blank. Leave it null to keep n8n's own default prefixes."
+  }
+
+  # n8n and Bull both use ":" as their own internal key-segment delimiter
+  # (e.g. "<prefix>:n8n.commands", "<prefix>:jobs:wait"), so a prefix that
+  # itself contains ":", whitespace, or other Redis key-pattern metacharacters
+  # would produce a technically-valid but confusing key namespace. Restricted
+  # to what both n8n's own default ("n8n") and Bull's ("bull") already look
+  # like: alphanumerics, hyphens and underscores.
+  validation {
+    condition     = var.redis_key_prefix != null ? can(regex("^[A-Za-z0-9_-]+$", var.redis_key_prefix)) : true
+    error_message = "redis_key_prefix must contain only letters, digits, hyphens and underscores: it becomes a literal Redis key segment (e.g. \"<prefix>:n8n.commands\", \"<prefix>:jobs:wait\"), and \":\" or whitespace in it would produce a confusing or malformed key namespace."
+  }
+}
+
 # ── S3 ────────────────────────────────────────────────────────────────────────
 
 variable "create_s3_bucket" {
@@ -1680,6 +1693,13 @@ variable "existing_s3_bucket_name" {
     condition     = var.existing_s3_bucket_name == null ? true : can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.existing_s3_bucket_name))
     error_message = "existing_s3_bucket_name must be a valid S3 bucket name: 3-63 characters, lowercase letters, numbers, dots, and hyphens only."
   }
+}
+
+variable "s3_kms_encryption_enabled" {
+  description = "When true (the default), set the S3 bucket's default encryption to SSE-KMS with a KMS key: a module-created Customer Managed KMS Key (aws_kms_key.s3) unless s3_kms_key_arn supplies an existing one, and grant the n8n pod role kms:Decrypt / kms:GenerateDataKey / kms:DescribeKey on it. Clears Checkov finding CKV_AWS_145. This selects which key encrypts objects, not whether they are encrypted: S3 encrypts every object regardless, and setting this to false leaves new objects on SSE-S3 with S3-managed keys. S3 Bucket Keys are enabled alongside it so KMS is called per bucket rather than per object. Ignored when create_s3_bucket = false: the module creates no bucket to set a default encryption configuration on, though s3_kms_key_arn still matters there for the IAM grant. The setting applies only to objects written afterwards: existing objects keep their original encryption. Do not change true to false while any retained object uses the module-created CMK. Terraform immediately schedules that key for deletion, making those objects unreadable while the key is PendingDeletion and permanently unrecoverable after the 7-day window. See README → KMS key after terraform destroy for recovery."
+  type        = bool
+  default     = true
+  nullable    = false
 }
 
 variable "s3_kms_key_arn" {
