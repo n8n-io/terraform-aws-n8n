@@ -55,11 +55,25 @@ these toggles and the one every later one was modeled on.
 2. Gate every resource that layer owns with `count = var.create_<x> ? 1 : 0`
    (or the `install_<x>` equivalent). Gate *all* of it: a layer that
    creates an IAM role, a security group, and a Helm release needs all
-   three gated, not just the most visible resource. The IAM/Pod Identity
-   gating gap this module carried for the Load Balancer Controller and
-   Cluster Autoscaler toggles (their `helm_release` was gated but their
-   IAM role and Pod Identity association were not) is the cautionary
-   example here.
+   three gated, not just the most visible resource. The Load Balancer
+   Controller and Cluster Autoscaler toggles are the cautionary example
+   here, and a subtler one than "forgot to add a `count`": their
+   `helm_release` was correctly gated on `install_lbc`/
+   `install_cluster_autoscaler`, but their Pod Identity association was
+   left fully unconditional, on the deliberate (and, for a freshly
+   created cluster, correct) reasoning that an externally-installed
+   controller still needs the IAM binding. That reasoning silently broke
+   down on `create_eks = false`: pointed at an existing cluster that
+   already carries that ServiceAccount's association (e.g. from a
+   previous invocation of this exact module against the same cluster),
+   the unconditional association collided with EKS's one-role-per-
+   ServiceAccount constraint (`409 ResourceInUseException`), confirmed
+   live. The fix (`modules/controllers/iam.tf`) is a compound gate,
+   `var.create_eks || var.install_<x>`, not a bare toggle: a resource
+   whose "should I exist" answer depends on more than its own layer's
+   toggle is a sign the layer isn't as independent as the three-part
+   convention above assumes, and deserves the same scrutiny before
+   shipping, not just a `count` on the most visible resource.
 3. Add the "ignored when both are set"/"required when toggle is false"
    `check`/`validation` blocks, following `database.tf`'s or `redis.tf`'s
    `check` blocks as the template.
@@ -73,6 +87,47 @@ these toggles and the one every later one was modeled on.
 6. Regenerate `README.md` with `terraform-docs .` and add a row to the
    "Customer-managed infrastructure" table if the layer is one an
    external caller would look for.
+
+## `create_eks = false` + `create_ingress = true`: no supported path when the existing cluster's LBC wasn't installed by this invocation
+
+`install_lbc = false` is hard-rejected at plan time whenever `create_ingress
+= true` (`variables.tf`'s validation on `install_lbc`), with no exception
+for `create_eks = false`. This means that today, pointing this module at an
+existing cluster that already runs a working AWS Load Balancer Controller
+(installed by a platform team, by a previous invocation of this exact
+module, or by anything else) gives exactly two options, not three:
+
+1. **`install_lbc = true`.** This module installs its own, second LBC
+   release alongside the one already running. **Not recommended** when the
+   existing cluster already has one: two independent LBC controllers
+   watching the same `IngressClass` and validating-webhook configuration is
+   a real conflict risk, not a theoretical one: this is why the live EKS-
+   layer validation for this PR deliberately set `install_lbc = false`
+   rather than attempt it. Only reach for this option if the existing LBC
+   is scoped to a different `IngressClass` this module's `create_ingress`
+   path won't touch.
+2. **`create_ingress = false`.** This module creates and manages no Ingress
+   resource for n8n at all. Bring your own `kubernetes_ingress_v1` (or
+   equivalent) pointed at the already-running LBC, outside this module.
+   This is the only path validated live for this PR's `create_eks = false`
+   layer, and the one the validation's own error message already points
+   to.
+
+There is currently no third option of "trust the existing cluster's LBC and
+let this module still manage the n8n Ingress resource," even though that is
+arguably the more natural ask on an existing, shared cluster.
+`existing_eks_cluster_prerequisites_confirmed`'s own four attestations
+(`variables.tf`) don't cover "there is already a working Ingress
+controller here" either, worth adding as a fifth if this gap is ever
+closed. Relaxing `install_lbc`'s validation to allow `install_lbc = false`
+together with `create_ingress = true`, specifically when `create_eks =
+false` (reading that combination as "an LBC already exists and is healthy,
+wire my Ingress to it"), is a reasonable future enhancement; it is not
+implemented here, and
+is left as a known limitation rather than fixed under this pass, since it
+touches the module's plan-time validation contract and deserves its own
+review rather than a same-pass bundling with the Pod Identity gating fix
+above.
 
 ## What's deliberately not supported
 

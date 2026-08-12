@@ -306,7 +306,20 @@ resource "aws_iam_role_policy_attachment" "lbc" {
   policy_arn = aws_iam_policy.lbc.arn
 }
 
+# Gated on create_eks || install_lbc, not left unconditional: on a freshly
+# created cluster (create_eks = true) nothing can already be bound to this
+# ServiceAccount, so creating the association regardless of install_lbc is
+# what lets an externally-installed LBC on that new cluster still get its IAM
+# binding. On an existing cluster (create_eks = false), that assumption
+# doesn't hold: the ServiceAccount may already carry an association (e.g.
+# from a previous invocation of this exact module against the same
+# cluster), and EKS hard-rejects a second one for the same ServiceAccount
+# (409 ResourceInUseException, confirmed live). install_lbc = false on that
+# path is this module's signal that an association already exists and it
+# should not create a colliding one.
 resource "aws_eks_pod_identity_association" "lbc" {
+  count = var.create_eks || var.install_lbc ? 1 : 0
+
   cluster_name    = var.eks_cluster_name
   namespace       = "kube-system"
   service_account = "aws-load-balancer-controller"
@@ -316,10 +329,11 @@ resource "aws_eks_pod_identity_association" "lbc" {
 }
 
 # ── Cluster Autoscaler IAM ────────────────────────────────────────────────────
-# Deliberately NOT gated on var.install_cluster_autoscaler, for the same reason
-# the LBC IAM above is not gated on var.install_lbc: an externally-installed
-# Cluster Autoscaler still needs this role bound via Pod Identity to the
-# standard cluster-autoscaler ServiceAccount.
+# Same create_eks-aware gating as the LBC association above, and for the same
+# reason: not gated on var.install_cluster_autoscaler alone, since an
+# externally-installed Cluster Autoscaler on a freshly created cluster still
+# needs this role bound via Pod Identity, but an existing cluster may already
+# carry this ServiceAccount's association from elsewhere.
 
 resource "aws_iam_policy" "cluster_autoscaler" {
   # checkov:skip=CKV_AWS_290:The Describe* actions in the first statement don't support resource-level ARNs in IAM at all, so "*" is required. The write actions in the second statement are scoped via a ResourceTag condition to this cluster's own node group ASGs (see eks.tf's k8s.io/cluster-autoscaler tags) - AWS's own documented mitigation for Auto Scaling APIs, which likewise don't support resource-level ARNs.
@@ -386,6 +400,8 @@ resource "aws_iam_role_policy_attachment" "cluster_autoscaler" {
 }
 
 resource "aws_eks_pod_identity_association" "cluster_autoscaler" {
+  count = var.create_eks || var.install_cluster_autoscaler ? 1 : 0
+
   cluster_name    = var.eks_cluster_name
   namespace       = "kube-system"
   service_account = "cluster-autoscaler"

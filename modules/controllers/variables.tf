@@ -23,6 +23,12 @@ variable "vpc_id" {
   type        = string
 }
 
+variable "create_eks" {
+  description = "Whether the EKS cluster named by eks_cluster_name is being created by the same apply that calls this submodule. Root module passes its own var.create_eks straight through. Decides whether the LBC/Cluster Autoscaler Pod Identity associations (iam.tf) are created unconditionally or only when install_lbc/install_cluster_autoscaler is true: see those two variables' descriptions below for why the two toggles alone are not enough to decide this safely. Defaults to true, which reproduces this submodule's original unconditional behavior, so an advanced caller invoking modules/controllers directly (see examples/customer-managed-everything) is not broken by this input's addition. Set it to false when pointing this submodule at a cluster that already existed before this apply, where that ServiceAccount may already carry a Pod Identity association."
+  type        = bool
+  default     = true
+}
+
 variable "iam_permissions_boundary_arn" {
   description = "ARN of an IAM policy to attach as the permissions boundary on every IAM role this submodule creates (LBC, Cluster Autoscaler, EBS CSI driver). Passed straight through from the root module's variable of the same name."
   type        = string
@@ -42,13 +48,13 @@ variable "common_tags" {
 # existence.
 
 variable "install_lbc" {
-  description = "When true (the default), installs the AWS Load Balancer Controller via Helm. The IAM role, policy and Pod Identity association for the aws-load-balancer-controller ServiceAccount are created regardless of this toggle: an unattached Pod Identity association is inert, not a live attack surface, and leaving it in place is what lets a caller whose platform team installs LBC through GitOps still get the IAM binding this module creates, without a second Helm release racing the first one for the same ServiceAccount. Set this to false only when an identical install already exists in the cluster. See docs/customer-managed-infrastructure.md for the externally-managed-controller pattern."
+  description = "When true (the default), installs the AWS Load Balancer Controller via Helm. The IAM role and policy for the aws-load-balancer-controller ServiceAccount are created regardless of this toggle, but the Pod Identity association (iam.tf) is only created when this is true OR var.create_eks is true. On a freshly created cluster (create_eks = true) there is nothing yet bound to that ServiceAccount, so creating the association even with install_lbc = false is what lets a caller whose platform team installs LBC through GitOps still get the IAM binding this module creates. On an existing cluster (create_eks = false), the opposite risk applies: that ServiceAccount may already carry a Pod Identity association, e.g. one this exact module created on a previous invocation against the same cluster, and EKS hard-rejects a second association for a ServiceAccount that already has one (409 ResourceInUseException). install_lbc = false on that path is read as \"an association already exists here, do not create a second one.\" Set this to false only when an identical install already exists in the cluster. See docs/customer-managed-infrastructure.md for the externally-managed-controller pattern."
   type        = bool
   default     = true
 }
 
 variable "install_cluster_autoscaler" {
-  description = "When true (the default), installs the Kubernetes Cluster Autoscaler via Helm, and creates the IAM role, policy and Pod Identity association for its ServiceAccount. Set to false when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps, or when the node group is meant to stay a fixed size."
+  description = "When true (the default), installs the Kubernetes Cluster Autoscaler via Helm, and creates the IAM role and policy for its ServiceAccount. The Pod Identity association (iam.tf) follows the same create_eks-aware rule as install_lbc's association: created whenever this is true, or whenever var.create_eks is true (a freshly created cluster cannot yet have a conflicting association), and skipped only when both this and var.create_eks are false, since that combination means an existing cluster already carries this ServiceAccount's association and a second one would collide with it (409 ResourceInUseException). Set to false when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps, or when the node group is meant to stay a fixed size."
   type        = bool
   default     = true
 }

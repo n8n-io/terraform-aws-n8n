@@ -400,6 +400,21 @@ module "controllers" {
 
   common_tags = local.common_tags
 
+  # true, not false, even though module "n8n" below sets create_eks = false:
+  # the two mean different things. n8n's create_eks = false says "the n8n
+  # module does not own the cluster"; this submodule's create_eks says "the
+  # cluster is being created by the same apply that is calling me", which is
+  # true here, since aws_eks_cluster.customer_managed above is part of this
+  # very configuration. That is what lets the LBC and Cluster Autoscaler Pod
+  # Identity associations be created unconditionally: nothing can already be
+  # bound to those ServiceAccounts on a cluster this apply just created. A
+  # platform team copying this example onto a cluster that already exists
+  # should set this to false instead, so the associations are created only
+  # for the controllers this call actually installs and an association the
+  # cluster already carries is not duplicated (EKS rejects the second one
+  # with 409 ResourceInUseException).
+  create_eks = true
+
   install_lbc                = true
   install_cluster_autoscaler = true
   install_metrics_server     = true

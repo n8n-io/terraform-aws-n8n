@@ -160,9 +160,15 @@ moved {
   to   = module.controllers.aws_iam_role_policy_attachment.lbc
 }
 
+# Combined with the controllers-submodule extraction move below: this
+# resource gained a create_eks || install_lbc count gate in the same
+# unreleased branch that introduced the submodule (dbb80b1 and after), so
+# there is no released version where consumers landed on the un-indexed
+# module.controllers address: safe to move straight to [0] in one hop
+# rather than chaining two moved blocks.
 moved {
   from = aws_eks_pod_identity_association.lbc
-  to   = module.controllers.aws_eks_pod_identity_association.lbc
+  to   = module.controllers.aws_eks_pod_identity_association.lbc[0]
 }
 
 moved {
@@ -180,9 +186,11 @@ moved {
   to   = module.controllers.aws_iam_role_policy_attachment.cluster_autoscaler
 }
 
+# Same reasoning as the lbc moved block above: no released version ever had
+# consumers land on the un-indexed address, so one hop straight to [0].
 moved {
   from = aws_eks_pod_identity_association.cluster_autoscaler
-  to   = module.controllers.aws_eks_pod_identity_association.cluster_autoscaler
+  to   = module.controllers.aws_eks_pod_identity_association.cluster_autoscaler[0]
 }
 
 # EBS CSI driver: already gated on create_ebs_csi before this extraction, so

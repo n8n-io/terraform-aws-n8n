@@ -24,6 +24,7 @@ module "controllers" {
   eks_cluster_name = local.eks_cluster_name
   aws_region       = local.aws_region
   vpc_id           = local.vpc_id
+  create_eks       = var.create_eks
 
   iam_permissions_boundary_arn = var.iam_permissions_boundary_arn
   common_tags                  = local.common_tags
