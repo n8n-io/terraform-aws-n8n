@@ -437,6 +437,55 @@ If pods already have corrupted package directories from an interrupted
 install, a rolling restart after raising the resources above resolves it —
 n8n rewrites the directory from scratch on the next successful install.
 
+## `terraform plan` fails with `Get "http://localhost/...": connect: connection refused` on `create_eks = false`
+
+### Symptom
+
+On a deployment that has already applied once with `create_eks = false`, a
+later `terraform plan` fails while refreshing Kubernetes resources:
+
+```text
+Error: Get "http://localhost/api/v1/namespaces/n8n": dial tcp [::1]:80: connect: connection refused
+
+  with module.n8n.kubernetes_namespace.n8n[0],
+```
+
+The first apply worked. The error appears only once Kubernetes resources
+exist in state AND some other change is pending in the same configuration,
+upstream of the existing cluster.
+
+### Cause
+
+On the `create_eks = false` path, the module's `cluster_endpoint` /
+`cluster_certificate_authority_data` / `cluster_name` outputs resolve through
+`data.aws_eks_cluster.existing`. Terraform defers a data source read to apply
+time whenever anything it depends on has a pending change, and in a
+configuration where the existing cluster is itself a Terraform resource (as
+in `examples/customer-managed-cluster`), any planned change to something that
+cluster depends on is enough. A subnet tag update on the cluster's VPC
+deferred the read exactly this way, confirmed live. Deferred, the module
+outputs are unknown at plan time, and the kubernetes provider treats the
+unknown `host` as unset and falls back to `localhost` when refreshing
+resources already in state.
+
+### Fix
+
+Apply the pending upstream change on its own first, then plan normally. With
+no pending change left upstream of the cluster, the data source reads at plan
+time again and the providers get real endpoints:
+
+```bash
+terraform apply -target=module.vpc   # or whatever carries the pending change
+terraform plan                       # now refreshes against the real cluster
+```
+
+Do NOT reach for `-refresh=false` to get past the refresh error. Skipping
+refresh defers every data source in the configuration, including
+`aws_caller_identity`; the module's generated S3 bucket name then becomes
+unknown, and because `bucket` forces replacement, the resulting plan destroys
+and recreates the bucket holding n8n's binary execution data. Verified live;
+the plan was discarded unapplied.
+
 ## LBC fails with `couldn't auto-discover subnets: ... are tagged for other clusters`, deploying a second stack into a VPC another n8n deployment already uses
 
 ### Symptom

@@ -158,6 +158,18 @@ this project adheres to the stability contract in
   one customer-managed Postgres share one n8n instance's data. The
   migration/cutover case works; true multi-tenant sharing does not.
 
+  A third `docs/troubleshooting.md` entry, also from live validation: on the
+  `create_eks = false` path, a `terraform plan` with any change pending
+  upstream of the existing cluster defers `data.aws_eks_cluster.existing` to
+  apply time, which leaves the kubernetes provider's `host` unknown and makes
+  it dial `localhost` while refreshing resources already in state, failing
+  the plan with `connect: connection refused`. The entry gives the recovery
+  (apply the upstream change on its own first) and warns explicitly against
+  `-refresh=false`, which defers every data source including
+  `aws_caller_identity` and turns the generated S3 bucket name unknown,
+  planning a destroy and recreate of the bucket holding binary execution
+  data.
+
 - **`db_engine_version` now defaults to `18.4` instead of `16.9`.** n8n's
   Postgres version policy supports the latest two actively-maintained majors
   (17 and 18, as of this writing) plus one older, time-limited compatibility
