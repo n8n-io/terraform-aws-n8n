@@ -33,7 +33,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 FILES=(variables.tf outputs.tf)
-VARIABLE_BANNERS=("Common" "Foundation inputs" "EKS cluster" "Ingress" "Nodes" "n8n chart" "n8n resource requests and limits" "Execution settings" "S3" "Graceful shutdown" "Task runners" "RDS PostgreSQL" "ElastiCache Redis" "HPA: main pods" "HPA: webhook processor pods" "Observability" "Community packages" "KEDA: worker pods")
+# Keep in lockstep with the banner table in AGENTS.md ("Clear documentation" >
+# variable/output banners). This list had drifted: it still named a single
+# "n8n chart" section that variables.tf had long since split into "Cluster
+# controllers" / "Chart repositories" / "Chart versions", and predated the
+# "External Secrets" section, so this check failed on an unmodified checkout
+# and `task ci` was red on main for everyone.
+VARIABLE_BANNERS=("Common" "Foundation inputs" "EKS cluster" "Ingress" "Nodes" "Cluster controllers" "Chart repositories" "Chart versions" "n8n resource requests and limits" "Execution settings" "Graceful shutdown" "Task runners" "RDS PostgreSQL" "ElastiCache Redis" "S3" "HPA: main pods" "HPA: webhook processor pods" "Observability" "Community packages" "External Secrets" "KEDA: worker pods")
 OUTPUT_BANNERS=("App DNS" "Secrets" "Infrastructure")
 BANNER_LOOSE_RE='^#[[:space:]]+[─—-]'
 BANNER_STRICT_RE='^# ── (.+) ─{2,}$'

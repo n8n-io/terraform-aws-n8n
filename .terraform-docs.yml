@@ -29,9 +29,12 @@ settings:
   # versions.tf (e.g. `~> 5.0`), never as the resolved versions from
   # `.terraform.lock.hcl` (e.g. `5.100.0`). Constraints are what consumers
   # of this registry module actually contract against; resolved versions
-  # are local-environment noise. Per HashiCorp's guidance for modules
-  # published to the registry, `.terraform.lock.hcl` is intentionally not
-  # committed (see .gitignore), so this also keeps local renders matching
-  # CI even after a contributor runs `terraform init`.
+  # are local-environment noise. `.terraform.lock.hcl` IS committed here, at
+  # the module root and in every examples/* root module, purely to key the
+  # CI provider cache and speed up the local dev loop (see AGENTS.md
+  # "Provider lock files"); consumers of the published module never read it,
+  # since Terraform resolves a root module's own lock file rather than one
+  # committed inside a dependency. This setting is what keeps that lock file
+  # from leaking pinned versions into the README table.
   # https://developer.hashicorp.com/terraform/language/files/dependency-lock
   lockfile: false

@@ -31,6 +31,89 @@ mock_provider "aws" {
     }
   }
 
+  # data.aws_kms_key.db_byo / .db_logs_byo describe a caller-supplied CMK so an
+  # unusable key fails the plan instead of the apply (database.tf). The mock
+  # provider would otherwise invent values for key_state, key_usage and key_spec,
+  # and the db_byo_kms_keys_are_usable check would then report a healthy fixture
+  # key as disabled or asymmetric. These are the values a real symmetric,
+  # enabled, encryption key returns. Runs that want the unhappy path override
+  # them per-run.
+  #
+  # The key ID in every KMS ARN fixture below is a strictly RFC 4122-shaped UUID
+  # for the same reason: the provider's own key_id validator rejects anything
+  # else, including AWS's own docs placeholder 1234abcd-12ab-34cd-56ef-...,
+  # whose fourth group does not start with 8, 9, a or b. Do not "correct" the
+  # fixtures back to the docs value.
+  mock_data "aws_kms_key" {
+    defaults = {
+      key_state = "Enabled"
+      key_usage = "ENCRYPT_DECRYPT"
+      key_spec  = "SYMMETRIC_DEFAULT"
+    }
+  }
+
+  # data.aws_db_snapshot.restore is read whenever db_snapshot_identifier is set,
+  # so the checks in database.tf can compare the snapshot against the
+  # configuration before a ForceNew mismatch turns into a permanent replacement
+  # diff. Default fixture is an unencrypted 20 GB postgres snapshot, which is the
+  # combination that needs the fewest inputs to plan cleanly. Runs override it for
+  # the encrypted case and for each mismatch.
+  mock_data "aws_db_snapshot" {
+    defaults = {
+      engine            = "postgres"
+      encrypted         = false
+      kms_key_id        = ""
+      allocated_storage = 20
+      status            = "available"
+    }
+  }
+
+  # data.aws_secretsmanager_secret.external_secrets resolves each name in
+  # n8n_external_secrets_aws_secret_names to an ARN. Every instance gets the
+  # same fixture ARN unless a run overrides it, which is deliberately what
+  # makes the intersection-check tests below work: pointing
+  # module_managed.arns at this same value is what triggers the check.
+  mock_data "aws_secretsmanager_secret" {
+    defaults = {
+      arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:mock-AbCdEf"
+    }
+  }
+
+  # data.aws_secretsmanager_secrets.module_managed is the best-effort tag
+  # query behind the intersection check (s3.tf). Empty by default, matching a
+  # test account with nothing tagged ManagedBy = terraform in Secrets Manager.
+  mock_data "aws_secretsmanager_secrets" {
+    defaults = {
+      arns  = []
+      names = []
+    }
+  }
+
+  # data.aws_eks_cluster.existing (create_eks = false) describes a caller's
+  # existing cluster. Defaults match this file's own vpc_id and
+  # kubernetes_version defaults exactly, so a run that only sets create_eks =
+  # false and existing_eks_cluster_name plans cleanly with no VPC or version
+  # check firing; runs exercising those mismatches override vpc_config.vpc_id
+  # or version explicitly.
+  mock_data "aws_eks_cluster" {
+    defaults = {
+      endpoint = "https://EXISTING1234567890EXAMPLE.gr7.us-east-1.eks.amazonaws.com"
+      version  = "1.35"
+      certificate_authority = [{
+        data = "ZmFrZS1jYS1kYXRh"
+      }]
+      vpc_config = [{
+        vpc_id                    = "vpc-test12345"
+        cluster_security_group_id = "sg-existingcluster"
+        endpoint_private_access   = true
+        endpoint_public_access    = true
+        public_access_cidrs       = ["0.0.0.0/0"]
+        security_group_ids        = []
+        subnet_ids                = ["subnet-priv1", "subnet-priv2", "subnet-priv3", "subnet-pub1", "subnet-pub2", "subnet-pub3"]
+      }]
+    }
+  }
+
   override_data {
     target = data.aws_caller_identity.current
     values = {
@@ -41,7 +124,7 @@ mock_provider "aws" {
   }
 
   override_data {
-    target = data.aws_iam_policy_document.lbc
+    target = module.controllers.data.aws_iam_policy_document.lbc
     values = {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"elasticloadbalancing:*\"],\"Resource\":\"*\"}]}"
     }
@@ -70,18 +153,18 @@ run "defaults_produce_valid_plan" {
   command = plan
 
   assert {
-    condition     = aws_eks_cluster.n8n.name == "n8n-cluster"
+    condition     = aws_eks_cluster.n8n[0].name == "n8n-cluster"
     error_message = "var.cluster_name should flow through to aws_eks_cluster.name"
   }
 
   assert {
-    condition     = aws_eks_cluster.n8n.version == "1.35"
+    condition     = aws_eks_cluster.n8n[0].version == "1.35"
     error_message = "kubernetes_version should default to 1.35"
   }
 
   # Multi-main sizes nodes larger than single (6 n8n pods + overhead).
   assert {
-    condition     = aws_eks_node_group.n8n.instance_types[0] == "t3.xlarge"
+    condition     = aws_eks_node_group.n8n[0].instance_types[0] == "t3.xlarge"
     error_message = "node_instance_type default should be t3.xlarge for multi-main workload"
   }
 
@@ -93,30 +176,671 @@ run "defaults_produce_valid_plan" {
   # verified by a live apply, a manual scale event (or CA-driven scale), and a
   # follow-up `terraform plan` showing no changes to desired_size.
   assert {
-    condition     = aws_eks_node_group.n8n.scaling_config[0].desired_size == 3
+    condition     = aws_eks_node_group.n8n[0].scaling_config[0].desired_size == 3
     error_message = "node_desired should default to 3 (multi-main minimum)"
   }
 
   assert {
-    condition     = aws_eks_node_group.n8n.scaling_config[0].min_size == 3
+    condition     = aws_eks_node_group.n8n[0].scaling_config[0].min_size == 3
     error_message = "node_min should default to 3"
   }
 
   assert {
-    condition     = aws_eks_node_group.n8n.scaling_config[0].max_size == 6
+    condition     = aws_eks_node_group.n8n[0].scaling_config[0].max_size == 6
     error_message = "node_max should default to 6"
   }
 
   # Cluster Autoscaler relies on these tags for ASG discovery.
   assert {
-    condition     = aws_eks_node_group.n8n.tags["k8s.io/cluster-autoscaler/enabled"] == "true"
+    condition     = aws_eks_node_group.n8n[0].tags["k8s.io/cluster-autoscaler/enabled"] == "true"
     error_message = "node group must carry k8s.io/cluster-autoscaler/enabled tag"
   }
 
   assert {
-    condition     = aws_eks_node_group.n8n.tags["k8s.io/cluster-autoscaler/n8n-cluster"] == "owned"
+    condition     = aws_eks_node_group.n8n[0].tags["k8s.io/cluster-autoscaler/n8n-cluster"] == "owned"
     error_message = "node group must carry cluster-specific autoscaler ownership tag"
   }
+}
+
+# ── Credentials held in the shared Secret rather than in Helm values ─────────
+# The license key and the task runner token both used to be passed to the chart
+# as literal values, which put them in the rendered Helm release and therefore in
+# Helm's own release Secret in-cluster. Both now go through
+# kubernetes_secret.n8n, like the encryption key below.
+#
+# Only the presence and content of the Secret is assertable here. That the values
+# are *absent* from the Helm release is not: helm_release.n8n.values embeds the
+# Redis endpoint, so it is unknown at plan time, the same limitation the KEDA and
+# extraEnv sections further down work around.
+
+# ── Bring your own EKS cluster (create_eks) ──────────────────────────────────
+
+run "create_eks_default_creates_the_cluster" {
+  command = plan
+
+  assert {
+    condition = (
+      length(aws_eks_cluster.n8n) == 1 &&
+      length(aws_eks_node_group.n8n) == 1 &&
+      length(aws_iam_role.cluster) == 1 &&
+      length(aws_iam_role.nodes) == 1 &&
+      length(aws_eks_addon.pod_identity_agent) == 1 &&
+      length(data.aws_eks_cluster.existing) == 0
+    )
+    error_message = "create_eks = true (the default) must create the cluster, node group, both IAM roles and the Pod Identity Agent addon, and read no existing cluster"
+  }
+}
+
+run "create_eks_false_requires_existing_eks_cluster_name" {
+  command = plan
+
+  variables {
+    create_eks = false
+  }
+
+  # existing_eks_cluster_prerequisites_confirmed also defaults to false, so it
+  # trips here too; listed alongside the input this run is actually about.
+  expect_failures = [var.existing_eks_cluster_name, var.existing_eks_cluster_prerequisites_confirmed]
+}
+
+run "create_eks_false_requires_prerequisites_confirmed" {
+  command = plan
+
+  variables {
+    create_eks                = false
+    existing_eks_cluster_name = "platform-shared-cluster"
+  }
+
+  # The storage check also fires unconditionally whenever create_eks = false
+  # (see storage.tf), independent of this run's actual subject.
+  expect_failures = [var.existing_eks_cluster_prerequisites_confirmed, check.existing_eks_cluster_needs_its_own_storage_toggle]
+}
+
+run "create_eks_false_skips_module_managed_cluster_resources" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+  }
+
+  # The storage check always fires on this path (see storage.tf); listing it
+  # here is what proves nothing else unexpected also fired.
+  expect_failures = [check.existing_eks_cluster_needs_its_own_storage_toggle]
+
+  assert {
+    condition = (
+      length(aws_eks_cluster.n8n) == 0 &&
+      length(aws_eks_node_group.n8n) == 0 &&
+      length(aws_iam_role.cluster) == 0 &&
+      length(aws_iam_role.nodes) == 0 &&
+      length(aws_eks_addon.pod_identity_agent) == 0 &&
+      length(data.aws_eks_cluster.existing) == 1
+    )
+    error_message = "create_eks = false must create no module-managed cluster resources and instead read the existing cluster"
+  }
+
+  # eks_secrets_encryption_enabled defaults to true, but its CMK, alias and
+  # control-plane log group have no consumer on this path: the encryption_config
+  # they would feed lives on aws_eks_cluster.n8n, which does not exist here, and
+  # their policy needs aws_iam_role.cluster, which also does not exist.
+  assert {
+    condition = (
+      length(aws_kms_key.eks) == 0 &&
+      length(aws_kms_alias.eks) == 0 &&
+      length(aws_cloudwatch_log_group.eks_cluster) == 0
+    )
+    error_message = "create_eks = false must create no cluster-secrets CMK, alias, or control-plane log group: none of the module-created cluster resources they support exist on this path"
+  }
+
+  assert {
+    condition     = local.eks_cluster_name == "platform-shared-cluster"
+    error_message = "local.eks_cluster_name must resolve to the existing cluster's name on this path"
+  }
+
+  assert {
+    condition     = aws_iam_role_policy_attachment.s3.role == aws_iam_role.s3.name
+    error_message = "IAM/Pod Identity resources this module still owns (the n8n service account's S3 role, for example) must keep working against the existing cluster"
+  }
+}
+
+run "create_eks_false_rejects_a_vpc_mismatch" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+  }
+
+  override_data {
+    target = data.aws_eks_cluster.existing[0]
+    values = {
+      vpc_config = [{
+        vpc_id                    = "vpc-wrong00000"
+        cluster_security_group_id = "sg-existingcluster"
+        endpoint_private_access   = true
+        endpoint_public_access    = true
+        public_access_cidrs       = ["0.0.0.0/0"]
+        security_group_ids        = []
+        subnet_ids                = ["subnet-priv1"]
+      }]
+    }
+  }
+
+  expect_failures = [data.aws_eks_cluster.existing, check.existing_eks_cluster_needs_its_own_storage_toggle]
+}
+
+run "create_eks_false_kubernetes_version_mismatch_warns" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+    kubernetes_version                           = "1.31"
+  }
+
+  # The mock cluster is fixed at version 1.35 (see mock_data above), so asking
+  # for 1.31 here is the mismatch this check exists to surface. The storage
+  # check also fires: create_ebs_csi is left at its true default (see the run
+  # above).
+  expect_failures = [
+    check.existing_eks_cluster_kubernetes_version_matches,
+    check.existing_eks_cluster_needs_its_own_storage_toggle,
+  ]
+}
+
+# The mirror image of the required-when-false validation above: naming a cluster
+# while leaving create_eks at its default is accepted, and quietly builds a whole
+# new cluster next to the one the caller meant to deploy onto.
+run "existing_eks_cluster_name_without_create_eks_false_warns" {
+  command = plan
+
+  variables {
+    existing_eks_cluster_name = "platform-shared-cluster"
+  }
+
+  expect_failures = [check.existing_eks_cluster_name_requires_create_eks_false]
+}
+
+run "existing_eks_cluster_name_unset_is_silent_on_the_default_path" {
+  command = plan
+
+  assert {
+    condition     = length(data.aws_eks_cluster.existing) == 0
+    error_message = "create_eks = true (the default) must read no existing cluster, so the ignored-input check has nothing to warn about"
+  }
+}
+
+# ── create_ebs_csi ────────────────────────────────────────────────────────────
+
+run "create_ebs_csi_default_installs_storage" {
+  command = plan
+
+  assert {
+    condition     = length(module.controllers.ebs_csi_addon) == 1 && length(module.controllers.gp3_storage_class) == 1
+    error_message = "create_ebs_csi = true (the default) must install the CSI addon and the gp3 StorageClass"
+  }
+}
+
+run "create_ebs_csi_false_creates_no_storage_resources" {
+  command = plan
+
+  variables {
+    create_ebs_csi = false
+  }
+
+  assert {
+    condition     = length(module.controllers.ebs_csi_addon) == 0 && length(module.controllers.gp3_storage_class) == 0
+    error_message = "create_ebs_csi = false must create neither the CSI addon nor the gp3 StorageClass"
+  }
+
+  # The IAM role and its policy attachment are gated on the same toggle. Their
+  # only consumer is the addon's pod_identity_association block, so leaving them
+  # unconditional would strand a role carrying AmazonEBSCSIDriverPolicy that
+  # nothing can assume, the same way aws_security_group.rds used to be stranded
+  # on the external-database path.
+  assert {
+    condition     = length(module.controllers.ebs_csi_iam_role) == 0 && length(module.controllers.ebs_csi_iam_role_policy_attachment) == 0
+    error_message = "create_ebs_csi = false must leave behind neither the EBS CSI IAM role nor its AmazonEBSCSIDriverPolicy attachment"
+  }
+}
+
+run "create_ebs_csi_false_silences_the_existing_cluster_storage_check" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+    create_ebs_csi                               = false
+  }
+
+  assert {
+    condition     = length(module.controllers.ebs_csi_addon) == 0 && length(module.controllers.gp3_storage_class) == 0
+    error_message = "create_eks = false with create_ebs_csi = false must still create no storage resources, and the check above must not need listing in expect_failures"
+  }
+}
+
+run "license_key_reaches_pods_through_the_shared_secret" {
+  command = plan
+
+  assert {
+    condition     = kubernetes_secret.n8n[0].data["N8N_LICENSE_ACTIVATION_KEY"] == "test-license-key-not-real"
+    error_message = "n8n_license_key must reach pods through kubernetes_secret.n8n, not as a literal chart value"
+  }
+}
+
+run "task_runner_token_is_always_generated" {
+  command = plan
+
+  # Asserted on the configured length rather than on .result, which is
+  # computed and therefore unknown under `command = plan` even with the
+  # random provider mocked. Always generated: there is no override input.
+  assert {
+    condition     = random_password.task_runner_token.length == 32
+    error_message = "The task runner token must always be generated by the module; there is no caller-supplied override."
+  }
+}
+
+run "task_runner_token_secret_is_independent_of_task_runners_toggle" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = false
+  }
+
+  assert {
+    condition     = random_password.task_runner_token.length == 32
+    error_message = "The token must still be generated when n8n_task_runners_enabled = false; the sidecar toggle does not gate it."
+  }
+}
+
+# ── Encryption key override ──────────────────────────────────────────────────
+
+run "encryption_key_defaults_to_generated" {
+  command = plan
+
+  assert {
+    condition     = length(random_id.n8n_encryption_key) == 1
+    error_message = "Leaving n8n_encryption_key null must generate a key exactly as every deployment before this input did"
+  }
+}
+
+run "encryption_key_override_skips_generation" {
+  command = plan
+
+  variables {
+    n8n_encryption_key = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+
+  assert {
+    condition     = length(random_id.n8n_encryption_key) == 0
+    error_message = "Supplying n8n_encryption_key must skip generating a random one"
+  }
+
+  assert {
+    condition     = kubernetes_secret.n8n[0].data["N8N_ENCRYPTION_KEY"] == "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+    error_message = "The supplied n8n_encryption_key must reach the N8N_ENCRYPTION_KEY secret key unchanged"
+  }
+}
+
+run "encryption_key_rejects_wrong_length" {
+  command = plan
+
+  variables {
+    n8n_encryption_key = "tooshort"
+  }
+
+  expect_failures = [var.n8n_encryption_key]
+}
+
+run "encryption_key_rejects_non_hex" {
+  command = plan
+
+  variables {
+    # 64 characters (correct length), but the leading 'g' is not a hex digit.
+    n8n_encryption_key = "g0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde"
+  }
+
+  expect_failures = [var.n8n_encryption_key]
+}
+
+# ── B3: consuming Secrets you already manage ─────────────────────────────────
+# Five *_secret_ref inputs, one per credential, each taking {name, key} instead
+# of the value itself, so a caller already running something like External
+# Secrets Operator can point the module at a Secret it never reads rather than
+# handing over the raw credential.
+#
+# helm_release.n8n.values is unknown at plan time (see the note near the top
+# of this file), so these assert against the resources and locals the chart
+# value is built from, the same way the rest of this file tests chart wiring
+# it cannot reach directly.
+
+# ── License key secret ref ────────────────────────────────────────────────────
+# Lives in the shared kubernetes_secret.n8n. Setting this drops
+# N8N_LICENSE_ACTIVATION_KEY from that Secret's data rather than gating the
+# Secret itself, since the other three keys it carries are still needed.
+
+run "license_key_secret_ref_defaults_to_null_and_changes_nothing" {
+  command = plan
+
+  assert {
+    condition     = kubernetes_secret.n8n[0].data["N8N_LICENSE_ACTIVATION_KEY"] == "test-license-key-not-real"
+    error_message = "Leaving n8n_license_key_secret_ref null must not change the default license key wiring"
+  }
+}
+
+run "license_key_secret_ref_drops_the_key_from_the_shared_secret" {
+  command = plan
+
+  variables {
+    n8n_license_key            = null
+    n8n_license_key_secret_ref = { name = "caller-license-secret" }
+  }
+
+  assert {
+    condition     = !contains(keys(kubernetes_secret.n8n[0].data), "N8N_LICENSE_ACTIVATION_KEY")
+    error_message = "N8N_LICENSE_ACTIVATION_KEY must be dropped from kubernetes_secret.n8n's data when n8n_license_key_secret_ref supplies the license key instead"
+  }
+
+  assert {
+    condition     = !contains(keys(kubernetes_secret.n8n[0].data), "N8N_RUNNERS_AUTH_TOKEN")
+    error_message = "The task runner token never rides in kubernetes_secret.n8n; it reaches the chart as a literal Helm value regardless of n8n_license_key_secret_ref"
+  }
+
+  assert {
+    condition     = local.n8n_license_key_secret_ref_key == "license-key"
+    error_message = "n8n_license_key_secret_ref.key must default to \"license-key\", matching the chart's own license.existingSecret.key default"
+  }
+}
+
+run "license_key_secret_ref_key_can_be_overridden" {
+  command = plan
+
+  variables {
+    n8n_license_key            = null
+    n8n_license_key_secret_ref = { name = "caller-license-secret", key = "n8n-license" }
+  }
+
+  assert {
+    condition     = local.n8n_license_key_secret_ref_key == "n8n-license"
+    error_message = "An explicit key on n8n_license_key_secret_ref must override the \"license-key\" default"
+  }
+}
+
+run "license_key_secret_ref_rejects_being_set_alongside_the_value" {
+  command = plan
+
+  variables {
+    n8n_license_key            = "test-license-key-not-real"
+    n8n_license_key_secret_ref = { name = "caller-license-secret" }
+  }
+
+  expect_failures = [var.n8n_license_key_secret_ref]
+}
+
+run "license_key_is_required_when_neither_input_is_set" {
+  command = plan
+
+  variables {
+    n8n_license_key = null
+    # n8n_license_key_secret_ref left at its default (null) too: nothing
+    # supplies the license key at all.
+  }
+
+  # Owned by n8n_license_key_secret_ref's own validation rather than
+  # n8n_license_key's, to avoid a variable-validation dependency cycle between
+  # the two; see n8n_license_key_secret_ref's description.
+  expect_failures = [var.n8n_license_key_secret_ref]
+}
+
+
+# ── Encryption key secret ref ─────────────────────────────────────────────────
+# The exception to the exception: secretRefs.existingSecret takes ONE Secret
+# name for all four of N8N_ENCRYPTION_KEY, N8N_HOST, N8N_PORT and
+# N8N_PROTOCOL, so setting this gates kubernetes_secret.n8n to zero entirely
+# rather than dropping one key from it, unlike the license key and task runner
+# token above. That leaves the license key and the task runner token with
+# nowhere to live unless both are also caller-supplied through their own
+# *_secret_ref inputs; the module rejects the plan otherwise. See
+# n8n_encryption_key_secret_ref's description.
+
+run "encryption_key_secret_ref_defaults_to_null_and_changes_nothing" {
+  command = plan
+
+  assert {
+    condition     = length(kubernetes_secret.n8n) == 1
+    error_message = "Leaving n8n_encryption_key_secret_ref null must keep kubernetes_secret.n8n exactly as before"
+  }
+}
+
+run "encryption_key_secret_ref_gates_the_shared_secret_to_zero" {
+  command = plan
+
+  variables {
+    n8n_encryption_key_secret_ref = { name = "caller-core-secret" }
+    n8n_license_key               = null
+    n8n_license_key_secret_ref    = { name = "caller-core-secret" }
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n) == 0
+    error_message = "n8n_encryption_key_secret_ref must gate kubernetes_secret.n8n to zero: secretRefs.existingSecret replaces the whole Secret"
+  }
+
+  assert {
+    condition     = length(random_id.n8n_encryption_key) == 0
+    error_message = "n8n_encryption_key_secret_ref must skip generating a key nothing would read"
+  }
+
+  assert {
+    condition     = output.n8n_encryption_key == null
+    error_message = "n8n_encryption_key output must be null when the key lives in a caller-managed Secret the module never reads"
+  }
+}
+
+run "encryption_key_secret_ref_requires_the_license_ref_too" {
+  command = plan
+
+  variables {
+    n8n_encryption_key_secret_ref = { name = "caller-core-secret" }
+    # n8n_license_key_secret_ref intentionally left unset, and n8n_license_key
+    # stays at its file-level default: kubernetes_secret.n8n no longer exists
+    # for it to land in.
+  }
+
+  expect_failures = [var.n8n_encryption_key_secret_ref]
+}
+
+run "encryption_key_secret_ref_rejects_being_set_alongside_the_value" {
+  command = plan
+
+  variables {
+    n8n_encryption_key            = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+    n8n_encryption_key_secret_ref = { name = "caller-core-secret" }
+    n8n_license_key               = null
+    n8n_license_key_secret_ref    = { name = "caller-core-secret" }
+  }
+
+  expect_failures = [var.n8n_encryption_key_secret_ref]
+}
+
+run "encryption_key_secret_ref_rejects_a_nonstandard_key" {
+  command = plan
+
+  variables {
+    n8n_encryption_key_secret_ref = { name = "caller-core-secret", key = "custom-key" }
+    n8n_license_key               = null
+    n8n_license_key_secret_ref    = { name = "caller-core-secret" }
+  }
+
+  expect_failures = [var.n8n_encryption_key_secret_ref]
+}
+
+# ── Database password secret ref ─────────────────────────────────────────────
+# External-database path only: aws_db_instance.n8n needs the password's actual
+# value to provision the instance, so this is rejected with create_database =
+# true rather than silently ignored.
+
+run "db_password_secret_ref_defaults_to_null_and_changes_nothing" {
+  command = plan
+
+  assert {
+    condition     = length(kubernetes_secret.n8n_db) == 1
+    error_message = "Leaving db_password_secret_ref null must keep kubernetes_secret.n8n_db exactly as before"
+  }
+}
+
+run "db_password_secret_ref_gates_the_db_secret_to_zero" {
+  command = plan
+
+  variables {
+    create_database        = false
+    db_host                = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password_secret_ref = { name = "caller-db-secret" }
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n_db) == 0
+    error_message = "db_password_secret_ref must gate kubernetes_secret.n8n_db to zero: the chart points at the caller's Secret instead"
+  }
+
+  assert {
+    condition     = local.db_password_secret_ref_key == "password"
+    error_message = "db_password_secret_ref.key must default to \"password\", matching the chart's database.passwordSecret.key default"
+  }
+
+  assert {
+    condition     = output.db_password == null
+    error_message = "db_password output must be null when the password lives in a caller-managed Secret the module never reads"
+  }
+}
+
+run "db_password_secret_ref_key_can_be_overridden" {
+  command = plan
+
+  variables {
+    create_database        = false
+    db_host                = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password_secret_ref = { name = "caller-db-secret", key = "db-password" }
+  }
+
+  assert {
+    condition     = local.db_password_secret_ref_key == "db-password"
+    error_message = "An explicit key on db_password_secret_ref must override the \"password\" default"
+  }
+}
+
+run "db_password_secret_ref_rejects_module_managed_database" {
+  command = plan
+
+  variables {
+    # create_database left at its default (true): aws_db_instance.n8n needs
+    # the password's actual value, which a Secret name cannot supply.
+    db_password_secret_ref = { name = "caller-db-secret" }
+  }
+
+  expect_failures = [var.db_password_secret_ref]
+}
+
+run "db_password_secret_ref_rejects_being_set_alongside_the_value" {
+  command = plan
+
+  variables {
+    create_database        = false
+    db_host                = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password            = "external-db-password"
+    db_password_secret_ref = { name = "caller-db-secret" }
+  }
+
+  expect_failures = [var.db_password_secret_ref]
+}
+
+# ── Redis AUTH token secret ref ──────────────────────────────────────────────
+# External-Redis path only, mirroring db_password_secret_ref above:
+# aws_elasticache_replication_group.n8n needs the token's actual value to
+# provision module-managed ElastiCache.
+
+run "redis_auth_token_secret_ref_defaults_to_null_and_changes_nothing" {
+  command = plan
+
+  assert {
+    condition     = local.redis_auth_active == false
+    error_message = "Leaving redis_auth_token_secret_ref null must not activate Redis AUTH on the default (unencrypted, module-managed) path"
+  }
+}
+
+run "redis_auth_token_secret_ref_activates_auth_without_a_module_managed_secret" {
+  command = plan
+
+  variables {
+    create_elasticache          = false
+    redis_host                  = "redis.internal.example.com"
+    redis_auth_token_secret_ref = { name = "caller-redis-secret" }
+  }
+
+  assert {
+    condition     = local.redis_auth_active == true
+    error_message = "redis_auth_token_secret_ref must activate Redis AUTH exactly as redis_auth_token does"
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n_redis) == 0
+    error_message = "redis_auth_token_secret_ref must gate kubernetes_secret.n8n_redis to zero: the chart points at the caller's Secret instead"
+  }
+
+  assert {
+    condition     = local.redis_auth_token_secret_ref_key == "password"
+    error_message = "redis_auth_token_secret_ref.key must default to \"password\", matching the chart's redis.passwordSecret.key default"
+  }
+
+  assert {
+    condition     = output.redis_auth_token == null
+    error_message = "redis_auth_token output must be null when the token lives in a caller-managed Secret the module never reads"
+  }
+}
+
+run "redis_auth_token_secret_ref_key_can_be_overridden" {
+  command = plan
+
+  variables {
+    create_elasticache          = false
+    redis_host                  = "redis.internal.example.com"
+    redis_auth_token_secret_ref = { name = "caller-redis-secret", key = "redis-password" }
+  }
+
+  assert {
+    condition     = local.redis_auth_token_secret_ref_key == "redis-password"
+    error_message = "An explicit key on redis_auth_token_secret_ref must override the \"password\" default"
+  }
+}
+
+run "redis_auth_token_secret_ref_rejects_module_managed_elasticache" {
+  command = plan
+
+  variables {
+    # create_elasticache left at its default (true): the replication group
+    # needs the token's actual value, which a Secret name cannot supply.
+    redis_auth_token_secret_ref = { name = "caller-redis-secret" }
+  }
+
+  expect_failures = [var.redis_auth_token_secret_ref]
+}
+
+run "redis_auth_token_secret_ref_rejects_being_set_alongside_the_value" {
+  command = plan
+
+  variables {
+    create_elasticache          = false
+    redis_host                  = "redis.internal.example.com"
+    redis_auth_token            = "external-redis-token"
+    redis_auth_token_secret_ref = { name = "caller-redis-secret" }
+  }
+
+  expect_failures = [var.redis_auth_token_secret_ref]
 }
 
 # ── HPA: webhook processor scale-up stabilization ────────────────────────────
@@ -125,17 +849,17 @@ run "webhook_hpa_scale_up_stabilization_window_defaults_to_zero" {
   command = plan
 
   assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].behavior[0].scale_up[0].stabilization_window_seconds == 0
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].behavior[0].scale_up[0].stabilization_window_seconds == 0
     error_message = "n8n_webhook_hpa_scale_up_stabilization_window_seconds should default to 0, matching the Kubernetes API's own default."
   }
 
   # Regression guard: select_policy must be set explicitly. When it is unset,
   # the provider sends selectPolicy: "" and the Kubernetes API rejects the HPA
-  # at apply time (`Unsupported value: ""`) — mocked tests cannot catch that
+  # at apply time (`Unsupported value: ""`): mocked tests cannot catch that
   # server-side rejection, only this plan-time value.
   assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].behavior[0].scale_up[0].select_policy == "Max"
-    error_message = "n8n_webhook HPA scale_up.select_policy must be explicitly \"Max\" — an unset value is serialized as \"\" and rejected by the Kubernetes API at apply."
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].behavior[0].scale_up[0].select_policy == "Max"
+    error_message = "n8n_webhook HPA scale_up.select_policy must be explicitly \"Max\": an unset value is serialized as \"\" and rejected by the Kubernetes API at apply."
   }
 }
 
@@ -147,7 +871,7 @@ run "webhook_hpa_scale_up_stabilization_window_accepts_override" {
   }
 
   assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].behavior[0].scale_up[0].stabilization_window_seconds == 300
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].behavior[0].scale_up[0].stabilization_window_seconds == 300
     error_message = "n8n_webhook_hpa_scale_up_stabilization_window_seconds should flow through to the HPA's scale_up.stabilization_window_seconds."
   }
 }
@@ -197,7 +921,7 @@ run "rds_hardened_defaults" {
 
   assert {
     condition     = aws_db_instance.n8n[0].multi_az == true
-    error_message = "db_multi_az should default to true — HA is the point of the multi template"
+    error_message = "db_multi_az should default to true: HA is the point of the multi template"
   }
 
   assert {
@@ -253,7 +977,7 @@ run "rds_hardened_defaults" {
   # The explicit log group is what keeps RDS from auto-creating it with
   # "Never expire" retention as soon as enabled_cloudwatch_logs_exports fires.
   # Without this resource the operational drift is invisible to Checkov (the
-  # auto-created group isn't in Terraform state) but very real — a single
+  # auto-created group isn't in Terraform state) but very real: a single
   # busy RDS instance accumulates GB of logs per month with no cap.
   assert {
     condition     = aws_cloudwatch_log_group.rds_postgresql[0].retention_in_days == 365
@@ -276,16 +1000,16 @@ run "rds_hardened_defaults" {
 
   assert {
     condition     = aws_kms_key.db[0].enable_key_rotation == true
-    error_message = "CMK key rotation must be enabled — annual rotation is the AWS-recommended default and requires no ongoing operator action"
+    error_message = "CMK key rotation must be enabled: annual rotation is the AWS-recommended default and requires no ongoing operator action"
   }
 
   # ARN-linkage between aws_kms_key.db[0].arn and its three consumers
   # (aws_db_instance.kms_key_id, performance_insights_kms_key_id, and the
   # postgresql log group's kms_key_id) is verified by the live-apply step
   # documented in README.md → "Upgrading from a pre-CMK apply" rather than at
-  # plan time — the ARN is computed and would require terraform >= 1.11's
+  # plan time: the ARN is computed and would require terraform >= 1.11's
   # `override_during = plan` to assert against under the mock provider, which
-  # exceeds the module's `required_version = ">= 1.9"` floor.
+  # exceeds the module's `required_version = ">= 1.11"` floor.
 }
 
 run "db_storage_encrypted_false_skips_cmk" {
@@ -305,7 +1029,7 @@ run "db_storage_encrypted_false_skips_cmk" {
     error_message = "Setting db_storage_encrypted = false must also skip the KMS alias"
   }
 
-  # storage_encrypted explicitly false on the instance — preserves prior
+  # storage_encrypted explicitly false on the instance: preserves prior
   # unencrypted behavior on existing applies (no surprise replacement).
   assert {
     condition     = aws_db_instance.n8n[0].storage_encrypted == false
@@ -351,6 +1075,706 @@ run "external_db_skips_rds_instance" {
     condition     = length(aws_db_subnet_group.n8n) == 0
     error_message = "No RDS subnet group should be created when create_database = false"
   }
+
+  assert {
+    condition     = length(aws_security_group.rds) == 0
+    error_message = "No RDS security group should be created when create_database = false; it fronts nothing without an instance"
+  }
+}
+
+# ── Restore from a snapshot ─────────────────────────────────────────────────
+# The other half of n8n_encryption_key: a rebuilt stack can now restore the
+# database the encryption key belongs to, instead of having to restore it outside
+# the module and give up everything the module manages around the instance.
+#
+# Every check here guards a ForceNew argument, so the failure they prevent is not
+# a one-off error but a plan that wants to replace the instance on every apply and
+# can never reconcile.
+
+run "db_snapshot_identifier_defaults_to_creating_an_empty_database" {
+  command = plan
+
+  # Asserted on the data source rather than on
+  # aws_db_instance.n8n[0].snapshot_identifier == null: the argument is
+  # Optional+Computed, so an unset value renders as "known after apply" and the
+  # comparison fails with "Unknown condition value" rather than passing. Same
+  # limitation as redis_apply_immediately, which locals.tf works around the same
+  # way. A concrete value IS assertable, which is what the next run does.
+  assert {
+    condition     = length(data.aws_db_snapshot.restore) == 0
+    error_message = "No snapshot should be described, or restored from, when db_snapshot_identifier is null"
+  }
+}
+
+run "db_snapshot_identifier_restores_the_module_managed_instance" {
+  command = plan
+
+  variables {
+    db_snapshot_identifier = "n8n-postgres-pre-rebuild"
+    # The fixture snapshot is unencrypted, and a restore inherits that, so the
+    # configuration has to say so too.
+    db_storage_encrypted = false
+    # Supplied because restoring without it is the one restore mistake that
+    # cannot be seen in the plan; see the dedicated run below.
+    n8n_encryption_key = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].snapshot_identifier == "n8n-postgres-pre-rebuild"
+    error_message = "db_snapshot_identifier must reach aws_db_instance.n8n.snapshot_identifier"
+  }
+
+  # The module still owns everything around the restored instance, which is the
+  # whole reason for the input: the create_database = false alternative gives all
+  # of this up.
+  assert {
+    condition = (
+      length(aws_db_subnet_group.n8n) == 1 &&
+      length(aws_cloudwatch_log_group.rds_postgresql) == 1 &&
+      aws_db_instance.n8n[0].monitoring_interval == 60 &&
+      aws_db_instance.n8n[0].performance_insights_enabled == true
+    )
+    error_message = "A restored instance must still get the module-managed subnet group, log group, Enhanced Monitoring and Performance Insights"
+  }
+
+  # The generated password reaching a restored instance is not assertable here:
+  # random_password.db_password.result is computed, so both sides of that
+  # comparison are unknown under `command = plan`. It is a provider behaviour
+  # rather than a module one anyway. RestoreDBInstanceFromDBSnapshot takes no
+  # password parameter, and the AWS provider issues a ModifyDBInstance with
+  # MasterUserPassword immediately after the restore, so the module's credential
+  # becomes the restored instance's master password. Verified by reading
+  # internal/service/rds/instance.go, and worth re-checking on a provider major
+  # bump, because n8n silently cannot connect if it ever stops.
+}
+
+run "db_snapshot_restore_accepts_a_matching_encrypted_snapshot" {
+  command = plan
+
+  variables {
+    db_snapshot_identifier = "n8n-postgres-pre-rebuild"
+    create_db_kms_key      = false
+    db_kms_key_arn         = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    n8n_encryption_key     = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+
+  override_data {
+    target = data.aws_db_snapshot.restore[0]
+    values = {
+      engine            = "postgres"
+      encrypted         = true
+      kms_key_id        = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+      allocated_storage = 20
+      status            = "available"
+    }
+  }
+
+  # Only the log-group disclosure fires, which is about db_kms_key_arn and not
+  # about the restore. Listing it alone asserts that none of the snapshot checks
+  # complain about a correctly-described encrypted snapshot.
+  expect_failures = [check.db_kms_key_arn_does_not_encrypt_postgresql_logs]
+}
+
+run "db_snapshot_restore_rejects_an_encryption_mismatch" {
+  command = plan
+
+  variables {
+    db_snapshot_identifier = "n8n-postgres-pre-rebuild"
+    # Snapshot fixture is unencrypted; the default db_storage_encrypted = true
+    # claims otherwise, and storage_encrypted is ForceNew.
+    n8n_encryption_key = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+
+  expect_failures = [check.db_snapshot_encryption_matches_configuration]
+}
+
+run "db_snapshot_restore_rejects_a_key_that_is_not_the_snapshots" {
+  command = plan
+
+  variables {
+    db_snapshot_identifier = "n8n-postgres-pre-rebuild"
+    create_db_kms_key      = false
+    db_kms_key_arn         = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    n8n_encryption_key     = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+
+  override_data {
+    target = data.aws_db_snapshot.restore[0]
+    values = {
+      engine            = "postgres"
+      encrypted         = true
+      kms_key_id        = "arn:aws:kms:us-east-1:123456789012:key/9f8e7d6c-5b4a-4938-8271-6f5e4d3c2b1a"
+      allocated_storage = 20
+      status            = "available"
+    }
+  }
+
+  expect_failures = [
+    check.db_snapshot_encryption_matches_configuration,
+    check.db_kms_key_arn_does_not_encrypt_postgresql_logs,
+  ]
+}
+
+run "db_snapshot_restore_rejects_a_non_postgres_snapshot" {
+  command = plan
+
+  variables {
+    db_snapshot_identifier = "some-mysql-snapshot"
+    db_storage_encrypted   = false
+    n8n_encryption_key     = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+
+  override_data {
+    target = data.aws_db_snapshot.restore[0]
+    values = {
+      engine            = "mysql"
+      encrypted         = false
+      kms_key_id        = ""
+      allocated_storage = 20
+      status            = "available"
+    }
+  }
+
+  expect_failures = [check.db_snapshot_engine_is_postgres]
+}
+
+run "db_snapshot_restore_rejects_a_snapshot_larger_than_the_allocation" {
+  command = plan
+
+  variables {
+    db_snapshot_identifier = "n8n-postgres-pre-rebuild"
+    db_storage_encrypted   = false
+    db_allocated_storage   = 20
+    n8n_encryption_key     = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+
+  override_data {
+    target = data.aws_db_snapshot.restore[0]
+    values = {
+      engine            = "postgres"
+      encrypted         = false
+      kms_key_id        = ""
+      allocated_storage = 200
+      status            = "available"
+    }
+  }
+
+  expect_failures = [check.db_snapshot_fits_allocated_storage]
+}
+
+# The restore mistake nothing else can catch. Every other snapshot check compares
+# the configuration against something AWS reports about the snapshot; this one
+# compares two inputs, because the damage is inside the database and invisible to
+# both Terraform and AWS. A restore without the original key applies cleanly and
+# leaves every stored credential unreadable.
+run "db_snapshot_restore_without_the_encryption_key_warns" {
+  command = plan
+
+  variables {
+    db_snapshot_identifier = "n8n-postgres-pre-rebuild"
+    db_storage_encrypted   = false
+    # n8n_encryption_key deliberately left null, which is the whole point.
+  }
+
+  expect_failures = [check.db_snapshot_restore_needs_the_original_encryption_key]
+
+  # The module still generates a key, so the failure is a warning about what that
+  # means rather than a refusal. Restoring for the workflow data while accepting
+  # that the credentials are disposable stays possible.
+  assert {
+    condition     = length(random_id.n8n_encryption_key) == 1
+    error_message = "The warning must not stop the module generating a key; it is a check, not a validation"
+  }
+}
+
+# The inverse. A supplied key silences it, which is what makes the warning mean
+# something rather than being noise on every restore.
+run "db_snapshot_restore_with_the_encryption_key_is_quiet" {
+  command = plan
+
+  variables {
+    db_snapshot_identifier = "n8n-postgres-pre-rebuild"
+    db_storage_encrypted   = false
+    n8n_encryption_key     = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+
+  assert {
+    condition     = length(random_id.n8n_encryption_key) == 0
+    error_message = "A restore with a supplied key must reuse it rather than generating one"
+  }
+}
+
+# The same inverse, but through B3's Secret reference rather than a direct value.
+# The check must recognize this input too: a caller supplying the original key via
+# n8n_encryption_key_secret_ref has satisfied the same requirement as n8n_encryption_key,
+# and a warning here would be a false positive against a correct B3 usage.
+run "db_snapshot_restore_with_the_encryption_key_secret_ref_is_quiet" {
+  command = plan
+
+  variables {
+    db_snapshot_identifier        = "n8n-postgres-pre-rebuild"
+    db_storage_encrypted          = false
+    n8n_encryption_key_secret_ref = { name = "byo-encryption-secret" }
+    # n8n_encryption_key_secret_ref gates kubernetes_secret.n8n entirely, so this
+    # must also be set; not what this test is about, just satisfying that rule.
+    # n8n_license_key must be nulled out too: the file-level default in this test
+    # file's own variables block sets it, which would otherwise collide with
+    # n8n_license_key_secret_ref below.
+    n8n_license_key            = null
+    n8n_license_key_secret_ref = { name = "byo-license-secret" }
+  }
+
+  assert {
+    condition     = length(random_id.n8n_encryption_key) == 0
+    error_message = "A restore with a supplied key must reuse it rather than generating one"
+  }
+}
+
+# And it must stay silent where the snapshot is ignored anyway. The
+# create_database = false run above already proves this implicitly, since it lists
+# only one expected check failure, but stating it here means a regression names
+# itself instead of surfacing as a confusing failure in an unrelated run.
+run "db_snapshot_encryption_key_warning_respects_create_database" {
+  command = plan
+
+  variables {
+    create_database        = false
+    db_host                = "n8n.example.internal"
+    db_password            = "external-password"
+    db_snapshot_identifier = "n8n-postgres-pre-rebuild"
+  }
+
+  expect_failures = [check.db_snapshot_identifier_requires_module_managed_database]
+}
+
+run "db_snapshot_identifier_with_an_external_database_warns" {
+  command = plan
+
+  variables {
+    db_snapshot_identifier = "n8n-postgres-pre-rebuild"
+    create_database        = false
+    db_host                = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password            = "external-db-password"
+  }
+
+  expect_failures = [check.db_snapshot_identifier_requires_module_managed_database]
+
+  assert {
+    condition     = length(data.aws_db_snapshot.restore) == 0
+    error_message = "An ignored db_snapshot_identifier must not even be described, let alone restored"
+  }
+}
+
+run "db_snapshot_identifier_rejects_a_blank_value" {
+  command = plan
+
+  variables {
+    db_snapshot_identifier = "  "
+  }
+
+  expect_failures = [var.db_snapshot_identifier]
+}
+
+# ── BYO KMS key for RDS encryption ──────────────────────────────────────────
+# db_kms_key_arn is a purely additive escape hatch: left at its null default,
+# behavior must be byte-for-byte identical to before it existed (module still
+# mints its own CMK). Setting it must suppress that CMK and thread the
+# supplied ARN through to every consumer instead.
+
+run "db_kms_key_arn_defaults_to_module_managed_cmk" {
+  command = plan
+
+  assert {
+    condition     = length(aws_kms_key.db) == 1
+    error_message = "With db_kms_key_arn left at its null default, the module must still create its own CMK (unchanged default behavior)"
+  }
+
+  assert {
+    condition     = length(aws_kms_alias.db) == 1
+    error_message = "With db_kms_key_arn left at its null default, the module must still create the CMK alias (unchanged default behavior)"
+  }
+
+  # aws_db_instance.n8n[0].kms_key_id == aws_kms_key.db[0].arn is NOT asserted
+  # here: aws_kms_key.db[0].arn is computed, so under the mock provider it is
+  # unknown at plan time ("Unknown condition value"). The ARN-linkage between
+  # the CMK and its three consumers is verified by the live-apply step
+  # documented in README.md → "Upgrading from a pre-CMK apply", same
+  # limitation already called out next to the rds_hardened_defaults run above.
+}
+
+run "db_kms_key_arn_suppresses_module_managed_cmk" {
+  command = plan
+
+  variables {
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+  }
+
+  assert {
+    condition     = length(aws_kms_key.db) == 0
+    error_message = "Setting db_kms_key_arn must suppress module-managed CMK creation (aws_kms_key.db)"
+  }
+
+  assert {
+    condition     = length(aws_kms_alias.db) == 0
+    error_message = "Setting db_kms_key_arn must also suppress the module-managed CMK alias (aws_kms_alias.db)"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].kms_key_id == "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    error_message = "aws_db_instance.n8n.kms_key_id must use the caller-supplied db_kms_key_arn"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].performance_insights_kms_key_id == "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    error_message = "performance_insights_kms_key_id must use the caller-supplied db_kms_key_arn"
+  }
+
+  # The postgresql log group is deliberately NOT on the caller's key. CloudWatch
+  # Logs refuses a key whose policy does not name logs.<region>.amazonaws.com,
+  # and no data source lets the module check whether this one does, so it falls
+  # back to CloudWatch's AWS-managed encryption rather than failing the apply
+  # part-way through. db_logs_kms_key_arn is the opt-in, covered by the next run.
+  assert {
+    condition     = aws_cloudwatch_log_group.rds_postgresql[0].kms_key_id == null
+    error_message = "db_kms_key_arn alone must leave the postgresql log group on CloudWatch's AWS-managed key, not the caller-supplied CMK"
+  }
+
+  # And it is disclosed rather than silent. Listing only this check also asserts
+  # that no other check fires on this path: terraform test fails a run on any
+  # check failure it was not told to expect.
+  expect_failures = [check.db_kms_key_arn_does_not_encrypt_postgresql_logs]
+}
+
+run "db_logs_kms_key_arn_encrypts_the_postgresql_log_group" {
+  command = plan
+
+  variables {
+    create_db_kms_key       = false
+    db_kms_key_arn          = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    db_logs_kms_key_enabled = true
+    db_logs_kms_key_arn     = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_group.rds_postgresql[0].kms_key_id == "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    error_message = "Setting db_logs_kms_key_arn must encrypt the postgresql log group with that key"
+  }
+
+  # The instance's own two consumers are unaffected by the logs key.
+  assert {
+    condition     = aws_db_instance.n8n[0].kms_key_id == "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    error_message = "db_logs_kms_key_arn must not change which key encrypts RDS storage"
+  }
+}
+
+run "db_logs_kms_key_arn_is_ignored_without_the_toggle" {
+  command = plan
+
+  variables {
+    db_logs_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+  }
+
+  # The ARN alone changes nothing: db_logs_kms_key_enabled is what opts the log
+  # group onto a caller key, and create_db_kms_key is still at its default, so
+  # the module mints its own CMK and that is what the log group gets. The check
+  # says so rather than failing, since staging the ARN in tfvars ahead of
+  # flipping both toggles is a legitimate thing to do.
+  assert {
+    condition     = length(aws_kms_key.db) == 1
+    error_message = "db_logs_kms_key_arn alone must not suppress the module-managed CMK"
+  }
+
+  # kms_key_id is not asserted: it resolves to aws_kms_key.db[0].arn, which is
+  # computed and therefore unknown at plan time under the mock provider, the same
+  # limitation as db_kms_key_arn_defaults_to_module_managed_cmk above.
+
+  expect_failures = [check.db_logs_kms_key_arn_requires_db_logs_kms_key_enabled]
+}
+
+# ── The KMS toggles' own validations ──────────────────────────────────────────
+# create_db_kms_key / db_logs_kms_key_enabled / create_s3_kms_key exist so the
+# module never gates a `count` on whether a caller-supplied ARN is null: an ARN
+# wired from a KMS key created in the same configuration is unknown until apply,
+# and an unknown count fails the plan outright. See the comment above
+# aws_kms_key.db in database.tf. These runs pin the incomplete-configuration
+# half of each toggle's contract.
+
+run "create_db_kms_key_false_without_an_arn_is_rejected" {
+  command = plan
+
+  variables {
+    create_db_kms_key = false
+  }
+
+  expect_failures = [var.create_db_kms_key]
+}
+
+run "db_logs_kms_key_enabled_without_an_arn_is_rejected" {
+  command = plan
+
+  variables {
+    create_db_kms_key       = false
+    db_kms_key_arn          = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    db_logs_kms_key_enabled = true
+  }
+
+  expect_failures = [var.db_logs_kms_key_enabled]
+}
+
+# The log-group toggle is meaningless while the module owns the key: its own
+# CMK already carries AllowCloudWatchLogsEncrypt and already encrypts the log
+# group, so there is nothing to opt into.
+run "db_logs_kms_key_enabled_requires_create_db_kms_key_false" {
+  command = plan
+
+  variables {
+    db_logs_kms_key_enabled = true
+    db_logs_kms_key_arn     = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+  }
+
+  expect_failures = [var.db_logs_kms_key_enabled]
+}
+
+run "create_s3_kms_key_false_without_an_arn_is_rejected" {
+  command = plan
+
+  variables {
+    create_s3_kms_key = false
+  }
+
+  expect_failures = [var.create_s3_kms_key]
+}
+
+run "create_s3_kms_key_false_with_an_arn_suppresses_the_module_cmk" {
+  command = plan
+
+  variables {
+    create_s3_kms_key = false
+    s3_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+  }
+
+  assert {
+    condition     = length(aws_kms_key.s3) == 0
+    error_message = "create_s3_kms_key = false must suppress the module-managed S3 CMK"
+  }
+
+  assert {
+    condition     = length(aws_kms_alias.s3) == 0
+    error_message = "create_s3_kms_key = false must also suppress the module-managed S3 CMK alias"
+  }
+
+  assert {
+    # rule is a set, so it is iterated rather than indexed.
+    condition = alltrue([
+      for r in aws_s3_bucket_server_side_encryption_configuration.n8n[0].rule :
+      alltrue([
+        for d in r.apply_server_side_encryption_by_default :
+        d.kms_master_key_id == "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d" && d.sse_algorithm == "aws:kms"
+      ])
+    ])
+    error_message = "The bucket's encryption configuration must stay SSE-KMS and name the caller-supplied key"
+  }
+}
+
+# The point of the whole exercise: the ARN is now free to be a value Terraform
+# cannot know until apply, because nothing gates a count on it any more.
+run "create_s3_kms_key_true_still_creates_the_module_cmk" {
+  command = plan
+
+  assert {
+    condition     = length(aws_kms_key.s3) == 1
+    error_message = "create_s3_kms_key defaults to true, so the module must still create its own CMK (unchanged default behavior)"
+  }
+}
+
+# An unusable key is caught while planning rather than part-way through the
+# apply. Only key_state is exercised here: key_usage and key_spec take the same
+# code path through local.db_byo_kms_keys and the same mock_data override, so a
+# third and fourth near-identical run would assert the same wiring twice.
+run "a_key_pending_deletion_is_reported_at_plan_time" {
+  command = plan
+
+  variables {
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+  }
+
+  override_data {
+    target = data.aws_kms_key.db_byo[0]
+    values = {
+      key_state = "PendingDeletion"
+      key_usage = "ENCRYPT_DECRYPT"
+      key_spec  = "SYMMETRIC_DEFAULT"
+    }
+  }
+
+  expect_failures = [
+    check.db_byo_kms_keys_are_usable,
+    check.db_kms_key_arn_does_not_encrypt_postgresql_logs,
+  ]
+}
+
+# A key from another region is rejected from the ARN string alone, with no API
+# call, so this holds on every path including the ones where the key is ignored.
+run "a_key_in_another_region_is_reported_at_plan_time" {
+  command = plan
+
+  variables {
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:eu-west-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+  }
+
+  expect_failures = [
+    check.db_byo_kms_key_regions_match,
+    check.db_kms_key_arn_does_not_encrypt_postgresql_logs,
+  ]
+}
+
+run "db_logs_kms_key_arn_validator_rejects_malformed_arn" {
+  command = plan
+
+  variables {
+    db_logs_kms_key_arn = "not-an-arn"
+  }
+
+  expect_failures = [var.db_logs_kms_key_arn]
+}
+
+run "db_logs_kms_key_arn_validator_rejects_alias_arn" {
+  command = plan
+
+  variables {
+    # create_db_kms_key = false is required alongside db_logs_kms_key_enabled
+    # = true, else db_logs_kms_key_enabled's own second validation
+    # (db_logs_kms_key_enabled = true requires create_db_kms_key = false)
+    # fails too, at create_db_kms_key's true default, and this run would then
+    # have an unexpected failure beyond the alias-ARN one under test. Setting
+    # create_db_kms_key = false in turn requires db_kms_key_arn (create_database
+    # and db_storage_encrypted are both still at their true defaults here), so
+    # a valid key ARN is supplied to keep that validation from firing too.
+    create_db_kms_key       = false
+    db_kms_key_arn          = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    db_logs_kms_key_enabled = true
+    db_logs_kms_key_arn     = "arn:aws:kms:us-east-1:123456789012:alias/my-key"
+  }
+
+  expect_failures = [var.db_logs_kms_key_arn]
+}
+
+run "db_kms_key_arn_validator_rejects_malformed_arn" {
+  command = plan
+
+  variables {
+    db_kms_key_arn = "not-an-arn"
+  }
+
+  expect_failures = [var.db_kms_key_arn]
+}
+
+run "db_kms_key_arn_validator_rejects_alias_arn" {
+  command = plan
+
+  variables {
+    # An alias ARN, not a key ARN: the validator requires the latter.
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:alias/my-key"
+  }
+
+  expect_failures = [var.db_kms_key_arn]
+}
+
+run "db_kms_key_arn_set_with_storage_encryption_disabled_warns" {
+  command = plan
+
+  variables {
+    create_db_kms_key    = false
+    db_kms_key_arn       = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    db_storage_encrypted = false
+  }
+
+  expect_failures = [check.db_kms_key_arn_requires_module_managed_encrypted_database]
+
+  # The check above tells the caller their key is unused. These make that true.
+  # local.db_kms_key_arn originally returned the BYO key regardless of
+  # db_storage_encrypted, so the log group really was encrypted with it while the
+  # warning said otherwise, and on a key whose policy probably does not let
+  # CloudWatch Logs use it, which fails the apply.
+  assert {
+    condition     = aws_cloudwatch_log_group.rds_postgresql[0].kms_key_id == null
+    error_message = "db_storage_encrypted = false must leave the postgresql log group unencrypted even when db_kms_key_arn is set"
+  }
+
+  # Asserted on the local rather than on aws_db_instance.n8n[0].kms_key_id and
+  # .performance_insights_kms_key_id: the AWS provider marks both computed, so
+  # they stay unknown under `command = plan` whatever is fed in. The local is the
+  # single value both arguments read, so it is the thing worth pinning anyway.
+  assert {
+    condition     = local.db_kms_key_arn == null
+    error_message = "db_storage_encrypted = false must resolve local.db_kms_key_arn to null even when db_kms_key_arn is set, so nothing downstream encrypts with the supplied key"
+  }
+}
+
+# The BYO key reaches storage and Performance Insights on the supported path,
+# and stops there: the postgresql log group needs db_logs_kms_key_arn as well,
+# because CloudWatch Logs is the one consumer that refuses a key whose policy the
+# module cannot inspect (see database.tf and README.md -> "Bring your own KMS key
+# for RDS").
+run "db_kms_key_arn_reaches_storage_and_pi_but_not_the_log_group" {
+  command = plan
+
+  variables {
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+  }
+
+  # local.db_kms_key_arn for the same reason as the run above: the instance's own
+  # kms_key_id and performance_insights_kms_key_id are computed and stay unknown
+  # at plan time. Both read this local and nothing else.
+  assert {
+    condition     = local.db_kms_key_arn == "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    error_message = "The supplied key must be what RDS storage and Performance Insights encrypt with"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_group.rds_postgresql[0].kms_key_id == null
+    error_message = "The supplied key must not encrypt the postgresql log group unless db_logs_kms_key_arn opts in"
+  }
+
+  expect_failures = [check.db_kms_key_arn_does_not_encrypt_postgresql_logs]
+}
+
+run "db_kms_key_arn_set_with_create_database_false_warns" {
+  command = plan
+
+  variables {
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    create_database   = false
+    db_host           = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password       = "external-db-password"
+  }
+
+  expect_failures = [check.db_kms_key_arn_requires_module_managed_encrypted_database]
+}
+
+# db_kms_key_arn on its own trips exactly one check, the log-group disclosure,
+# and never the "set but ignored" footgun check. The disclosure is silenceable by
+# setting db_logs_kms_key_arn, which is what separates it from noise.
+run "db_kms_key_arn_with_defaults_trips_only_the_log_group_disclosure" {
+  command = plan
+
+  variables {
+    create_db_kms_key = false
+    db_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+  }
+
+  assert {
+    condition     = length(aws_kms_key.db) == 0
+    error_message = "db_kms_key_arn alone (with defaults otherwise) must suppress the module-managed CMK without tripping the footgun check"
+  }
+
+  expect_failures = [check.db_kms_key_arn_does_not_encrypt_postgresql_logs]
 }
 
 # Cross-variable validation: when the caller opts into an external database
@@ -393,7 +1817,11 @@ run "external_db_missing_password_fails_validation" {
     # db_password intentionally unset
   }
 
-  expect_failures = [var.db_password]
+  # The combined "one of db_password / db_password_secret_ref is required"
+  # check lives on db_password_secret_ref's own validation, not db_password's,
+  # to avoid a variable-validation dependency cycle between the two; see that
+  # variable.
+  expect_failures = [var.db_password_secret_ref]
 }
 
 # ── Ingress ──────────────────────────────────────────────────────────────────
@@ -1015,8 +2443,31 @@ run "namespace_output_carries_a_dependency_on_the_namespace_resource" {
   }
 
   assert {
-    condition     = kubernetes_namespace.n8n.metadata[0].name == "n8n-custom"
+    condition     = kubernetes_namespace.n8n[0].metadata[0].name == "n8n-custom"
     error_message = "var.namespace must still drive the namespace the module creates"
+  }
+}
+
+# create_namespace = false: the caller's namespace already exists, so the
+# module must not create one, and everything that used to read the resource
+# attribute must fall back to var.namespace directly instead.
+
+run "create_namespace_false_creates_no_namespace" {
+  command = plan
+
+  variables {
+    create_namespace = false
+    namespace        = "platform-managed"
+  }
+
+  assert {
+    condition     = length(kubernetes_namespace.n8n) == 0
+    error_message = "No namespace should be created when create_namespace = false"
+  }
+
+  assert {
+    condition     = output.namespace == "platform-managed"
+    error_message = "The namespace output must fall back to var.namespace when the module does not create the namespace"
   }
 }
 
@@ -1060,7 +2511,7 @@ run "rds_security_group_allows_vpc_cidr_only_by_default" {
   command = plan
 
   assert {
-    condition     = tolist(aws_security_group.rds.ingress)[0].cidr_blocks == tolist(["10.0.0.0/16"])
+    condition     = tolist(aws_security_group.rds[0].ingress)[0].cidr_blocks == tolist(["10.0.0.0/16"])
     error_message = "By default only the VPC CIDR should reach the database"
   }
 }
@@ -1073,7 +2524,7 @@ run "db_allowed_cidr_blocks_are_appended_to_vpc_cidr" {
   }
 
   assert {
-    condition     = tolist(aws_security_group.rds.ingress)[0].cidr_blocks == tolist(["10.0.0.0/16", "10.20.0.0/16", "192.168.100.0/24"])
+    condition     = tolist(aws_security_group.rds[0].ingress)[0].cidr_blocks == tolist(["10.0.0.0/16", "10.20.0.0/16", "192.168.100.0/24"])
     error_message = "db_allowed_cidr_blocks should be appended to the always-allowed VPC CIDR"
   }
 }
@@ -1100,7 +2551,7 @@ run "duplicate_cidrs_are_collapsed_not_passed_through" {
   }
 
   assert {
-    condition     = tolist(aws_security_group.rds.ingress)[0].cidr_blocks == tolist(["10.0.0.0/16", "10.20.0.0/16"])
+    condition     = tolist(aws_security_group.rds[0].ingress)[0].cidr_blocks == tolist(["10.0.0.0/16", "10.20.0.0/16"])
     error_message = "Duplicate CIDRs must be collapsed, including a repeat of the VPC CIDR itself"
   }
 }
@@ -1113,7 +2564,7 @@ run "no_security_group_rule_when_list_is_empty" {
   command = plan
 
   assert {
-    condition     = length(aws_security_group.rds.ingress) == 1
+    condition     = length(aws_security_group.rds[0].ingress) == 1
     error_message = "With db_allowed_security_group_ids empty there must be exactly one ingress rule, the CIDR one. A second empty rule would be a spurious diff for every existing deployment"
   }
 }
@@ -1126,7 +2577,7 @@ run "security_group_ingress_rule_is_added_when_set" {
   }
 
   assert {
-    condition     = length(aws_security_group.rds.ingress) == 2
+    condition     = length(aws_security_group.rds[0].ingress) == 2
     error_message = "Setting db_allowed_security_group_ids must add a second ingress rule"
   }
 
@@ -1134,7 +2585,7 @@ run "security_group_ingress_rule_is_added_when_set" {
   # length() rather than compared directly.
   assert {
     condition = length([
-      for r in tolist(aws_security_group.rds.ingress) : r
+      for r in tolist(aws_security_group.rds[0].ingress) : r
       if try(length(r.security_groups), 0) == 2 && r.from_port == 5432 && r.to_port == 5432
     ]) == 1
     error_message = "The security group rule must allow both groups on port 5432"
@@ -1143,7 +2594,7 @@ run "security_group_ingress_rule_is_added_when_set" {
   # The CIDR rule must be untouched by the addition.
   assert {
     condition = length([
-      for r in tolist(aws_security_group.rds.ingress) : r
+      for r in tolist(aws_security_group.rds[0].ingress) : r
       if r.cidr_blocks == tolist(["10.0.0.0/16"])
     ]) == 1
     error_message = "Adding security group sources must not disturb the VPC CIDR rule"
@@ -1830,7 +3281,37 @@ run "redis_auth_token_output_is_null_for_ha_without_tls" {
 # plaintext endpoint with a credential it has never heard of. That applies
 # cleanly and fails at runtime, so it is a hard validation rather than one of
 # the `check` warnings below.
-run "transit_encryption_with_external_redis_fails_validation" {
+# ── External Redis: TLS and AUTH ─────────────────────────────────────────────
+# create_elasticache = false no longer requires an unauthenticated, plaintext
+# endpoint. redis_transit_encryption_enabled and redis_auth_token each describe
+# a property of the caller's own Redis on this path, independent of the
+# module-managed replication group's migration lever.
+
+run "external_redis_defaults_to_plaintext_no_auth" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = "redis.example.internal"
+  }
+
+  assert {
+    condition     = local.redis_tls_active == false
+    error_message = "Leaving redis_transit_encryption_enabled at its default must not claim the external endpoint speaks TLS"
+  }
+
+  assert {
+    condition     = local.redis_auth_active == false
+    error_message = "Leaving redis_auth_token null must not claim there is a credential"
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n_redis) == 0
+    error_message = "No Secret should exist when the external Redis needs neither TLS nor AUTH"
+  }
+}
+
+run "external_redis_tls_only_is_supported" {
   command = plan
 
   variables {
@@ -1839,7 +3320,297 @@ run "transit_encryption_with_external_redis_fails_validation" {
     redis_transit_encryption_enabled = true
   }
 
-  expect_failures = [var.redis_transit_encryption_enabled]
+  # This combination used to fail plan-time validation outright. It is now a
+  # supported configuration: the caller is declaring that their own Redis
+  # speaks TLS, not asking the module to configure TLS on infrastructure it
+  # does not manage.
+  assert {
+    condition     = local.redis_tls_active == true
+    error_message = "redis_transit_encryption_enabled must be honored on the external path as 'this endpoint speaks TLS'"
+  }
+
+  assert {
+    condition     = local.redis_auth_active == false
+    error_message = "TLS alone must not imply a credential when redis_auth_token is left null"
+  }
+
+  assert {
+    condition     = length(random_password.redis_auth_token) == 0
+    error_message = "The module must never generate a token for a Redis it does not manage"
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n_redis) == 0
+    error_message = "No password Secret should exist without an AUTH token"
+  }
+}
+
+run "external_redis_auth_only_is_supported" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = "redis.example.internal"
+    redis_auth_token   = "s3cr3t-external-password"
+  }
+
+  assert {
+    condition     = local.redis_tls_active == false
+    error_message = "Supplying an AUTH token must not imply TLS: a plain self-hosted Redis can require AUTH without TLS"
+  }
+
+  assert {
+    condition     = local.redis_auth_active == true
+    error_message = "Supplying redis_auth_token must mark AUTH as active on the external path"
+  }
+
+  assert {
+    condition     = local.redis_auth_token_value == "s3cr3t-external-password"
+    error_message = "The caller-supplied token, not a generated one, must reach the resolved local"
+  }
+
+  assert {
+    condition = (
+      length(random_password.redis_auth_token) == 0 &&
+      length(kubernetes_secret.n8n_redis) == 1 &&
+      kubernetes_secret.n8n_redis[0].data["password"] == "s3cr3t-external-password"
+    )
+    error_message = "The module must wire the caller's own token into the Secret rather than generating one"
+  }
+}
+
+run "external_redis_tls_and_auth_together" {
+  command = plan
+
+  variables {
+    create_elasticache               = false
+    redis_host                       = "redis.example.internal"
+    redis_transit_encryption_enabled = true
+    redis_auth_token                 = "s3cr3t-external-password"
+  }
+
+  assert {
+    condition = (
+      local.redis_tls_active == true &&
+      local.redis_auth_active == true &&
+      kubernetes_secret.n8n_redis[0].data["password"] == "s3cr3t-external-password" &&
+      local.keda_redis_auth_metadata["enableTLS"] == "true" &&
+      local.keda_redis_auth_metadata["passwordFromEnv"] == "QUEUE_BULL_REDIS_PASSWORD"
+    )
+    error_message = "TLS and AUTH must compose on the external path exactly as they do on the module-managed one"
+  }
+}
+
+run "redis_auth_token_ignored_with_module_managed_elasticache_warns" {
+  command = plan
+
+  variables {
+    redis_auth_token = "should-be-ignored"
+  }
+
+  expect_failures = [check.redis_auth_token_requires_external_redis]
+
+  assert {
+    condition     = length(random_password.redis_auth_token) == 0
+    error_message = "redis_transit_encryption_enabled is false by default, so no token should be generated regardless of the ignored input"
+  }
+}
+
+# ── Redis 6+ ACL username on the external path ───────────────────────────────
+# A named ACL user is the one authentication shape the external hook could not
+# express: redis_auth_token carries a password, and without a username it is the
+# default user's password. Both consumers have to learn the username or half the
+# deployment authenticates as the wrong user, so the assertions below cover the
+# chart value and the KEDA trigger metadata, not just the input.
+
+run "external_redis_acl_username_reaches_both_consumers" {
+  command = plan
+
+  variables {
+    create_elasticache               = false
+    redis_host                       = "redis.example.internal"
+    redis_transit_encryption_enabled = true
+    redis_auth_token                 = "s3cr3t-external-password"
+    redis_username                   = "n8n-queue"
+  }
+
+  assert {
+    condition     = local.redis_username_value == "n8n-queue"
+    error_message = "redis_username must resolve through to the value the chart and KEDA read"
+  }
+
+  # username is a literal in the trigger metadata, unlike the password, which is
+  # referenced with passwordFromEnv so it never lands in the ScaledObject. A
+  # username is not a credential, and the literal does not depend on KEDA
+  # resolving the chart's QUEUE_BULL_REDIS_USERNAME env var.
+  assert {
+    condition = (
+      local.keda_redis_auth_metadata["username"] == "n8n-queue" &&
+      local.keda_redis_auth_metadata["passwordFromEnv"] == "QUEUE_BULL_REDIS_PASSWORD" &&
+      local.keda_redis_auth_metadata["enableTLS"] == "true"
+    )
+    error_message = "The KEDA worker triggers must authenticate as the same ACL user n8n does, over the same TLS setting"
+  }
+
+  assert {
+    condition     = !contains(keys(local.keda_redis_auth_metadata), "usernameFromEnv")
+    error_message = "The username is passed literally; usernameFromEnv would add a resolution step for a value that is not secret"
+  }
+}
+
+run "external_redis_without_a_username_stays_on_the_default_user" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = "redis.example.internal"
+    redis_auth_token   = "s3cr3t-external-password"
+  }
+
+  assert {
+    condition     = local.redis_username_value == null
+    error_message = "Leaving redis_username null must authenticate as Redis's default user"
+  }
+
+  # Omitted, not sent as null: the chart guards on `if .Values.redis.username`,
+  # and every release that does not set it must render byte-identically to before
+  # the input existed.
+  assert {
+    condition     = !contains(keys(local.keda_redis_auth_metadata), "username")
+    error_message = "No username must appear in the KEDA trigger metadata when redis_username is null"
+  }
+}
+
+run "redis_username_ignored_with_module_managed_elasticache_warns" {
+  command = plan
+
+  variables {
+    redis_username = "should-be-ignored"
+  }
+
+  expect_failures = [check.redis_username_requires_external_redis]
+
+  # Ignored means ignored. Passing a username to ElastiCache AUTH breaks a
+  # working connection, so the local must resolve it away rather than merely
+  # warn about it.
+  assert {
+    condition     = local.redis_username_value == null
+    error_message = "redis_username must not reach the chart or KEDA when the module manages ElastiCache"
+  }
+}
+
+run "redis_username_rejects_a_blank_value" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = "redis.example.internal"
+    redis_username     = "   "
+  }
+
+  expect_failures = [var.redis_username]
+}
+
+run "redis_username_rejects_whitespace" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = "redis.example.internal"
+    redis_username     = "n8n queue"
+  }
+
+  expect_failures = [var.redis_username]
+}
+
+run "redis_username_rejects_a_padded_value" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = "redis.example.internal"
+    redis_username     = " n8n-queue "
+  }
+
+  expect_failures = [var.redis_username]
+}
+
+# redis_key_prefix: N8N_REDIS_KEY_PREFIX/QUEUE_BULL_PREFIX/KEDA listName all
+# live inside helm_release.n8n's single yamlencode'd values string (like the
+# OTEL block above), so these assert at the variable/local contract level
+# rather than parsing that string.
+run "redis_key_prefix_defaults_to_null_and_keeps_bulls_own_prefix" {
+  command = plan
+
+  assert {
+    condition     = var.redis_key_prefix == null
+    error_message = "redis_key_prefix must default to null: n8n and Bull keep their own default prefixes unless a caller opts in."
+  }
+
+  assert {
+    condition     = local.redis_key_prefix_value == "bull"
+    error_message = "local.redis_key_prefix_value must fall back to Bull's own default prefix (\"bull\") when redis_key_prefix is null, so the KEDA listName values stay byte-identical to before this variable existed."
+  }
+}
+
+run "redis_key_prefix_resolves_into_the_shared_local" {
+  command = plan
+
+  variables {
+    create_elasticache = false
+    redis_host         = "redis.example.internal"
+    redis_key_prefix   = "tenant-a"
+  }
+
+  assert {
+    condition     = local.redis_key_prefix_value == "tenant-a"
+    error_message = "local.redis_key_prefix_value must resolve to the caller-supplied prefix, which n8n.tf's env var, redis.prefix, and both KEDA listName values all read from"
+  }
+}
+
+run "redis_key_prefix_rejects_a_blank_value" {
+  command = plan
+
+  variables {
+    redis_key_prefix = "   "
+  }
+
+  expect_failures = [var.redis_key_prefix]
+}
+
+run "redis_key_prefix_rejects_a_colon" {
+  command = plan
+
+  variables {
+    # ":" is n8n's and Bull's own key-segment delimiter (e.g.
+    # "<prefix>:n8n.commands"), so a prefix containing one would produce a
+    # confusing or malformed key namespace rather than a clean second segment.
+    redis_key_prefix = "tenant:a"
+  }
+
+  expect_failures = [var.redis_key_prefix]
+}
+
+run "redis_key_prefix_rejects_whitespace" {
+  command = plan
+
+  variables {
+    redis_key_prefix = "tenant a"
+  }
+
+  expect_failures = [var.redis_key_prefix]
+}
+
+run "redis_mode_tuning_ignored_on_external_redis_warns" {
+  command = plan
+
+  variables {
+    create_elasticache            = false
+    redis_host                    = "redis.example.internal"
+    redis_transit_encryption_mode = "preferred"
+  }
+
+  expect_failures = [check.redis_tuning_requires_module_managed_elasticache]
 }
 
 # ── Staged migration inputs ──────────────────────────────────────────────────
@@ -2520,50 +4291,455 @@ run "s3_bucket_is_private" {
   command = plan
 
   assert {
-    condition     = aws_s3_bucket_public_access_block.n8n.block_public_acls == true
+    condition     = aws_s3_bucket_public_access_block.n8n[0].block_public_acls == true
     error_message = "S3 bucket must block public ACLs"
   }
 
   assert {
-    condition     = aws_s3_bucket_public_access_block.n8n.block_public_policy == true
+    condition     = aws_s3_bucket_public_access_block.n8n[0].block_public_policy == true
     error_message = "S3 bucket must block public bucket policies"
   }
 
   assert {
-    condition     = aws_s3_bucket_public_access_block.n8n.ignore_public_acls == true
+    condition     = aws_s3_bucket_public_access_block.n8n[0].ignore_public_acls == true
     error_message = "S3 bucket must ignore public ACLs"
   }
 
   assert {
-    condition     = aws_s3_bucket_public_access_block.n8n.restrict_public_buckets == true
+    condition     = aws_s3_bucket_public_access_block.n8n[0].restrict_public_buckets == true
     error_message = "S3 bucket must restrict public access"
   }
 
   # force_destroy lets terraform destroy drop the bucket even when n8n has
-  # written attachments — without it, destroy fails with BucketNotEmpty.
+  # written attachments: without it, destroy fails with BucketNotEmpty.
   assert {
-    condition     = aws_s3_bucket.n8n.force_destroy == true
+    condition     = aws_s3_bucket.n8n[0].force_destroy == true
     error_message = "S3 bucket must have force_destroy=true so teardown is clean"
   }
 
   # Bucket name: n8n-<cluster_name>-<last 6 of account ID>. With the default
   # cluster_name "n8n-cluster" and mocked account 123456789012 → 789012.
   assert {
-    condition     = aws_s3_bucket.n8n.bucket == "n8n-n8n-cluster-789012"
+    condition     = aws_s3_bucket.n8n[0].bucket == "n8n-n8n-cluster-789012"
     error_message = "S3 bucket name should be n8n-<cluster_name>-<account_suffix>"
   }
+
+  assert {
+    condition     = local.s3_bucket_name == "n8n-n8n-cluster-789012"
+    error_message = "local.s3_bucket_name should track the module-managed bucket by default"
+  }
+}
+
+# ── Server-side encryption ────────────────────────────────────────────────────
+
+# s3_kms_encryption_enabled defaults to true, so the bucket's own default is
+# SSE-KMS with a module-created CMK, covered by "s3_kms_encryption_defaults"
+# and "s3_kms_encryption_can_be_disabled" further down (sse_algorithm,
+# bucket_key_enabled, and that the CMK itself gets created). The specific
+# claim that kms_master_key_id resolves to that CMK's own ARN and not to
+# s3_kms_key_arn is a plan-time-unknown-vs-unknown comparison the mocked
+# providers here cannot resolve under `command = plan`; it follows directly
+# from local.s3_kms_key_arn's definition in locals.tf instead.
+
+run "s3_sse_kms_input_switches_algorithm" {
+  command = plan
+
+  variables {
+    # create_s3_kms_key = false is what tells the module not to mint its own
+    # CMK; the ARN alone is ignored (and warned about by
+    # check.s3_kms_key_arn_requires_create_s3_kms_key_false). See the comment
+    # above aws_kms_key.db in database.tf for why the toggle is a boolean
+    # rather than an inference from this ARN being non-null.
+    create_s3_kms_key = false
+    s3_kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+  }
+
+  assert {
+    condition     = one(one(aws_s3_bucket_server_side_encryption_configuration.n8n[0].rule).apply_server_side_encryption_by_default).sse_algorithm == "aws:kms"
+    error_message = "Setting s3_kms_key_arn should switch the bucket to SSE-KMS"
+  }
+
+  assert {
+    condition     = one(one(aws_s3_bucket_server_side_encryption_configuration.n8n[0].rule).apply_server_side_encryption_by_default).kms_master_key_id == "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+    error_message = "kms_master_key_id should be set to s3_kms_key_arn"
+  }
+
+  assert {
+    condition     = one(aws_s3_bucket_server_side_encryption_configuration.n8n[0].rule).bucket_key_enabled == true
+    error_message = "bucket_key_enabled should be true under SSE-KMS"
+  }
+}
+
+run "s3_kms_key_arn_validator_rejects_malformed_arn" {
+  command = plan
+
+  variables {
+    s3_kms_key_arn = "not-an-arn"
+  }
+
+  expect_failures = [var.s3_kms_key_arn]
+}
+
+# ── Bring your own S3 bucket ──────────────────────────────────────────────────
+
+run "existing_s3_bucket_skips_module_managed_resources" {
+  command = plan
+
+  variables {
+    create_s3_bucket        = false
+    existing_s3_bucket_name = "my-existing-n8n-bucket"
+  }
+
+  assert {
+    condition     = length(aws_s3_bucket.n8n) == 0
+    error_message = "No S3 bucket should be created when create_s3_bucket = false"
+  }
+
+  assert {
+    condition     = length(aws_s3_bucket_public_access_block.n8n) == 0
+    error_message = "No public access block should be created when create_s3_bucket = false"
+  }
+
+  assert {
+    condition     = length(aws_s3_bucket_server_side_encryption_configuration.n8n) == 0
+    error_message = "No SSE configuration should be created when create_s3_bucket = false: the caller's bucket is the caller's to secure"
+  }
+
+  assert {
+    condition     = local.s3_bucket_name == "my-existing-n8n-bucket"
+    error_message = "local.s3_bucket_name should track existing_s3_bucket_name when create_s3_bucket = false"
+  }
+
+  assert {
+    condition     = local.s3_bucket_arn == "arn:aws:s3:::my-existing-n8n-bucket"
+    error_message = "local.s3_bucket_arn should be derived from existing_s3_bucket_name when create_s3_bucket = false"
+  }
+}
+
+run "existing_s3_bucket_missing_name_fails_validation" {
+  command = plan
+
+  variables {
+    create_s3_bucket = false
+    # existing_s3_bucket_name intentionally unset
+  }
+
+  expect_failures = [var.existing_s3_bucket_name]
+}
+
+run "create_s3_bucket_default_behavior_is_unchanged" {
+  command = plan
+
+  assert {
+    condition     = aws_s3_bucket.n8n[0].bucket == "n8n-n8n-cluster-789012"
+    error_message = "create_s3_bucket defaulting to true should preserve the module-managed bucket naming"
+  }
+
+  assert {
+    condition     = aws_iam_policy.s3.policy != null
+    error_message = "S3 IAM policy should still be created when create_s3_bucket defaults to true"
+  }
+}
+
+# ── BYO-bucket diagnostic checks ──────────────────────────────────────────────
+# Same shape as the external-database checks: setting an input that a sibling
+# toggle causes the module to ignore plans and applies cleanly while silently
+# discarding what the caller asked for, so these warn rather than fail.
+
+run "existing_s3_bucket_name_with_create_s3_bucket_true_warns" {
+  command = plan
+
+  variables {
+    # create_s3_bucket defaults to true, so this bucket is never used.
+    existing_s3_bucket_name = "unused-bucket-name"
+  }
+
+  expect_failures = [check.existing_s3_bucket_name_requires_create_s3_bucket_false]
+}
+
+# s3_kms_key_arn alongside create_s3_bucket = false used to trip a check block
+# warning that the input was ignored. It is not ignored any more: it is how a
+# caller tells the module that the bucket they supplied is SSE-KMS encrypted, so
+# the pod role gets key permissions. Asserting on the policy JSON is possible
+# here (and not on the module-managed path) because local.s3_bucket_arn is a
+# static string when the bucket name comes from a variable, leaving the whole
+# document known at plan time.
+run "existing_s3_bucket_with_sse_kms_grants_key_permissions_to_pod_role" {
+  command = plan
+
+  variables {
+    create_s3_bucket        = false
+    existing_s3_bucket_name = "my-existing-n8n-bucket"
+    s3_kms_key_arn          = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
+  }
+
+  assert {
+    condition     = length(jsondecode(aws_iam_policy.s3.policy).Statement) == 2
+    error_message = "The pod role policy must carry a second statement granting KMS access when s3_kms_key_arn is set"
+  }
+
+  # kms:Decrypt covers GetObject, kms:GenerateDataKey covers PutObject. Missing
+  # either one turns every binary-data operation into an AccessDenied.
+  assert {
+    condition = alltrue([
+      for action in ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"] :
+      contains(jsondecode(aws_iam_policy.s3.policy).Statement[1].Action, action)
+    ])
+    error_message = "The KMS statement must grant kms:Decrypt, kms:GenerateDataKey and kms:DescribeKey"
+  }
+
+  # Scoped to the one key, never "*".
+  assert {
+    condition     = jsondecode(aws_iam_policy.s3.policy).Statement[1].Resource == ["arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"]
+    error_message = "The KMS statement must be scoped to the supplied key ARN alone"
+  }
+}
+
+run "existing_s3_bucket_without_kms_key_grants_no_key_permissions" {
+  command = plan
+
+  variables {
+    create_s3_bucket        = false
+    existing_s3_bucket_name = "my-existing-n8n-bucket"
+  }
+
+  # SSE-S3 needs no key permissions, so the policy must stay exactly as narrow
+  # as it was before s3_kms_key_arn existed.
+  assert {
+    condition     = length(jsondecode(aws_iam_policy.s3.policy).Statement) == 1
+    error_message = "The pod role policy must carry no KMS statement when s3_kms_key_arn is null"
+  }
+}
+
+run "s3_kms_key_arn_validator_rejects_alias_arn" {
+  command = plan
+
+  variables {
+    # An alias ARN cannot appear in an IAM policy Resource element, so a grant
+    # written against one would match nothing and the AccessDenied would look
+    # like a bug in the module rather than a bad input.
+    s3_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:alias/n8n-s3"
+  }
+
+  expect_failures = [var.s3_kms_key_arn]
+}
+
+run "clean_existing_s3_bucket_config_is_quiet" {
+  command = plan
+
+  variables {
+    create_s3_bucket        = false
+    existing_s3_bucket_name = "my-existing-n8n-bucket"
+  }
+
+  assert {
+    condition     = local.s3_bucket_name == "my-existing-n8n-bucket"
+    error_message = "Sanity check that the plan succeeded with a clean BYO-bucket config"
+  }
+}
+
+# ── External Secrets ──────────────────────────────────────────────────────────
+# Layer 1 (n8n_external_secrets_enabled, n8n_external_secrets_update_interval)
+# is asserted at the local/variable level, not against helm_release.n8n.values:
+# that field is unknown at plan time under the mock provider (see "Known mock
+# provider limitations" in AGENTS.md, and the execution_data_storage_mode runs
+# above for the same pattern). To verify end-to-end, run a real `terraform
+# plan` from examples/small/ with n8n_external_secrets_enabled = false and
+# confirm N8N_DISABLED_MODULES=external-secrets appears in the helm_release.n8n
+# values.
+
+run "external_secrets_layer_one_defaults_to_no_env_vars" {
+  command = plan
+
+  assert {
+    condition     = length(local.n8n_disabled_modules) == 0
+    error_message = "local.n8n_disabled_modules must be empty by default, so N8N_DISABLED_MODULES is never emitted for an existing deployment"
+  }
+
+  assert {
+    condition     = var.n8n_external_secrets_update_interval == null
+    error_message = "n8n_external_secrets_update_interval must default to null, so N8N_EXTERNAL_SECRETS_UPDATE_INTERVAL is omitted and n8n's own default applies"
+  }
+}
+
+run "n8n_external_secrets_enabled_false_disables_the_module" {
+  command = plan
+
+  variables {
+    n8n_external_secrets_enabled = false
+  }
+
+  assert {
+    condition     = length(local.n8n_disabled_modules) == 1 && local.n8n_disabled_modules[0] == "external-secrets"
+    error_message = "n8n_external_secrets_enabled = false must add exactly \"external-secrets\" to local.n8n_disabled_modules"
+  }
+}
+
+run "n8n_external_secrets_update_interval_rejects_zero" {
+  command = plan
+
+  variables {
+    n8n_external_secrets_update_interval = 0
+  }
+
+  expect_failures = [var.n8n_external_secrets_update_interval]
+}
+
+run "external_secrets_aws_grant_disabled_by_default" {
+  command = plan
+
+  assert {
+    condition = (
+      length(aws_iam_policy.external_secrets) == 0 && length(aws_iam_role_policy_attachment.external_secrets) == 0 &&
+      length(aws_iam_policy.external_secrets_kms) == 0 && length(aws_iam_role_policy_attachment.external_secrets_kms) == 0
+    )
+    error_message = "n8n_external_secrets_aws_enabled = false must create no IAM policy and no attachment, so an existing deployment plans unchanged"
+  }
+}
+
+run "external_secrets_aws_grant_enabled_creates_the_expected_policy_shape" {
+  command = plan
+
+  variables {
+    n8n_external_secrets_aws_enabled      = true
+    n8n_external_secrets_aws_secret_names = ["n8n/workflow-vault"]
+  }
+
+  assert {
+    condition = (
+      length(aws_iam_policy.external_secrets) == 1 && length(aws_iam_role_policy_attachment.external_secrets) == 1 &&
+      length(aws_iam_policy.external_secrets_kms) == 1 && length(aws_iam_role_policy_attachment.external_secrets_kms) == 1
+    )
+    error_message = "n8n_external_secrets_aws_enabled = true must create exactly one Secrets Manager policy, one KMS policy, and one attachment each"
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy_attachment.external_secrets[0].role == aws_iam_role.s3.name &&
+      aws_iam_role_policy_attachment.external_secrets_kms[0].role == aws_iam_role.s3.name
+    )
+    error_message = "Both the External Secrets policy and its KMS policy must attach to the same Pod Identity role S3 already uses, not a second role"
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[0].Effect == "Allow" &&
+      contains(jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[0].Action, "secretsmanager:ListSecrets") &&
+      contains(jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[0].Action, "secretsmanager:BatchGetSecretValue") &&
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[0].Resource == "*"
+    )
+    error_message = "ListSecrets and BatchGetSecretValue must be granted on \"*\": AWS defines no resource-level permissions on either action"
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[1].Effect == "Allow" &&
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[1].Action == ["secretsmanager:GetSecretValue"] &&
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[1].Resource == ["arn:aws:secretsmanager:us-east-1:123456789012:secret:mock-AbCdEf"]
+    )
+    error_message = "GetSecretValue must be scoped to exactly the resolved ARNs of the named secrets, never a wildcard"
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[2].Effect == "Deny" &&
+      jsondecode(aws_iam_policy.external_secrets[0].policy).Statement[2].Condition.StringEquals["aws:ResourceTag/ManagedBy"] == "terraform"
+    )
+    error_message = "The policy must carry an explicit Deny on anything tagged ManagedBy = terraform, so the grant can never widen to cover a module-managed secret"
+  }
+
+  # Without this statement an allow-listed secret encrypted with a customer
+  # managed KMS key is unreadable: Secrets Manager decrypts as the calling
+  # principal, so GetSecretValue fails on kms:Decrypt regardless of the
+  # secret's own policy. Lives in its own policy document (external_secrets_kms),
+  # not as a fourth statement on aws_iam_policy.external_secrets above, so the
+  # allow-listed ARNs embedded here (via kms:EncryptionContext:SecretARN) don't
+  # count against the same 6,144-character policy-size cap as the ARNs already
+  # embedded in that policy's own GetSecretValue statement.
+  assert {
+    condition = (
+      jsondecode(aws_iam_policy.external_secrets_kms[0].policy).Statement[0].Effect == "Allow" &&
+      jsondecode(aws_iam_policy.external_secrets_kms[0].policy).Statement[0].Action == ["kms:Decrypt"] &&
+      jsondecode(aws_iam_policy.external_secrets_kms[0].policy).Statement[0].Condition.StringEquals["kms:ViaService"] == "secretsmanager.us-east-1.amazonaws.com" &&
+      jsondecode(aws_iam_policy.external_secrets_kms[0].policy).Statement[0].Condition.StringEquals["kms:EncryptionContext:SecretARN"] == ["arn:aws:secretsmanager:us-east-1:123456789012:secret:mock-AbCdEf"]
+    )
+    error_message = "The KMS policy must grant kms:Decrypt scoped by kms:ViaService AND kms:EncryptionContext:SecretARN pinned to the resolved allow-list, or a CMK-encrypted allow-listed secret returns AccessDenied at runtime, or KMS enforces a wider boundary than GetSecretValue's own Resource list does"
+  }
+}
+
+run "external_secrets_aws_grant_requires_at_least_one_secret_name" {
+  command = plan
+
+  variables {
+    n8n_external_secrets_aws_enabled = true
+  }
+
+  expect_failures = [var.n8n_external_secrets_aws_secret_names]
+}
+
+run "external_secrets_aws_secret_names_rejects_a_wildcard" {
+  command = plan
+
+  variables {
+    n8n_external_secrets_aws_enabled      = true
+    n8n_external_secrets_aws_secret_names = ["n8n/workflow-*"]
+  }
+
+  expect_failures = [var.n8n_external_secrets_aws_secret_names]
+}
+
+run "external_secrets_allow_list_check_is_quiet_by_default" {
+  command = plan
+
+  variables {
+    n8n_external_secrets_aws_enabled      = true
+    n8n_external_secrets_aws_secret_names = ["n8n/workflow-vault"]
+  }
+
+  # module_managed.arns defaults to [] (see mock_data above), so there is
+  # nothing to intersect and the check must stay quiet.
+  assert {
+    condition     = length(aws_iam_policy.external_secrets) == 1
+    error_message = "Sanity check that the plan succeeded with no module-managed secrets in the test account"
+  }
+}
+
+run "external_secrets_allow_list_check_fires_on_intersection" {
+  command = plan
+
+  variables {
+    n8n_external_secrets_aws_enabled      = true
+    n8n_external_secrets_aws_secret_names = ["n8n/workflow-vault"]
+  }
+
+  # Same fixture ARN data.aws_secretsmanager_secret always resolves to (see
+  # mock_data above), now echoed back as a "module-managed" secret. That is
+  # the intersection the check exists to catch.
+  override_data {
+    target = data.aws_secretsmanager_secrets.module_managed[0]
+    values = {
+      arns  = ["arn:aws:secretsmanager:us-east-1:123456789012:secret:mock-AbCdEf"]
+      names = ["mock-module-secret"]
+    }
+  }
+
+  expect_failures = [check.external_secrets_allow_list_excludes_module_managed_secrets]
 }
 
 run "pod_identity_bindings_use_correct_service_accounts" {
   command = plan
 
+  # create_eks and install_lbc/install_cluster_autoscaler are all left at
+  # their true defaults on this run, so both associations exist (count = 1)
+  # and [0] is safe; see the create_eks_false_* runs below for the skipped
+  # (count = 0) case this compound gate exists for.
   assert {
-    condition     = aws_eks_pod_identity_association.lbc.namespace == "kube-system"
+    condition     = module.controllers.lbc_pod_identity_association[0].namespace == "kube-system"
     error_message = "LBC pod identity binding must target kube-system"
   }
 
   assert {
-    condition     = aws_eks_pod_identity_association.lbc.service_account == "aws-load-balancer-controller"
+    condition     = module.controllers.lbc_pod_identity_association[0].service_account == "aws-load-balancer-controller"
     error_message = "LBC pod identity must bind to the aws-load-balancer-controller SA"
   }
 
@@ -2573,7 +4749,7 @@ run "pod_identity_bindings_use_correct_service_accounts" {
   }
 
   assert {
-    condition     = aws_eks_pod_identity_association.cluster_autoscaler.service_account == "cluster-autoscaler"
+    condition     = module.controllers.cluster_autoscaler_pod_identity_association[0].service_account == "cluster-autoscaler"
     error_message = "Cluster autoscaler pod identity must bind to the cluster-autoscaler SA"
   }
 }
@@ -2586,63 +4762,63 @@ run "ebs_csi_and_default_storage_class" {
   command = plan
 
   assert {
-    condition     = aws_eks_addon.ebs_csi.addon_name == "aws-ebs-csi-driver"
+    condition     = module.controllers.ebs_csi_addon[0].addon_name == "aws-ebs-csi-driver"
     error_message = "EBS CSI managed addon must be installed, without it no PVC can bind (issue #22)"
   }
 
   assert {
     # pod_identity_association is a set of objects, so it cannot be indexed.
-    condition     = anytrue([for a in aws_eks_addon.ebs_csi.pod_identity_association : a.service_account == "ebs-csi-controller-sa"])
+    condition     = anytrue([for a in module.controllers.ebs_csi_addon[0].pod_identity_association : a.service_account == "ebs-csi-controller-sa"])
     error_message = "EBS CSI addon must bind Pod Identity to the ebs-csi-controller-sa SA"
   }
 
   assert {
-    condition     = strcontains(aws_iam_role.ebs_csi.assume_role_policy, "pods.eks.amazonaws.com")
+    condition     = strcontains(module.controllers.ebs_csi_iam_role[0].assume_role_policy, "pods.eks.amazonaws.com")
     error_message = "EBS CSI role must trust pods.eks.amazonaws.com (Pod Identity, not IRSA)"
   }
 
   assert {
-    condition     = aws_iam_role_policy_attachment.ebs_csi.policy_arn == "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+    condition     = module.controllers.ebs_csi_iam_role_policy_attachment[0].policy_arn == "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
     error_message = "EBS CSI role must attach the AWS-managed AmazonEBSCSIDriverPolicy"
   }
 
   assert {
-    condition     = kubernetes_storage_class_v1.gp3.metadata[0].name == "gp3"
+    condition     = module.controllers.gp3_storage_class[0].metadata[0].name == "gp3"
     error_message = "Default StorageClass must be named gp3"
   }
 
   assert {
-    condition     = kubernetes_storage_class_v1.gp3.metadata[0].annotations["storageclass.kubernetes.io/is-default-class"] == "true"
+    condition     = module.controllers.gp3_storage_class[0].metadata[0].annotations["storageclass.kubernetes.io/is-default-class"] == "true"
     error_message = "gp3 StorageClass must carry the default-class annotation so unqualified PVCs bind"
   }
 
   assert {
-    condition     = kubernetes_storage_class_v1.gp3.storage_provisioner == "ebs.csi.aws.com"
+    condition     = module.controllers.gp3_storage_class[0].storage_provisioner == "ebs.csi.aws.com"
     error_message = "gp3 StorageClass must use the EBS CSI provisioner, not the removed in-tree one"
   }
 
   assert {
-    condition     = kubernetes_storage_class_v1.gp3.volume_binding_mode == "WaitForFirstConsumer"
+    condition     = module.controllers.gp3_storage_class[0].volume_binding_mode == "WaitForFirstConsumer"
     error_message = "gp3 StorageClass must use WaitForFirstConsumer so volumes land in the consumer pod's AZ"
   }
 
   assert {
-    condition     = kubernetes_storage_class_v1.gp3.reclaim_policy == "Delete"
+    condition     = module.controllers.gp3_storage_class[0].reclaim_policy == "Delete"
     error_message = "gp3 StorageClass must use the Delete reclaim policy to limit orphaned EBS volumes"
   }
 
   assert {
-    condition     = kubernetes_storage_class_v1.gp3.allow_volume_expansion == true
+    condition     = module.controllers.gp3_storage_class[0].allow_volume_expansion == true
     error_message = "gp3 StorageClass must allow volume expansion"
   }
 
   assert {
-    condition     = kubernetes_storage_class_v1.gp3.parameters["type"] == "gp3"
+    condition     = module.controllers.gp3_storage_class[0].parameters["type"] == "gp3"
     error_message = "gp3 StorageClass must provision gp3 volumes"
   }
 
   assert {
-    condition     = kubernetes_storage_class_v1.gp3.parameters["encrypted"] == "true"
+    condition     = module.controllers.gp3_storage_class[0].parameters["encrypted"] == "true"
     error_message = "gp3 StorageClass must encrypt volumes at rest"
   }
 }
@@ -2651,12 +4827,12 @@ run "keda_installed_in_multi" {
   command = plan
 
   assert {
-    condition     = helm_release.keda.chart == "keda"
-    error_message = "KEDA helm release must exist in the multi template — worker autoscaling depends on it"
+    condition     = module.controllers.keda_helm_release[0].chart == "keda"
+    error_message = "KEDA helm release must exist in the multi template: worker autoscaling depends on it"
   }
 
   assert {
-    condition     = helm_release.keda.namespace == "keda"
+    condition     = module.controllers.keda_helm_release[0].namespace == "keda"
     error_message = "KEDA must be installed in its own 'keda' namespace"
   }
 }
@@ -2706,7 +4882,7 @@ run "custom_namespace_propagates_to_s3_binding" {
 # attaches no transport and silently drops every log line. These tests pin the
 # corrected defaults and the validators that prevent the regression. The Helm
 # values blob itself is unknown at plan time under the helm mock provider, so
-# we assert at the variable contract level — n8n.tf wires both vars through
+# we assert at the variable contract level: n8n.tf wires both vars through
 # verbatim into the extraEnv list.
 
 run "log_defaults" {
@@ -2716,7 +4892,7 @@ run "log_defaults" {
     # Regression guard: the previous hardcoded value was "json". Anything other
     # than a console/file combination here breaks logging entirely.
     condition     = var.n8n_log_output == "console"
-    error_message = "n8n_log_output must default to 'console' — 'json' (the previous value) silently drops all logs."
+    error_message = "n8n_log_output must default to 'console': 'json' (the previous value) silently drops all logs."
   }
 
   assert {
@@ -2849,7 +5025,7 @@ run "webhook_resources_decimal_cpu_below_threshold_triggers_check_warning" {
   variables {
     n8n_reinstall_missing_packages = true
     # "0.5" (500m, decimal-core form) must parse rather than being treated as
-    # unreadable — an unreadable quantity silently skips the check.
+    # unreadable: an unreadable quantity silently skips the check.
     n8n_webhook_cpu_request    = "0.5"
     n8n_webhook_cpu_limit      = "1500m"
     n8n_webhook_memory_request = "1Gi"
@@ -2873,7 +5049,7 @@ run "otel_defaults_off" {
 
   assert {
     condition     = var.n8n_otel_enabled == false
-    error_message = "n8n_otel_enabled must default to false — OpenTelemetry tracing is opt-in."
+    error_message = "n8n_otel_enabled must default to false: OpenTelemetry tracing is opt-in."
   }
 
   assert {
@@ -2915,7 +5091,7 @@ run "otel_sample_rate_validator_accepts_zero_one_and_fractional" {
 
   variables {
     # Master toggle on so this run isn't tripped by the
-    # `check "otel_tuning_requires_master_switch"` block in n8n.tf — the
+    # `check "otel_tuning_requires_master_switch"` block in n8n.tf: the
     # purpose of this run is to exercise the sample-rate validator, not the
     # master/tuning interaction (which has its own runs below).
     n8n_otel_enabled            = true
@@ -3047,7 +5223,7 @@ run "log_streaming_defaults_off" {
 
   assert {
     condition     = var.n8n_log_streaming_managed_by_env == false
-    error_message = "n8n_log_streaming_managed_by_env must default to false — env-managed log streaming is opt-in."
+    error_message = "n8n_log_streaming_managed_by_env must default to false: env-managed log streaming is opt-in."
   }
 
   assert {
@@ -3254,7 +5430,7 @@ run "extra_env_rejects_module_managed_name" {
 
 # Regression guards: env vars the module started managing after this input was
 # first written (templates/personalization, OTEL, log streaming) must also be
-# rejected by the escape hatch — keep local.n8n_managed_env_names in sync.
+# rejected by the escape hatch: keep local.n8n_managed_env_names in sync.
 run "extra_env_rejects_feature_toggle_name" {
   command = plan
 
@@ -3293,7 +5469,7 @@ run "extra_env_rejects_log_streaming_managed_name" {
 
 # Prefix-family guards: connection, license, and AWS-credential vars the chart
 # renders from module values must be rejected, because config.extraEnv is
-# appended last and Kubernetes resolves duplicate env names last-wins — an
+# appended last and Kubernetes resolves duplicate env names last-wins: an
 # override here would silently repoint the DB, disable Enterprise, or hijack
 # storage credentials.
 run "extra_env_rejects_db_connection_name" {
@@ -3346,7 +5522,7 @@ run "extra_env_rejects_aws_credentials_name" {
 
 # Regression guard: N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN became
 # module-managed alongside the n8n_license_detach_floating_on_shutdown input
-# (issue #49) — an override here would silently re-enable n8n's unsafe
+# (issue #49): an override here would silently re-enable n8n's unsafe
 # upstream default and reintroduce the multi-main crash-loop.
 run "extra_env_rejects_license_detach_floating_on_shutdown_name" {
   command = plan
@@ -3389,7 +5565,7 @@ run "image_tag_defaults_to_null" {
 run "image_tag_accepts_concrete_version" {
   command = plan
 
-  # Asserts at the variable contract level only — helm_release.values is
+  # Asserts at the variable contract level only: helm_release.values is
   # unknown at plan time under the mock provider (it depends on
   # kubernetes_namespace, which is "(known after apply)"), so the merge()
   # wiring of image.tag into the Helm values cannot be verified here.
@@ -3435,7 +5611,7 @@ run "image_tag_accepts_leading_underscore" {
 
   assert {
     condition     = var.n8n_image_tag == "_1.2.3"
-    error_message = "n8n_image_tag should accept a leading underscore — valid per Docker tag spec."
+    error_message = "n8n_image_tag should accept a leading underscore: valid per Docker tag spec."
   }
 }
 
@@ -3443,7 +5619,7 @@ run "image_tag_rejects_overlong_tag" {
   command = plan
 
   variables {
-    # 129 characters — one over the Docker limit of 128
+    # 129 characters: one over the Docker limit of 128
     n8n_image_tag = "a${join("", [for i in range(128) : "b"])}"
   }
 
@@ -4575,17 +6751,17 @@ run "autoscaling_defaults_fit_the_default_node_group" {
   # which is the assertion that matters here. The replica asserts pin the
   # defaults that make it hold.
   assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].max_replicas == 8
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].max_replicas == 8
     error_message = "The webhook HPA ceiling must default to 8, which the default node group can schedule alongside the main and worker ceilings"
   }
 
   assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].min_replicas == 2
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].min_replicas == 2
     error_message = "The webhook HPA floor must stay at 2 for multi-replica availability"
   }
 
   assert {
-    condition     = aws_eks_node_group.n8n.scaling_config[0].max_size == 6
+    condition     = aws_eks_node_group.n8n[0].scaling_config[0].max_size == 6
     error_message = "node_max must default to 6; the HPA and KEDA ceilings are sized against it"
   }
 }
@@ -4646,7 +6822,7 @@ run "main_maximum_of_twelve_fits_without_task_runners" {
   }
 
   assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].max_replicas == 8
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].max_replicas == 8
     error_message = "Disabling task runners must not disturb the webhook ceiling"
   }
 }
@@ -4663,7 +6839,7 @@ run "raising_node_max_admits_higher_maxima" {
   }
 
   assert {
-    condition     = aws_eks_node_group.n8n.scaling_config[0].max_size == 14
+    condition     = aws_eks_node_group.n8n[0].scaling_config[0].max_size == 14
     error_message = "node_max must reach the node group so the capacity model reflects it"
   }
 }
@@ -4680,7 +6856,7 @@ run "a_larger_instance_type_admits_higher_maxima" {
   }
 
   assert {
-    condition     = one(aws_eks_node_group.n8n.instance_types) == "m6i.2xlarge"
+    condition     = one(aws_eks_node_group.n8n[0].instance_types) == "m6i.2xlarge"
     error_message = "node_instance_type must reach the node group so the capacity model reflects it"
   }
 }
@@ -4713,14 +6889,24 @@ run "an_off_ladder_instance_size_silences_the_capacity_check" {
   }
 
   assert {
-    condition     = one(aws_eks_node_group.n8n.instance_types) == "m5.metal"
+    condition     = one(aws_eks_node_group.n8n[0].instance_types) == "m5.metal"
     error_message = "An instance size the model cannot read must still reach the node group"
   }
 }
 
-# Likewise for a CPU request in a form the module cannot parse: the ceiling here
-# would warn loudly if the quantity had parsed.
-run "unparseable_cpu_request_silences_the_capacity_check" {
+# The CPU quantity is a different case from the instance size above, and used
+# to behave the same way. An unparseable request made
+# local.n8n_cpu_requests_readable false, which collapsed the peak-CPU figure to
+# zero and let the capacity check pass on a configuration nothing had measured:
+# a maximum of 200 main pods reported as fitting. Since the quantity inputs
+# validate their own syntax, that state is unreachable and the value is
+# rejected before any of it is computed.
+#
+# The instance size above still degrades to silence, deliberately: the module
+# reads a ladder of sizes it knows, and an unlisted one is a gap in that ladder
+# rather than a caller error. A CPU quantity has one correct grammar, so a
+# value outside it is always a mistake.
+run "unparseable_cpu_request_is_rejected_rather_than_silencing_the_capacity_check" {
   command = plan
 
   variables {
@@ -4728,10 +6914,7 @@ run "unparseable_cpu_request_silences_the_capacity_check" {
     n8n_main_hpa_max_replicas = 200
   }
 
-  assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].max_replicas == 8
-    error_message = "An unreadable CPU quantity must leave the rest of the plan intact"
-  }
+  expect_failures = [var.n8n_main_cpu_request]
 }
 
 # ── Autoscaler floors drive the deployments' own replica counts ───────────────
@@ -4755,7 +6938,7 @@ run "autoscaler_floors_default_to_warm_multi_replica_values" {
   }
 
   assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].min_replicas == var.n8n_webhook_hpa_min_replicas
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].min_replicas == var.n8n_webhook_hpa_min_replicas
     error_message = "The webhook HPA floor must track n8n_webhook_hpa_min_replicas, which is also what the chart writes to spec.replicas"
   }
 }
@@ -4770,7 +6953,7 @@ run "raised_floors_reach_the_module_owned_webhook_hpa" {
   }
 
   assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].min_replicas == 5
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].min_replicas == 5
     error_message = "A raised webhook floor must reach the HPA the module creates in scaling.tf"
   }
 }
@@ -4835,7 +7018,7 @@ run "equal_floor_and_ceiling_is_accepted" {
   }
 
   assert {
-    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].min_replicas == kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook.spec[0].max_replicas
+    condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].min_replicas == kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].max_replicas
     error_message = "A floor equal to its ceiling must be accepted as a fixed-size deployment"
   }
 }
@@ -4971,19 +7154,19 @@ run "eks_control_plane_hardening_defaults" {
   command = plan
 
   assert {
-    condition     = length(aws_eks_cluster.n8n.encryption_config) == 1
+    condition     = length(aws_eks_cluster.n8n[0].encryption_config) == 1
     error_message = "eks_secrets_encryption_enabled defaults to true, so the cluster should plan with an encryption_config block."
   }
 
   assert {
-    condition     = aws_eks_cluster.n8n.encryption_config[0].resources == toset(["secrets"])
+    condition     = aws_eks_cluster.n8n[0].encryption_config[0].resources == toset(["secrets"])
     error_message = "encryption_config should envelope-encrypt secrets, the only resource type EKS supports here."
   }
 
   # All five types, so an audit trail exists from the first apply rather than
   # being switched on after the incident that needed it.
   assert {
-    condition = aws_eks_cluster.n8n.enabled_cluster_log_types == toset([
+    condition = aws_eks_cluster.n8n[0].enabled_cluster_log_types == toset([
       "api", "audit", "authenticator", "controllerManager", "scheduler",
     ])
     error_message = "All five EKS control-plane log types should be enabled by default."
@@ -4992,22 +7175,22 @@ run "eks_control_plane_hardening_defaults" {
   # The log group is module-managed precisely so retention is not "Never
   # expire", which is what EKS picks when it auto-creates the group.
   assert {
-    condition     = aws_cloudwatch_log_group.eks_cluster.name == "/aws/eks/n8n-cluster/cluster"
+    condition     = aws_cloudwatch_log_group.eks_cluster[0].name == "/aws/eks/n8n-cluster/cluster"
     error_message = "The control-plane log group must use the name EKS writes to, or EKS auto-creates its own alongside it."
   }
 
   assert {
-    condition     = aws_cloudwatch_log_group.eks_cluster.retention_in_days == 365
+    condition     = aws_cloudwatch_log_group.eks_cluster[0].retention_in_days == 365
     error_message = "Control-plane log retention should be finite and explicit."
   }
 
   assert {
-    condition     = aws_eks_cluster.n8n.vpc_config[0].endpoint_public_access
+    condition     = aws_eks_cluster.n8n[0].vpc_config[0].endpoint_public_access
     error_message = "cluster_endpoint_public_access should default to true (kubectl works right after apply)."
   }
 
   assert {
-    condition     = aws_eks_cluster.n8n.vpc_config[0].public_access_cidrs == toset(["0.0.0.0/0"])
+    condition     = aws_eks_cluster.n8n[0].vpc_config[0].public_access_cidrs == toset(["0.0.0.0/0"])
     error_message = "cluster_endpoint_public_access_cidrs should default to unrestricted, preserving pre-#27 behavior."
   }
 }
@@ -5023,7 +7206,7 @@ run "eks_secrets_encryption_can_be_disabled" {
   }
 
   assert {
-    condition     = length(aws_eks_cluster.n8n.encryption_config) == 0
+    condition     = length(aws_eks_cluster.n8n[0].encryption_config) == 0
     error_message = "eks_secrets_encryption_enabled = false should plan no encryption_config block."
   }
 
@@ -5042,12 +7225,12 @@ run "endpoint_access_cidrs_flow_through" {
   }
 
   assert {
-    condition     = aws_eks_cluster.n8n.vpc_config[0].public_access_cidrs == toset(["203.0.113.0/24"])
+    condition     = aws_eks_cluster.n8n[0].vpc_config[0].public_access_cidrs == toset(["203.0.113.0/24"])
     error_message = "cluster_endpoint_public_access_cidrs should reach vpc_config.public_access_cidrs."
   }
 
   assert {
-    condition     = aws_eks_cluster.n8n.vpc_config[0].endpoint_private_access
+    condition     = aws_eks_cluster.n8n[0].vpc_config[0].endpoint_private_access
     error_message = "cluster_endpoint_private_access should reach vpc_config.endpoint_private_access."
   }
 }
@@ -5088,7 +7271,7 @@ run "endpoint_access_cidrs_empty_list_accepted_when_public_access_is_off" {
   }
 
   assert {
-    condition     = length(aws_eks_cluster.n8n.vpc_config[0].public_access_cidrs) == 0
+    condition     = length(aws_eks_cluster.n8n[0].vpc_config[0].public_access_cidrs) == 0
     error_message = "An empty CIDR list must reach the cluster's vpc_config when the public endpoint is disabled"
   }
 }
@@ -5153,8 +7336,10 @@ run "s3_kms_encryption_defaults" {
   }
 }
 
-# The opt-out has to remove both halves: an SSE configuration left behind would
-# point at a key that no longer exists.
+# The opt-out drops the CMK, not the SSE configuration resource itself: the
+# bucket still needs an explicit encryption default (now SSE-S3/AES256) rather
+# than reverting to no aws_s3_bucket_server_side_encryption_configuration at
+# all, since create_s3_bucket = true always manages one.
 run "s3_kms_encryption_can_be_disabled" {
   command = plan
 
@@ -5163,8 +7348,18 @@ run "s3_kms_encryption_can_be_disabled" {
   }
 
   assert {
-    condition     = length(aws_s3_bucket_server_side_encryption_configuration.n8n) == 0
-    error_message = "s3_kms_encryption_enabled = false should leave the bucket on SSE-S3 with no encryption configuration resource."
+    condition = one(flatten([
+      for r in aws_s3_bucket_server_side_encryption_configuration.n8n[0].rule :
+      [for d in r.apply_server_side_encryption_by_default : d.sse_algorithm]
+    ])) == "AES256"
+    error_message = "s3_kms_encryption_enabled = false should leave the bucket on SSE-S3 (AES256), not aws:kms."
+  }
+
+  assert {
+    condition = !one([
+      for r in aws_s3_bucket_server_side_encryption_configuration.n8n[0].rule : r.bucket_key_enabled
+    ])
+    error_message = "S3 Bucket Keys are meaningless under SSE-S3 and should not be enabled when s3_kms_encryption_enabled = false."
   }
 
   assert {
@@ -5246,4 +7441,969 @@ run "db_parameter_group_absent_without_module_database" {
     condition     = length(aws_db_parameter_group.n8n) == 0
     error_message = "create_database = false should create no parameter group."
   }
+}
+
+# ── iam_permissions_boundary_arn ──────────────────────────────────────────────
+# Every aws_iam_role this module creates: aws_iam_role.cluster and
+# aws_iam_role.nodes (eks.tf), aws_iam_role.s3 (s3.tf), and
+# module.controllers.lbc_iam_role, module.controllers.cluster_autoscaler_iam_role,
+# module.controllers.ebs_csi_iam_role (modules/controllers/iam.tf).
+# permissions_boundary = var.iam_permissions_boundary_arn is set on all six
+# regardless of the toggle that gates them, so both directions are asserted
+# across all six roles rather than just one, to catch a future new IAM role
+# that forgets to wire the boundary.
+run "iam_permissions_boundary_defaults_to_null_on_every_role" {
+  command = plan
+
+  assert {
+    condition     = aws_iam_role.cluster[0].permissions_boundary == null
+    error_message = "aws_iam_role.cluster must have no permissions_boundary by default"
+  }
+
+  assert {
+    condition     = aws_iam_role.nodes[0].permissions_boundary == null
+    error_message = "aws_iam_role.nodes must have no permissions_boundary by default"
+  }
+
+  assert {
+    condition     = aws_iam_role.s3.permissions_boundary == null
+    error_message = "aws_iam_role.s3 must have no permissions_boundary by default"
+  }
+
+  assert {
+    condition     = module.controllers.lbc_iam_role[0].permissions_boundary == null
+    error_message = "aws_iam_role.lbc must have no permissions_boundary by default"
+  }
+
+  assert {
+    condition     = module.controllers.cluster_autoscaler_iam_role[0].permissions_boundary == null
+    error_message = "aws_iam_role.cluster_autoscaler must have no permissions_boundary by default"
+  }
+
+  assert {
+    condition     = module.controllers.ebs_csi_iam_role[0].permissions_boundary == null
+    error_message = "aws_iam_role.ebs_csi must have no permissions_boundary by default"
+  }
+
+  # The seventh role, and the one originally missed. Count-gated on
+  # create_database, which is what made it easy to skip: it is the only role
+  # that disappears on a path the other six all survive.
+  assert {
+    condition     = aws_iam_role.rds_enhanced_monitoring[0].permissions_boundary == null
+    error_message = "aws_iam_role.rds_enhanced_monitoring must have no permissions_boundary by default"
+  }
+}
+
+# These two runs enumerate roles by hand, which is what let the seventh role
+# ship unwired: the test agreed with the code because both were written from the
+# same incomplete list. Terraform's test language cannot enumerate resources, so
+# there is no assertion that closes the gap structurally. When adding an
+# aws_iam_role to this module, set permissions_boundary on it, add it to both
+# runs here, and name it in the iam_permissions_boundary_arn description.
+# `grep -c 'resource "aws_iam_role"' *.tf` is the check; it must equal 7.
+
+run "iam_permissions_boundary_propagates_to_every_role" {
+  command = plan
+
+  variables {
+    iam_permissions_boundary_arn = "arn:aws:iam::123456789012:policy/ExamplePermissionsBoundary"
+  }
+
+  assert {
+    condition     = aws_iam_role.cluster[0].permissions_boundary == "arn:aws:iam::123456789012:policy/ExamplePermissionsBoundary"
+    error_message = "aws_iam_role.cluster must carry the configured permissions boundary"
+  }
+
+  assert {
+    condition     = aws_iam_role.nodes[0].permissions_boundary == "arn:aws:iam::123456789012:policy/ExamplePermissionsBoundary"
+    error_message = "aws_iam_role.nodes must carry the configured permissions boundary"
+  }
+
+  assert {
+    condition     = aws_iam_role.s3.permissions_boundary == "arn:aws:iam::123456789012:policy/ExamplePermissionsBoundary"
+    error_message = "aws_iam_role.s3 must carry the configured permissions boundary"
+  }
+
+  assert {
+    condition     = module.controllers.lbc_iam_role[0].permissions_boundary == "arn:aws:iam::123456789012:policy/ExamplePermissionsBoundary"
+    error_message = "aws_iam_role.lbc must carry the configured permissions boundary"
+  }
+
+  assert {
+    condition     = module.controllers.cluster_autoscaler_iam_role[0].permissions_boundary == "arn:aws:iam::123456789012:policy/ExamplePermissionsBoundary"
+    error_message = "aws_iam_role.cluster_autoscaler must carry the configured permissions boundary"
+  }
+
+  assert {
+    condition     = module.controllers.ebs_csi_iam_role[0].permissions_boundary == "arn:aws:iam::123456789012:policy/ExamplePermissionsBoundary"
+    error_message = "aws_iam_role.ebs_csi must carry the configured permissions boundary"
+  }
+
+  # The seventh role. In an account whose SCP requires a boundary on every role,
+  # this one missing is enough to fail the whole apply.
+  assert {
+    condition     = aws_iam_role.rds_enhanced_monitoring[0].permissions_boundary == "arn:aws:iam::123456789012:policy/ExamplePermissionsBoundary"
+    error_message = "aws_iam_role.rds_enhanced_monitoring must carry the configured permissions boundary"
+  }
+}
+
+run "iam_permissions_boundary_rejects_malformed_arn" {
+  command = plan
+
+  variables {
+    # Missing the policy/ resource segment entirely: not a policy ARN at all.
+    iam_permissions_boundary_arn = "arn:aws:iam::123456789012:role/NotAPolicy"
+  }
+
+  expect_failures = [var.iam_permissions_boundary_arn]
+}
+
+# AWS permits an AWS managed policy to be used as a permissions boundary, and
+# those carry `aws` in the account field rather than a 12-digit ID. The
+# validation has to accept that shape, or the module fails the plan on a
+# configuration AWS itself accepts.
+run "iam_permissions_boundary_accepts_an_aws_managed_policy" {
+  command = plan
+
+  variables {
+    iam_permissions_boundary_arn = "arn:aws:iam::aws:policy/PowerUserAccess"
+  }
+
+  assert {
+    condition     = aws_iam_role.s3.permissions_boundary == "arn:aws:iam::aws:policy/PowerUserAccess"
+    error_message = "An AWS managed policy ARN must be accepted as a permissions boundary and reach every role"
+  }
+}
+
+# ── n8n defaults scheduled to change ──────────────────────────────────────────
+# n8n warns on every pod start that four of its defaults will move in a future
+# version. The module pins one of them and exposes the other three, which is a
+# deliberate asymmetry: see the block comment above n8n_task_runner_timeout in
+# variables.tf.
+#
+# These runs assert on the inputs rather than on the rendered env list, for the
+# same reason the execution-data runs do: config.extraEnv lives inside
+# helm_release.n8n.values, which is unknown at plan, so the emitted names are not
+# assertable under `command = plan`. The collision-guard runs below are what
+# prove the module considers these names its own.
+
+run "task_runner_timeout_pins_n8ns_current_default" {
+  command = plan
+
+  # 300 is n8n's own current default, so pinning it changes nothing today. That
+  # is the point: the value is emitted unconditionally, so when n8n drops its
+  # default to 60 an upgrade cannot silently abort every Code node task that
+  # runs longer than a minute.
+  assert {
+    condition     = var.n8n_task_runner_timeout == 300
+    error_message = "n8n_task_runner_timeout must default to 300, n8n's current default, so an n8n upgrade cannot move it"
+  }
+}
+
+run "task_runner_timeout_accepts_n8ns_future_default" {
+  command = plan
+
+  variables {
+    n8n_task_runner_timeout = 60
+  }
+
+  assert {
+    condition     = var.n8n_task_runner_timeout == 60
+    error_message = "n8n_task_runner_timeout must accept 60, so a caller can adopt n8n's future default early"
+  }
+}
+
+run "task_runner_timeout_rejects_zero" {
+  command = plan
+
+  variables {
+    n8n_task_runner_timeout = 0
+  }
+
+  expect_failures = [var.n8n_task_runner_timeout]
+}
+
+run "the_tightening_defaults_are_left_to_n8n" {
+  command = plan
+
+  # All three are n8n hardening a security default rather than changing
+  # behaviour arbitrarily, so the module leaves them unset and lets n8n's
+  # default apply, today's and tomorrow's alike.
+  assert {
+    condition = (
+      var.n8n_unverified_packages_enabled == null &&
+      var.n8n_compression_max_decompressed_size_bytes == null &&
+      var.n8n_compression_max_zip_entries == null
+    )
+    error_message = "The three tightening defaults must be null by default, so the module freezes none of them on a caller's behalf"
+  }
+}
+
+run "the_tightening_defaults_are_settable" {
+  command = plan
+
+  variables {
+    n8n_unverified_packages_enabled             = true
+    n8n_compression_max_decompressed_size_bytes = 2147483648
+    n8n_compression_max_zip_entries             = 5000
+  }
+
+  assert {
+    condition = (
+      var.n8n_unverified_packages_enabled == true &&
+      var.n8n_compression_max_decompressed_size_bytes == 2147483648 &&
+      var.n8n_compression_max_zip_entries == 5000
+    )
+    error_message = "A caller must be able to pin today's values explicitly when their workflows depend on them"
+  }
+}
+
+run "compression_decompressed_size_rejects_zero" {
+  command = plan
+
+  variables {
+    n8n_compression_max_decompressed_size_bytes = 0
+  }
+
+  expect_failures = [var.n8n_compression_max_decompressed_size_bytes]
+}
+
+run "compression_zip_entries_rejects_zero" {
+  command = plan
+
+  variables {
+    n8n_compression_max_zip_entries = 0
+  }
+
+  expect_failures = [var.n8n_compression_max_zip_entries]
+}
+
+# The collision guard. n8n_extra_env is appended last and wins on duplicate
+# names, so an override here would unpin the task timeout or move a limit the
+# module deliberately leaves to n8n, with no input saying so.
+
+run "extra_env_rejects_the_task_runner_timeout_name" {
+  command = plan
+
+  variables {
+    # Covered by the N8N_RUNNERS_ prefix rather than by an exact-name entry.
+    n8n_extra_env = [
+      { name = "N8N_RUNNERS_TASK_TIMEOUT", value = "60" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_env_rejects_the_tightening_default_names" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_UNVERIFIED_PACKAGES_ENABLED", value = "true" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_env_rejects_the_compression_limit_names" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_COMPRESSION_NODE_MAX_ZIP_ENTRIES", value = "5000" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# ── Cluster controller install toggles ───────────────────────────────────────
+
+run "install_lbc_false_creates_no_lbc_release" {
+  command = plan
+
+  variables {
+    install_lbc    = false
+    create_ingress = false
+  }
+
+  assert {
+    condition     = length(module.controllers.lbc_helm_release) == 0
+    error_message = "No LBC Helm release should be created when install_lbc = false"
+  }
+
+  # create_eks is left at its true default here: on a freshly created
+  # cluster, nothing can already be bound to the aws-load-balancer-controller
+  # ServiceAccount, so the association is still created even with
+  # install_lbc = false, letting an externally-installed LBC on the new
+  # cluster still get its IAM binding.
+  assert {
+    condition     = length(module.controllers.lbc_pod_identity_association) == 1
+    error_message = "LBC Pod Identity association must still be created on create_eks = true even when install_lbc = false, so an externally-installed LBC on the new cluster gets its IAM binding"
+  }
+}
+
+run "install_lbc_false_rejects_create_ingress_true" {
+  command = plan
+
+  variables {
+    install_lbc    = false
+    create_ingress = true
+  }
+
+  expect_failures = [var.install_lbc]
+}
+
+# Regression test for the 409 ResourceInUseException confirmed in live
+# testing: create_eks = false against an existing cluster that already
+# carries the aws-load-balancer-controller ServiceAccount's Pod Identity
+# association (e.g. from a previous invocation of this exact module) must
+# not attempt to create a second one when install_lbc = false attests that
+# an association already exists there.
+run "create_eks_false_install_lbc_false_skips_lbc_pod_identity_association" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+    create_ebs_csi                               = false
+    install_lbc                                  = false
+    create_ingress                               = false
+  }
+
+  assert {
+    condition     = length(module.controllers.lbc_pod_identity_association) == 0
+    error_message = "create_eks = false with install_lbc = false must skip the LBC Pod Identity association, not collide with one that may already exist on the shared cluster"
+  }
+
+  # The role goes with the association. Left unconditional it would be an IAM
+  # role carrying AWSLoadBalancerControllerIAMPolicy that no principal can
+  # assume, since the association is the only thing that binds it to a
+  # ServiceAccount, and its deterministic cluster_name-derived name would
+  # collide with a second modules/controllers call sharing that cluster_name
+  # (examples/customer-managed-everything is exactly that shape).
+  assert {
+    condition     = length(module.controllers.lbc_iam_role) == 0
+    error_message = "create_eks = false with install_lbc = false must skip the LBC IAM role too, not strand a role nothing can assume"
+  }
+
+  # The gate is per-controller, so leaving install_cluster_autoscaler at its
+  # default here proves the LBC gate does not drag its neighbour with it.
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_iam_role) == 1
+    error_message = "install_lbc = false must not gate the Cluster Autoscaler IAM role: each controller's resources follow its own toggle"
+  }
+}
+
+# The Cluster Autoscaler half of the run above.
+run "create_eks_false_install_cluster_autoscaler_false_skips_its_iam_role" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+    create_ebs_csi                               = false
+    install_cluster_autoscaler                   = false
+    create_ingress                               = false
+  }
+
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_pod_identity_association) == 0
+    error_message = "create_eks = false with install_cluster_autoscaler = false must skip the Cluster Autoscaler Pod Identity association"
+  }
+
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_iam_role) == 0
+    error_message = "create_eks = false with install_cluster_autoscaler = false must skip the Cluster Autoscaler IAM role too, not strand a role nothing can assume"
+  }
+}
+
+# Complements the run above: create_eks = false does not, on its own, skip
+# the association -- only install_lbc = false alongside it does. This is the
+# "this invocation owns installing LBC on the existing cluster" case.
+run "create_eks_false_install_lbc_true_still_creates_lbc_pod_identity_association" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+    create_ebs_csi                               = false
+    install_lbc                                  = true
+  }
+
+  assert {
+    condition     = length(module.controllers.lbc_pod_identity_association) == 1
+    error_message = "create_eks = false with install_lbc = true must still create the LBC Pod Identity association: this invocation owns installing LBC on the existing cluster"
+  }
+
+  assert {
+    condition     = length(module.controllers.lbc_iam_role) == 1
+    error_message = "create_eks = false with install_lbc = true must create the LBC IAM role: the association it is bound to exists on this path"
+  }
+}
+
+# The default path, stated explicitly so the gate's other half is covered:
+# create_eks = true creates the LBC and Cluster Autoscaler IAM roles whether
+# or not the module installs the controllers itself. Nothing can already be
+# bound to those ServiceAccounts on a cluster this apply just created, so the
+# roles exist for an externally installed controller to use.
+run "create_eks_true_creates_controller_iam_roles_regardless_of_install_toggles" {
+  command = plan
+
+  variables {
+    install_lbc                = false
+    install_cluster_autoscaler = false
+    create_ingress             = false
+  }
+
+  assert {
+    condition     = length(module.controllers.lbc_iam_role) == 1
+    error_message = "create_eks = true must create the LBC IAM role even with install_lbc = false, so an externally installed controller still gets its IAM binding"
+  }
+
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_iam_role) == 1
+    error_message = "create_eks = true must create the Cluster Autoscaler IAM role even with install_cluster_autoscaler = false"
+  }
+}
+
+run "install_cluster_autoscaler_false_creates_no_release" {
+  command = plan
+
+  variables {
+    install_cluster_autoscaler = false
+  }
+
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_pod_identity_association) == 1
+    error_message = "Cluster Autoscaler Pod Identity association must still be created on create_eks = true even when install_cluster_autoscaler = false, so an externally-installed Cluster Autoscaler on the new cluster gets its IAM binding"
+  }
+
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_helm_release) == 0
+    error_message = "No Cluster Autoscaler Helm release should be created when install_cluster_autoscaler = false"
+  }
+}
+
+# Same regression pair as the LBC runs above, for Cluster Autoscaler.
+run "create_eks_false_install_cluster_autoscaler_false_skips_pod_identity_association" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+    create_ebs_csi                               = false
+    install_cluster_autoscaler                   = false
+  }
+
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_pod_identity_association) == 0
+    error_message = "create_eks = false with install_cluster_autoscaler = false must skip the Cluster Autoscaler Pod Identity association, not collide with one that may already exist on the shared cluster"
+  }
+}
+
+run "create_eks_false_install_cluster_autoscaler_true_still_creates_pod_identity_association" {
+  command = plan
+
+  variables {
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+    create_ebs_csi                               = false
+    install_cluster_autoscaler                   = true
+  }
+
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_pod_identity_association) == 1
+    error_message = "create_eks = false with install_cluster_autoscaler = true must still create the Cluster Autoscaler Pod Identity association: this invocation owns installing it on the existing cluster"
+  }
+}
+
+run "install_metrics_server_false_creates_no_release" {
+  command = plan
+
+  variables {
+    install_metrics_server = false
+  }
+
+  assert {
+    condition     = length(module.controllers.metrics_server_helm_release) == 0
+    error_message = "No metrics-server Helm release should be created when install_metrics_server = false"
+  }
+
+  # The webhook HPA is CPU-based and always present, so disabling
+  # metrics-server always trips this warning too.
+  expect_failures = [check.webhook_hpa_needs_metrics_server_somewhere]
+}
+
+run "install_keda_false_creates_no_release" {
+  command = plan
+
+  variables {
+    install_keda = false
+  }
+
+  assert {
+    condition     = length(module.controllers.keda_helm_release) == 0
+    error_message = "No KEDA Helm release should be created when install_keda = false"
+  }
+}
+
+run "controllers_all_installed_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(module.controllers.lbc_helm_release) == 1
+    error_message = "LBC should be installed by default"
+  }
+
+  assert {
+    condition     = length(module.controllers.cluster_autoscaler_helm_release) == 1
+    error_message = "Cluster Autoscaler should be installed by default"
+  }
+
+  assert {
+    condition     = length(module.controllers.metrics_server_helm_release) == 1
+    error_message = "metrics-server should be installed by default"
+  }
+
+  assert {
+    condition     = length(module.controllers.keda_helm_release) == 1
+    error_message = "KEDA should be installed by default"
+  }
+}
+
+# ── Chart repository overrides ───────────────────────────────────────────────
+
+run "chart_repositories_default_to_the_public_upstreams" {
+  command = plan
+
+  assert {
+    condition     = helm_release.n8n.repository == "oci://ghcr.io/n8n-io/n8n-helm-chart"
+    error_message = "n8n_chart_repository must default to the public n8n chart repository"
+  }
+
+  assert {
+    condition     = module.controllers.lbc_helm_release[0].repository == "https://aws.github.io/eks-charts"
+    error_message = "lbc_chart_repository must default to the public LBC chart repository"
+  }
+
+  assert {
+    condition     = module.controllers.cluster_autoscaler_helm_release[0].repository == "https://kubernetes.github.io/autoscaler"
+    error_message = "cluster_autoscaler_chart_repository must default to the public Cluster Autoscaler chart repository"
+  }
+
+  assert {
+    condition     = module.controllers.metrics_server_helm_release[0].repository == "https://kubernetes-sigs.github.io/metrics-server/"
+    error_message = "metrics_server_chart_repository must default to the public metrics-server chart repository"
+  }
+
+  assert {
+    condition     = module.controllers.keda_helm_release[0].repository == "https://kedacore.github.io/charts"
+    error_message = "keda_chart_repository must default to the public KEDA chart repository"
+  }
+}
+
+run "chart_repositories_can_be_mirrored" {
+  command = plan
+
+  variables {
+    n8n_chart_repository                = "oci://123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-chart-mirror"
+    lbc_chart_repository                = "https://charts.internal.example.com/eks-charts"
+    cluster_autoscaler_chart_repository = "https://charts.internal.example.com/autoscaler"
+    metrics_server_chart_repository     = "https://charts.internal.example.com/metrics-server"
+    keda_chart_repository               = "https://charts.internal.example.com/keda"
+  }
+
+  assert {
+    condition     = helm_release.n8n.repository == "oci://123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-chart-mirror"
+    error_message = "n8n_chart_repository must reach the n8n Helm release"
+  }
+
+  assert {
+    condition     = module.controllers.lbc_helm_release[0].repository == "https://charts.internal.example.com/eks-charts"
+    error_message = "lbc_chart_repository must reach the LBC Helm release"
+  }
+
+  assert {
+    condition     = module.controllers.cluster_autoscaler_helm_release[0].repository == "https://charts.internal.example.com/autoscaler"
+    error_message = "cluster_autoscaler_chart_repository must reach the Cluster Autoscaler Helm release"
+  }
+
+  assert {
+    condition     = module.controllers.metrics_server_helm_release[0].repository == "https://charts.internal.example.com/metrics-server"
+    error_message = "metrics_server_chart_repository must reach the metrics-server Helm release"
+  }
+
+  assert {
+    condition     = module.controllers.keda_helm_release[0].repository == "https://charts.internal.example.com/keda"
+    error_message = "keda_chart_repository must reach the KEDA Helm release"
+  }
+}
+
+run "n8n_chart_repository_rejects_a_bare_hostname" {
+  command = plan
+
+  variables {
+    n8n_chart_repository = "ghcr.io/n8n-io/n8n-helm-chart"
+  }
+
+  expect_failures = [var.n8n_chart_repository]
+}
+
+run "lbc_chart_repository_rejects_whitespace" {
+  command = plan
+
+  variables {
+    lbc_chart_repository = "https://charts.internal.example.com/eks charts"
+  }
+
+  expect_failures = [var.lbc_chart_repository]
+}
+
+run "cluster_autoscaler_chart_repository_rejects_an_unsupported_scheme" {
+  command = plan
+
+  variables {
+    cluster_autoscaler_chart_repository = "ftp://charts.internal.example.com/autoscaler"
+  }
+
+  expect_failures = [var.cluster_autoscaler_chart_repository]
+}
+
+run "metrics_server_chart_repository_rejects_an_unsupported_scheme" {
+  command = plan
+
+  variables {
+    metrics_server_chart_repository = "http://charts.internal.example.com/metrics-server"
+  }
+
+  expect_failures = [var.metrics_server_chart_repository]
+}
+
+run "keda_chart_repository_rejects_an_unsupported_scheme" {
+  command = plan
+
+  variables {
+    keda_chart_repository = "http://charts.internal.example.com/keda"
+  }
+
+  expect_failures = [var.keda_chart_repository]
+}
+
+# ── Webhook HPA opt-out ───────────────────────────────────────────────────────
+
+run "webhook_hpa_created_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook) == 1
+    error_message = "The webhook processor HPA should be created by default"
+  }
+}
+
+run "n8n_webhook_hpa_enabled_false_creates_no_hpa" {
+  command = plan
+
+  variables {
+    n8n_webhook_hpa_enabled = false
+  }
+
+  assert {
+    condition     = length(kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook) == 0
+    error_message = "No webhook processor HPA should be created when n8n_webhook_hpa_enabled = false"
+  }
+}
+
+run "n8n_webhook_hpa_enabled_false_silences_the_metrics_server_check" {
+  command = plan
+
+  variables {
+    n8n_webhook_hpa_enabled = false
+    install_metrics_server  = false
+  }
+
+  # With no webhook HPA at all, there is nothing left needing metrics-server
+  # on this front, so the check that fires when only install_metrics_server is
+  # false must not fire here.
+}
+
+# ── Malformed-input rejection ─────────────────────────────────────────────────
+# One run per input that previously accepted a value it could not use. Each of
+# these used to plan cleanly and fail later: at apply against the Kubernetes or
+# AWS API, or, worse, not at all. Grouped here rather than beside each feature
+# because what they have in common is the failure mode, not the subsystem.
+
+run "namespace_rejects_a_non_dns1123_name" {
+  command = plan
+
+  variables {
+    # Uppercase and an underscore, both of which Kubernetes rejects on a
+    # namespace. The kubernetes provider does catch this one at plan time, but
+    # as an opaque metadata.0.name schema error that names neither the input
+    # nor the namespace; the name also reaches
+    # aws_eks_pod_identity_association, which has no such schema check.
+    namespace = "N8N_Prod"
+  }
+
+  expect_failures = [var.namespace]
+}
+
+run "certificate_arn_rejects_a_non_acm_arn" {
+  command = plan
+
+  variables {
+    certificate_arn = "arn:aws:iam::123456789012:server-certificate/legacy"
+  }
+
+  expect_failures = [var.certificate_arn]
+}
+
+# The ARN is well-formed, so the shape validation passes and the region one is
+# what catches it. us-east-1 is the reflex here because CloudFront requires it;
+# an ALB does not, and cannot use a certificate from another region.
+run "certificate_arn_in_another_region_is_rejected" {
+  command = plan
+
+  variables {
+    aws_region      = "eu-west-1"
+    certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012"
+    route53_zone_id = null
+  }
+
+  expect_failures = [var.certificate_arn]
+}
+
+run "certificate_arn_in_the_deployment_region_is_accepted" {
+  command = plan
+
+  variables {
+    aws_region      = "eu-west-1"
+    certificate_arn = "arn:aws:acm:eu-west-1:123456789012:certificate/12345678-1234-1234-1234-123456789012"
+    route53_zone_id = null
+  }
+
+  assert {
+    condition     = local.certificate_arn == "arn:aws:acm:eu-west-1:123456789012:certificate/12345678-1234-1234-1234-123456789012"
+    error_message = "A certificate in the deployment region must be used as-is"
+  }
+}
+
+run "webhook_url_rejects_a_plaintext_scheme" {
+  command = plan
+
+  variables {
+    n8n_webhook_url = "http://webhooks.example.com"
+  }
+
+  expect_failures = [var.n8n_webhook_url]
+}
+
+# A memory suffix on a CPU field. This is the case that mattered most: an
+# unreadable CPU quantity collapsed local.n8n_peak_cpu_request_millis to zero,
+# which made check.autoscaling_maxima_fit_node_capacity pass vacuously. The
+# plan then asserted the maxima fit when nothing had been measured.
+run "cpu_request_rejects_a_memory_quantity" {
+  command = plan
+
+  variables {
+    n8n_main_cpu_request = "2Gi"
+  }
+
+  expect_failures = [var.n8n_main_cpu_request]
+}
+
+run "memory_limit_rejects_a_non_kubernetes_suffix" {
+  command = plan
+
+  variables {
+    n8n_webhook_memory_limit = "2GB"
+  }
+
+  expect_failures = [var.n8n_webhook_memory_limit]
+}
+
+# The decimal suffixes are legal Kubernetes and now parse, where before they
+# fell through to null and silenced the advisory entirely. 1G is 953.67Mi,
+# under the 1024Mi request threshold, so the advisory must fire on it.
+run "decimal_memory_suffix_still_reaches_the_webhook_sizing_advisory" {
+  command = plan
+
+  variables {
+    n8n_reinstall_missing_packages = true
+    n8n_webhook_cpu_request        = "800m"
+    n8n_webhook_cpu_limit          = "1500m"
+    n8n_webhook_memory_request     = "1G"
+    n8n_webhook_memory_limit       = "2Gi"
+  }
+
+  assert {
+    condition     = local.n8n_webhook_memory_mebibytes["request"] < 1024
+    error_message = "1G must parse to 953.67Mi, not to 1024Mi and not to null: the decimal suffixes are not their binary namesakes"
+  }
+
+  expect_failures = [check.webhook_resources_sized_for_reinstall_missing_packages]
+}
+
+# Each floor is tested on its own, with the other side of the pair left at a
+# value that keeps the pre-existing min <= max validation satisfied. Setting
+# both to 0 would trip three validations at once and prove nothing about which.
+run "hpa_min_replicas_rejects_zero" {
+  command = plan
+
+  variables {
+    n8n_main_hpa_min_replicas = 0
+  }
+
+  expect_failures = [var.n8n_main_hpa_min_replicas]
+}
+
+run "hpa_max_replicas_rejects_a_fractional_count" {
+  command = plan
+
+  variables {
+    n8n_main_hpa_min_replicas = 2
+    n8n_main_hpa_max_replicas = 2.5
+  }
+
+  expect_failures = [var.n8n_main_hpa_max_replicas]
+}
+
+# KEDA scales to zero natively, so its floor is the one place 0 is legitimate.
+run "keda_min_replicas_accepts_zero" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_min_replicas = 0
+  }
+
+  assert {
+    condition     = var.n8n_worker_keda_min_replicas == 0
+    error_message = "n8n_worker_keda_min_replicas must accept 0: KEDA scales a ScaledObject to zero, unlike an HPA on EKS"
+  }
+}
+
+run "hpa_cpu_threshold_rejects_a_value_outside_one_to_a_hundred" {
+  command = plan
+
+  variables {
+    n8n_webhook_hpa_cpu_threshold = 150
+  }
+
+  expect_failures = [var.n8n_webhook_hpa_cpu_threshold]
+}
+
+run "keda_jobs_per_replica_rejects_zero" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_jobs_per_replica = 0
+  }
+
+  expect_failures = [var.n8n_worker_keda_jobs_per_replica]
+}
+
+# node_min, node_max and node_desired were each floored at 1 on their own, but
+# never checked against each other. AWS rejects the resulting scaling config.
+run "node_max_below_node_min_is_rejected" {
+  command = plan
+
+  variables {
+    node_min     = 6
+    node_desired = 6
+    node_max     = 3
+  }
+
+  # Only node_max is listed even though node_desired is also out of range here.
+  # Terraform skips a validation whose condition references a variable that has
+  # already failed its own, so node_desired's bounds check never runs once
+  # node_max is invalid. The run below covers node_desired on its own, with a
+  # node_max that validates.
+  expect_failures = [var.node_max]
+}
+
+# node_max stays at or above the default here on purpose. Dropping it to 4
+# would also trip check.autoscaling_maxima_fit_node_group_capacity, and a run
+# that fails two unrelated things proves neither.
+run "node_desired_outside_the_scaling_bounds_is_rejected" {
+  command = plan
+
+  variables {
+    node_min     = 2
+    node_desired = 9
+    node_max     = 8
+  }
+
+  expect_failures = [var.node_desired]
+}
+
+run "fractional_node_count_is_rejected" {
+  command = plan
+
+  variables {
+    node_max = 6.5
+  }
+
+  expect_failures = [var.node_max]
+}
+
+# ── Chart version pinning ─────────────────────────────────────────────────────
+# The four controller charts had no `version` at all, so the installed version
+# was whatever the repository index served at first apply.
+
+run "controller_charts_are_version_pinned" {
+  command = plan
+
+  assert {
+    condition     = module.controllers.lbc_helm_release[0].version == var.lbc_chart_version
+    error_message = "helm_release.lbc must pin its chart version rather than floating on the repository index"
+  }
+
+  assert {
+    condition     = module.controllers.cluster_autoscaler_helm_release[0].version == var.cluster_autoscaler_chart_version
+    error_message = "helm_release.cluster_autoscaler must pin its chart version"
+  }
+
+  assert {
+    condition     = module.controllers.metrics_server_helm_release[0].version == var.metrics_server_chart_version
+    error_message = "helm_release.metrics_server must pin its chart version"
+  }
+
+  assert {
+    condition     = module.controllers.keda_helm_release[0].version == var.keda_chart_version
+    error_message = "helm_release.keda must pin its chart version"
+  }
+
+  assert {
+    condition     = helm_release.n8n.version == var.n8n_chart_version
+    error_message = "helm_release.n8n must keep pinning its chart version"
+  }
+}
+
+# Helm resolves these literally, so a constraint string is not a version it can
+# fetch. Rejecting it here beats an apply-time "chart not found".
+run "chart_version_rejects_a_constraint_rather_than_a_version" {
+  command = plan
+
+  variables {
+    keda_chart_version = ">= 2.20"
+  }
+
+  expect_failures = [var.keda_chart_version]
+}
+
+run "chart_version_rejects_a_leading_v" {
+  command = plan
+
+  variables {
+    lbc_chart_version = "v3.5.0"
+  }
+
+  expect_failures = [var.lbc_chart_version]
 }

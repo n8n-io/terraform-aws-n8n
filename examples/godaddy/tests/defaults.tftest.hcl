@@ -4,7 +4,7 @@
 # AWS or GoDaddy.
 #
 # Run: terraform test
-#   (from examples/godaddy/ — requires terraform >= 1.9)
+#   (from examples/godaddy/, requires terraform >= 1.11)
 
 mock_provider "aws" {
   override_data {

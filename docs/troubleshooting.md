@@ -160,7 +160,7 @@ Three possibilities, in the order worth checking. The first two are specific to 
 
     Two preconditions have to hold, and by default neither does:
 
-    - The IngressClass must actually reference the params object through `spec.parameters`. The Helm chart this module installs (`aws-load-balancer-controller` 3.5.0) creates both an `alb` IngressClass and an `alb` `IngressClassParams`, but does not wire them together, and the params object it creates has an empty spec. Filling in the spec alone changes nothing until someone also adds the reference.
+    - The IngressClass must actually reference the params object through `spec.parameters`. The Helm chart this module installs (`aws-load-balancer-controller`, pinned to 3.5.0 by `lbc_chart_version`) creates both an `alb` IngressClass and an `alb` `IngressClassParams`, but does not wire them together, and the params object it creates has an empty spec. Filling in the spec alone changes nothing until someone also adds the reference. Everything below was verified against that version; a different `lbc_chart_version` may behave differently.
     - The Ingress must be classified through `spec.ingressClassName`. The controller checks the legacy `kubernetes.io/ingress.class` annotation first and returns as soon as it matches, so an Ingress carrying that annotation never has its IngressClass or params loaded.
 
     **The module-managed Ingress sets `kubernetes.io/ingress.class` (see `locals.tf`), so this cause cannot apply to it.** An `IngressClassParams` can be bound and populated and the module's `alb_inbound_cidrs` still wins. That immunity is incidental rather than designed, and it would disappear if the module ever dropped the legacy annotation, which is why the mechanism is documented here rather than left out.
@@ -244,7 +244,7 @@ Your resource had no dependency edge to the namespace, so Terraform scheduled it
 
 ### Fix
 
-Upgrade: `namespace` is now sourced from `kubernetes_namespace.n8n`, so consuming it orders your resources implicitly.
+Upgrade: `namespace` is now sourced from `kubernetes_namespace.n8n[0]` when the module creates the namespace (`create_namespace = true`, the default), so consuming it orders your resources implicitly. If you set `create_namespace = false` to deploy into a namespace you manage yourself, there is no module-owned namespace resource to order against; make sure that namespace already exists before applying this module.
 
 Also add an explicit dependency on the whole module for anything an ALB registers targets for:
 
@@ -436,3 +436,137 @@ n8n_webhook_hpa_scale_up_stabilization_window_seconds = 300
 If pods already have corrupted package directories from an interrupted
 install, a rolling restart after raising the resources above resolves it —
 n8n rewrites the directory from scratch on the next successful install.
+
+## `terraform plan` fails with `Get "http://localhost/...": connect: connection refused` on `create_eks = false`
+
+### Symptom
+
+On a deployment that has already applied once with `create_eks = false`, a
+later `terraform plan` fails while refreshing Kubernetes resources:
+
+```text
+Error: Get "http://localhost/api/v1/namespaces/n8n": dial tcp [::1]:80: connect: connection refused
+
+  with module.n8n.kubernetes_namespace.n8n[0],
+```
+
+The first apply worked. The error appears only once Kubernetes resources
+exist in state AND some other change is pending in the same configuration,
+upstream of the existing cluster.
+
+### Cause
+
+On the `create_eks = false` path, the module's `cluster_endpoint` /
+`cluster_certificate_authority_data` / `cluster_name` outputs resolve through
+`data.aws_eks_cluster.existing`. Terraform defers a data source read to apply
+time whenever anything it depends on has a pending change, and in a
+configuration where the existing cluster is itself a Terraform resource (as
+in `examples/customer-managed-cluster`), any planned change to something that
+cluster depends on is enough. A subnet tag update on the cluster's VPC
+deferred the read exactly this way, confirmed live. Deferred, the module
+outputs are unknown at plan time, and the kubernetes provider treats the
+unknown `host` as unset and falls back to `localhost` when refreshing
+resources already in state.
+
+### Fix
+
+Apply the pending upstream change on its own first, then plan normally. With
+no pending change left upstream of the cluster, the data source reads at plan
+time again and the providers get real endpoints:
+
+```bash
+terraform apply -target=module.vpc   # or whatever carries the pending change
+terraform plan                       # now refreshes against the real cluster
+```
+
+Do NOT reach for `-refresh=false` to get past the refresh error. Skipping
+refresh defers every data source in the configuration, including
+`aws_caller_identity`; the module's generated S3 bucket name then becomes
+unknown, and because `bucket` forces replacement, the resulting plan destroys
+and recreates the bucket holding n8n's binary execution data. Verified live;
+the plan was discarded unapplied.
+
+## LBC fails with `couldn't auto-discover subnets: ... are tagged for other clusters`, deploying a second stack into a VPC another n8n deployment already uses
+
+### Symptom
+
+`helm_release.lbc` (or the standalone `aws-load-balancer-controller` release
+on an existing cluster) fails to provision an ALB for the module-managed
+Ingress, with:
+
+```text
+couldn't auto-discover subnets: unable to resolve at least one subnet.
+Evaluated 2 subnets: 2 are tagged for other clusters, and 0 have
+insufficient available IP addresses
+```
+
+This shows up specifically when reusing another deployment's VPC/subnets,
+for example pointing `redis_host` at another module-managed deployment's
+real ElastiCache endpoint (ElastiCache is VPC-scoped, unlike S3's IAM-based
+cross-account/cross-VPC access, so sharing that layer means sharing the VPC
+too). Confirmed live for this module.
+
+### Cause
+
+The AWS Load Balancer Controller's own subnet auto-discovery looks for
+`kubernetes.io/role/elb` / `kubernetes.io/role/internal-elb` tags, but a
+subnet already carrying `kubernetes.io/cluster/<other-cluster-name>=shared`
+(which every EKS-managed VPC module sets, including this module's own
+examples) is treated by LBC as **ineligible for this cluster**, not
+shareable, even though it still carries the role tags LBC's own docs
+describe as sufficient on their own.
+
+### Fix
+
+Bypass auto-discovery entirely rather than re-tagging the other
+deployment's already-running subnets, via `ingress_annotations`:
+
+```hcl
+ingress_annotations = {
+  "alb.ingress.kubernetes.io/subnets" = "subnet-0123456789abcdef0,subnet-0fedcba9876543210"
+}
+```
+
+## Two n8n deployments sharing one external Redis interfere with each other's workflow activation
+
+### Symptom
+
+Activating a workflow on one deployment fails with `webhook not
+registered`, even immediately after a fresh `terraform apply` and even
+after repeated activate/deactivate retries, while a second, independent
+n8n deployment elsewhere is live and pointed at the **same** Redis (e.g.
+via `create_elasticache = false` + `redis_host` pointed at another module-
+managed deployment's real ElastiCache endpoint).
+
+### Cause
+
+n8n's scaling-mode pub/sub command channel (`<prefix>:n8n.commands`,
+prefixed by `N8N_REDIS_KEY_PREFIX`, which defaults to `"n8n"` for every
+deployment) is not scoped per deployment. One deployment's
+`add-webhooks-triggers-and-pollers` broadcast is received by every other
+main pod subscribed to that same channel on the same Redis, each of which
+looks the workflow up in *its own* database, fails to find it, and
+publishes a `display-workflow-activation-error` back onto the same shared
+channel, which is what breaks the *other* deployment's own activation.
+Confirmed live by subscribing to the channel directly and matching the
+broadcasting pod's `senderId` against the other deployment's own pod name.
+This has nothing to do with which deployment created the Redis: it affects
+any two n8n installs (from this module or otherwise) sharing one Redis
+instance, module-managed ElastiCache instances are exempt only because each
+one is dedicated to a single deployment by default.
+
+### Fix
+
+Set `redis_key_prefix` to a distinct value on every deployment that shares
+a Redis instance with another:
+
+```hcl
+redis_key_prefix = "tenant-a" # a different value on every deployment sharing this Redis
+```
+
+This scopes both `N8N_REDIS_KEY_PREFIX` and the Bull queue's own key prefix
+(`QUEUE_BULL_PREFIX`) to the value given, and keeps KEDA's queue-depth
+triggers reading from the matching, non-default queue keys. Leave it unset
+on the module-managed ElastiCache path (`create_elasticache = true`, the
+default): each such instance is already dedicated to one deployment, so
+there's nothing to scope.

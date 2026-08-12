@@ -10,6 +10,17 @@ locals {
   cluster_name = var.cluster_name
   n8n_domain   = var.n8n_domain
 
+  # The EKS cluster every other file reads. Resolves to the module-managed
+  # cluster (create_eks = true, the default) or to existing_eks_cluster_name
+  # via data.aws_eks_cluster.existing (eks.tf) otherwise, the same pattern
+  # local.namespace_name and local.s3_bucket_arn already use. cluster_name
+  # above stays a separate thing: it names *this module's own* resources
+  # (IAM role suffixes, the generated S3 bucket name), not the EKS cluster
+  # itself, and keeps meaning that on both create_eks paths.
+  eks_cluster_name     = var.create_eks ? aws_eks_cluster.n8n[0].name : data.aws_eks_cluster.existing[0].name
+  eks_cluster_endpoint = var.create_eks ? aws_eks_cluster.n8n[0].endpoint : data.aws_eks_cluster.existing[0].endpoint
+  eks_cluster_ca_data  = var.create_eks ? aws_eks_cluster.n8n[0].certificate_authority[0].data : data.aws_eks_cluster.existing[0].certificate_authority[0].data
+
   # Every hostname n8n answers on, primary first. Single source of truth for the
   # ACM certificate's name list, the Route 53 validation records, the alias
   # records, and the Ingress host rules, so those four cannot drift apart.
@@ -211,7 +222,7 @@ locals {
   # namespace. The KEDA chart allows it by default (permissions.operator and
   # permissions.metricServer both have restrict.secret = false); setting
   # KEDA_RESTRICT_SECRET_ACCESS=true on the operator would break this path.
-  # keda.tf installs the chart without overriding those values.
+  # modules/controllers/keda.tf installs the chart without overriding those values.
   #
   # The two halves are gated separately because the migration's middle state
   # separates them. In transit_encryption_mode = preferred the endpoint speaks
@@ -220,9 +231,18 @@ locals {
   # exist resolves to an empty credential, and the trigger then authenticates
   # against a server with no password configured. Once the group reaches
   # required the token exists and both halves apply.
+  #
+  # username is the exception to the FromEnv treatment above, deliberately. It is
+  # not a credential, so there is nothing gained by keeping it out of the
+  # manifest, and a literal removes the dependency on KEDA resolving it: the
+  # scaler's field is declared
+  # `Username string keda:"name=username, order=triggerMetadata;resolvedEnv;authParams"`,
+  # so both forms work, and the literal is the one that cannot be broken by the
+  # chart changing how it renders QUEUE_BULL_REDIS_USERNAME.
   keda_redis_auth_metadata = merge(
     local.redis_tls_active ? { enableTLS = "true" } : {},
     local.redis_auth_active ? { passwordFromEnv = "QUEUE_BULL_REDIS_PASSWORD" } : {},
+    local.redis_username_value != null ? { username = local.redis_username_value } : {},
   )
 
   # Rolls main, worker and webhook processor pods when the AUTH token changes.
@@ -231,8 +251,12 @@ locals {
   # endpoint), so this is the layer where the contract is assertable. See the
   # long comment at the merge site in n8n.tf for why the chart's own
   # checksum/secret cannot cover a Secret created outside the chart.
-  redis_pod_annotations = local.redis_auth_active ? {
-    "checksum/redis-auth-token" = sha256(random_password.redis_auth_token[0].result)
+  # Also gated on redis_auth_token_secret_ref being null: with a caller-managed
+  # Secret the module never reads the token's value (that is the point of the
+  # input), so there is nothing here to hash, and local.redis_auth_token_value
+  # resolves to null on that path (see below).
+  redis_pod_annotations = (local.redis_auth_active && var.redis_auth_token_secret_ref == null) ? {
+    "checksum/redis-auth-token" = sha256(local.redis_auth_token_value)
   } : {}
 
   # The two arguments the staged HA -> HA+TLS migration needs, lifted here for
@@ -247,43 +271,90 @@ locals {
   # That contract is the point: every deployment already on a replication group
   # re-plans against this version of the module, and writing a default onto
   # either argument would show them an in-place Redis update that changes
-  # nothing.
-  redis_transit_encryption_mode = local.redis_tls_active ? var.redis_transit_encryption_mode : null
+  # nothing. Gated on redis_managed_tls_active (not redis_tls_active), since
+  # transit_encryption_mode is a property of the replication group this module
+  # manages and has no meaning against an external Redis.
+  redis_transit_encryption_mode = local.redis_managed_tls_active ? var.redis_transit_encryption_mode : null
   redis_apply_immediately       = var.redis_apply_immediately ? true : null
 
-  # Whether the endpoint n8n is being pointed at actually speaks TLS and demands
-  # a token. Gated on create_elasticache as well as the variable, so the clients
-  # can never be configured for a posture the module did not provision. A hard
-  # validation on redis_transit_encryption_enabled already rejects that
-  # combination, but the clients read this rather than the raw variable so the
-  # invariant holds at the point of use.
-  redis_tls_active = var.create_elasticache && var.redis_transit_encryption_enabled
+  # Whether the endpoint n8n is being pointed at actually speaks TLS. True on
+  # either path now: the module-managed replication group with
+  # redis_transit_encryption_enabled, or an external Redis (create_elasticache
+  # = false) the caller has flagged as TLS-only via the same variable: the
+  # module does not manage that endpoint, so this is a declaration from the
+  # caller rather than something the module provisions or verifies.
+  redis_tls_active = var.redis_transit_encryption_enabled
 
-  # Whether there is an AUTH token at all. Narrower than redis_tls_active by
-  # exactly one condition, and that condition is AWS's, not a preference:
+  # Narrower than redis_tls_active: true only when the module itself is the one
+  # putting TLS on a replication group it manages. Gates the arguments that are
+  # properties of THAT resource specifically (transit_encryption_mode) rather
+  # than of "is this endpoint encrypted" in general, which redis_tls_active
+  # already answers for both paths.
+  redis_managed_tls_active = var.create_elasticache && var.redis_transit_encryption_enabled
+
+  # Whether there is an AUTH token to wire up at all, and where it comes from.
   #
-  #   InvalidParameterValue: The AUTH token modification is only supported when
-  #   encryption-in-transit is enabled.
-  #
-  # AWS returns that for a group sitting in transit_encryption_mode = preferred
-  # with TransitEncryptionEnabled already true. So "encryption-in-transit is
-  # enabled" means `required` specifically, and there is no way to introduce a
-  # token during the preferred window. Confirmed live on a throwaway group, both
-  # as a standalone modify and bundled into the same call as the move to
-  # required; both are rejected identically.
-  #
-  # Gating the whole credential on this is what makes the staged migration
-  # expressible as ordinary variable changes rather than out-of-band CLI work.
-  # The first apply moves the group to preferred and rolls the pods onto TLS
-  # with no credential, which preferred accepts; the second moves it to required
-  # and lets the token land behind it. If the token were tied to
-  # redis_tls_active instead, the first apply would send it too and AWS would
-  # reject the whole modification, which is the failure this feature started
-  # from.
-  #
-  # A first-time create is unaffected: redis_transit_encryption_mode defaults to
-  # "required", so TLS and the token still arrive together in one apply.
-  redis_auth_active = local.redis_tls_active && var.redis_transit_encryption_mode == "required"
+  #   create_elasticache = true   gated on redis_managed_tls_active AND
+  #                               transit_encryption_mode == "required", because
+  #                               AWS returns InvalidParameterValue: The AUTH
+  #                               token modification is only supported when
+  #                               encryption-in-transit is enabled, and that
+  #                               means "required" specifically, not "preferred"
+  #                               with TransitEncryptionEnabled already true.
+  #                               Confirmed live on a throwaway group, both as a
+  #                               standalone modify and bundled into the same
+  #                               call as the move to required; both were
+  #                               rejected identically. Gating the whole
+  #                               credential on this is what makes the staged
+  #                               migration expressible as ordinary variable
+  #                               changes: the first apply moves the group to
+  #                               preferred and rolls the pods onto TLS with no
+  #                               credential, which preferred accepts; the
+  #                               second moves it to required and lets the token
+  #                               land behind it. A first-time create is
+  #                               unaffected, since the mode defaults to
+  #                               "required".
+  #   create_elasticache = false  true whenever the caller supplied
+  #                               redis_auth_token OR redis_auth_token_secret_ref.
+  #                               The module cannot generate a credential for
+  #                               infrastructure it does not provision, and an
+  #                               external Redis with AUTH does not carry
+  #                               AWS's TLS-before-AUTH constraint, so this is
+  #                               a plain presence check either way.
+  redis_auth_active = (
+    var.create_elasticache
+    ? (local.redis_managed_tls_active && var.redis_transit_encryption_mode == "required")
+    : (var.redis_auth_token != null || var.redis_auth_token_secret_ref != null)
+  )
+
+  # The credential value that actually reaches the Kubernetes Secret this
+  # module writes, resolving both module-known sources the same way
+  # local.redis_host resolves the endpoint: branching on the variables (known
+  # at plan time) rather than try()/coalesce() over the resource, so the
+  # unselected branch's [0] is never indexed. null when
+  # redis_auth_token_secret_ref is set: the value then lives in the caller's
+  # own Secret, which the module never reads, and kubernetes_secret.n8n_redis
+  # is not created on that path (n8n.tf), so this local has no consumer there
+  # either.
+  redis_auth_token_value = (
+    var.create_elasticache
+    ? try(random_password.redis_auth_token[0].result, null)
+    : var.redis_auth_token
+  )
+
+  # The ACL username, resolved to null on the module-managed path so "ignored
+  # when create_elasticache = true" means the value genuinely never reaches
+  # anything, the same treatment local.db_logs_kms_key_arn gives an ignored key.
+  # An ElastiCache AUTH token authenticates as Redis's default user and the
+  # service has no username concept, so passing one there would break a
+  # connection that works.
+  redis_username_value = var.create_elasticache ? null : var.redis_username
+
+  # Bull's own default prefix, mirrored here (rather than left as a literal
+  # at each of the two KEDA listName call sites) so n8n.tf's env var, the
+  # chart's redis.prefix value, and KEDA's listName all read from one
+  # resolved value instead of three separately-maintained literals.
+  redis_key_prefix_value = coalesce(var.redis_key_prefix, "bull")
 
   common_tags = merge(
     {
@@ -295,7 +366,37 @@ locals {
 
   # cluster_name + last 6 digits of the account ID keeps names unique across
   # both clusters in the same account and accounts with the same cluster name.
-  s3_bucket_name = "n8n-${local.cluster_name}-${substr(data.aws_caller_identity.current.account_id, 6, 6)}"
+  # Only used to name aws_s3_bucket.n8n when create_s3_bucket = true.
+  s3_bucket_name_generated = "n8n-${local.cluster_name}-${substr(data.aws_caller_identity.current.account_id, 6, 6)}"
+
+  # Name of the bucket actually in use: the module-managed bucket when
+  # create_s3_bucket = true (the default), or the caller-supplied existing
+  # bucket otherwise. n8n.tf and the s3_bucket_name output read this rather
+  # than aws_s3_bucket.n8n directly, so both resolve correctly whichever
+  # bucket is in play.
+  s3_bucket_name = var.create_s3_bucket ? local.s3_bucket_name_generated : var.existing_s3_bucket_name
+
+  # ARN of the bucket actually in use. aws_iam_policy.s3 (s3.tf) grants access
+  # to this ARN regardless of who created the bucket.
+  s3_bucket_arn = var.create_s3_bucket ? aws_s3_bucket.n8n[0].arn : "arn:aws:s3:::${var.existing_s3_bucket_name}"
+
+  # KMS key actually protecting the bucket in use, or null when it is not
+  # SSE-KMS encrypted. On the caller-supplied bucket path (create_s3_bucket =
+  # false) s3_kms_key_arn passes straight through regardless of
+  # s3_kms_encryption_enabled, since that toggle only governs a bucket
+  # encryption configuration this module never creates there, and an explicit
+  # ARN is the only way the pod role can be granted key access to a bucket
+  # this module does not create. On the module-managed path, which key
+  # protects the bucket is create_s3_kms_key's call, not s3_kms_key_arn's:
+  # true means the module's own CMK (aws_kms_key.s3), false means the
+  # caller's s3_kms_key_arn is the one actually in use. Either way this
+  # resolves to null when s3_kms_encryption_enabled is false, so the IAM
+  # grant never names a key that is not actually the bucket's default
+  # encryption key.
+  s3_kms_key_arn = (
+    !var.create_s3_bucket ? var.s3_kms_key_arn :
+    var.s3_kms_encryption_enabled ? (var.create_s3_kms_key ? try(aws_kms_key.s3[0].arn, null) : var.s3_kms_key_arn) : null
+  )
 
   # ── n8n service account ────────────────────────────────────────────────────
   # The chart creating its own ServiceAccount is the arrangement we want, with
@@ -407,6 +508,23 @@ locals {
     "N8N_COMMUNITY_PACKAGES_PREVENT_LOADING",
     "N8N_COMMUNITY_PACKAGES_REGISTRY",
     "N8N_CUSTOM_EXTENSIONS",
+    # Owned by redis_key_prefix, which is the single source of truth for the
+    # Redis namespace: it sets this, the chart's redis.prefix (QUEUE_BULL_PREFIX)
+    # and the KEDA ScaledObject's listName together. QUEUE_BULL_PREFIX is
+    # already covered by the QUEUE_ prefix below; without this entry the two
+    # halves could be set independently, leaving n8n's pub/sub channel and
+    # Bull's job keys under different namespaces, and KEDA watching a list
+    # nothing writes to.
+    "N8N_REDIS_KEY_PREFIX",
+    # Owned by the four "n8n defaults scheduled to change" inputs. Listed even
+    # though three of them are only emitted when set: an extraEnv override would
+    # move a limit the module deliberately leaves to n8n, or unpin the task
+    # timeout the module deliberately pins, without the input saying so.
+    # N8N_RUNNERS_TASK_TIMEOUT is already covered by the N8N_RUNNERS_ prefix
+    # below and is not repeated here.
+    "N8N_UNVERIFIED_PACKAGES_ENABLED",
+    "N8N_COMPRESSION_NODE_MAX_DECOMPRESSED_SIZE_BYTES",
+    "N8N_COMPRESSION_NODE_MAX_ZIP_ENTRIES",
     "WEBHOOK_URL",
     "N8N_TEMPLATES_ENABLED",
     "N8N_PERSONALIZATION_ENABLED",
@@ -441,6 +559,8 @@ locals {
     "N8N_DISABLE_PRODUCTION_MAIN_PROCESS",
     "N8N_NATIVE_PYTHON_RUNNER",
     "TZ",
+    "N8N_DISABLED_MODULES",
+    "N8N_EXTERNAL_SECRETS_UPDATE_INTERVAL",
   ]
 
   # Whole env-var families the module/chart owns, matched by prefix so the guard
@@ -456,4 +576,12 @@ locals {
     "N8N_MULTI_MAIN_",
     "AWS_",
   ]
+
+  # Modules explicitly disabled via N8N_DISABLED_MODULES. A list rather than a
+  # direct string assignment so a later toggle for another module can append
+  # to it without touching the join() that renders it. See
+  # var.n8n_external_secrets_enabled.
+  n8n_disabled_modules = concat(
+    var.n8n_external_secrets_enabled ? [] : ["external-secrets"],
+  )
 }

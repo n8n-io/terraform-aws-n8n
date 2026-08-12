@@ -87,6 +87,10 @@ chart-cache/
 /init.sh
 /progress.txt
 
+# Internal issue-filing and test-campaign notes drafted while developing a
+# change locally, not part of the published module.
+/docs/planning/
+
 # ── OS and editor noise ───────────────────────────────────────────────────────
 
 .DS_Store

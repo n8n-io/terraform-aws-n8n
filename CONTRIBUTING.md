@@ -36,8 +36,16 @@ terraform-docs --output-check .
 Repeat the `init / validate / test / tflint / terraform-docs` block
 under each example directory (`examples/small`, `examples/medium`,
 `examples/large`, `examples/cloudflare`, `examples/godaddy`,
-`examples/split-ingress`) — that mirrors the CI matrix exactly. CI will run
-the same matrix on your PR.
+`examples/split-ingress`, `examples/customer-managed-redis`,
+`examples/customer-managed-s3`, `examples/customer-managed-cluster`,
+`examples/customer-managed-everything`), which mirrors the CI matrix
+exactly. CI will run the same matrix on your PR.
+
+Don't skip the `customer-managed-*` four. `customer-managed-everything`
+invokes `modules/controllers` directly rather than through the root
+module, so it is the only root that catches a change to that submodule's
+input contract; a new required variable there validates fine everywhere
+else and fails only here.
 
 If you have [`task`](https://taskfile.dev) installed (`brew install
 go-task`), `task ci` runs the same fmt/validate/test/lint/docs matrix
@@ -75,4 +83,7 @@ Multi-AZ option`). Use the imperative mood ("add", not "added" or
 - All CI checks must be green before merge.
 
 See [`AGENTS.md`](./AGENTS.md) for details on adding inputs, adding
-resources, and what *not* to change.
+resources, and what *not* to change. See
+[`docs/customer-managed-infrastructure.md`](./docs/customer-managed-infrastructure.md)
+specifically before adding a new `create_<x>`/`install_<x>` toggle for a
+customer-managed layer.

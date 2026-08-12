@@ -11,7 +11,21 @@ permissions:
   pull-requests: write
 
 env:
-  TF_VERSION: "1.9.8"
+  # Every job runs this one version: the current latest stable, so there is one
+  # deliberately tracked version to bump rather than a moving target.
+  #
+  # Bumped from 1.9.8 because examples/customer-managed-redis, -s3 and -cluster
+  # need override_resource's override_during attribute to assert a plan-time
+  # value on a resource the same configuration creates, and that attribute
+  # arrived in Terraform 1.11 (hashicorp/terraform#36227).
+  #
+  # The module's own floor moved with it: every versions.tf in the repo now
+  # declares required_version = ">= 1.11" rather than the ">= 1.9" that no job
+  # here exercised. Keep the two in step. A floor CI never runs is a claim
+  # nobody is checking, and this repo has already been bitten by the specific
+  # version-skew hazard that hides behind one (`check` blocks did not
+  # short-circuit && / || before Terraform 1.10; see AGENTS.md).
+  TF_VERSION: "1.15.8"
   TFLINT_VERSION: "v0.53.0"
   # checkov results are version-dependent, so this gate pins one version rather
   # than tracking latest. tests/scripts/check-checkov.sh reads this value and
@@ -96,13 +110,29 @@ jobs:
         working-directory: examples/split-ingress
         run: terraform-docs --output-check .
 
+      - name: terraform-docs --output-check (examples/customer-managed-redis)
+        working-directory: examples/customer-managed-redis
+        run: terraform-docs --output-check .
+
+      - name: terraform-docs --output-check (examples/customer-managed-s3)
+        working-directory: examples/customer-managed-s3
+        run: terraform-docs --output-check .
+
+      - name: terraform-docs --output-check (examples/customer-managed-cluster)
+        working-directory: examples/customer-managed-cluster
+        run: terraform-docs --output-check .
+
+      - name: terraform-docs --output-check (examples/customer-managed-everything)
+        working-directory: examples/customer-managed-everything
+        run: terraform-docs --output-check .
+
   validate:
     name: terraform validate (${{ matrix.target }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
     steps:
       - uses: actions/checkout@v4
 
@@ -131,7 +161,7 @@ jobs:
     needs: validate
     env:
       # Stub credentials so the veksh/godaddy-dns provider initializes during
-      # terraform test. Scoped to this job only — no real GoDaddy API calls
+      # terraform test. Scoped to this job only: no real GoDaddy API calls
       # are made; godaddy-dns_record resources use for_each over unknown ACM
       # domain_validation_options, which evaluates to an empty map under a
       # mocked AWS provider. Other jobs (fmt, validate, tflint, checkov)
@@ -141,7 +171,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
     steps:
       - uses: actions/checkout@v4
 
@@ -170,7 +200,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
     steps:
       - uses: actions/checkout@v4
 

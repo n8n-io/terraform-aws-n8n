@@ -1,0 +1,36 @@
+# Copy this file to terraform.tfvars and fill in your values.
+
+# Fully-qualified domain for n8n. The parent zone must be hosted in Route53.
+n8n_domain = "n8n.example.com"
+
+# Route53 hosted zone ID for the parent domain (e.g. example.com). The module
+# issues the ACM certificate, validates it, and creates the alias A-record
+# here.
+route53_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# n8n Enterprise license activation key. Get one at https://n8n.io/pricing.
+n8n_license_key = "your-enterprise-license-key-here"
+
+# AWS region. Change if you're deploying outside us-east-1.
+# aws_region = "eu-west-1"
+
+# EKS cluster name. Keep to 14 characters or fewer. The stand-in cluster this
+# example creates is named "<cluster_name>-cm".
+# cluster_name = "n8n-cluster"
+
+# Kubernetes version for the stand-in cluster this example creates.
+# kubernetes_version = "1.35"
+
+# Instance type and scaling bounds for the stand-in cluster's node group.
+# Matches the module's own recommended sizing for a full multi-main
+# deployment; do not shrink these without reading this example's README.
+# customer_managed_node_instance_type = "t3.xlarge"
+# customer_managed_node_desired       = 3
+# customer_managed_node_min           = 3
+# customer_managed_node_max           = 6
+
+# Extra AWS tags applied to every resource this example creates.
+# tags = {
+#   Environment = "production"
+#   Owner       = "platform-team"
+# }

@@ -24,9 +24,19 @@ variable "tags" {
 }
 
 variable "namespace" {
-  description = "Kubernetes namespace to deploy n8n into"
+  description = "Kubernetes namespace to deploy n8n into. Names the namespace the module creates when create_namespace = true (the default), or the existing namespace the module deploys into when create_namespace = false."
   type        = string
   default     = "n8n"
+
+  validation {
+    # DNS-1123 label, which is what Kubernetes requires of a namespace name and
+    # what every resource this module creates in it inherits. Checked here
+    # rather than left to the API server because the name also reaches the Pod
+    # Identity association (s3.tf), where a rejection surfaces as an AWS error
+    # that does not mention the namespace at all.
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.namespace)) && length(var.namespace) <= 63
+    error_message = "namespace must be a DNS-1123 label, which is what Kubernetes requires of a namespace: 63 characters or fewer, lowercase alphanumerics and hyphens only, starting and ending with an alphanumeric (e.g. \"n8n\", \"n8n-prod\"). Underscores, dots and uppercase are rejected."
+  }
 }
 
 # ── Foundation inputs ─────────────────────────────────────────────────────────
@@ -126,6 +136,40 @@ variable "certificate_arn" {
   description = "ARN of a pre-validated ACM certificate for n8n_domain. Use this for Cloudflare, GoDaddy, or any DNS provider other than Route53 — the respective examples (examples/cloudflare, examples/godaddy) issue the certificate and pass its ARN here. Set exactly one of certificate_arn or route53_zone_id."
   type        = string
   default     = null
+
+  validation {
+    condition     = var.certificate_arn == null ? true : can(regex("^arn:aws:acm:[a-z0-9-]+:[0-9]{12}:certificate/[A-Za-z0-9-]+$", var.certificate_arn))
+    error_message = "certificate_arn must be an ACM certificate ARN (arn:aws:acm:<region>:<account>:certificate/<id>). An IAM server certificate ARN, a bare certificate ID, or a certificate ARN from another service is not accepted."
+  }
+
+  validation {
+    # ACM certificates are regional and an Application Load Balancer can only
+    # use one issued in its own region. Reaching for us-east-1 is a common
+    # reflex, because that is where CloudFront requires them, and the mistake
+    # otherwise survives the whole plan: the ARN is well-formed, nothing in
+    # Terraform resolves it, and the Ingress annotation renders. The AWS Load
+    # Balancer Controller then fails to attach it and the HTTPS listener never
+    # comes up.
+    #
+    # A hard failure rather than the check block s3_kms_key_arn_region_matches
+    # uses for the analogous KMS case, because the outcomes differ in kind: a
+    # wrong-region KMS key leaves a working stack that returns AccessDenied on
+    # binary data, while a wrong-region certificate means the listener the whole
+    # deployment is reached through does not exist.
+    #
+    # Written as a variable validation rather than a check block for a reason
+    # that is easy to trip over: examples/cloudflare and examples/godaddy pass
+    # an ARN straight from aws_acm_certificate_validation, which is unknown at
+    # plan time. A check block on an unknown condition reports "known after
+    # apply" and fails terraform test; Terraform defers a variable validation
+    # it cannot evaluate instead, so a literal ARN in tfvars is still checked
+    # and a computed one simply passes through.
+    #
+    # Account is deliberately not compared: a certificate shared into this
+    # account from a central one is legitimate.
+    condition     = var.certificate_arn == null ? true : split(":", var.certificate_arn)[3] == var.aws_region
+    error_message = "certificate_arn is in a different region from aws_region. ACM certificates are regional and an Application Load Balancer can only use one issued in its own region, so the HTTPS listener would fail to come up and the ALB would answer on port 80 only. Reissue or import the certificate in the deployment region. A us-east-1 certificate is only required for CloudFront, not for an ALB."
+  }
 }
 
 variable "route53_zone_id" {
@@ -136,6 +180,24 @@ variable "route53_zone_id" {
   validation {
     condition     = (var.certificate_arn == null) != (var.route53_zone_id == null)
     error_message = "Set exactly one of certificate_arn or route53_zone_id."
+  }
+}
+
+variable "iam_permissions_boundary_arn" {
+  description = "ARN of an IAM policy to attach as the permissions boundary on every IAM role this module creates: the EKS cluster role, the EKS node role, the S3 Pod Identity role, the AWS Load Balancer Controller role, the Cluster Autoscaler role, the EBS CSI driver role, and the RDS Enhanced Monitoring role (that last one only exists when create_database = true). Many organizations enforce an SCP or IAM policy that requires every role created in-account to carry a permissions boundary; set this to satisfy that control. Missing even one role is enough for the apply to fail in such an account, so the propagation test asserts on all seven by name rather than on a hand-kept list. Leave null (the default) and every role is created without a boundary, exactly as before this input existed."
+  type        = string
+  default     = null
+
+  validation {
+    # Commercial partition only, matching db_kms_key_arn and s3_kms_key_arn and
+    # the AWS managed policy ARNs this module attaches elsewhere.
+    #
+    # The account field accepts the literal `aws` as well as a 12-digit account
+    # ID: AWS permits an AWS managed policy to be used as a permissions
+    # boundary, and those carry arn:aws:iam::aws:policy/... . Rejecting that
+    # shape would fail the plan on a configuration AWS itself accepts.
+    condition     = var.iam_permissions_boundary_arn == null ? true : can(regex("^arn:aws:iam::([0-9]{12}|aws):policy/.+$", var.iam_permissions_boundary_arn))
+    error_message = "iam_permissions_boundary_arn must be a valid IAM policy ARN (e.g. arn:aws:iam::123456789012:policy/ExamplePermissionsBoundary, or arn:aws:iam::aws:policy/PowerUserAccess for an AWS managed policy)."
   }
 }
 
@@ -150,16 +212,122 @@ variable "kubernetes_version" {
   }
 }
 
+variable "create_eks" {
+  description = "When true (the default), the module creates its own EKS cluster, node group, node IAM role, and Pod Identity Agent addon. Set to false to deploy onto an existing cluster named by existing_eks_cluster_name instead, e.g. one a platform team already provisions and runs company-wide. On that path the module still creates everything it always has around n8n itself (RDS, Redis, S3, the namespace, IAM roles and Pod Identity associations for n8n and the controllers it installs), it just stops owning the cluster and node group underneath all of that. Gated with count and a moved block, same pattern as create_database and create_s3_bucket. The EBS CSI driver addon and default gp3 StorageClass (modules/controllers/storage.tf) are gated separately, on their own create_ebs_csi input, since a shared existing cluster may already run a CSI driver while a freshly created one never does."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
+variable "existing_eks_cluster_name" {
+  description = "Name of the existing EKS cluster to deploy onto. Required, and read with data.aws_eks_cluster, when create_eks = false; ignored when create_eks = true (the default), which check.existing_eks_cluster_name_requires_create_eks_false warns about, since that combination applies cleanly and builds a whole new cluster beside the one you named. The cluster must be in var.vpc_id (enforced with a hard plan-time failure) and must already have the eks-pod-identity-agent addon installed (the AWS provider itself fails the plan if it does not, reading data.aws_eks_addon.existing_pod_identity_agent). Everything else this module cannot verify about the cluster is listed on existing_eks_cluster_prerequisites_confirmed."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.create_eks ? true : var.existing_eks_cluster_name != null
+    error_message = "existing_eks_cluster_name is required when create_eks = false: the module needs a cluster name to read with data.aws_eks_cluster."
+  }
+}
+
+# Read only by its own validation block below, which is the whole point: this
+# input has no effect on any resource, it exists purely as a plan-time
+# attestation gate.
+# tflint-ignore: terraform_unused_declarations
+variable "existing_eks_cluster_prerequisites_confirmed" {
+  description = "Required to be true when create_eks = false. An explicit attestation, not a rubber stamp: setting it to true is a claim that you have personally verified every item below, because none of them is checkable at plan time the way the cluster's Kubernetes version and VPC are. (1) Node capacity: the HPA/KEDA maxima this module computes (scaling.tf) assume the node group it creates itself; on an existing cluster running Karpenter, self-managed ASGs, Fargate, or any topology other than a plain EKS-managed node group, this module cannot see or validate schedulable capacity at all. (2) Cluster Autoscaler auto-discovery tags: aws_eks_node_group.n8n normally carries k8s.io/cluster-autoscaler/<cluster>=owned and k8s.io/cluster-autoscaler/enabled=true; an existing node group has no guarantee of carrying them, and this module cannot tag infrastructure it does not own. (3) API server reachability: this module sets no endpoint_private_access or endpoint_public_access, so it cannot tell you whether the existing cluster's API is reachable from wherever `terraform apply` runs, e.g. a private-only endpoint reachable only from inside the VPC or over a VPN. (4) Naming and identity collisions: the IAM role names, kube-system ServiceAccount names, and Pod Identity associations this module creates for n8n and any install_* controller it installs are not checked against what may already exist on a shared cluster. Storage is deliberately not on this list: create_ebs_csi (default true) lets you opt the EBS CSI addon and gp3 StorageClass out entirely if the existing cluster already provides its own, rather than asking you to merely attest to the risk. Ingress is also not on this list, for the opposite reason: there is currently no toggle that lets create_ingress = true trust an already-working LBC on the existing cluster the way create_ebs_csi trusts an already-working CSI driver -- install_lbc = false is hard-rejected whenever create_ingress = true, full stop, regardless of this attestation. See docs/customer-managed-infrastructure.md's \"create_eks = false + create_ingress = true\" section."
+  type        = bool
+  default     = false
+  nullable    = false
+
+  validation {
+    condition     = var.create_eks ? true : var.existing_eks_cluster_prerequisites_confirmed
+    error_message = "existing_eks_cluster_prerequisites_confirmed must be true when create_eks = false. Read its full description first: it enumerates four specific things this module cannot verify on infrastructure it does not own."
+  }
+}
+
+variable "create_ebs_csi" {
+  description = "When true (the default), the module installs the aws-ebs-csi-driver addon and a default gp3 StorageClass (modules/controllers/storage.tf), so any PVC-using workload deployed beside n8n has working persistence out of the box. Set to false to skip both, e.g. when create_eks = false and the existing cluster you are deploying onto already runs its own CSI driver and default StorageClass: installing a second aws-ebs-csi-driver addon on a cluster that already has one fails outright rather than degrading gracefully. Also gates the CSI driver's IAM role and its AmazonEBSCSIDriverPolicy attachment (modules/controllers/iam.tf), whose only consumer is the addon's Pod Identity association, so false leaves behind no role that nothing can assume. Independent of create_eks; a freshly created cluster (create_eks = true, the default) never has a CSI driver of its own, so leave this at its default in that case. check.existing_eks_cluster_needs_its_own_storage_toggle warns if create_eks = false and this is still left at its default."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "n8n_webhook_url" {
   description = "Public HTTPS base URL used for webhook callbacks (e.g. <https://webhooks.example.com>). Defaults to https://<n8n_domain> when not set. Override when webhooks are served from a different host than the n8n UI."
   type        = string
   default     = null
+
+  validation {
+    condition     = var.n8n_webhook_url == null ? true : can(regex("^https://[A-Za-z0-9._~-]+(:[0-9]+)?(/[^[:space:]]*)?$", var.n8n_webhook_url))
+    error_message = "n8n_webhook_url must be an https:// base URL with a host and no whitespace (e.g. \"https://webhooks.example.com\"). n8n hands this value to callers as the address to POST to, so a bare hostname, an http:// URL, or a trailing newline produces webhook URLs that external systems cannot reach, with nothing failing on this side."
+  }
 }
 
 variable "n8n_license_key" {
-  description = "n8n Enterprise license activation key. Get one at <https://n8n.io/pricing>"
+  description = "n8n Enterprise license activation key. Get one at https://n8n.io/pricing. Required unless n8n_license_key_secret_ref points at an existing Kubernetes Secret that already carries it, in which case leave this null. Setting both is rejected at plan time; see n8n_license_key_secret_ref, which owns that validation to avoid a variable-validation dependency cycle between the two."
   type        = string
   sensitive   = true
+  default     = null
+}
+
+variable "n8n_license_key_secret_ref" {
+  description = "Existing Kubernetes Secret carrying the n8n Enterprise license key, instead of supplying the value through n8n_license_key. name is the Secret's name in var.namespace; key defaults to \"license-key\", matching the chart's own license.existingSecret.key default, and can be overridden if the Secret you already sync uses a different key name. Null (the default) changes nothing: the module keeps writing the value from n8n_license_key into kubernetes_secret.n8n as it always has. The module does not verify that the named Secret exists or carries this key: a typo surfaces only as a pod stuck in CreateContainerConfigError naming the missing key, not as a Terraform error, because reading the Secret's data to check would put the credential back in Terraform state, which defeats the reason this input exists. Setting this alongside n8n_license_key is rejected at plan time, so one can never silently win over the other; so is setting neither, since n8n_license_key is otherwise required. Both checks live here rather than split across both variables, which would form a validation dependency cycle. Also see n8n_encryption_key_secret_ref: setting that input replaces kubernetes_secret.n8n entirely, and this input becomes required (not merely allowed) whenever it is set, since there is then no module-managed Secret left for the license key to live in."
+  type = object({
+    name = string
+    key  = optional(string)
+  })
+  default = null
+
+  validation {
+    condition     = var.n8n_license_key_secret_ref == null || var.n8n_license_key == null
+    error_message = "Both n8n_license_key and n8n_license_key_secret_ref are set. Only one may supply the license key: remove n8n_license_key to consume the referenced Secret, or remove n8n_license_key_secret_ref to keep passing the value directly."
+  }
+
+  validation {
+    condition     = var.n8n_license_key_secret_ref != null || var.n8n_license_key != null
+    error_message = "n8n_license_key is required unless n8n_license_key_secret_ref is set. Supply the license key directly, or point n8n_license_key_secret_ref at an existing Kubernetes Secret that already carries it."
+  }
+}
+
+variable "n8n_encryption_key" {
+  description = "N8N_ENCRYPTION_KEY value. Leave null (the default) to let the module generate one with random_id (32 bytes, rendered as 64 hex characters), matching every deployment's behavior before this input existed. THIS IS NOT A ROTATION MECHANISM. n8n's own docs describe this as the instance's master key, set once at deployment time, and state plainly that it never changes; a second, distinct key (the data encryption key, stored in the database and itself encrypted by this one) is what n8n's own key-rotation feature (N8N_ENV_FEAT_ENCRYPTION_KEY_ROTATION, a one-way operation with no rollback) actually rotates, unrelated to this input. Setting this variable to a NEW value against a database that already holds credentials encrypted under a DIFFERENT key does not migrate or re-encrypt anything: n8n reads the new key, the stored credentials were written under the old one, and every one of them becomes permanently unreadable with no n8n-side recovery path. The only supported uses of a non-null value are (1) the first deployment against a brand-new, empty database, where there is nothing yet encrypted to mismatch, and (2) restoring the EXACT ORIGINAL key into a rebuilt stack pointed at a database that already holds credentials encrypted under that same original key: a rebuilt cluster, a cross-region standby, or any fresh terraform apply reattaching to an existing RDS instance or snapshot. Retrieve that original value beforehand with `terraform output -raw n8n_encryption_key` (or wherever it was backed up per that output's own warning); never invent a new one for an existing database. Must be exactly 64 hexadecimal characters (32 bytes) to match the shape n8n and the chart expect and what random_id has always produced; a shorter or non-hex value is rejected at plan time rather than reaching n8n and failing less legibly there. Kept as a static input compared at plan time (`== null`) rather than left to a resource distinction, because gating `random_id.n8n_encryption_key`'s `count` on it is what lets Terraform decide at plan time whether to generate a key at all, and a `moved` block in refactoring.tf absorbs the resulting address change for every deployment that leaves this null, so upgrading onto this input is a no-op as long as the value is not set. Leave this null as well when n8n_encryption_key_secret_ref is set instead; setting both is rejected at plan time."
+  type        = string
+  sensitive   = true
+  default     = null
+
+  validation {
+    condition     = var.n8n_encryption_key == null || can(regex("^[0-9a-fA-F]{64}$", var.n8n_encryption_key))
+    error_message = "n8n_encryption_key must be exactly 64 hexadecimal characters (32 bytes), the shape random_id.n8n_encryption_key (byte_length = 32) has always produced, or null to let the module generate one."
+  }
+}
+
+variable "n8n_encryption_key_secret_ref" {
+  description = "Existing Kubernetes Secret carrying N8N_ENCRYPTION_KEY, instead of supplying the value through n8n_encryption_key. Different in shape from the other three secret-reference inputs below: the chart's secretRefs.existingSecret (n8n.tf) names a single Secret that n8n.coreSecretsEnv reads FOUR keys from, N8N_ENCRYPTION_KEY, N8N_HOST, N8N_PORT and N8N_PROTOCOL, so setting this input points the chart at your Secret for all four, not just the encryption key, and your Secret must carry every one of them: N8N_HOST is var.n8n_domain, N8N_PORT is \"5678\", N8N_PROTOCOL is \"http\". See README.md -> \"Where credentials live\" for a worked ExternalSecret example with a template block supplying those three literals alongside the fetched key. key defaults to \"N8N_ENCRYPTION_KEY\" and exists only for shape parity with the other three secret-reference inputs: the chart hardcodes the key name it reads on this path, so this module rejects any other value at plan time rather than silently ignoring it. Setting this input also gates kubernetes_secret.n8n to zero, since secretRefs.existingSecret replaces that whole Secret rather than one key inside it, which leaves the license key with nowhere to live: it otherwise rides in kubernetes_secret.n8n too. The task runner auth token is unaffected, since it is never in a Secret at all: it reaches the chart as a literal Helm value regardless of this input. n8n_license_key_secret_ref must therefore also be set whenever this is; the module rejects the plan rather than pointing a chart value at a Secret that no longer exists. Setting this alongside n8n_encryption_key is rejected at plan time. The module does not verify that the referenced Secret exists or carries the required keys: a missing key surfaces only as a pod stuck in CreateContainerConfigError, not as a Terraform error."
+  type = object({
+    name = string
+    key  = optional(string)
+  })
+  default = null
+
+  validation {
+    condition     = var.n8n_encryption_key_secret_ref == null || var.n8n_encryption_key == null
+    error_message = "Both n8n_encryption_key and n8n_encryption_key_secret_ref are set. Only one may supply the encryption key: remove n8n_encryption_key to consume the referenced Secret, or remove n8n_encryption_key_secret_ref to keep passing the value directly."
+  }
+
+  # Written as a nested ternary rather than `== null ||`, per AGENTS.md's
+  # consistency rule for guard-style conditions: the null guard gates the
+  # `.key` access structurally rather than relying on short-circuit
+  # evaluation.
+  validation {
+    condition     = var.n8n_encryption_key_secret_ref == null ? true : coalesce(var.n8n_encryption_key_secret_ref.key, "N8N_ENCRYPTION_KEY") == "N8N_ENCRYPTION_KEY"
+    error_message = "n8n_encryption_key_secret_ref.key must be \"N8N_ENCRYPTION_KEY\" or unset. The chart's coreSecretsEnv helper reads this exact key name from secretRefs.existingSecret and takes no override, unlike the other three secret-reference inputs, whose key the chart does honor."
+  }
+
+  validation {
+    condition     = var.n8n_encryption_key_secret_ref == null || var.n8n_license_key_secret_ref != null
+    error_message = "n8n_encryption_key_secret_ref replaces kubernetes_secret.n8n entirely, so n8n_license_key_secret_ref must also be set: the license key has no module-managed Secret left to live in otherwise."
+  }
 }
 
 variable "n8n_license_detach_floating_on_shutdown" {
@@ -221,10 +389,17 @@ variable "cluster_endpoint_private_access" {
   }
 }
 
+variable "create_namespace" {
+  description = "When true (the default), the module creates the Kubernetes namespace named by var.namespace. Set to false to deploy into a namespace that already exists, e.g. one a platform team created with its own resource quotas, labels, or network policies. The module does not validate that the namespace exists; the apply fails on the first resource that references it if it does not. Kept as a static boolean rather than checking for the namespace's existence because count expressions cannot depend on values computed at apply time."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 # ── Ingress ───────────────────────────────────────────────────────────────────
 
 variable "create_ingress" {
-  description = "When true (the default), the module creates the ALB Ingress that fronts n8n: a single internet-facing ALB routing /webhook to the webhook processors and / to the mains. Set to false to bring your own Ingress resources, for example the two-ALB split where an internet-facing ALB serves /webhook and a separate internal (VPN-only) ALB serves the admin UI. When false the module also skips the Route 53 alias A-record and the ALB lookup behind it, since there is no module-owned ALB to point at; the ACM certificate is still issued when route53_zone_id is set. Point your own Ingresses at the module-created Services n8n_service_name and n8n_webhook_service_name, both on port 5678. Kept as a static boolean because count expressions cannot depend on values computed at apply time."
+  description = "When true (the default), the module creates the ALB Ingress that fronts n8n: a single internet-facing ALB routing /webhook to the webhook processors and / to the mains. Set to false to supply your own, customer-managed Ingress resources instead, for example the two-ALB split where an internet-facing ALB serves /webhook and a separate internal (VPN-only) ALB serves the admin UI. When false the module also skips the Route 53 alias A-record and the ALB lookup behind it, since there is no module-owned ALB to point at; the ACM certificate is still issued when route53_zone_id is set. Point your own Ingresses at the module-created Services n8n_service_name and n8n_webhook_service_name, both on port 5678. Kept as a static boolean because count expressions cannot depend on values computed at apply time."
   type        = bool
   default     = true
 }
@@ -278,7 +453,7 @@ variable "alb_inbound_prefix_list_ids" {
 }
 
 variable "ingress_annotations" {
-  description = "Extra annotations for the module-managed Ingress, merged over the module's defaults (last write wins). Use this for AWS Load Balancer Controller features the module has no opinion on: alb.ingress.kubernetes.io/wafv2-acl-arn, subnets, security-groups, load-balancer-name, group.name, access log settings. Overriding alb.ingress.kubernetes.io/target-group-attributes drops the session stickiness that keeps WebSocket connections pinned to one main pod; re-include stickiness.enabled=true if you set it. Prefer ingress_scheme over setting alb.ingress.kubernetes.io/scheme here, alb_ssl_policy over setting alb.ingress.kubernetes.io/ssl-policy here, and alb_inbound_cidrs / alb_inbound_prefix_list_ids over setting alb.ingress.kubernetes.io/inbound-cidrs or security-group-prefix-lists here, because setting both raises a plan-time warning. Ignored when create_ingress = false."
+  description = "Extra annotations for the module-managed Ingress, merged over the module's defaults (last write wins). Use this for AWS Load Balancer Controller features the module has no opinion on: alb.ingress.kubernetes.io/wafv2-acl-arn, subnets, security-groups, load-balancer-name, group.name, access log settings. Overriding alb.ingress.kubernetes.io/target-group-attributes drops the session stickiness that keeps WebSocket connections pinned to one main pod; re-include stickiness.enabled=true if you set it. Prefer ingress_scheme over setting alb.ingress.kubernetes.io/scheme here, alb_ssl_policy over setting alb.ingress.kubernetes.io/ssl-policy here, and alb_inbound_cidrs / alb_inbound_prefix_list_ids over setting alb.ingress.kubernetes.io/inbound-cidrs or security-group-prefix-lists here, because setting both raises a plan-time warning. Ignored when create_ingress = false. Also the fix for a real subnet auto-discovery gap when two deployments of this module share one VPC (e.g. redis_host / db_host / existing_s3_bucket_name pointed at another deployment's real infrastructure, per docs/customer-managed-infrastructure.md): the Load Balancer Controller's own auto-discovery treats a subnet already tagged kubernetes.io/cluster/<other-name>=shared as ineligible for THIS cluster, not shareable, even though the same subnet still carries the kubernetes.io/role/elb / role/internal-elb tags LBC's docs describe as sufficient -- confirmed live (\"couldn't auto-discover subnets: ... N are tagged for other clusters\"). Set alb.ingress.kubernetes.io/subnets = \"<id>,<id>\" here to bypass auto-discovery entirely rather than re-tagging the other deployment's already-running subnets."
   type        = map(string)
   default     = {}
 }
@@ -305,7 +480,7 @@ variable "node_instance_type" {
   nullable    = false
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9]*\\.[a-z0-9]+$", var.node_instance_type))
+    condition     = can(regex("^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z0-9]+(-[a-z0-9]+)*$", var.node_instance_type))
     error_message = "Value must be a valid EC2 instance type (e.g. t3.xlarge, m5.large)."
   }
 }
@@ -319,6 +494,11 @@ variable "node_desired" {
     condition     = var.node_desired >= 1
     error_message = "Desired node count must be at least 1."
   }
+
+  validation {
+    condition     = var.node_desired == floor(var.node_desired) && var.node_desired >= var.node_min && var.node_desired <= var.node_max
+    error_message = "node_desired must be a whole number of nodes within [node_min, node_max]. AWS rejects a managed node group whose desiredSize sits outside its own scaling bounds; this only applied at creation, so getting it wrong failed the first apply rather than a later one."
+  }
 }
 
 variable "node_min" {
@@ -329,6 +509,11 @@ variable "node_min" {
   validation {
     condition     = var.node_min >= 1
     error_message = "Minimum node count must be at least 1."
+  }
+
+  validation {
+    condition     = var.node_min == floor(var.node_min) && var.node_min >= 1
+    error_message = "node_min must be a whole number of nodes, 1 or greater."
   }
 }
 
@@ -342,14 +527,208 @@ variable "node_max" {
     condition     = var.node_max >= 1
     error_message = "Maximum node count must be at least 1."
   }
+
+  validation {
+    condition     = var.node_max == floor(var.node_max) && var.node_max >= var.node_min
+    error_message = "node_max must be a whole number of nodes and must not be below node_min. AWS rejects a managed node group whose scaling config has maxSize below minSize, and nothing before this said so."
+  }
 }
 
-# ── n8n chart ─────────────────────────────────────────────────────────────────
+# ── Cluster controllers ────────────────────────────────────────────────────────
+# Four Helm-installed controllers run alongside n8n in kube-system (LBC, Cluster
+# Autoscaler, metrics-server) and its own keda namespace. All four default to
+# installed, matching every module version before these inputs existed.
+#
+# Each toggle skips only the helm_release. The IAM role, policy and Pod
+# Identity association for LBC and Cluster Autoscaler (modules/controllers/iam.tf) are left
+# unconditional on purpose: a Pod Identity association does nothing on its own
+# until a ServiceAccount matching its namespace and name actually exists, so an
+# association with no controller installed is inert, not a live attack surface
+# the way, say, an unattached security group rule would be. Leaving IAM in
+# place is also what makes the toggle useful for its main purpose: a caller
+# whose platform team installs these same charts through GitOps rather than
+# Terraform still needs the IAM binding this module creates, just not a second
+# Helm release racing the first one for the same ServiceAccount.
+#
+# Terraform cannot see whether that external install actually exists at plan
+# time, so setting any of these to false is a claim only the caller can make.
+# Getting it wrong fails at apply, not plan: helm_release.n8n's dependency on
+# install_lbc / install_keda (n8n.tf) becomes a no-op, so nothing here blocks
+# an apply with no controller behind it. See each variable for what actually
+# breaks and how.
+
+variable "install_lbc" {
+  description = "When true (the default), the module installs the AWS Load Balancer Controller via Helm. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps. The IAM role, policy and Pod Identity association this module creates for the aws-load-balancer-controller ServiceAccount in kube-system are all created whenever this is true OR create_eks is true, and all skipped when both are false, so this toggle never strands an IAM role nothing can assume. On create_eks = true (a freshly created cluster), nothing can already be bound to that ServiceAccount, so the association is created regardless of this toggle, which is what lets an externally-installed LBC on the new cluster still get its IAM binding. On create_eks = false (an existing cluster), that assumption doesn't hold: the ServiceAccount may already carry an association, e.g. one from a previous invocation of this exact module against the same cluster, and EKS hard-rejects a second association for a ServiceAccount that already has one. Setting this to false on that path is read as an attestation that an association already exists there. Must stay true whenever create_ingress = true: kubernetes_ingress_v1.n8n waits for LBC to provision an ALB (wait_for_load_balancer = true) and that wait times out the apply if no controller is running to service it. Disabling this while an external LBC is not yet Ready can also race helm_release.keda; see the ordering note in modules/controllers/keda.tf."
+  type        = bool
+  default     = true
+
+  validation {
+    condition     = var.install_lbc || !var.create_ingress
+    error_message = "install_lbc = false is incompatible with create_ingress = true: the module-managed Ingress waits for the Load Balancer Controller to provision an ALB, and with no controller installed that wait times out the apply. Either leave install_lbc = true, or set create_ingress = false and point your own Ingress resources at an LBC you install another way. There is no exception for create_eks = false against a cluster whose LBC already works: see docs/customer-managed-infrastructure.md's \"create_eks = false + create_ingress = true\" section for why, and what the two supported options are."
+  }
+}
+
+variable "install_cluster_autoscaler" {
+  description = "When true (the default), the module installs the Kubernetes Cluster Autoscaler via Helm. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps, or when node_desired = node_max and the node group is meant to stay a fixed size. The IAM role, policy and Pod Identity association for the cluster-autoscaler ServiceAccount all follow the same create_eks-aware rule as install_lbc's (see that variable's description): created when this is true or create_eks is true, skipped only when both are false, since an existing cluster may already carry this ServiceAccount's association from elsewhere and a second one would collide with it. With no autoscaler running at all, node_max is not enforced automatically: nodes stay at whatever desired_size last converged to, and the autoscaling capacity check in scaling.tf still assumes an autoscaler will eventually add nodes up to node_max, so a caller relying on this toggle to go without one entirely should also lower the HPA/KEDA maxima to what the fixed node count can actually schedule."
+  type        = bool
+  default     = true
+}
+
+variable "install_metrics_server" {
+  description = "When true (the default), the module installs metrics-server via Helm. EKS does not ship it by default, and without it every CPU-based HPA target reads \"cpu: <unknown>\" and never scales. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps, or the caller's own metrics pipeline already serves the metrics.k8s.io API. kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook (scaling.tf) is a CPU-resource HPA and depends on metrics-server existing somewhere; disabling this with no equivalent running leaves that HPA permanently unable to read CPU and stuck at its minimum replica count. That failure is silent: it does not fail the apply, only the autoscaling."
+  type        = bool
+  default     = true
+}
+
+variable "install_keda" {
+  description = "When true (the default), the module installs the KEDA operator via Helm into the keda namespace. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps. The n8n Helm release always sets keda.enabled = true in its values (n8n.tf), which makes the chart emit a ScaledObject for the worker deployment regardless of this variable; if no KEDA operator and CRDs are registered anywhere in the cluster when that manifest applies, helm_release.n8n fails outright with an unrecognized-kind error, not a silent misbehavior like install_metrics_server's failure mode. Disabling this while an external KEDA is not yet Ready can also race helm_release.lbc; see the ordering note in modules/controllers/keda.tf. Flipping this from true to false on an already-applied stack (rather than a full terraform destroy) can hang the apply indefinitely: nothing in this toggle touches helm_release.n8n, so its live ScaledObject is never removed, and Helm's own uninstall of the KEDA chart deletes the operator before the scaledobjects.keda.sh CRD, whose deletion then blocks forever on that still-live instance's finalizer with no operator left running to clear it. Delete the n8n-rendered ScaledObject(s) by hand before disabling this on a live cluster, or expect to break the deadlock manually (patch the ScaledObject's finalizers to empty)."
+  type        = bool
+  default     = true
+}
+
+# ── Chart repositories ─────────────────────────────────────────────────────────
+# Each helm_release's repository argument, exposed so any of the five charts
+# can be pulled from a private mirror instead of its public upstream. Every
+# default reproduces the module's own hardcoded value exactly, so leaving all
+# five unset is a no-op for every existing deployment. This is the other half
+# of air-gapped support: n8n_image_repository already lets the n8n container
+# image itself be mirrored, but until these existed the five charts had no
+# such input, so a cluster with no egress to their public repositories could
+# not come up regardless of what the image pointed at.
+#
+# A mirror must carry the exact version each chart is pinned to in "Chart
+# versions" below, since all five versions are now explicit. Mirroring a
+# subset of upstream's versions is the common case, so expect to set the
+# matching *_chart_version alongside the repository rather than only the
+# repository.
+
+variable "n8n_chart_repository" {
+  description = "Helm chart repository for the n8n chart. Defaults to the public upstream (oci://ghcr.io/n8n-io/n8n-helm-chart). Point this at a private mirror, e.g. an ECR OCI repository in this account, for a cluster with no egress to ghcr.io. The mirror must serve the exact chart version named by n8n_chart_version; this module does not verify that a mirrored repository actually carries it."
+  type        = string
+  default     = "oci://ghcr.io/n8n-io/n8n-helm-chart"
+
+  validation {
+    condition     = can(regex("^(https://|oci://)[A-Za-z0-9._~-]+(:[0-9]+)?(/[^[:space:]]*)?$", var.n8n_chart_repository))
+    error_message = "n8n_chart_repository must be a URL starting with https:// or oci://, with a host and no whitespace."
+  }
+}
+
+variable "lbc_chart_repository" {
+  description = "Helm chart repository for the AWS Load Balancer Controller chart. Defaults to the public upstream (https://aws.github.io/eks-charts). Point this at a private mirror for a cluster with no egress to that repository. Ignored when install_lbc = false."
+  type        = string
+  default     = "https://aws.github.io/eks-charts"
+
+  validation {
+    condition     = can(regex("^(https://|oci://)[A-Za-z0-9._~-]+(:[0-9]+)?(/[^[:space:]]*)?$", var.lbc_chart_repository))
+    error_message = "lbc_chart_repository must be a URL starting with https:// or oci://, with a host and no whitespace."
+  }
+}
+
+variable "cluster_autoscaler_chart_repository" {
+  description = "Helm chart repository for the Cluster Autoscaler chart. Defaults to the public upstream (https://kubernetes.github.io/autoscaler). Point this at a private mirror for a cluster with no egress to that repository. Ignored when install_cluster_autoscaler = false."
+  type        = string
+  default     = "https://kubernetes.github.io/autoscaler"
+
+  validation {
+    condition     = can(regex("^(https://|oci://)[A-Za-z0-9._~-]+(:[0-9]+)?(/[^[:space:]]*)?$", var.cluster_autoscaler_chart_repository))
+    error_message = "cluster_autoscaler_chart_repository must be a URL starting with https:// or oci://, with a host and no whitespace."
+  }
+}
+
+variable "metrics_server_chart_repository" {
+  description = "Helm chart repository for the metrics-server chart. Defaults to the public upstream (https://kubernetes-sigs.github.io/metrics-server/). Point this at a private mirror for a cluster with no egress to that repository. Ignored when install_metrics_server = false."
+  type        = string
+  default     = "https://kubernetes-sigs.github.io/metrics-server/"
+
+  validation {
+    condition     = can(regex("^(https://|oci://)[A-Za-z0-9._~-]+(:[0-9]+)?(/[^[:space:]]*)?$", var.metrics_server_chart_repository))
+    error_message = "metrics_server_chart_repository must be a URL starting with https:// or oci://, with a host and no whitespace."
+  }
+}
+
+variable "keda_chart_repository" {
+  description = "Helm chart repository for the KEDA chart. Defaults to the public upstream (https://kedacore.github.io/charts). Point this at a private mirror for a cluster with no egress to that repository. Ignored when install_keda = false."
+  type        = string
+  default     = "https://kedacore.github.io/charts"
+
+  validation {
+    condition     = can(regex("^(https://|oci://)[A-Za-z0-9._~-]+(:[0-9]+)?(/[^[:space:]]*)?$", var.keda_chart_repository))
+    error_message = "keda_chart_repository must be a URL starting with https:// or oci://, with a host and no whitespace."
+  }
+}
+
+# ── Chart versions ────────────────────────────────────────────────────────────
+# The four controller charts alongside n8n's own. n8n_chart_version has always
+# been pinned; these four were not passed a `version` at all, which meant the
+# installed version was whatever each repository's index happened to serve at
+# the moment of the first apply. Two deployments of the same module commit
+# could therefore be running different controller versions, and neither the
+# plan nor the state made that visible until something broke.
+#
+# Every default is the version the public repository serves as latest as of
+# 2026-08-05, so a fresh apply installs exactly what it would have installed
+# unpinned. A deployment that first applied earlier and is still on an older
+# chart plans an in-place Helm upgrade to the pinned version on its next apply.
+# That is the intended cost: a deliberate, reviewable upgrade in a plan beats a
+# version nobody chose. Override any of these to stay where you are.
+#
+# Bumping a default here is a module change worth its own CHANGELOG entry,
+# because it upgrades a cluster-scoped controller for every consumer who has
+# not pinned. See AGENTS.md → "When adding a new input".
 
 variable "n8n_chart_version" {
-  description = "n8n Helm chart version to deploy"
+  description = "n8n Helm chart version to deploy. Must be an exact version, not a constraint: the Helm provider resolves this literally."
   type        = string
   default     = "1.10.0"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version))
+    error_message = "n8n_chart_version must be an exact SemVer 2 version such as \"1.10.0\" or \"1.11.0-rc.1\". Helm resolves chart versions literally here, so a range (\">= 1.10\", \"~1.10.0\"), a leading \"v\", or a floating tag is not accepted."
+  }
+}
+
+variable "lbc_chart_version" {
+  description = "AWS Load Balancer Controller Helm chart version. Defaults to 3.5.0, the version the module's documented ALB behaviour (source restrictions, IngressClassParams precedence, the failurePolicy override) was verified against on a live cluster. Ignored when install_lbc = false."
+  type        = string
+  default     = "3.5.0"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.lbc_chart_version))
+    error_message = "lbc_chart_version must be an exact SemVer 2 version such as \"3.5.0\". Helm resolves chart versions literally here, so a range (\">= 3.5\", \"~3.5.0\"), a leading \"v\", or a floating tag is not accepted."
+  }
+}
+
+variable "cluster_autoscaler_chart_version" {
+  description = "Cluster Autoscaler Helm chart version. Defaults to 9.59.0. The chart version and the autoscaler's own app version move independently, so read the chart's release notes rather than assuming this tracks a Kubernetes minor. Ignored when install_cluster_autoscaler = false."
+  type        = string
+  default     = "9.59.0"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.cluster_autoscaler_chart_version))
+    error_message = "cluster_autoscaler_chart_version must be an exact SemVer 2 version such as \"9.59.0\". Helm resolves chart versions literally here, so a range (\">= 9.59\", \"~9.59.0\"), a leading \"v\", or a floating tag is not accepted."
+  }
+}
+
+variable "metrics_server_chart_version" {
+  description = "metrics-server Helm chart version. Defaults to 3.13.1. Ignored when install_metrics_server = false."
+  type        = string
+  default     = "3.13.1"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.metrics_server_chart_version))
+    error_message = "metrics_server_chart_version must be an exact SemVer 2 version such as \"3.13.1\". Helm resolves chart versions literally here, so a range (\">= 3.13\", \"~3.13.0\"), a leading \"v\", or a floating tag is not accepted."
+  }
+}
+
+variable "keda_chart_version" {
+  description = "KEDA Helm chart version. Defaults to 2.20.2. KEDA ships its CRDs in this chart, and the n8n chart always emits a ScaledObject (n8n.tf sets keda.enabled = true unconditionally), so a downgrade far enough to drop the ScaledObject API version the n8n chart renders fails helm_release.n8n outright rather than degrading. Ignored when install_keda = false."
+  type        = string
+  default     = "2.20.2"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.keda_chart_version))
+    error_message = "keda_chart_version must be an exact SemVer 2 version such as \"2.20.2\". Helm resolves chart versions literally here, so a range (\">= 2.20\", \"~2.20.0\"), a leading \"v\", or a floating tag is not accepted."
+  }
 }
 
 variable "n8n_image_tag" {
@@ -497,72 +876,168 @@ variable "n8n_main_cpu_request" {
   description = "CPU request for n8n main pods (e.g. 1000m, 500m)"
   type        = string
   default     = "1000m"
+
+  validation {
+    # The subset of Kubernetes' quantity grammar that scaling.tf's capacity
+    # model can read. Restricting to it is the point: an unreadable quantity
+    # makes local.n8n_cpu_requests_readable false, which collapses the peak-CPU
+    # figure to zero and lets check.autoscaling_maxima_fit_node_capacity pass
+    # vacuously. Kubernetes would still reject the value at apply, but only
+    # after a plan that claimed the maxima fit.
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?m?$", var.n8n_main_cpu_request))
+    error_message = "n8n_main_cpu_request must be a CPU quantity: a plain number of cores (\"1\", \"0.5\") or millicores with an m suffix (\"1000m\"). Memory suffixes (Mi, Gi), units (\"1 core\"), and whitespace are not accepted."
+  }
 }
 
 variable "n8n_main_cpu_limit" {
   description = "CPU limit for n8n main pods (e.g. 2000m, 1000m)"
   type        = string
   default     = "2000m"
+
+  validation {
+    # The subset of Kubernetes' quantity grammar that scaling.tf's capacity
+    # model can read. Restricting to it is the point: an unreadable quantity
+    # makes local.n8n_cpu_requests_readable false, which collapses the peak-CPU
+    # figure to zero and lets check.autoscaling_maxima_fit_node_capacity pass
+    # vacuously. Kubernetes would still reject the value at apply, but only
+    # after a plan that claimed the maxima fit.
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?m?$", var.n8n_main_cpu_limit))
+    error_message = "n8n_main_cpu_limit must be a CPU quantity: a plain number of cores (\"1\", \"0.5\") or millicores with an m suffix (\"1000m\"). Memory suffixes (Mi, Gi), units (\"1 core\"), and whitespace are not accepted."
+  }
 }
 
 variable "n8n_main_memory_request" {
   description = "Memory request for n8n main pods (e.g. 2Gi, 1Gi)"
   type        = string
   default     = "2Gi"
+
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$", var.n8n_main_memory_request))
+    error_message = "n8n_main_memory_request must be a memory quantity: a number with an optional Kubernetes suffix (\"512Mi\", \"2Gi\", \"1G\", or plain bytes). \"GB\"/\"MB\", whitespace, and CPU-style m suffixes are not accepted. Prefer the binary suffixes (Mi, Gi): 2G is 2,000,000,000 bytes while 2Gi is 2,147,483,648."
+  }
 }
 
 variable "n8n_main_memory_limit" {
   description = "Memory limit for n8n main pods (e.g. 4Gi, 2Gi)"
   type        = string
   default     = "4Gi"
+
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$", var.n8n_main_memory_limit))
+    error_message = "n8n_main_memory_limit must be a memory quantity: a number with an optional Kubernetes suffix (\"512Mi\", \"2Gi\", \"1G\", or plain bytes). \"GB\"/\"MB\", whitespace, and CPU-style m suffixes are not accepted. Prefer the binary suffixes (Mi, Gi): 2G is 2,000,000,000 bytes while 2Gi is 2,147,483,648."
+  }
 }
 
 variable "n8n_worker_cpu_request" {
   description = "CPU request for n8n worker pods (e.g. 500m, 1000m)"
   type        = string
   default     = "500m"
+
+  validation {
+    # The subset of Kubernetes' quantity grammar that scaling.tf's capacity
+    # model can read. Restricting to it is the point: an unreadable quantity
+    # makes local.n8n_cpu_requests_readable false, which collapses the peak-CPU
+    # figure to zero and lets check.autoscaling_maxima_fit_node_capacity pass
+    # vacuously. Kubernetes would still reject the value at apply, but only
+    # after a plan that claimed the maxima fit.
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?m?$", var.n8n_worker_cpu_request))
+    error_message = "n8n_worker_cpu_request must be a CPU quantity: a plain number of cores (\"1\", \"0.5\") or millicores with an m suffix (\"1000m\"). Memory suffixes (Mi, Gi), units (\"1 core\"), and whitespace are not accepted."
+  }
 }
 
 variable "n8n_worker_cpu_limit" {
   description = "CPU limit for n8n worker pods (e.g. 1000m, 2000m)"
   type        = string
   default     = "1000m"
+
+  validation {
+    # The subset of Kubernetes' quantity grammar that scaling.tf's capacity
+    # model can read. Restricting to it is the point: an unreadable quantity
+    # makes local.n8n_cpu_requests_readable false, which collapses the peak-CPU
+    # figure to zero and lets check.autoscaling_maxima_fit_node_capacity pass
+    # vacuously. Kubernetes would still reject the value at apply, but only
+    # after a plan that claimed the maxima fit.
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?m?$", var.n8n_worker_cpu_limit))
+    error_message = "n8n_worker_cpu_limit must be a CPU quantity: a plain number of cores (\"1\", \"0.5\") or millicores with an m suffix (\"1000m\"). Memory suffixes (Mi, Gi), units (\"1 core\"), and whitespace are not accepted."
+  }
 }
 
 variable "n8n_worker_memory_request" {
   description = "Memory request for n8n worker pods (e.g. 1Gi, 2Gi)"
   type        = string
   default     = "1Gi"
+
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$", var.n8n_worker_memory_request))
+    error_message = "n8n_worker_memory_request must be a memory quantity: a number with an optional Kubernetes suffix (\"512Mi\", \"2Gi\", \"1G\", or plain bytes). \"GB\"/\"MB\", whitespace, and CPU-style m suffixes are not accepted. Prefer the binary suffixes (Mi, Gi): 2G is 2,000,000,000 bytes while 2Gi is 2,147,483,648."
+  }
 }
 
 variable "n8n_worker_memory_limit" {
   description = "Memory limit for n8n worker pods (e.g. 2Gi, 4Gi)"
   type        = string
   default     = "2Gi"
+
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$", var.n8n_worker_memory_limit))
+    error_message = "n8n_worker_memory_limit must be a memory quantity: a number with an optional Kubernetes suffix (\"512Mi\", \"2Gi\", \"1G\", or plain bytes). \"GB\"/\"MB\", whitespace, and CPU-style m suffixes are not accepted. Prefer the binary suffixes (Mi, Gi): 2G is 2,000,000,000 bytes while 2Gi is 2,147,483,648."
+  }
 }
 
 variable "n8n_webhook_cpu_request" {
   description = "CPU request for n8n webhook processor pods (e.g. 300m, 500m). This default is sized for typical webhook traffic, not for n8n_reinstall_missing_packages = true: a low request against an npm-install CPU spike is what drives the CPU-based HPA into a scale-up-on-every-rollout loop. Raise to at least 800m when that toggle is on; see n8n_reinstall_missing_packages and docs/troubleshooting.md."
   type        = string
   default     = "300m"
+
+  validation {
+    # The subset of Kubernetes' quantity grammar that scaling.tf's capacity
+    # model can read. Restricting to it is the point: an unreadable quantity
+    # makes local.n8n_cpu_requests_readable false, which collapses the peak-CPU
+    # figure to zero and lets check.autoscaling_maxima_fit_node_capacity pass
+    # vacuously. Kubernetes would still reject the value at apply, but only
+    # after a plan that claimed the maxima fit.
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?m?$", var.n8n_webhook_cpu_request))
+    error_message = "n8n_webhook_cpu_request must be a CPU quantity: a plain number of cores (\"1\", \"0.5\") or millicores with an m suffix (\"1000m\"). Memory suffixes (Mi, Gi), units (\"1 core\"), and whitespace are not accepted."
+  }
 }
 
 variable "n8n_webhook_cpu_limit" {
   description = "CPU limit for n8n webhook processor pods (e.g. 800m, 1000m). Raise to at least 1500m when n8n_reinstall_missing_packages = true; see that variable and docs/troubleshooting.md."
   type        = string
   default     = "800m"
+
+  validation {
+    # The subset of Kubernetes' quantity grammar that scaling.tf's capacity
+    # model can read. Restricting to it is the point: an unreadable quantity
+    # makes local.n8n_cpu_requests_readable false, which collapses the peak-CPU
+    # figure to zero and lets check.autoscaling_maxima_fit_node_capacity pass
+    # vacuously. Kubernetes would still reject the value at apply, but only
+    # after a plan that claimed the maxima fit.
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?m?$", var.n8n_webhook_cpu_limit))
+    error_message = "n8n_webhook_cpu_limit must be a CPU quantity: a plain number of cores (\"1\", \"0.5\") or millicores with an m suffix (\"1000m\"). Memory suffixes (Mi, Gi), units (\"1 core\"), and whitespace are not accepted."
+  }
 }
 
 variable "n8n_webhook_memory_request" {
   description = "Memory request for n8n webhook processor pods (e.g. 512Mi, 1Gi). Raise to at least 1Gi when n8n_reinstall_missing_packages = true; see that variable and docs/troubleshooting.md."
   type        = string
   default     = "512Mi"
+
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$", var.n8n_webhook_memory_request))
+    error_message = "n8n_webhook_memory_request must be a memory quantity: a number with an optional Kubernetes suffix (\"512Mi\", \"2Gi\", \"1G\", or plain bytes). \"GB\"/\"MB\", whitespace, and CPU-style m suffixes are not accepted. Prefer the binary suffixes (Mi, Gi): 2G is 2,000,000,000 bytes while 2Gi is 2,147,483,648."
+  }
 }
 
 variable "n8n_webhook_memory_limit" {
   description = "Memory limit for n8n webhook processor pods (e.g. 1Gi, 2Gi). This default is too low for n8n_reinstall_missing_packages = true: concurrent npm installs plus the n8n baseline can exceed it and OOMKill the pod mid-install into a reinstall/broadcast crash loop. Raise to at least 2Gi when that toggle is on; see that variable and docs/troubleshooting.md."
   type        = string
   default     = "1Gi"
+
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$", var.n8n_webhook_memory_limit))
+    error_message = "n8n_webhook_memory_limit must be a memory quantity: a number with an optional Kubernetes suffix (\"512Mi\", \"2Gi\", \"1G\", or plain bytes). \"GB\"/\"MB\", whitespace, and CPU-style m suffixes are not accepted. Prefer the binary suffixes (Mi, Gi): 2G is 2,000,000,000 bytes while 2Gi is 2,147,483,648."
+  }
 }
 
 # ── Execution settings ────────────────────────────────────────────────────────
@@ -620,15 +1095,6 @@ variable "n8n_execution_data_storage_mode" {
   }
 }
 
-# ── S3 ────────────────────────────────────────────────────────────────────────
-
-variable "s3_kms_encryption_enabled" {
-  description = "When true (the default), set the S3 bucket's default encryption to SSE-KMS with a module-created Customer Managed KMS Key (aws_kms_key.s3) and grant the n8n pod role kms:Decrypt / kms:GenerateDataKey on it. Clears Checkov finding CKV_AWS_145. This selects which key encrypts objects, not whether they are encrypted: S3 encrypts every object regardless, and setting this to false leaves new objects on SSE-S3 with S3-managed keys. S3 Bucket Keys are enabled alongside it so KMS is called per bucket rather than per object. The setting applies only to objects written afterwards: existing objects keep their original encryption. Do not change true to false while any retained object uses this CMK. Terraform immediately schedules the key for deletion, making those objects unreadable while the key is PendingDeletion and permanently unrecoverable after the 7-day window. See README → KMS key after terraform destroy for recovery."
-  type        = bool
-  default     = true
-  nullable    = false
-}
-
 # ── Graceful shutdown ─────────────────────────────────────────────────────────
 
 variable "n8n_termination_grace_period" {
@@ -677,24 +1143,56 @@ variable "n8n_task_runner_cpu_request" {
   description = "CPU request for task runner sidecar containers (e.g. 200m, 500m)"
   type        = string
   default     = "200m"
+
+  validation {
+    # The subset of Kubernetes' quantity grammar that scaling.tf's capacity
+    # model can read. Restricting to it is the point: an unreadable quantity
+    # makes local.n8n_cpu_requests_readable false, which collapses the peak-CPU
+    # figure to zero and lets check.autoscaling_maxima_fit_node_capacity pass
+    # vacuously. Kubernetes would still reject the value at apply, but only
+    # after a plan that claimed the maxima fit.
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?m?$", var.n8n_task_runner_cpu_request))
+    error_message = "n8n_task_runner_cpu_request must be a CPU quantity: a plain number of cores (\"1\", \"0.5\") or millicores with an m suffix (\"1000m\"). Memory suffixes (Mi, Gi), units (\"1 core\"), and whitespace are not accepted."
+  }
 }
 
 variable "n8n_task_runner_cpu_limit" {
   description = "CPU limit for task runner sidecar containers (e.g. 1, 2000m)"
   type        = string
   default     = "1"
+
+  validation {
+    # The subset of Kubernetes' quantity grammar that scaling.tf's capacity
+    # model can read. Restricting to it is the point: an unreadable quantity
+    # makes local.n8n_cpu_requests_readable false, which collapses the peak-CPU
+    # figure to zero and lets check.autoscaling_maxima_fit_node_capacity pass
+    # vacuously. Kubernetes would still reject the value at apply, but only
+    # after a plan that claimed the maxima fit.
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?m?$", var.n8n_task_runner_cpu_limit))
+    error_message = "n8n_task_runner_cpu_limit must be a CPU quantity: a plain number of cores (\"1\", \"0.5\") or millicores with an m suffix (\"1000m\"). Memory suffixes (Mi, Gi), units (\"1 core\"), and whitespace are not accepted."
+  }
 }
 
 variable "n8n_task_runner_memory_request" {
   description = "Memory request for task runner sidecar containers (e.g. 512Mi, 1Gi)"
   type        = string
   default     = "512Mi"
+
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$", var.n8n_task_runner_memory_request))
+    error_message = "n8n_task_runner_memory_request must be a memory quantity: a number with an optional Kubernetes suffix (\"512Mi\", \"2Gi\", \"1G\", or plain bytes). \"GB\"/\"MB\", whitespace, and CPU-style m suffixes are not accepted. Prefer the binary suffixes (Mi, Gi): 2G is 2,000,000,000 bytes while 2Gi is 2,147,483,648."
+  }
 }
 
 variable "n8n_task_runner_memory_limit" {
   description = "Memory limit for task runner sidecar containers (e.g. 1Gi, 2Gi)"
   type        = string
   default     = "1Gi"
+
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$", var.n8n_task_runner_memory_limit))
+    error_message = "n8n_task_runner_memory_limit must be a memory quantity: a number with an optional Kubernetes suffix (\"512Mi\", \"2Gi\", \"1G\", or plain bytes). \"GB\"/\"MB\", whitespace, and CPU-style m suffixes are not accepted. Prefer the binary suffixes (Mi, Gi): 2G is 2,000,000,000 bytes while 2Gi is 2,147,483,648."
+  }
 }
 
 variable "n8n_task_runner_auto_shutdown_timeout" {
@@ -704,7 +1202,7 @@ variable "n8n_task_runner_auto_shutdown_timeout" {
 }
 
 variable "n8n_task_runner_request_timeout" {
-  description = "Seconds n8n waits for a task runner to accept a Code node task. Wired to the N8N_RUNNERS_TASK_REQUEST_TIMEOUT env var on the main pod. Increase if Code nodes fail with 'task request timed out' under high concurrency (many parallel Code nodes competing for the single runner sidecar)."
+  description = "Seconds n8n waits for a task runner to accept a Code node task. Wired to the N8N_RUNNERS_TASK_REQUEST_TIMEOUT env var on the main pod. Increase if Code nodes fail with 'task request timed out' under high concurrency (many parallel Code nodes competing for the single runner sidecar). This governs the wait for a runner to pick the task up; n8n_task_runner_timeout governs how long the task may then run."
   type        = number
   default     = 300
 }
@@ -754,9 +1252,83 @@ variable "db_multi_az" {
 }
 
 variable "db_storage_encrypted" {
-  description = "When true (the default), encrypt the RDS instance's storage, Performance Insights data, and the postgresql CloudWatch log group with a module-created Customer Managed KMS Key (aws_kms_key.db). Clears Checkov findings CKV_AWS_16, CKV_AWS_354, and CKV_AWS_158. Flipping this from false to true on an existing RDS instance forces a replacement — AWS does not support enabling storage encryption in place, so the upgrade path is snapshot → restore into a new encrypted instance. Set to false in your tfvars to preserve current behavior on pre-existing unencrypted deployments. The CMK rotates annually and uses a 7-day deletion window (AWS minimum). Ignored when create_database = false."
+  description = "When true (the default), encrypt the RDS instance's storage, Performance Insights data, and the postgresql CloudWatch log group with a KMS key: a module-created Customer Managed KMS Key (aws_kms_key.db) unless db_kms_key_arn supplies an existing one, in which case the log group also needs db_logs_kms_key_arn before it is encrypted with that key rather than with CloudWatch's AWS-managed one. Clears Checkov findings CKV_AWS_16, CKV_AWS_354, and CKV_AWS_158. Flipping this from false to true on an existing RDS instance forces a replacement, because AWS does not support enabling storage encryption in place, so the upgrade path is snapshot then restore into a new encrypted instance. Set to false in your tfvars to preserve current behavior on pre-existing unencrypted deployments. The module-created CMK rotates annually and uses a 7-day deletion window (AWS minimum). Ignored when create_database = false."
   type        = bool
   default     = true
+}
+
+variable "create_db_kms_key" {
+  description = "When true (the default), the module creates and manages its own Customer Managed KMS Key for the RDS instance's storage, Performance Insights data and postgresql log group. Set to false to encrypt with a key you already own, which db_kms_key_arn must then supply. A static boolean rather than inferring the same thing from db_kms_key_arn being null, for the reason docs/customer-managed-infrastructure.md gives: the module gates aws_kms_key.db on this, a count cannot depend on a value Terraform only learns during apply, and inferring from the ARN would mean a key created in the same configuration (aws_kms_key.mine.arn) fails the plan outright. With this boolean the ARN is free to be computed. Ignored when db_storage_encrypted = false or create_database = false, where no CMK is used at all."
+  type        = bool
+  default     = true
+  nullable    = false
+
+  validation {
+    # Gated on create_database && db_storage_encrypted, matching the
+    # description's own "ignored when" clause: a BYO-database or
+    # storage-unencrypted deployment uses no CMK of any kind, module-managed
+    # or otherwise, so create_db_kms_key = false is a genuine no-op there and
+    # should not demand an ARN it will never read.
+    condition     = (var.create_database && var.db_storage_encrypted) ? (var.create_db_kms_key || var.db_kms_key_arn != null) : true
+    error_message = "create_db_kms_key = false requires db_kms_key_arn: with the module not creating a key and no key supplied, there is nothing to encrypt the RDS instance with. Either leave create_db_kms_key = true, or set db_kms_key_arn to a key you own."
+  }
+}
+
+variable "db_kms_key_arn" {
+  description = "ARN of an existing KMS key to use for RDS storage encryption and Performance Insights data, instead of the module provisioning its own Customer Managed Key (aws_kms_key.db). Set this together with create_db_kms_key = false, which is the input that actually stops the module minting its own key; supplying the ARN alone changes nothing and raises the db_kms_key_arn_requires_module_managed_encrypted_database check. Set both when a central security team owns all KMS keys and Terraform modules are not permitted to create new ones. Left at its null default with create_db_kms_key = true, the module creates and manages its own CMK exactly as before, so the pair is a purely additive escape hatch with no change to current behavior. Because the module gates on the boolean and never on this value, the ARN itself may be computed, e.g. a KMS key created in the same configuration. This key is deliberately NOT used for the postgresql CloudWatch log group: CloudWatch Logs rejects a key whose policy does not grant the regional service principal (logs.<region>.amazonaws.com) kms:Encrypt, kms:Decrypt, kms:ReEncrypt*, kms:GenerateDataKey* and kms:DescribeKey, no AWS provider data source exposes a key policy, so the module cannot verify yours does, and the resulting failure lands while creating the log group before the RDS instance exists. The log group therefore falls back to CloudWatch's AWS-managed encryption, and a plan-time check says so; add that statement to your key policy and set db_logs_kms_key_arn to put the log group on your key too. RDS itself needs nothing beyond the default root statement, because it reaches the key through a grant. The module describes the key while planning, which requires kms:DescribeKey (already required of anyone creating an encrypted RDS instance, alongside kms:CreateGrant), so a key that is missing, disabled, pending deletion, asymmetric or not an encryption key fails the plan instead of the apply. The key must be in the same region this module deploys into; a key in another account is fine. Must be a KMS key ARN (arn:aws:kms:<region>:<account-id>:key/<key-id>), not an alias ARN. Ignored when db_storage_encrypted = false (nothing is encrypted with a CMK) or create_database = false (no module-managed RDS instance exists to encrypt); see the db_kms_key_arn_requires_module_managed_encrypted_database check for that footgun."
+  type        = string
+  default     = null
+
+  validation {
+    # Commercial partition only, like every other ARN this module builds or
+    # accepts. Broadening this to arn:aws-us-gov / arn:aws-cn would advertise
+    # support the module does not have: the AWS managed policy ARNs in
+    # modules/controllers/iam.tf and eks.tf are commercial-partition literals, so an apply in GovCloud
+    # fails there regardless of what key was passed in here.
+    condition     = var.db_kms_key_arn == null ? true : can(regex("^arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key/[a-zA-Z0-9-]+$", var.db_kms_key_arn))
+    error_message = "db_kms_key_arn must be a valid KMS key ARN of the form arn:aws:kms:<region>:<account-id>:key/<key-id>."
+  }
+}
+
+variable "db_logs_kms_key_enabled" {
+  description = "When true, the postgresql CloudWatch log group is encrypted with db_logs_kms_key_arn, which must then be set. Only meaningful alongside create_db_kms_key = false: on the module-managed key path the module's own CMK already carries the CloudWatch Logs statement and already encrypts the log group, so there is nothing to opt into. Defaults to false, which is what leaves the log group on CloudWatch's AWS-managed key on the bring-your-own-key path, still encrypted at rest but not with your CMK, and the db_kms_key_arn_does_not_encrypt_postgresql_logs check says so on every plan. A static boolean for the same reason as create_db_kms_key: data.aws_kms_key.db_logs_byo is gated on it, and a count cannot depend on an ARN computed during apply."
+  type        = bool
+  default     = false
+  nullable    = false
+
+  validation {
+    condition     = !var.db_logs_kms_key_enabled || var.db_logs_kms_key_arn != null
+    error_message = "db_logs_kms_key_enabled = true requires db_logs_kms_key_arn: there is no key to put the postgresql log group on otherwise."
+  }
+
+  validation {
+    condition     = !var.db_logs_kms_key_enabled || !var.create_db_kms_key
+    error_message = "db_logs_kms_key_enabled = true requires create_db_kms_key = false. On the module-managed key path the module's own CMK already carries the AllowCloudWatchLogsEncrypt statement and already encrypts the postgresql log group, so there is nothing this toggle could add."
+  }
+}
+
+variable "db_logs_kms_key_arn" {
+  description = "ARN of an existing KMS key to encrypt the postgresql CloudWatch log group with, on the bring-your-own-key path only. Setting this is your assertion that the key's policy grants logs.<region>.amazonaws.com kms:Encrypt, kms:Decrypt, kms:ReEncrypt*, kms:GenerateDataKey* and kms:DescribeKey; CloudWatch Logs rejects a key without that statement (InvalidParameterException on CreateLogGroup) and no AWS provider data source exposes a key policy, so the module cannot check on your behalf. See README.md -> \"Bring your own KMS key for RDS\" for the exact statement. Set this to the same ARN as db_kms_key_arn once that statement is in place, together with db_logs_kms_key_enabled = true, which is the input that actually opts the log group onto it; supplying the ARN alone changes nothing and raises the db_logs_kms_key_arn_requires_db_logs_kms_key_enabled check. Or point it at a different key your organization has already blessed for CloudWatch Logs. Left off (the default) while create_db_kms_key = false, the log group is encrypted with CloudWatch's AWS-managed key instead: still encrypted at rest, just not with your CMK, and the db_kms_key_arn_does_not_encrypt_postgresql_logs check states that out loud on every plan. Ignored when create_db_kms_key = true, because the module's own CMK already carries the statement and already encrypts the log group, and ignored when create_database = false or db_storage_encrypted = false for the same reasons db_kms_key_arn is. Subject to the same plan-time checks as db_kms_key_arn: same region, key usage ENCRYPT_DECRYPT, spec SYMMETRIC_DEFAULT, Enabled state, and a key ARN rather than an alias ARN."
+  type        = string
+  default     = null
+
+  validation {
+    # Same shape and same commercial-partition-only reasoning as
+    # db_kms_key_arn above; see the comment there.
+    condition     = var.db_logs_kms_key_arn == null ? true : can(regex("^arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key/[a-zA-Z0-9-]+$", var.db_logs_kms_key_arn))
+    error_message = "db_logs_kms_key_arn must be a valid KMS key ARN of the form arn:aws:kms:<region>:<account-id>:key/<key-id>."
+  }
+}
+
+variable "db_snapshot_identifier" {
+  description = "Identifier (or ARN, which is required for a snapshot shared from another account) of an RDS snapshot to restore the module-managed database from, instead of creating an empty one. This is the missing half of n8n_encryption_key: that input exists so a rebuilt stack can decrypt credentials an existing database already holds, and until this input existed the only way to reach that state was to restore outside the module and point at it with create_database = false, giving up the module's management of the subnet group, security group, CMK, log group retention, Enhanced Monitoring and Performance Insights. Restore and encryption key go together: restoring a database without also supplying the original n8n_encryption_key leaves every stored credential in it permanently unreadable. Four things behave differently on this path, all verified against the RestoreDBInstanceFromDBSnapshot API and the AWS provider rather than assumed. (1) This forces a replacement. snapshot_identifier is ForceNew, so setting it on a deployment that already has a database destroys that database and restores this snapshot in its place; it is meant for a fresh stack, not as a way to reload an existing one. (2) The master password still applies: RestoreDBInstanceFromDBSnapshot takes no password parameter, but the provider issues a ModifyDBInstance immediately after the restore, so the module's generated password becomes the restored instance's master password. (3) Encryption comes from the snapshot and cannot be changed while restoring. Both db_storage_encrypted and the KMS key must therefore describe what the snapshot already is: an encrypted snapshot needs db_storage_encrypted = true and db_kms_key_arn set to that snapshot's own key, and an unencrypted one needs db_storage_encrypted = false. Get it wrong and Terraform wants to replace the instance on every apply, because both arguments are ForceNew and neither can be satisfied in place; re-encrypt by copying the snapshot to a new key first. Plan-time checks catch all three of those combinations. (4) RDS ignores the database name when restoring a PostgreSQL snapshot, so the restored instance keeps its own, while this module hardcodes n8n_enterprise and db_name is ForceNew too. A snapshot whose database is named anything else therefore produces a permanent replacement diff, and nothing can check it: no data source exposes a snapshot's database name. Use a snapshot taken from a module-managed instance. Ignored when create_database = false, where the module manages no instance to restore into."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.db_snapshot_identifier != null ? trimspace(var.db_snapshot_identifier) != "" : true
+    error_message = "db_snapshot_identifier must not be blank. Leave it null to create an empty database."
+  }
 }
 
 variable "db_allocated_storage" {
@@ -793,7 +1365,7 @@ variable "db_backup_retention_period" {
 }
 
 variable "db_allowed_cidr_blocks" {
-  description = "Additional CIDR blocks allowed to reach the module-managed RDS instance on port 5432, appended to the VPC CIDR (which is always allowed so nodes and pods can connect). Use this for a corporate network, VPN pool, or peered VPC rather than attaching a standalone aws_security_group_rule at the root, because a root-level rule is not tracked by the module's inline ingress block and gets stripped on the next plan. Duplicates, including a repeat of the VPC CIDR, are collapsed. With create_database = false the security group is still created and carries these rules, but nothing is attached to it."
+  description = "Additional CIDR blocks allowed to reach the module-managed RDS instance on port 5432, appended to the VPC CIDR (which is always allowed so nodes and pods can connect). Use this for a corporate network, VPN pool, or peered VPC rather than attaching a standalone aws_security_group_rule at the root, because a root-level rule is not tracked by the module's inline ingress block and gets stripped on the next plan. Duplicates, including a repeat of the VPC CIDR, are collapsed. Ignored when create_database = false: the module creates no RDS instance to attach a security group to, so this rule would front nothing."
   type        = list(string)
   default     = []
 
@@ -804,7 +1376,7 @@ variable "db_allowed_cidr_blocks" {
 }
 
 variable "db_allowed_security_group_ids" {
-  description = "Security group IDs allowed to reach the module-managed RDS instance on port 5432, in addition to the always-allowed VPC CIDR. Preferred over db_allowed_cidr_blocks for sources inside the VPC: membership follows the instances rather than their addresses, so the rule survives subnet changes and IP reuse. Use it for a bastion, a migration runner, or an app tier that already has its own group. No rule is created when the list is empty. With create_database = false the security group is still created and carries this rule, but nothing is attached to it."
+  description = "Security group IDs allowed to reach the module-managed RDS instance on port 5432, in addition to the always-allowed VPC CIDR. Preferred over db_allowed_cidr_blocks for sources inside the VPC: membership follows the instances rather than their addresses, so the rule survives subnet changes and IP reuse. Use it for a bastion, a migration runner, or an app tier that already has its own group. No rule is created when the list is empty. Ignored when create_database = false: the module creates no RDS instance to attach a security group to, so this rule would front nothing."
   type        = list(string)
   default     = []
 
@@ -821,7 +1393,7 @@ variable "create_database" {
 }
 
 variable "db_host" {
-  description = "External database host. Required when create_database = false. Ignored otherwise. Use this to pass in an Amazon Aurora cluster endpoint or any external PostgreSQL host."
+  description = "External database host. Required when create_database = false. Ignored otherwise. Use this to pass in an Amazon Aurora cluster endpoint or any external PostgreSQL host. The database name n8n connects to on this host is not configurable -- it is hardcoded to \"n8n_enterprise\" on both the create_database = true and = false paths (n8n.tf), so pointing this at a host that already runs an n8n deployment from this module shares the exact database and tables, not merely the RDS instance. This is the supported \"migrate to a new stack, keep the same RDS instance\" pattern (stop the old writer first, then cut over) confirmed live for this PR -- it is not true concurrent multi-tenant sharing of one instance across logically separate deployments, which this module does not support today."
   type        = string
   default     = null
 
@@ -832,14 +1404,33 @@ variable "db_host" {
 }
 
 variable "db_password" {
-  description = "Password for the external database specified by db_host. Required when create_database = false. Ignored otherwise (the module generates a random password for its managed RDS instance)."
+  description = "Password for the external database specified by db_host. Required when create_database = false, unless db_password_secret_ref supplies it instead; see that variable, which owns the combined validation to avoid a variable-validation dependency cycle between the two. Ignored otherwise (the module generates a random password for its managed RDS instance)."
   type        = string
   default     = null
   sensitive   = true
+}
+
+variable "db_password_secret_ref" {
+  description = "Existing Kubernetes Secret carrying the external database password, instead of supplying the value through db_password. name is the Secret's name in var.namespace; key defaults to \"password\", matching the chart's database.passwordSecret.key default. External-database path only (create_database = false): aws_db_instance.n8n (database.tf:374) needs the password's actual value to provision the instance, and a Kubernetes Secret name cannot supply that, so setting this while create_database = true is rejected at plan time. On the external path this gates kubernetes_secret.n8n_db to zero and points the chart's database.passwordSecret at your Secret instead. Setting this alongside db_password is rejected at plan time, and so is setting neither while create_database = false, since db_password is otherwise required there; both checks live here rather than split across this variable and db_password, which would form a validation dependency cycle. The module does not verify that the named Secret exists or carries this key: a typo surfaces only as a pod stuck in CreateContainerConfigError, not as a Terraform error, because reading the Secret to check would put the password back in Terraform state, which defeats the reason this input exists."
+  type = object({
+    name = string
+    key  = optional(string)
+  })
+  default = null
 
   validation {
-    condition     = var.create_database || var.db_password != null
-    error_message = "db_password is required when create_database = false."
+    condition     = var.db_password_secret_ref == null || !var.create_database
+    error_message = "db_password_secret_ref is set while create_database = true. aws_db_instance.n8n needs the database password's actual value to provision the instance, and a Kubernetes Secret name cannot supply it. Either set create_database = false, or supply the password via db_password instead."
+  }
+
+  validation {
+    condition     = var.db_password_secret_ref == null || var.db_password == null
+    error_message = "Both db_password and db_password_secret_ref are set. Only one may supply the database password: remove db_password to consume the referenced Secret, or remove db_password_secret_ref to keep passing the value directly."
+  }
+
+  validation {
+    condition     = var.create_database || var.db_password_secret_ref != null || var.db_password != null
+    error_message = "db_password or db_password_secret_ref is required when create_database = false."
   }
 }
 
@@ -922,21 +1513,9 @@ variable "n8n_redis_timeout_threshold" {
 }
 
 variable "redis_transit_encryption_enabled" {
-  description = "Encrypt the n8n queue backend in transit and require an AUTH token on it. Defaults to false, which is the module's deliberate network-trust posture: Redis sits in private subnets behind a security group that admits only VPC traffic, so isolation is by network boundary rather than by credentials. Set true to add TLS plus a generated AUTH token on top of that boundary, worth doing when queue payloads (workflow execution data) crossing the VPC in cleartext, or an unauthenticated Redis after a network-boundary breach, are risks you need closed. Independent of redis_high_availability_enabled: this buys encryption and authentication only, and leaves the cache at one node. CHANGING THIS ON AN EXISTING DEPLOYMENT REPLACES REDIS: AWS exposes the AUTH token only on aws_elasticache_replication_group, so enabling it moves a default deployment off aws_elasticache_cluster, which drops every job queued at that moment. Drain workers and pick a maintenance window. Enabling it on a deployment that is ALREADY on a replication group (redis_high_availability_enabled = true) is supported but takes three applies, not one: AWS refuses a direct plaintext-to-encrypted transition and requires the group to pass through transit_encryption_mode = preferred first, and it refuses an AUTH token until the mode is required. Setting this variable on its own therefore plans clean and then fails at apply. Drive the migration with redis_transit_encryption_mode and redis_apply_immediately instead. The full sequence was run against a live cluster with a client connection held open across every step and interrupted service at no point; see README for the three steps, their measured durations, and why the third one is not optional. Worker queue-depth autoscaling is unaffected: KEDA's Redis triggers pick up TLS and the AUTH token alongside the workers themselves. Requires create_elasticache = true, since the module cannot put a token on a Redis it does not manage. Retrieve the generated token with `terraform output -raw redis_auth_token`."
+  description = "Whether n8n and KEDA connect to Redis over TLS. Meaning depends on create_elasticache. With create_elasticache = true (the default), this ALSO provisions a generated AUTH token on the ElastiCache the module manages: Redis sits in private subnets behind a security group that admits only VPC traffic by default (isolation by network boundary), and this input adds encryption and credential-based isolation on top of that, worth doing when queue payloads (workflow execution data) crossing the VPC in cleartext, or an unauthenticated Redis after a network-boundary breach, are risks you need closed. Independent of redis_high_availability_enabled: this buys encryption and authentication only, and leaves the cache at one node. CHANGING THIS ON AN EXISTING create_elasticache = true DEPLOYMENT REPLACES REDIS: AWS exposes the AUTH token only on aws_elasticache_replication_group, so enabling it moves a default deployment off aws_elasticache_cluster, which drops every job queued at that moment. Drain workers and pick a maintenance window. Enabling it on a deployment that is ALREADY on a replication group (redis_high_availability_enabled = true) is supported but takes three applies, not one: AWS refuses a direct plaintext-to-encrypted transition and requires the group to pass through transit_encryption_mode = preferred first, and it refuses an AUTH token until the mode is required. Setting this variable on its own therefore plans clean and then fails at apply. Drive the migration with redis_transit_encryption_mode and redis_apply_immediately instead. The full sequence was run against a live cluster with a client connection held open across every step and interrupted service at no point; see README for the three steps, their measured durations, and why the third one is not optional. Retrieve the generated token with `terraform output -raw redis_auth_token`. With create_elasticache = false, this instead declares that the external Redis at redis_host speaks TLS: the module does not verify this, so setting it against a plaintext endpoint is a connection failure, not a security hole, and leaving it false against a TLS-only endpoint fails the same way in reverse. The module does not generate a token for a Redis it does not manage; supply one via redis_auth_token if your external Redis requires AUTH. redis_transit_encryption_mode and redis_apply_immediately describe the module-managed migration lever specifically and do not apply on this path. Worker queue-depth autoscaling picks up TLS (and the AUTH token, when active) on either path via KEDA's Redis triggers."
   type        = bool
   default     = false
-
-  # Hard error rather than a `check` warning, unlike the two diagnostics in
-  # redis.tf. Those cover inputs that are merely ignored. This combination is
-  # worse than ignored: with no module-managed ElastiCache there is nothing to
-  # put a token on, yet the Helm values would still be rendered with tls = true
-  # and a generated password, pointing every n8n pod at the caller's plaintext
-  # Redis with a credential it has never heard of. That applies cleanly and
-  # then fails at runtime, which is exactly what a plan-time error is for.
-  validation {
-    condition     = var.create_elasticache || !var.redis_transit_encryption_enabled
-    error_message = "redis_transit_encryption_enabled requires create_elasticache = true. The module provisions TLS and the AUTH token on the ElastiCache it manages, and cannot configure a Redis supplied via redis_host: on that path n8n and KEDA connect in plaintext with no credential, so an external Redis must accept unauthenticated, non-TLS connections. Leave this at false and secure the external endpoint at the network boundary instead."
-  }
 
   # null is not meaningful here: a caller writing `x = null` in a module block
   # would otherwise propagate null into local.redis_tls_active and the other
@@ -986,7 +1565,7 @@ variable "redis_apply_immediately" {
 }
 
 variable "create_elasticache" {
-  description = "When true (the default), the module creates and manages the ElastiCache Redis that the Bull queue and multi-main leader election run on. Set to false to point n8n at an external Redis. redis_host must then be supplied, and the module creates no ElastiCache cluster, replication group, subnet group, or security group. Mirrors create_database, and is the hook the cross-region HA/DR design uses to share one replication-capable Redis between regions. Kept as a static boolean rather than `redis_host == null` because count expressions cannot depend on values computed at apply time. The module wires host and port only: an external Redis that requires AUTH or TLS is not supported yet."
+  description = "When true (the default), the module creates and manages the ElastiCache Redis that the Bull queue and multi-main leader election run on. Set to false to point n8n at a customer-managed Redis. redis_host must then be supplied, and the module creates no ElastiCache cluster, replication group, subnet group, or security group. Mirrors create_database, and is the hook the cross-region HA/DR design uses to share one replication-capable Redis between regions. Kept as a static boolean rather than `redis_host == null` because count expressions cannot depend on values computed at apply time. AUTH and TLS are both supported on this path too: see redis_auth_token, redis_auth_token_secret_ref, and redis_transit_encryption_enabled."
   type        = bool
   default     = true
 
@@ -997,7 +1576,7 @@ variable "create_elasticache" {
 }
 
 variable "redis_host" {
-  description = "External Redis host. Required when create_elasticache = false. Ignored otherwise. Must be reachable from the EKS node subnets on redis_port, and must accept unauthenticated, non-TLS connections, because the module wires neither a Redis password nor TLS. For a replication group the caller manages, use its primary endpoint rather than a node address, so the name follows the primary across a failover."
+  description = "Customer-managed Redis host. Required when create_elasticache = false. Ignored otherwise. Must be reachable from the EKS node subnets on redis_port; the module creates no security group on this path, so the rules that let the nodes in are the caller's to write. AUTH (redis_auth_token / redis_auth_token_secret_ref) and TLS (redis_transit_encryption_enabled) are both optional on this path, matching what the endpoint actually requires: leave both unset if it accepts unauthenticated, non-TLS connections. For a replication group the caller manages, use its primary endpoint rather than a node address, so the name follows the primary across a failover."
   type        = string
   default     = null
 
@@ -1057,6 +1636,140 @@ variable "redis_port" {
   }
 }
 
+variable "redis_auth_token" {
+  description = "AUTH token for an external Redis supplied via redis_host (create_elasticache = false). Optional even then: leave null if that Redis accepts unauthenticated connections, or supply the token instead through redis_auth_token_secret_ref. Ignored when create_elasticache = true: the module generates and manages its own token on the ElastiCache it provisions (see redis_transit_encryption_enabled), and cannot put a caller-supplied credential on infrastructure it owns and rotates on its own schedule. Wired to n8n and KEDA the same way the module-generated token is: as a Kubernetes Secret referenced by name (QUEUE_BULL_REDIS_PASSWORD), never inlined into the Helm release values or the KEDA ScaledObject manifest."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "redis_auth_token_secret_ref" {
+  description = "Existing Kubernetes Secret carrying the external Redis AUTH token, instead of supplying the value through redis_auth_token. name is the Secret's name in var.namespace; key defaults to \"password\", matching the chart's redis.passwordSecret.key default. External-Redis path only (create_elasticache = false): aws_elasticache_replication_group.n8n's auth_token (redis.tf:190) needs the token's actual value to provision module-managed ElastiCache, and a Kubernetes Secret name cannot supply that, so setting this while create_elasticache = true is rejected at plan time. On the external path this is optional exactly as redis_auth_token is: leave both null if that Redis accepts unauthenticated connections. Points the chart's redis.passwordSecret, and KEDA's queue-depth trigger metadata, at your Secret instead of a module-managed one. Unlike a module-generated token, the module never reads the value inside your Secret, so it cannot roll main/worker/webhook pods when that value changes the way it does for redis_pod_annotations on the module-managed path; rolling pods after you rotate the Secret's contents is your responsibility. Setting this alongside redis_auth_token is rejected at plan time. The module does not verify that the named Secret exists or carries this key."
+  type = object({
+    name = string
+    key  = optional(string)
+  })
+  default = null
+
+  validation {
+    condition     = var.redis_auth_token_secret_ref == null || !var.create_elasticache
+    error_message = "redis_auth_token_secret_ref is set while create_elasticache = true. aws_elasticache_replication_group.n8n needs the AUTH token's actual value to provision the module-managed replication group, and a Kubernetes Secret name cannot supply it. Either set create_elasticache = false, or supply the token via redis_auth_token instead."
+  }
+
+  validation {
+    condition     = var.redis_auth_token_secret_ref == null || var.redis_auth_token == null
+    error_message = "Both redis_auth_token and redis_auth_token_secret_ref are set. Only one may supply the Redis AUTH token: remove redis_auth_token to consume the referenced Secret, or remove redis_auth_token_secret_ref to keep passing the value directly."
+  }
+}
+
+variable "redis_username" {
+  description = "ACL username for an external Redis supplied via redis_host (create_elasticache = false). Leave null (the default) and both n8n and KEDA authenticate as Redis's default user, which is what an ElastiCache AUTH token and most self-hosted setups use. Set it when the endpoint authenticates against a named Redis 6+ ACL user, in which case redis_auth_token carries that user's password. Reaches n8n as QUEUE_BULL_REDIS_USERNAME (n8n's own config marks it \"Redis 6.0 or higher required\") and reaches the KEDA worker triggers as the redis scaler's username metadata field, so queue-depth autoscaling authenticates as the same user n8n does. Ignored when create_elasticache = true, and not merely warned about: ElastiCache AUTH has no username concept, its token authenticates as the default user, and sending a username on that path would break a connection that otherwise works. A username is not treated as a secret the way redis_auth_token is: it is a plain value in the Helm release and in the ScaledObject manifest, which is also what lets KEDA read it without resolving anything. The ACL user must be able to run the commands BullMQ uses against the bull:* keyspace, and must be able to run LLEN on bull:jobs:wait and bull:jobs:active for autoscaling to work; an ACL that authenticates but cannot read those keys leaves the HPA reporting <unknown> and the worker count frozen."
+  type        = string
+  default     = null
+
+  # Blank is rejected as well as null, for the same reason redis_host rejects it:
+  # an empty string satisfies "is set" and then reaches n8n and KEDA as an empty
+  # username, which authenticates as nobody. Nested ternaries rather than `&&`,
+  # per AGENTS.md's consistency rule for guard-style conditions: the null test
+  # gates the blank test structurally (trimspace(null) is a hard error) rather
+  # than relying on short-circuit evaluation.
+  validation {
+    condition     = var.redis_username != null ? trimspace(var.redis_username) != "" : true
+    error_message = "redis_username must not be blank. Leave it null to authenticate as Redis's default user."
+  }
+
+  # Redis ACL usernames cannot contain whitespace, so any is a copy-paste
+  # artifact rather than a name. Rejected rather than trimmed, so the value the
+  # caller sets is the value that gets deployed.
+  validation {
+    condition     = var.redis_username != null ? can(regex("^[^[:space:]]+$", var.redis_username)) : true
+    error_message = "redis_username must not contain whitespace: Redis ACL usernames cannot, and the module wires this value into n8n and KEDA verbatim."
+  }
+}
+
+variable "redis_key_prefix" {
+  description = "Prefix for every Redis key this n8n deployment uses: both n8n's own key prefix (N8N_REDIS_KEY_PREFIX, n8n's default is \"n8n\") and the Bull queue's own key prefix (QUEUE_BULL_PREFIX, n8n's default is \"bull\"), which this module sets to the same value so a single input keeps both in sync. Leave null (the default) to keep n8n's own defaults on both -- exactly today's behavior. Set this to a value unique per deployment whenever two or more n8n deployments (from this module or otherwise) point at the SAME external Redis (create_elasticache = false with redis_host shared across deployments), which the module cannot itself detect or prevent: without distinct prefixes, n8n's scaling-mode pub/sub command channel (\"<prefix>:n8n.commands\") is not scoped per deployment, and one deployment's workflow-activation broadcast is received by every other deployment sharing that Redis, each of which looks the workflow up in its own database, fails, and publishes an error back onto the same shared channel -- confirmed live, not theoretical. Each module-managed ElastiCache instance (create_elasticache = true, the default) is already dedicated to one deployment, so this has no effect worth setting there. Also updates the KEDA worker ScaledObject's listName metadata (scaling.tf) to \"<prefix>:jobs:wait\" / \"<prefix>:jobs:active\": leaving those at the literal \"bull:jobs:*\" while Bull itself writes under a different prefix would leave KEDA reading an empty list and queue-depth autoscaling permanently frozen at zero."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.redis_key_prefix != null ? trimspace(var.redis_key_prefix) != "" : true
+    error_message = "redis_key_prefix must not be blank. Leave it null to keep n8n's own default prefixes."
+  }
+
+  # n8n and Bull both use ":" as their own internal key-segment delimiter
+  # (e.g. "<prefix>:n8n.commands", "<prefix>:jobs:wait"), so a prefix that
+  # itself contains ":", whitespace, or other Redis key-pattern metacharacters
+  # would produce a technically-valid but confusing key namespace. Restricted
+  # to what both n8n's own default ("n8n") and Bull's ("bull") already look
+  # like: alphanumerics, hyphens and underscores.
+  validation {
+    condition     = var.redis_key_prefix != null ? can(regex("^[A-Za-z0-9_-]+$", var.redis_key_prefix)) : true
+    error_message = "redis_key_prefix must contain only letters, digits, hyphens and underscores: it becomes a literal Redis key segment (e.g. \"<prefix>:n8n.commands\", \"<prefix>:jobs:wait\"), and \":\" or whitespace in it would produce a confusing or malformed key namespace."
+  }
+}
+
+# ── S3 ────────────────────────────────────────────────────────────────────────
+
+variable "create_s3_bucket" {
+  description = "When true (the default), the module creates and manages an Amazon S3 bucket for n8n binary storage (and execution data, when n8n_execution_data_storage_mode = \"s3\"). Set to false to use an existing bucket you manage yourself: existing_s3_bucket_name must then be supplied. Kept as a static boolean rather than `existing_s3_bucket_name == null` because count expressions cannot depend on values computed at apply time."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
+variable "existing_s3_bucket_name" {
+  description = "Name of an existing S3 bucket for n8n to use. Required when create_s3_bucket = false. Ignored otherwise (the module creates its own bucket, named n8n-<cluster_name>-<account_suffix>). The module attaches its IAM policy and Pod Identity role to this bucket's ARN so the n8n service account can read and write it, but creates no public-access block and no server-side encryption configuration on it: how a bucket you own is secured is your decision, not the module's. One thing you do have to tell the module, though, is s3_kms_key_arn, if this bucket is SSE-KMS encrypted with a Customer Managed Key. The pod role needs key permissions to read and write such a bucket at all, and the module cannot see the bucket's encryption configuration to infer them."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.create_s3_bucket ? true : var.existing_s3_bucket_name != null
+    error_message = "existing_s3_bucket_name is required when create_s3_bucket = false."
+  }
+
+  validation {
+    condition     = var.existing_s3_bucket_name == null ? true : can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.existing_s3_bucket_name))
+    error_message = "existing_s3_bucket_name must be a valid S3 bucket name: 3-63 characters, lowercase letters, numbers, dots, and hyphens only."
+  }
+}
+
+variable "s3_kms_encryption_enabled" {
+  description = "When true (the default), set the S3 bucket's default encryption to SSE-KMS with a KMS key: a module-created Customer Managed KMS Key (aws_kms_key.s3) unless s3_kms_key_arn supplies an existing one, and grant the n8n pod role kms:Decrypt / kms:GenerateDataKey / kms:DescribeKey on it. Clears Checkov finding CKV_AWS_145. This selects which key encrypts objects, not whether they are encrypted: S3 encrypts every object regardless, and setting this to false leaves new objects on SSE-S3 with S3-managed keys. S3 Bucket Keys are enabled alongside it so KMS is called per bucket rather than per object. Ignored when create_s3_bucket = false: the module creates no bucket to set a default encryption configuration on, though s3_kms_key_arn still matters there for the IAM grant. The setting applies only to objects written afterwards: existing objects keep their original encryption. Do not change true to false while any retained object uses the module-created CMK. Terraform immediately schedules that key for deletion, making those objects unreadable while the key is PendingDeletion and permanently unrecoverable after the 7-day window. See README → KMS key after terraform destroy for recovery."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
+variable "create_s3_kms_key" {
+  description = "When true (the default), the module creates and manages its own Customer Managed KMS Key for the S3 bucket it creates. Set to false to encrypt that bucket with a key you already own, which s3_kms_key_arn must then supply. A static boolean rather than inferring the same thing from s3_kms_key_arn being null, for the reason docs/customer-managed-infrastructure.md gives: aws_kms_key.s3 is gated on this, and a count cannot depend on a value Terraform only learns during apply. Ignored when s3_kms_encryption_enabled = false (the bucket uses SSE-S3 and no CMK exists) or create_s3_bucket = false (there is no module-managed bucket to encrypt, though s3_kms_key_arn still matters on that path: it is what grants the n8n pod role kms:Decrypt on your bucket's key)."
+  type        = bool
+  default     = true
+  nullable    = false
+
+  validation {
+    # Gated on create_s3_bucket && s3_kms_encryption_enabled, matching the
+    # description's own "ignored when" clause: an SSE-S3 bucket uses no CMK
+    # at all, and a caller-supplied bucket has no module-managed bucket for
+    # this toggle to govern, so create_s3_kms_key = false is a genuine no-op
+    # on either path and should not demand an ARN it will never read here.
+    condition     = (var.create_s3_bucket && var.s3_kms_encryption_enabled) ? (var.create_s3_kms_key || var.s3_kms_key_arn != null) : true
+    error_message = "create_s3_kms_key = false requires s3_kms_key_arn: with the module not creating a key and no key supplied, the bucket has no CMK to encrypt with. Either leave create_s3_kms_key = true, or set s3_kms_key_arn to a key you own, or set s3_kms_encryption_enabled = false for SSE-S3."
+  }
+}
+
+variable "s3_kms_key_arn" {
+  description = "ARN of an existing Customer Managed KMS Key to use for S3 bucket encryption, instead of the module provisioning its own CMK (aws_kms_key.s3). Does two things, and which of them apply depends on create_s3_bucket and s3_kms_encryption_enabled. When create_s3_bucket = true and s3_kms_encryption_enabled = true (both defaults), the module encrypts the bucket it creates with this key instead of creating its own CMK, but only alongside create_s3_kms_key = false, which is the input that actually stops the module minting one; supplying the ARN alone changes nothing there and raises the s3_kms_key_arn_requires_create_s3_kms_key_false check. Set both when a central security team owns all KMS keys and Terraform modules are not permitted to create new ones. Because the module gates on the boolean and never on this value, the ARN itself may be computed, e.g. a KMS key created in the same configuration. On both the module-managed and the caller-supplied bucket path it also grants the n8n Pod Identity role kms:Decrypt, kms:GenerateDataKey and kms:DescribeKey on the key, which SSE-KMS requires of the requesting principal: without it every binary-data read and write returns AccessDenied even though the bucket policy and IAM policy both look correct. So set this whenever the bucket n8n uses is SSE-KMS encrypted, including a bucket you supplied yourself via existing_s3_bucket_name. Leave null (the default) and the module-managed bucket is encrypted with a module-created CMK (s3_kms_encryption_enabled = true) or SSE-S3 (s3_kms_encryption_enabled = false); a caller-supplied bucket with no override is assumed to need no key permissions of its own. The create_s3_kms_key toggle is irrelevant on the create_s3_bucket = false path: there is no module-managed bucket to encrypt, and this ARN is read for the IAM grant either way. Must be a KMS key ARN, not an alias ARN: an IAM policy Resource element does not accept an alias, so a grant written against one would silently match nothing."
+  type        = string
+  default     = null
+
+  validation {
+    # Same shape and same commercial-partition-only reasoning as db_kms_key_arn.
+    condition     = var.s3_kms_key_arn == null ? true : can(regex("^arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key/[a-zA-Z0-9-]+$", var.s3_kms_key_arn))
+    error_message = "s3_kms_key_arn must be a valid KMS key ARN of the form arn:aws:kms:<region>:<account-id>:key/<key-id>. Alias ARNs are not accepted: IAM policy Resource elements cannot reference a KMS alias."
+  }
+}
+
 # ── HPA: main pods ────────────────────────────────────────────────────────────
 
 variable "n8n_main_hpa_min_replicas" {
@@ -1069,6 +1782,11 @@ variable "n8n_main_hpa_min_replicas" {
     condition     = var.n8n_main_hpa_min_replicas <= var.n8n_main_hpa_max_replicas
     error_message = "n8n_main_hpa_min_replicas must not exceed n8n_main_hpa_max_replicas; Kubernetes rejects an HPA whose minReplicas is above its maxReplicas."
   }
+
+  validation {
+    condition     = var.n8n_main_hpa_min_replicas == floor(var.n8n_main_hpa_min_replicas) && var.n8n_main_hpa_min_replicas >= 1
+    error_message = "n8n_main_hpa_min_replicas must be a whole number of replicas, 1 or greater. Kubernetes rejects an HPA whose minReplicas is below 1 (scale-to-zero needs the HPAScaleToZero feature gate, which EKS does not enable)."
+  }
 }
 
 variable "n8n_main_hpa_max_replicas" {
@@ -1076,15 +1794,32 @@ variable "n8n_main_hpa_max_replicas" {
   type        = number
   default     = 6
   nullable    = false
+
+  validation {
+    condition     = var.n8n_main_hpa_max_replicas == floor(var.n8n_main_hpa_max_replicas) && var.n8n_main_hpa_max_replicas >= 1
+    error_message = "n8n_main_hpa_max_replicas must be a whole number of replicas, 1 or greater. Kubernetes rejects an HPA whose maxReplicas is below 1, and a fractional value is not a replica count."
+  }
 }
 
 variable "n8n_main_hpa_cpu_threshold" {
   description = "Target average CPU utilization (%) that triggers scaling of n8n main pods."
   type        = number
   default     = 60
+
+  validation {
+    condition     = var.n8n_main_hpa_cpu_threshold == floor(var.n8n_main_hpa_cpu_threshold) && var.n8n_main_hpa_cpu_threshold >= 1 && var.n8n_main_hpa_cpu_threshold <= 100
+    error_message = "n8n_main_hpa_cpu_threshold is a target average CPU utilization percentage, so it must be a whole number between 1 and 100. Values above 100 are accepted by Kubernetes but mean the HPA only scales once pods exceed their own CPU request, which is not what this input is for."
+  }
 }
 
 # ── HPA: webhook processor pods ───────────────────────────────────────────────
+
+variable "n8n_webhook_hpa_enabled" {
+  description = "When true (the default), the module creates kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook, a CPU-based HPA for the webhook processor deployment. The n8n Helm chart skips creating its own webhook HPA whenever keda.enabled is true, which this module always sets, so this module-managed HPA is otherwise the only thing that scales webhook processors at all. Set to false to bring your own autoscaling policy (e.g. a VPA, a custom-metrics HPA, or one managed outside Terraform) for the n8n-webhook-processor Deployment instead. With this false and nothing else targeting that Deployment, it stays fixed at n8n_webhook_hpa_min_replicas: the chart renders webhookProcessor.replicaCount from that same variable unconditionally, so disabling this HPA does not leave the deployment without a replica count, only without anything that changes it."
+  type        = bool
+  default     = true
+  nullable    = false
+}
 
 variable "n8n_webhook_hpa_min_replicas" {
   description = "Minimum replicas for n8n webhook processor pods. HPA will not scale below this. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back. Webhook processors take production webhook traffic, so a warm floor is what keeps a traffic ramp from queueing behind pod startup."
@@ -1096,6 +1831,11 @@ variable "n8n_webhook_hpa_min_replicas" {
     condition     = var.n8n_webhook_hpa_min_replicas <= var.n8n_webhook_hpa_max_replicas
     error_message = "n8n_webhook_hpa_min_replicas must not exceed n8n_webhook_hpa_max_replicas; Kubernetes rejects an HPA whose minReplicas is above its maxReplicas."
   }
+
+  validation {
+    condition     = var.n8n_webhook_hpa_min_replicas == floor(var.n8n_webhook_hpa_min_replicas) && var.n8n_webhook_hpa_min_replicas >= 1
+    error_message = "n8n_webhook_hpa_min_replicas must be a whole number of replicas, 1 or greater. Kubernetes rejects an HPA whose minReplicas is below 1 (scale-to-zero needs the HPAScaleToZero feature gate, which EKS does not enable)."
+  }
 }
 
 variable "n8n_webhook_hpa_max_replicas" {
@@ -1103,12 +1843,22 @@ variable "n8n_webhook_hpa_max_replicas" {
   type        = number
   default     = 8
   nullable    = false
+
+  validation {
+    condition     = var.n8n_webhook_hpa_max_replicas == floor(var.n8n_webhook_hpa_max_replicas) && var.n8n_webhook_hpa_max_replicas >= 1
+    error_message = "n8n_webhook_hpa_max_replicas must be a whole number of replicas, 1 or greater. Kubernetes rejects an HPA whose maxReplicas is below 1, and a fractional value is not a replica count."
+  }
 }
 
 variable "n8n_webhook_hpa_cpu_threshold" {
   description = "Target average CPU utilization (%) that triggers scaling of n8n webhook pods."
   type        = number
   default     = 65
+
+  validation {
+    condition     = var.n8n_webhook_hpa_cpu_threshold == floor(var.n8n_webhook_hpa_cpu_threshold) && var.n8n_webhook_hpa_cpu_threshold >= 1 && var.n8n_webhook_hpa_cpu_threshold <= 100
+    error_message = "n8n_webhook_hpa_cpu_threshold is a target average CPU utilization percentage, so it must be a whole number between 1 and 100. Values above 100 are accepted by Kubernetes but mean the HPA only scales once pods exceed their own CPU request, which is not what this input is for."
+  }
 }
 
 variable "n8n_webhook_hpa_scale_up_stabilization_window_seconds" {
@@ -1184,6 +1934,11 @@ variable "n8n_custom_extensions_path" {
     # container filesystem, and rewrites separators on Windows.
     condition     = var.n8n_custom_extensions_path == null ? true : !can(regex("//|/\\.\\.?(/|$)", var.n8n_custom_extensions_path))
     error_message = "n8n_custom_extensions_path must be a canonical path: no repeated slashes and no \".\" or \"..\" components (e.g. \"/opt/n8n-nodes\"). Those spellings resolve to the same directory inside the container but would slip past the /home/node/.n8n shadowing check."
+  }
+
+  validation {
+    condition     = var.n8n_custom_extensions_path == null ? true : (var.n8n_custom_extensions_path == "/" || !endswith(var.n8n_custom_extensions_path, "/"))
+    error_message = "n8n_custom_extensions_path must not end in a trailing slash (e.g. \"/opt/n8n-nodes\", not \"/opt/n8n-nodes/\"). Same reason as the canonical-path rule above: the two spellings are the same directory to the container but different strings to the coverage check in n8n.tf, which compares this path against n8n_extra_volume_mounts entries literally."
   }
 
   validation {
@@ -1326,6 +2081,61 @@ variable "n8n_community_packages_prevent_loading" {
   description = "Prevent installed community packages from being loaded at runtime. Maps to N8N_COMMUNITY_PACKAGES_PREVENT_LOADING. When true, n8n leaves the community-packages management surface in place but skips loading the package code, which is useful for locking an instance down without uninstalling. Leave false (the default) for community nodes to load and execute. n8n defaults this to false; when false the env var is omitted entirely so n8n's own default applies."
   type        = bool
   default     = false
+}
+
+# n8n defaults scheduled to change
+# n8n warns on every pod start that the defaults behind these four variables will
+# be reduced or flipped in a future version, and asks operators to set them
+# explicitly to keep the current behavior (see DeprecationService in
+# packages/cli/src/deprecation/deprecation.service.ts). The warnings fire because
+# nothing sets the variables, not because setting them is wrong.
+#
+# Only the task timeout is pinned by default here. Its change is a pure
+# functional regression: nothing about a five-minute Code node task becomes
+# unsafe, it simply stops working. The other three are n8n deliberately
+# tightening a security posture (unverified packages, and two zip-bomb limits on
+# the Compression node), so this module leaves them at whatever n8n decides and
+# exposes the lever rather than freezing the weaker value on every deployment's
+# behalf. Setting one of them is an operator saying "my workflows need this",
+# which is a claim the module cannot make for them.
+
+variable "n8n_task_runner_timeout" {
+  description = "Seconds a Code node task may run in a task runner before n8n aborts it. Maps to N8N_RUNNERS_TASK_TIMEOUT, and applies to every pod type. Not to be confused with n8n_task_runner_request_timeout, which is how long n8n waits for a runner to *accept* a task rather than how long the task may then run. Defaults to 300, which is n8n's own current default, and the module sets it explicitly rather than omitting it: n8n has announced this default will drop to 60 in a future version, which would abort any Code node task running longer than a minute after an n8n upgrade that changed nothing else. Pinning it here means an upgrade cannot move it silently. Set it to 60 to adopt n8n's future default early, or raise it for genuinely long-running tasks."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = var.n8n_task_runner_timeout > 0
+    error_message = "n8n_task_runner_timeout must be greater than 0 seconds."
+  }
+}
+
+variable "n8n_unverified_packages_enabled" {
+  description = "Allow installing community packages that n8n has not verified. Maps to N8N_UNVERIFIED_PACKAGES_ENABLED. Null (the default) omits the env var so n8n's own default applies, which is currently true but which n8n has announced will become false in a future version. Set this to true to keep installing unverified packages across that change, or to false to adopt the stricter behavior now. The module does not pin it, because unlike the task timeout this is n8n tightening a security default, and freezing the permissive value on every deployment's behalf is not a decision this module should make."
+  type        = bool
+  default     = null
+}
+
+variable "n8n_compression_max_decompressed_size_bytes" {
+  description = "Largest decompressed payload the Compression node will produce, in bytes. Maps to N8N_COMPRESSION_NODE_MAX_DECOMPRESSED_SIZE_BYTES. Null (the default) omits the env var so n8n's own default applies, which is currently 2 GiB (2147483648) and which n8n has announced will drop to 256 MiB (268435456) in a future version. This is a zip-bomb limit, so the reduction is a hardening rather than a regression; set this only if workflows genuinely decompress archives larger than n8n's default allows, and set it to the value those workflows need rather than to the old default."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.n8n_compression_max_decompressed_size_bytes == null ? true : var.n8n_compression_max_decompressed_size_bytes > 0
+    error_message = "n8n_compression_max_decompressed_size_bytes must be greater than 0 bytes when set."
+  }
+}
+
+variable "n8n_compression_max_zip_entries" {
+  description = "Largest number of entries the Compression node will extract from one archive. Maps to N8N_COMPRESSION_NODE_MAX_ZIP_ENTRIES. Null (the default) omits the env var so n8n's own default applies, which is currently 5000 and which n8n has announced will drop to 1000 in a future version. Like n8n_compression_max_decompressed_size_bytes this is a zip-bomb limit, so the reduction hardens rather than breaks; set it only for workflows that genuinely process archives with more entries than n8n's default allows."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.n8n_compression_max_zip_entries == null ? true : var.n8n_compression_max_zip_entries > 0
+    error_message = "n8n_compression_max_zip_entries must be greater than 0 entries when set."
+  }
 }
 
 # OpenTelemetry tracing
@@ -1489,6 +2299,75 @@ variable "n8n_extra_env" {
   }
 }
 
+# ── External Secrets ──────────────────────────────────────────────────────────
+# n8n's own External Secrets feature resolves *workflow credential* values from
+# an external vault at runtime (Settings -> External Secrets in the n8n UI),
+# keeping them out of n8n's Postgres and out from under N8N_ENCRYPTION_KEY.
+# This is unrelated to the module's own secrets (DB password, Redis AUTH
+# token, encryption key, task runner token, licence key): those stay
+# Kubernetes Secrets, unaffected by anything below.
+#
+# n8n gates the feature behind the feat:externalSecrets licence entitlement
+# (@BackendModule in module-registry.ts). Without that entitlement the feature
+# is inert regardless of these inputs, so n8n_external_secrets_enabled is an
+# explicit opt-out rather than a required guard, and Community-licensed
+# deployments can leave both inputs here at their defaults.
+
+variable "n8n_external_secrets_enabled" {
+  description = "Whether n8n's own External Secrets module may load. When false, appends \"external-secrets\" to N8N_DISABLED_MODULES, which disables the feature (and its Settings UI) even under a licence that includes it. When true (the default), no env var is emitted and n8n's own default applies: the module stays enabled, but inert on Community licences without the feat:externalSecrets entitlement. This input does not create a vault connection; that remains a manual step in the n8n UI regardless of this setting."
+  type        = bool
+  default     = true
+}
+
+variable "n8n_external_secrets_update_interval" {
+  description = "Seconds between n8n re-fetching external secret values from the connected vault, mapped to N8N_EXTERNAL_SECRETS_UPDATE_INTERVAL. Left null (the default) omits the env var so n8n's own default (300 seconds) applies. Ignored while n8n_external_secrets_enabled = false or while no vault connection exists."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.n8n_external_secrets_update_interval == null ? true : var.n8n_external_secrets_update_interval > 0
+    error_message = "n8n_external_secrets_update_interval must be a positive number of seconds, or null to use n8n's own default."
+  }
+}
+
+# The AWS grant below is a separate, opt-in layer: it makes n8n's own AWS
+# Secrets Manager provider keyless via EKS Pod Identity, so an admin connecting
+# that provider in the n8n UI can pick authMethod = autoDetect instead of
+# pasting static IAM user keys. It does nothing for the five other providers
+# n8n supports (Vault, Infisical, Azure Key Vault, GCP Secrets Manager, 1Password):
+# those take their own connection settings the same way, entirely inside n8n,
+# and this module has no opinion on them.
+#
+# n8n's AWS provider calls secretsmanager:ListSecrets with no name, path, or tag
+# filter, then reads every name it finds. IAM is therefore the only mechanism
+# that limits what a vault connection using this role can read: see the
+# GetSecretValue statement and the Deny in aws_iam_policy.external_secrets
+# (s3.tf) for how that boundary is enforced.
+
+variable "n8n_external_secrets_aws_enabled" {
+  description = "Grants the n8n pod's existing Pod Identity role (aws_iam_role.s3) permission to read AWS Secrets Manager, so n8n's own External Secrets feature can use authMethod = autoDetect with no static AWS keys. Default false: no IAM policy, no attachment, no plan diff for an existing deployment. This only prepares the IAM plumbing; connecting the AWS Secrets Manager provider itself is a manual step in the n8n UI (Settings -> External Secrets), and ingested secrets are also governed by n8n_external_secrets_enabled and the feat:externalSecrets licence entitlement."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "n8n_external_secrets_aws_secret_names" {
+  description = "Secrets Manager secret names (not ARNs) the pod role above may read via secretsmanager:GetSecretValue, resolved with data.aws_secretsmanager_secret and used to build that policy's Resource list. Required, non-empty, when n8n_external_secrets_aws_enabled = true: since n8n's AWS provider enumerates every secret it can see with no server-side filter, an empty or wildcard allow-list would be a silent full-account grant rather than a convenience default. Wildcards (* or ?) are rejected for the same reason: a secret's ARN carries a random six-character suffix Terraform cannot predict, so a caller reaching for a name-?????? pattern to work around that is exactly the case this input exists to prevent. Ignored while n8n_external_secrets_aws_enabled = false."
+  type        = list(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition     = var.n8n_external_secrets_aws_enabled ? length(var.n8n_external_secrets_aws_secret_names) > 0 : true
+    error_message = "n8n_external_secrets_aws_secret_names must name at least one secret when n8n_external_secrets_aws_enabled = true. n8n's AWS provider has no name, path, or tag filter of its own, so IAM is the only boundary on what it can read; an empty list here would leave that boundary wide open rather than closed."
+  }
+
+  validation {
+    condition     = alltrue([for n in var.n8n_external_secrets_aws_secret_names : !can(regex("[*?]", n))])
+    error_message = "n8n_external_secrets_aws_secret_names must be exact secret names, not wildcard patterns. Each name is resolved with data.aws_secretsmanager_secret and used to build the pod role's GetSecretValue statement; a wildcard cannot be resolved to a concrete ARN, and its presence usually means the actual secret ARN's random suffix is unknown, which is also unprovable to not overlap with a secret this grant must never read."
+  }
+}
+
 # ── KEDA: worker pods ─────────────────────────────────────────────────────────
 
 variable "n8n_worker_keda_min_replicas" {
@@ -1501,6 +2380,11 @@ variable "n8n_worker_keda_min_replicas" {
     condition     = var.n8n_worker_keda_min_replicas <= var.n8n_worker_keda_max_replicas
     error_message = "n8n_worker_keda_min_replicas must not exceed n8n_worker_keda_max_replicas; KEDA rejects a ScaledObject whose minReplicaCount is above its maxReplicaCount."
   }
+
+  validation {
+    condition     = var.n8n_worker_keda_min_replicas == floor(var.n8n_worker_keda_min_replicas) && var.n8n_worker_keda_min_replicas >= 0
+    error_message = "n8n_worker_keda_min_replicas must be a whole number of replicas, 0 or greater. 0 is allowed here, unlike the two HPA floors: KEDA scales a ScaledObject to zero natively."
+  }
 }
 
 variable "n8n_worker_keda_max_replicas" {
@@ -1508,10 +2392,20 @@ variable "n8n_worker_keda_max_replicas" {
   type        = number
   default     = 10
   nullable    = false
+
+  validation {
+    condition     = var.n8n_worker_keda_max_replicas == floor(var.n8n_worker_keda_max_replicas) && var.n8n_worker_keda_max_replicas >= 1
+    error_message = "n8n_worker_keda_max_replicas must be a whole number of replicas, 1 or greater. KEDA rejects a ScaledObject whose maxReplicaCount is below 1, and a fractional value is not a replica count."
+  }
 }
 
 variable "n8n_worker_keda_jobs_per_replica" {
   description = "Number of waiting jobs per worker replica used as the KEDA scaling threshold. KEDA targets ceil(queue_depth / jobs_per_replica) replicas."
   type        = number
   default     = 5
+
+  validation {
+    condition     = var.n8n_worker_keda_jobs_per_replica == floor(var.n8n_worker_keda_jobs_per_replica) && var.n8n_worker_keda_jobs_per_replica >= 1
+    error_message = "n8n_worker_keda_jobs_per_replica must be a whole number of jobs, 1 or greater. KEDA divides the queue depth by this value, so 0 is not a threshold it can act on."
+  }
 }

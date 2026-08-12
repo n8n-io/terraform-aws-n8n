@@ -145,6 +145,11 @@ variable "n8n_custom_extensions_path" {
   }
 
   validation {
+    condition     = var.n8n_custom_extensions_path == null ? true : (var.n8n_custom_extensions_path == "/" || !endswith(var.n8n_custom_extensions_path, "/"))
+    error_message = "n8n_custom_extensions_path must not end in a trailing slash (e.g. \"/opt/n8n-nodes\", not \"/opt/n8n-nodes/\"). Same reason as the canonical-path rule above: the two spellings are the same directory to the container but different strings to the coverage check in n8n.tf, which compares this path against n8n_extra_volume_mounts entries literally."
+  }
+
+  validation {
     # The chart mounts the `data` volume (an emptyDir at the chart default) at
     # /home/node/.n8n on the main deployment only, so anything the image baked
     # in under that path is hidden on mains while still present on workers and
