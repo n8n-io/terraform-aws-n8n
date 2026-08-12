@@ -480,7 +480,7 @@ variable "node_instance_type" {
   nullable    = false
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9]*\\.[a-z0-9]+$", var.node_instance_type))
+    condition     = can(regex("^[a-z][a-z0-9-]*\\.[a-z0-9-]+$", var.node_instance_type))
     error_message = "Value must be a valid EC2 instance type (e.g. t3.xlarge, m5.large)."
   }
 }
@@ -1264,7 +1264,12 @@ variable "create_db_kms_key" {
   nullable    = false
 
   validation {
-    condition     = var.create_db_kms_key || var.db_kms_key_arn != null
+    # Gated on create_database && db_storage_encrypted, matching the
+    # description's own "ignored when" clause: a BYO-database or
+    # storage-unencrypted deployment uses no CMK of any kind, module-managed
+    # or otherwise, so create_db_kms_key = false is a genuine no-op there and
+    # should not demand an ARN it will never read.
+    condition     = (var.create_database && var.db_storage_encrypted) ? (var.create_db_kms_key || var.db_kms_key_arn != null) : true
     error_message = "create_db_kms_key = false requires db_kms_key_arn: with the module not creating a key and no key supplied, there is nothing to encrypt the RDS instance with. Either leave create_db_kms_key = true, or set db_kms_key_arn to a key you own."
   }
 }
@@ -1303,7 +1308,7 @@ variable "db_logs_kms_key_enabled" {
 }
 
 variable "db_logs_kms_key_arn" {
-  description = "ARN of an existing KMS key to encrypt the postgresql CloudWatch log group with, on the bring-your-own-key path only. Setting this is your assertion that the key's policy grants logs.<region>.amazonaws.com kms:Encrypt, kms:Decrypt, kms:ReEncrypt*, kms:GenerateDataKey* and kms:DescribeKey; CloudWatch Logs rejects a key without that statement (InvalidParameterException on CreateLogGroup) and no AWS provider data source exposes a key policy, so the module cannot check on your behalf. See README.md -> \"Bring your own KMS key for RDS\" for the exact statement. Set this to the same ARN as db_kms_key_arn once that statement is in place, together with db_logs_kms_key_enabled = true, which is the input that actually opts the log group onto it; supplying the ARN alone changes nothing and raises the db_logs_kms_key_arn_requires_db_kms_key_arn check. Or point it at a different key your organization has already blessed for CloudWatch Logs. Left off (the default) while create_db_kms_key = false, the log group is encrypted with CloudWatch's AWS-managed key instead: still encrypted at rest, just not with your CMK, and the db_kms_key_arn_does_not_encrypt_postgresql_logs check states that out loud on every plan. Ignored when create_db_kms_key = true, because the module's own CMK already carries the statement and already encrypts the log group, and ignored when create_database = false or db_storage_encrypted = false for the same reasons db_kms_key_arn is. Subject to the same plan-time checks as db_kms_key_arn: same region, key usage ENCRYPT_DECRYPT, spec SYMMETRIC_DEFAULT, Enabled state, and a key ARN rather than an alias ARN."
+  description = "ARN of an existing KMS key to encrypt the postgresql CloudWatch log group with, on the bring-your-own-key path only. Setting this is your assertion that the key's policy grants logs.<region>.amazonaws.com kms:Encrypt, kms:Decrypt, kms:ReEncrypt*, kms:GenerateDataKey* and kms:DescribeKey; CloudWatch Logs rejects a key without that statement (InvalidParameterException on CreateLogGroup) and no AWS provider data source exposes a key policy, so the module cannot check on your behalf. See README.md -> \"Bring your own KMS key for RDS\" for the exact statement. Set this to the same ARN as db_kms_key_arn once that statement is in place, together with db_logs_kms_key_enabled = true, which is the input that actually opts the log group onto it; supplying the ARN alone changes nothing and raises the db_logs_kms_key_arn_requires_db_logs_kms_key_enabled check. Or point it at a different key your organization has already blessed for CloudWatch Logs. Left off (the default) while create_db_kms_key = false, the log group is encrypted with CloudWatch's AWS-managed key instead: still encrypted at rest, just not with your CMK, and the db_kms_key_arn_does_not_encrypt_postgresql_logs check states that out loud on every plan. Ignored when create_db_kms_key = true, because the module's own CMK already carries the statement and already encrypts the log group, and ignored when create_database = false or db_storage_encrypted = false for the same reasons db_kms_key_arn is. Subject to the same plan-time checks as db_kms_key_arn: same region, key usage ENCRYPT_DECRYPT, spec SYMMETRIC_DEFAULT, Enabled state, and a key ARN rather than an alias ARN."
   type        = string
   default     = null
 
@@ -1743,7 +1748,12 @@ variable "create_s3_kms_key" {
   nullable    = false
 
   validation {
-    condition     = var.create_s3_kms_key || var.s3_kms_key_arn != null
+    # Gated on create_s3_bucket && s3_kms_encryption_enabled, matching the
+    # description's own "ignored when" clause: an SSE-S3 bucket uses no CMK
+    # at all, and a caller-supplied bucket has no module-managed bucket for
+    # this toggle to govern, so create_s3_kms_key = false is a genuine no-op
+    # on either path and should not demand an ARN it will never read here.
+    condition     = (var.create_s3_bucket && var.s3_kms_encryption_enabled) ? (var.create_s3_kms_key || var.s3_kms_key_arn != null) : true
     error_message = "create_s3_kms_key = false requires s3_kms_key_arn: with the module not creating a key and no key supplied, the bucket has no CMK to encrypt with. Either leave create_s3_kms_key = true, or set s3_kms_key_arn to a key you own, or set s3_kms_encryption_enabled = false for SSE-S3."
   }
 }

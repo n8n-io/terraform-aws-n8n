@@ -294,16 +294,25 @@ resource "aws_iam_policy" "external_secrets" {
         # AWS-managed key), and only one of those four spellings is usable as
         # an IAM Resource. kms:ViaService is exact where an ARN list would be
         # a guess: it permits Decrypt only when Secrets Manager itself is the
-        # caller, in this region. That leaves GetSecretValue above as the
-        # only way to reach any ciphertext at all, and it is already pinned
-        # to the resolved ARNs of the allow list, so the effective grant is
-        # "decrypt exactly the allow-listed secrets" and nothing wider.
+        # caller, in this region.
+        #
+        # kms:ViaService alone is necessary but not sufficient: it still lets
+        # this role decrypt through Secrets Manager for ANY secret's key, not
+        # only the allow-listed ones, if some other policy or the secret's
+        # own resource policy ever grants it GetSecretValue on a secret this
+        # allow list never named. kms:EncryptionContext:SecretARN closes
+        # that: Secrets Manager sets this encryption context to the secret's
+        # own ARN on every Decrypt it proxies, so pinning it to the resolved
+        # allow-listed ARNs makes KMS itself enforce the same boundary
+        # GetSecretValue's Resource list does above, rather than trusting
+        # that no other policy ever grants a wider GetSecretValue.
         Effect   = "Allow"
         Action   = ["kms:Decrypt"]
         Resource = "*"
         Condition = {
           StringEquals = {
-            "kms:ViaService" = "secretsmanager.${local.aws_region}.amazonaws.com"
+            "kms:ViaService"                  = "secretsmanager.${local.aws_region}.amazonaws.com"
+            "kms:EncryptionContext:SecretARN" = [for s in data.aws_secretsmanager_secret.external_secrets : s.arn]
           }
         }
       },

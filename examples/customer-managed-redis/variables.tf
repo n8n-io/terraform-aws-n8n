@@ -199,6 +199,6 @@ variable "customer_managed_redis_auth_token" {
   # the apply fails on the one resource the example exists to demonstrate.
   validation {
     condition     = can(regex("^[A-Za-z0-9!&#$^<>-]+$", var.customer_managed_redis_auth_token))
-    error_message = "customer_managed_redis_auth_token must contain only alphanumerics and the characters ! & # $ ^ < > - , the ElastiCache AUTH token character set. Common choices such as _ @ + / % = are rejected by AWS at create time. https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth.html"
+    error_message = "customer_managed_redis_auth_token must contain only alphanumerics and the characters ! & # $ ^ < > - (the ElastiCache AUTH token character set). Common choices such as _ @ + / % = are rejected by AWS at create time. https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth.html"
   }
 }

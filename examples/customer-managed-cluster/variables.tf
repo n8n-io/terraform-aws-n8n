@@ -197,7 +197,7 @@ variable "customer_managed_node_instance_type" {
   # these, a typo or an out-of-bounds desired/min/max combination is only
   # rejected by AWS, on the first apply, after the cluster is already up.
   validation {
-    condition     = can(regex("^[a-z][a-z0-9]*\\.[a-z0-9]+$", var.customer_managed_node_instance_type))
+    condition     = can(regex("^[a-z][a-z0-9-]*\\.[a-z0-9-]+$", var.customer_managed_node_instance_type))
     error_message = "customer_managed_node_instance_type must be a valid EC2 instance type (e.g. t3.xlarge, m5.large)."
   }
 }

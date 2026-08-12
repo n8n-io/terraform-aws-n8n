@@ -71,7 +71,7 @@
 # module-managed cluster resource) is already covered by 400+ run blocks in
 # the repo root's tests/defaults.tftest.hcl, tested directly rather than
 # through an example wrapper, where this nested-module mocking limitation does
-# not apply. This example's own contribution beyond the one run block below is
+# not apply. This example's own contribution beyond the run blocks below is
 # a realistic, tested-by-hand reference configuration: terraform validate,
 # terraform fmt, and tflint all pass against it, and terraform plan/apply
 # against real AWS credentials is the way to exercise it end to end.

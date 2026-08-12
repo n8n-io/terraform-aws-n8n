@@ -265,15 +265,19 @@ instinct that was, for a long stretch of this repo's history, wrong.
 
 #### The floor is `>= 1.11`
 
-Declared in every `versions.tf` (root, `modules/controllers`, all ten
-examples) and matched by CI's single `TF_VERSION` pin. It moved up from
+Declared as `required_version = ">= 1.11"` everywhere: root, `modules/controllers`,
+and all ten examples, though not all in a `versions.tf` — eight examples have
+one, but `cloudflare` and `godaddy` declare it inline in `providers.tf`
+instead. Matched by CI's single `TF_VERSION` pin either way. It moved up from
 `>= 1.9` because `override_resource`'s `override_during` attribute, which
-`examples/customer-managed-redis`, `-s3` and `-cluster` need to assert a
-plan-time value on a resource the same configuration creates, arrived in 1.11
+`examples/customer-managed-redis` and `-s3` need to assert a plan-time value
+on a resource the same configuration creates, arrived in 1.11
 (hashicorp/terraform#36227) and is silently ignored before it. A silently
 ignored override does not error; it turns the documented `terraform test`
 command into a confusing assertion failure, which is the worst way to learn
-about a version constraint.
+about a version constraint. `-cluster` tried the same technique for an
+unrelated problem and it didn't work there; its floor is inherited from the
+module's, not from `override_during` (see its own `versions.tf`).
 
 Keep all twelve declarations and the CI pin in step when bumping. A floor the
 CI does not exercise is a claim nobody is checking.

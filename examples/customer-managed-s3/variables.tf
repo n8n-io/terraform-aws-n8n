@@ -23,9 +23,17 @@ variable "cluster_name" {
   # "N8N-Cluster" or "prod_cluster" passes here and then fails deep inside
   # module "n8n" with an "existing_s3_bucket_name must be a valid S3 bucket
   # name" error that names an input this example's caller never set.
+  #
+  # Dots are rejected outright rather than allowed alongside hyphens: S3
+  # forbids consecutive periods in a bucket name ("my..cluster" would still
+  # reach that same deep module error this validation exists to prevent),
+  # and cluster_name separately feeds the ElastiCache ID `<cluster_name>-redis`
+  # (see the description above), which forbids dots entirely. No dots
+  # satisfies both namers in one rule instead of chasing S3's narrower
+  # consecutive-dot exception.
   validation {
-    condition     = can(regex("^[a-z0-9][a-z0-9.-]*[a-z0-9]$", var.cluster_name)) || can(regex("^[a-z0-9]$", var.cluster_name))
-    error_message = "cluster_name must be lowercase alphanumerics, dots and hyphens, starting and ending with an alphanumeric (e.g. \"n8n-cluster\"). This example builds its stand-in S3 bucket name from it, and S3 bucket names accept nothing else."
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", var.cluster_name))
+    error_message = "cluster_name must be lowercase alphanumerics and hyphens only, starting and ending with an alphanumeric (e.g. \"n8n-cluster\"). This example builds its stand-in S3 bucket name and ElastiCache replication group ID from it, and dots are rejected outright: S3 forbids consecutive dots and ElastiCache forbids dots entirely."
   }
 }
 

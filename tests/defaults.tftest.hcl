@@ -1489,7 +1489,7 @@ run "db_logs_kms_key_arn_is_ignored_without_the_toggle" {
   # computed and therefore unknown at plan time under the mock provider, the same
   # limitation as db_kms_key_arn_defaults_to_module_managed_cmk above.
 
-  expect_failures = [check.db_logs_kms_key_arn_requires_db_kms_key_arn]
+  expect_failures = [check.db_logs_kms_key_arn_requires_db_logs_kms_key_enabled]
 }
 
 # ── The KMS toggles' own validations ──────────────────────────────────────────
@@ -1645,6 +1645,16 @@ run "db_logs_kms_key_arn_validator_rejects_alias_arn" {
   command = plan
 
   variables {
+    # create_db_kms_key = false is required alongside db_logs_kms_key_enabled
+    # = true, else db_logs_kms_key_enabled's own second validation
+    # (db_logs_kms_key_enabled = true requires create_db_kms_key = false)
+    # fails too, at create_db_kms_key's true default, and this run would then
+    # have an unexpected failure beyond the alias-ARN one under test. Setting
+    # create_db_kms_key = false in turn requires db_kms_key_arn (create_database
+    # and db_storage_encrypted are both still at their true defaults here), so
+    # a valid key ARN is supplied to keep that validation from firing too.
+    create_db_kms_key       = false
+    db_kms_key_arn          = "arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
     db_logs_kms_key_enabled = true
     db_logs_kms_key_arn     = "arn:aws:kms:us-east-1:123456789012:alias/my-key"
   }

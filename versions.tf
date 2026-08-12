@@ -10,11 +10,15 @@ terraform {
   #          var.route53_zone_id's validation referencing var.certificate_arn.
   #          Used throughout variables.tf.
   #   1.11: override_resource's override_during attribute, which
-  #          examples/customer-managed-redis, -s3 and -cluster need to assert a
+  #          examples/customer-managed-redis and -s3 need to assert a
   #          plan-time value on a resource the same configuration creates.
   #          Silently ignored before 1.11 rather than rejected, so a caller
   #          below this floor gets a confusing assertion failure from
   #          `terraform test` instead of a version error.
+  #          examples/customer-managed-cluster tried the same technique for a
+  #          different problem (see its own versions.tf) and it did not work
+  #          there; that example's floor is inherited from the module's,
+  #          not from override_during.
   #
   # 1.10 is also load-bearing in passing: it added short-circuit evaluation of
   # && and ||, which this module's `check` blocks used to have to work around

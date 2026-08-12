@@ -170,3 +170,23 @@ run "customer_managed_node_desired_rejects_above_max" {
 
   expect_failures = [var.customer_managed_node_desired]
 }
+
+run "customer_managed_node_max_rejects_below_min" {
+  command = plan
+
+  variables {
+    customer_managed_node_min = 5
+    customer_managed_node_max = 3
+  }
+
+  # customer_managed_node_desired's own validation cross-checks against min
+  # and max too, and desired's default (3) does not satisfy min <= desired <=
+  # max once max < min either. Confirmed by direct experimentation, not
+  # assumed, that this does NOT also surface as a second failure here: with
+  # node_max's own validation already invalid, Terraform reports only that
+  # one error for this variable group and does not go on to evaluate
+  # node_desired's, unlike customer_managed_node_min_rejects_zero below, whose
+  # explicit desired = 0 keeps desired's own check satisfied rather than
+  # relying on this same short-circuit.
+  expect_failures = [var.customer_managed_node_max]
+}

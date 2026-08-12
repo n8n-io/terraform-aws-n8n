@@ -150,8 +150,12 @@ variable "lbc_chart_repository" {
   nullable    = false
 
   validation {
-    condition     = can(regex("^(https?|oci)://", var.lbc_chart_repository))
-    error_message = "lbc_chart_repository must be an https:// or oci:// URL."
+    # Mirrors the root module's own lbc_chart_repository validation
+    # (variables.tf): anchored, requires a host, and rejects whitespace,
+    # rather than this submodule's own looser (https?|oci)://, which also
+    # accepted plain http:// and a bare scheme with no host.
+    condition     = can(regex("^(https://|oci://)[A-Za-z0-9._~-]+(:[0-9]+)?(/[^[:space:]]*)?$", var.lbc_chart_repository))
+    error_message = "lbc_chart_repository must be a URL starting with https:// or oci://, with a host and no whitespace."
   }
 }
 
@@ -174,8 +178,10 @@ variable "cluster_autoscaler_chart_repository" {
   nullable    = false
 
   validation {
-    condition     = can(regex("^(https?|oci)://", var.cluster_autoscaler_chart_repository))
-    error_message = "cluster_autoscaler_chart_repository must be an https:// or oci:// URL."
+    # Mirrors the root module's own cluster_autoscaler_chart_repository
+    # validation; see lbc_chart_repository above for why.
+    condition     = can(regex("^(https://|oci://)[A-Za-z0-9._~-]+(:[0-9]+)?(/[^[:space:]]*)?$", var.cluster_autoscaler_chart_repository))
+    error_message = "cluster_autoscaler_chart_repository must be a URL starting with https:// or oci://, with a host and no whitespace."
   }
 }
 
@@ -198,8 +204,10 @@ variable "metrics_server_chart_repository" {
   nullable    = false
 
   validation {
-    condition     = can(regex("^(https?|oci)://", var.metrics_server_chart_repository))
-    error_message = "metrics_server_chart_repository must be an https:// or oci:// URL."
+    # Mirrors the root module's own metrics_server_chart_repository
+    # validation; see lbc_chart_repository above for why.
+    condition     = can(regex("^(https://|oci://)[A-Za-z0-9._~-]+(:[0-9]+)?(/[^[:space:]]*)?$", var.metrics_server_chart_repository))
+    error_message = "metrics_server_chart_repository must be a URL starting with https:// or oci://, with a host and no whitespace."
   }
 }
 
@@ -222,8 +230,10 @@ variable "keda_chart_repository" {
   nullable    = false
 
   validation {
-    condition     = can(regex("^(https?|oci)://", var.keda_chart_repository))
-    error_message = "keda_chart_repository must be an https:// or oci:// URL."
+    # Mirrors the root module's own keda_chart_repository validation; see
+    # lbc_chart_repository above for why.
+    condition     = can(regex("^(https://|oci://)[A-Za-z0-9._~-]+(:[0-9]+)?(/[^[:space:]]*)?$", var.keda_chart_repository))
+    error_message = "keda_chart_repository must be a URL starting with https:// or oci://, with a host and no whitespace."
   }
 }
 

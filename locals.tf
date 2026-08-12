@@ -386,11 +386,13 @@ locals {
   # s3_kms_encryption_enabled, since that toggle only governs a bucket
   # encryption configuration this module never creates there, and an explicit
   # ARN is the only way the pod role can be granted key access to a bucket
-  # this module does not create. On the module-managed path s3_kms_key_arn
-  # overrides the CMK the module would otherwise create for itself
-  # (aws_kms_key.s3) while s3_kms_encryption_enabled is true, and resolves to
-  # null when that toggle is false, so the IAM grant never names a key that
-  # is not actually the bucket's default encryption key.
+  # this module does not create. On the module-managed path, which key
+  # protects the bucket is create_s3_kms_key's call, not s3_kms_key_arn's:
+  # true means the module's own CMK (aws_kms_key.s3), false means the
+  # caller's s3_kms_key_arn is the one actually in use. Either way this
+  # resolves to null when s3_kms_encryption_enabled is false, so the IAM
+  # grant never names a key that is not actually the bucket's default
+  # encryption key.
   s3_kms_key_arn = (
     !var.create_s3_bucket ? var.s3_kms_key_arn :
     var.s3_kms_encryption_enabled ? (var.create_s3_kms_key ? try(aws_kms_key.s3[0].arn, null) : var.s3_kms_key_arn) : null

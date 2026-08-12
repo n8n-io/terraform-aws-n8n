@@ -189,7 +189,7 @@ variable "customer_managed_node_instance_type" {
   # feed aws_eks_node_group.customer_managed directly rather than going through
   # module "n8n", so nothing else in this configuration checks them.
   validation {
-    condition     = can(regex("^[a-z][a-z0-9]*\\.[a-z0-9]+$", var.customer_managed_node_instance_type))
+    condition     = can(regex("^[a-z][a-z0-9-]*\\.[a-z0-9-]+$", var.customer_managed_node_instance_type))
     error_message = "customer_managed_node_instance_type must be a valid EC2 instance type (e.g. t3.xlarge, m5.large)."
   }
 }
@@ -305,7 +305,7 @@ variable "customer_managed_redis_auth_token" {
   # the apply fails on the one resource the example exists to demonstrate.
   validation {
     condition     = can(regex("^[A-Za-z0-9!&#$^<>-]+$", var.customer_managed_redis_auth_token))
-    error_message = "customer_managed_redis_auth_token must contain only alphanumerics and the characters ! & # $ ^ < > - , the ElastiCache AUTH token character set. Common choices such as _ @ + / % = are rejected by AWS at create time. https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth.html"
+    error_message = "customer_managed_redis_auth_token must contain only alphanumerics and the characters ! & # $ ^ < > - (the ElastiCache AUTH token character set). Common choices such as _ @ + / % = are rejected by AWS at create time. https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth.html"
   }
 }
 

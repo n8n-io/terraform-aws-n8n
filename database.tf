@@ -571,7 +571,7 @@ check "db_kms_key_arn_requires_module_managed_encrypted_database" {
   }
 }
 
-check "db_logs_kms_key_arn_requires_db_kms_key_arn" {
+check "db_logs_kms_key_arn_requires_db_logs_kms_key_enabled" {
   assert {
     condition = var.db_logs_kms_key_arn != null ? (
       var.db_logs_kms_key_enabled && var.create_database && var.db_storage_encrypted

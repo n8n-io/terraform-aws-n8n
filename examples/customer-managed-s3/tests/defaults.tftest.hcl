@@ -82,6 +82,16 @@ run "cluster_name_length_validation_rejects_long_names" {
   expect_failures = [var.cluster_name]
 }
 
+run "cluster_name_rejects_dots" {
+  command = plan
+
+  variables {
+    cluster_name = "n8n.cluster"
+  }
+
+  expect_failures = [var.cluster_name]
+}
+
 run "n8n_image_tag_defaults_to_null" {
   command = plan
 
