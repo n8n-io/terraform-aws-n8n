@@ -234,6 +234,20 @@ this project adheres to the stability contract in
 
 ### Fixed
 
+- **`examples/customer-managed-cluster` tagged its subnets for the wrong
+  cluster name, so the Ingress apply timed out waiting for an ALB.** The
+  example's VPC tagged subnets `kubernetes.io/cluster/<cluster_name>=shared`
+  while the stand-in cluster it creates is named `<cluster_name>-cm`. The AWS
+  Load Balancer Controller auto-discovers subnets by the cluster's real name
+  and treats a subnet tagged for any other name as ineligible ("2 are tagged
+  for other clusters"), so no ALB was ever provisioned and
+  `kubernetes_ingress_v1.n8n`'s `wait_for_load_balancer` failed the apply.
+  Found on a live deployment of the example; the mocked test suite cannot see
+  LBC's server-side discovery. Fixed the same way
+  `examples/customer-managed-everything` already handles it: a
+  `customer_managed_cluster_name` local is now the single source for the
+  cluster's name and both subnet tag keys, so the two cannot drift apart.
+
 - **State migration for every newly `count`-gated resource.** `create_eks`,
   `create_s3_bucket`, `create_ebs_csi`, `n8n_encryption_key_secret_ref` and
   `db_password_secret_ref` each put a `count` on resources that were

@@ -6,6 +6,19 @@ locals {
     },
     var.tags,
   )
+
+  # Matches aws_eks_cluster.customer_managed's own name below exactly. Needed
+  # here, ahead of that resource, for the VPC's subnet tags: the AWS Load
+  # Balancer Controller installed by the module auto-discovers subnets by
+  # kubernetes.io/cluster/<the cluster's real name>, and the actual cluster is
+  # named "${var.cluster_name}-cm", not var.cluster_name. Tagged with the
+  # wrong name, LBC's discovery rejects every subnet as "tagged for other
+  # clusters" and the Ingress apply times out waiting for an ALB that never
+  # comes -- confirmed live. A literal string formula, not a reference to the
+  # resource itself, because the resource's own subnet_ids come from this VPC:
+  # referencing aws_eks_cluster.customer_managed.name here would be a cycle.
+  # Same pattern and same reasoning as examples/customer-managed-everything.
+  customer_managed_cluster_name = "${var.cluster_name}-cm"
 }
 
 # ── VPC ───────────────────────────────────────────────────────────────────────
@@ -35,13 +48,13 @@ module "vpc" {
   enable_dns_support   = true
 
   public_subnet_tags = {
-    "kubernetes.io/role/elb"                    = "1"
-    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/role/elb"                                       = "1"
+    "kubernetes.io/cluster/${local.customer_managed_cluster_name}" = "shared"
   }
 
   private_subnet_tags = {
-    "kubernetes.io/role/internal-elb"           = "1"
-    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/role/internal-elb"                              = "1"
+    "kubernetes.io/cluster/${local.customer_managed_cluster_name}" = "shared"
   }
 
   tags = local.common_tags
@@ -121,7 +134,7 @@ resource "aws_eks_cluster" "customer_managed" {
   # checkov:skip=CKV_AWS_38:Unrestricted public endpoint access matches this stand-in's minimum-viable posture, the same default this module's own aws_eks_cluster.n8n (eks.tf) ships with for zero-friction kubectl access. A real customer-managed cluster's actual posture is whatever its owning platform team already chose; this section models the least-configured plausible case, not a hardening recommendation.
   # checkov:skip=CKV_AWS_39:Same rationale as CKV_AWS_38 above.
   # checkov:skip=CKV_AWS_58:Secrets encryption is intentionally left off this minimal stand-in: adding it means a KMS key this section would then also have to own and document, which is exactly the complexity a "pre-existing cluster" section should not be modeling. A real customer-managed cluster's actual encryption posture is the platform team's decision, not this example's.
-  name     = "${var.cluster_name}-cm"
+  name     = local.customer_managed_cluster_name
   role_arn = aws_iam_role.customer_managed_cluster.arn
   version  = var.kubernetes_version
 
