@@ -49,6 +49,19 @@ A **topology-variant example** at `small` sizing,
 internet-facing ALB serving only the webhook path prefixes (optionally behind a
 WAF) and an internal ALB serving the editor UI and REST API.
 
+Four **customer-managed examples**, also at `small` sizing, cover the
+`create_<x> = false` paths described in
+[`docs/customer-managed-infrastructure.md`](./docs/customer-managed-infrastructure.md).
+[`examples/customer-managed-redis/`](./examples/customer-managed-redis/),
+[`examples/customer-managed-s3/`](./examples/customer-managed-s3/) and
+[`examples/customer-managed-cluster/`](./examples/customer-managed-cluster/)
+each stand up a plain-Terraform stand-in for one piece of infrastructure a
+customer would already run and point the module at it.
+[`examples/customer-managed-everything/`](./examples/customer-managed-everything/)
+combines all three and additionally invokes `modules/controllers` directly,
+which makes it the only root module in the repo that exercises that
+submodule's input contract, so it is the one that catches a change to it.
+
 ### Architecture at a glance
 
 ```text
@@ -83,6 +96,10 @@ expected by the Terraform Registry:
 | `examples/cloudflare/`            | DNS-variant of `small` using Cloudflare DNS, including the VPC. |
 | `examples/godaddy/`               | DNS-variant of `small` using GoDaddy DNS, including the VPC.    |
 | `examples/split-ingress/`         | Topology-variant of `small`: `create_ingress = false` with a public webhook ALB and an internal admin ALB (Route 53, includes the VPC). |
+| `examples/customer-managed-redis/` | Customer-managed variant of `small`: a plain-Terraform ElastiCache replication group (AUTH + TLS) stands in for infrastructure the customer already runs, consumed via `create_elasticache = false`. |
+| `examples/customer-managed-s3/`   | Customer-managed variant of `small`: a plain-Terraform bucket with its own security configuration, consumed via `create_s3_bucket = false`. |
+| `examples/customer-managed-cluster/` | Customer-managed variant of `small`: a plain-Terraform EKS cluster and node group, consumed via `create_eks = false` + `existing_eks_cluster_name`. |
+| `examples/customer-managed-everything/` | All of the above at once, plus a **direct `modules/controllers` invocation**: every layer the module can create is customer-managed. The only root module that exercises the controllers submodule's input contract directly. |
 | `tests/*.tftest.hcl`              | `terraform test` plan-time tests with mocked providers.     |
 | `tests/scripts/smoke-test.sh`     | Post-`apply` smoke test for live deployments.               |
 | `tests/scripts/verify-custom-image.sh` | Post-`apply` check for baked-in community nodes (`n8n_image_repository` + `n8n_custom_extensions_path`). |
@@ -119,8 +136,10 @@ Concretely, in this repo:
 - **`terraform fmt -check -recursive`** — canonical formatting.
 - **`terraform validate`** against the module root *and* every example
   (`examples/small/`, `examples/medium/`, `examples/large/`,
-  `examples/cloudflare/`, `examples/godaddy/`, `examples/split-ingress/`) via
-  the CI matrix.
+  `examples/cloudflare/`, `examples/godaddy/`, `examples/split-ingress/`,
+  `examples/customer-managed-redis/`, `examples/customer-managed-s3/`,
+  `examples/customer-managed-cluster/`,
+  `examples/customer-managed-everything/`) via the CI matrix.
 - **`tflint`** against the module root and every example, with the AWS
   ruleset initialized via `tflint --init`.
 - **`checkov`** against the Terraform framework, at the version pinned in
@@ -307,18 +326,25 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
   | `EKS cluster` | Control-plane properties the module owns: API server endpoint access and Secrets encryption |
   | `Ingress` | ALB / ingress-controller settings |
   | `Nodes` | EKS managed node group sizing |
-  | `n8n chart` | Chart version, image tag, timeouts, logging |
+  | `Cluster controllers` | The `install_*` toggles for LBC, Cluster Autoscaler, metrics-server and KEDA |
+  | `Chart repositories` | The `*_chart_repository` overrides, one per chart the module installs |
+  | `Chart versions` | The `*_chart_version` pins, plus n8n image tag/repository/pull secrets, Helm timeout, timezone and logging |
   | `n8n resource requests and limits` | CPU/memory requests and limits, one set per pod role |
-  | `Execution settings` | Worker concurrency, execution timeouts, pruning |
-  | `S3` | Binary/execution-data bucket encryption |
+  | `Execution settings` | Worker concurrency, execution timeouts, pruning, execution-data storage mode |
   | `Graceful shutdown` | Termination grace period, prestop sleep |
   | `Task runners` | Task runner sizing and lifecycle |
-  | `RDS PostgreSQL` | Everything database-related |
-  | `ElastiCache Redis` | Redis node sizing |
+  | `RDS PostgreSQL` | Everything database-related, including `create_database` and the customer-managed `db_*` references |
+  | `ElastiCache Redis` | Redis sizing, HA/TLS/KMS topology, and the customer-managed `redis_*` references |
+  | `S3` | Bucket creation, the customer-managed `existing_s3_bucket_name` reference, and bucket encryption |
   | `HPA: main pods` / `HPA: webhook processor pods` | CPU-based autoscaling |
   | `Observability` | Metrics/telemetry toggles |
   | `Community packages` | Custom-node loading, OTEL export, log streaming, the `n8n_extra_env` escape hatch |
+  | `External Secrets` | External Secrets Operator integration |
   | `KEDA: worker pods` | Queue-depth autoscaling |
+
+  `scripts/check-variable-banners.sh` hardcodes this same list, in this same
+  order, and fails if `variables.tf` disagrees with it. Update the table and
+  the script together, or the check goes red on an untouched checkout.
 
   `outputs.tf` banners: `App DNS`, `Secrets`, `Infrastructure`.
 
@@ -382,14 +408,21 @@ terraform test -verbose                        # plan-time, no AWS creds needed
 tflint --init && tflint --format compact
 terraform-docs --output-check .                # README drift check
 
-# Repeat under each example. Mirrors the CI matrix so a green local run
-# means CI will be green too. Keep these in sync when adding examples.
-cd examples/small      && terraform init -backend=false && terraform validate && terraform test -verbose && tflint --init && tflint --format compact && terraform-docs --output-check .
-cd examples/medium     && terraform init -backend=false && terraform validate && terraform test -verbose && tflint --init && tflint --format compact && terraform-docs --output-check .
-cd examples/large      && terraform init -backend=false && terraform validate && terraform test -verbose && tflint --init && tflint --format compact && terraform-docs --output-check .
-cd examples/cloudflare && terraform init -backend=false && terraform validate && terraform test -verbose && tflint --init && tflint --format compact && terraform-docs --output-check .
-cd examples/godaddy    && terraform init -backend=false && terraform validate && terraform test -verbose && tflint --init && tflint --format compact && terraform-docs --output-check .
-cd examples/split-ingress && terraform init -backend=false && terraform validate && terraform test -verbose && tflint --init && tflint --format compact && terraform-docs --output-check .
+# Repeat under each example. This list mirrors the CI matrix (the `target:`
+# lists in .github/workflows/terraform-tests.yml) and Taskfile.yml's EXAMPLES
+# var, so a green local run means CI will be green too. Keep all three in sync
+# when adding an example: one that no local wrapper visits is one nobody
+# validates before pushing.
+for ex in small medium large cloudflare godaddy split-ingress \
+          customer-managed-redis customer-managed-s3 \
+          customer-managed-cluster customer-managed-everything; do
+  ( cd "examples/$ex" \
+      && terraform init -backend=false \
+      && terraform validate \
+      && terraform test -verbose \
+      && tflint --init && tflint --format compact \
+      && terraform-docs --output-check . ) || echo "FAILED: $ex"
+done
 ```
 
 A real deployment uses `terraform apply` from `examples/small/` with a
