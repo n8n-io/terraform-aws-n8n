@@ -93,6 +93,7 @@ Unlike [`customer-managed-redis`](../customer-managed-redis/) and [`customer-man
 
 | Name | Type |
 | ---- | ---- |
+| [aws_cloudwatch_log_group.customer_managed_cluster](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
 | [aws_eks_addon.customer_managed_pod_identity](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_addon) | resource |
 | [aws_eks_cluster.customer_managed](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_cluster) | resource |
 | [aws_eks_node_group.customer_managed](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_node_group) | resource |

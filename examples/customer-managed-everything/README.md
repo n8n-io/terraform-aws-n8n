@@ -102,6 +102,7 @@ Same structural limitation as [`examples/customer-managed-cluster`](../customer-
 
 | Name | Type |
 | ---- | ---- |
+| [aws_cloudwatch_log_group.customer_managed_cluster](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
 | [aws_db_instance.customer_managed](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance) | resource |
 | [aws_db_subnet_group.customer_managed](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_subnet_group) | resource |
 | [aws_eks_addon.customer_managed_pod_identity](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_addon) | resource |

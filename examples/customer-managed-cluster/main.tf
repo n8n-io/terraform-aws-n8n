@@ -155,7 +155,26 @@ resource "aws_eks_cluster" "customer_managed" {
 
   tags = local.common_tags
 
-  depends_on = [aws_iam_role_policy_attachment.customer_managed_cluster_policy]
+  depends_on = [
+    aws_iam_role_policy_attachment.customer_managed_cluster_policy,
+    aws_cloudwatch_log_group.customer_managed_cluster,
+  ]
+}
+
+# Created explicitly so the stand-in owns retention, mirroring the module's
+# own aws_cloudwatch_log_group.eks_cluster (eks.tf): with
+# enabled_cluster_log_types set above and no log group resource, EKS
+# auto-creates /aws/eks/<name>/cluster with "Never expire" retention, and
+# terraform destroy then orphans it, confirmed live on a destroy of this
+# example. The module itself deliberately does not manage this group on the
+# create_eks = false path (an existing cluster's log group belongs to whoever
+# manages the cluster), and in this example that is this file.
+resource "aws_cloudwatch_log_group" "customer_managed_cluster" {
+  # checkov:skip=CKV_AWS_158:The stand-in models a customer's pre-existing estate on CloudWatch's default AWS-managed encryption. This resource exists to own retention and prevent an orphaned Never-expire log group on destroy, not to model a KMS posture; the module's own log groups (eks.tf, database.tf) do carry a CMK.
+  name              = "/aws/eks/${local.customer_managed_cluster_name}/cluster"
+  retention_in_days = 365
+
+  tags = local.common_tags
 }
 
 resource "aws_eks_node_group" "customer_managed" {

@@ -260,6 +260,17 @@ this project adheres to the stability contract in
   `customer_managed_cluster_name` local is now the single source for the
   cluster's name and both subnet tag keys, so the two cannot drift apart.
 
+- **The stand-in clusters in `examples/customer-managed-cluster` and
+  `examples/customer-managed-everything` no longer orphan a Never-expire
+  control-plane log group on destroy.** Both enable all five
+  `enabled_cluster_log_types` but owned no log group, so EKS auto-created
+  `/aws/eks/<name>-cm/cluster` with "Never expire" retention outside
+  Terraform, and `terraform destroy` left it behind, confirmed live on a
+  destroy of `customer-managed-cluster`. Each example now creates the log
+  group explicitly (365-day retention, `depends_on` from the cluster so EKS
+  cannot race it into existence first), mirroring the module's own
+  `aws_cloudwatch_log_group.eks_cluster` pattern.
+
 - **State migration for every newly `count`-gated resource.** `create_eks`,
   `create_s3_bucket`, `create_ebs_csi`, `n8n_encryption_key_secret_ref` and
   `db_password_secret_ref` each put a `count` on resources that were
