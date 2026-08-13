@@ -5,7 +5,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to the stability contract in
 [README.md → Stability & versioning](./README.md#stability--versioning).
 
-## [Unreleased]
+## [0.3.0] - 2026-08-13
+
+Minor release per the [stability contract](./README.md#stability--versioning):
+the Terraform CLI floor raised to `>= 1.11` (see **Fixed**, below) is breaking
+for callers on an older CLI, and this range also refactors several resource
+addresses (absorbed by `moved` blocks, but a minor-boundary change under the
+contract regardless). Existing deployments upgrade with a no-op or in-place
+plan throughout, since every address change carries its own `moved` block and
+default changes that affect provisioning (e.g. `db_engine_version`) are
+guarded by `lifecycle.ignore_changes` on the resources that would otherwise
+drift. Pin this module to `~> 0.2.0` to stay on the previous floor and
+defaults, or retype your constraint to `~> 0.3.0` and read the upgrade notes
+under **Changed** and **Fixed**.
 
 ### Added
 
@@ -2047,6 +2059,37 @@ this project adheres to the stability contract in
   state, which defeats the reason this input exists. A typo surfaces only as a
   pod stuck in `CreateContainerConfigError`, not as a Terraform error.
 
+### Compatibility
+
+- **AWS provider:** `~> 6.0`.
+- **Helm provider:** `~> 3.0`.
+- **Kubernetes provider:** `~> 2.0`.
+- **Terraform CLI:** `>= 1.11` (raised from `>= 1.9`; see upgrade note under
+  **Fixed**).
+- **n8n Helm chart:** default `1.10.0`. Other chart versions can be selected
+  via `n8n_chart_version`.
+- **Kubernetes:** validated on EKS `1.35`.
+- **PostgreSQL:** validated on RDS `18.4` (raised from `16.9`; see upgrade
+  note under **Changed**).
+
+### Known limitations
+
+- On `create_eks = false` + `create_ingress = true`, `install_lbc = false` is
+  hard-rejected with no exception for an existing cluster that already runs a
+  healthy Load Balancer Controller. Documented as a known limitation rather
+  than fixed in this release; see
+  [`docs/customer-managed-infrastructure.md`](./docs/customer-managed-infrastructure.md).
+- Nodes loaded via `n8n_custom_extensions_path` register as `CUSTOM.<node>`
+  rather than `<npm-package>.<node>`, so workflows built against a
+  UI-installed copy of the same community package will not resolve. Suits new
+  deployments rather than migrating one that already uses community nodes.
+- `examples/customer-managed-cluster` and `examples/customer-managed-everything`
+  have no full-plan `terraform test` coverage: `data.aws_eks_cluster.existing`
+  cannot resolve to a known value under mocked providers once nested inside an
+  example's own `module "n8n"` call.
+- See [README.md → Out of scope](./README.md#out-of-scope) for what this
+  release explicitly does not cover.
+
 ## [0.2.0] - 2026-07-15
 
 Minor release per the [stability contract](./README.md#stability--versioning):
@@ -2227,6 +2270,7 @@ Initial release on the Terraform Registry as `n8n-io/n8n/aws`.
   block CI. Curated suppressions and a flip to hard-fail are tracked
   for v0.2.0.
 
-[Unreleased]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/n8n-io/terraform-aws-n8n/releases/tag/0.1.0

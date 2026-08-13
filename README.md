@@ -66,7 +66,7 @@ Set exactly one of:
 ```hcl
 module "n8n" {
   source  = "n8n-io/n8n/aws"
-  version = "~> 0.2.0"
+  version = "~> 0.3.0"
 
   aws_region      = "us-east-1"
   cluster_name    = "n8n-cluster"
@@ -119,12 +119,12 @@ bug-fix changes.
 | `0.MINOR.PATCH` → `0.MINOR.PATCH+1` | Bug fixes, new optional inputs, new outputs, new resources whose absence wouldn't affect existing callers. No removed or renamed inputs/outputs. No changed defaults that move infra. No changed resource addresses. |
 | `0.MINOR` → `0.MINOR+1` | Anything else, including removed inputs, renamed inputs, default changes that force resource replacement, refactored resource addresses, and bumped provider version floors. Each such change is called out in [`CHANGELOG.md`](./CHANGELOG.md) with an upgrade note. |
 
-Pin with `version = "~> 0.2.0"` to auto-receive 0.2.x patches without
-accidentally crossing a 0.2 → 0.3 boundary. Note the three-component
-constraint: `~> 0.2.0` resolves to `>= 0.2.0, < 0.3.0`, whereas the
-two-component `~> 0.2` would resolve to `>= 0.2, < 1.0` and let you cross
+Pin with `version = "~> 0.3.0"` to auto-receive 0.3.x patches without
+accidentally crossing a 0.3 → 0.4 boundary. Note the three-component
+constraint: `~> 0.3.0` resolves to `>= 0.3.0, < 0.4.0`, whereas the
+two-component `~> 0.3` would resolve to `>= 0.3, < 1.0` and let you cross
 minor boundaries unintentionally. To upgrade across minor lines, retype
-the constraint (e.g. `version = "~> 0.3.0"`) and read the release notes.
+the constraint (e.g. `version = "~> 0.4.0"`) and read the release notes.
 
 This contract goes away at 1.0.0 in favor of standard SemVer.
 
@@ -154,7 +154,7 @@ See [docs/upgrading-n8n.md](docs/upgrading-n8n.md) for the procedure to safely b
 
 ## Out of scope
 
-v0.2.0 intentionally does not cover the following. Each item is
+v0.3.0 intentionally does not cover the following. Each item is
 documented here so that issues filed against them can be triaged
 quickly; several are candidates for future minor releases (see
 [`ROADMAP.md`](./ROADMAP.md)).
