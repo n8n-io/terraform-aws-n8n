@@ -15,6 +15,7 @@ flowchart TB
     PUB -->|"webhook prefixes<br/>no catch-all"| WH["n8n-webhook-processor"]
     INT -->|"webhook prefixes"| WH
     INT -->|"catch-all /"| MAIN["n8n-main<br/>editor UI / REST API"]
+    PUB -->|"/rest/projects<br/>agents callbacks"| MAIN
 
     WH --> REDIS["ElastiCache Redis<br/>queue + leader election"]
     MAIN --> REDIS
@@ -25,9 +26,12 @@ flowchart TB
     WORK --> EXT["External systems"]
 ```
 
-The public ALB has no catch-all, so anything outside the webhook prefixes gets
-a 404 from the ALB itself and the editor is simply not routable from the
-internet. The prefixes are listed in [Which paths go where](#which-paths-go-where).
+The public ALB has no catch-all, so anything outside the webhook prefixes and
+`/rest/projects` gets a 404 from the ALB itself and the editor is simply not
+routable from the internet. The prefixes are listed in
+[Which paths go where](#which-paths-go-where), and `/rest/projects` — the one
+main-pod path on the public ALB — is explained in
+[Why the public ALB also routes /rest/projects](#why-the-public-alb-also-routes-restprojects).
 `n8n-main` and `n8n-webhook-processor` also talk to PostgreSQL; those edges are
 left off to keep the request path readable.
 
@@ -84,11 +88,24 @@ Both ALBs route the prefixes n8n disables on the main pods, read from `module.n8
 | | Public ALB | Internal ALB |
 | --- | --- | --- |
 | Webhook prefixes | webhook processors | webhook processors |
+| `/rest/projects` | main pods ([why](#why-the-public-alb-also-routes-restprojects)) | main pods (via the catch-all) |
 | Everything else | **404, no catch-all** | main pods (editor UI, REST API) |
 
 There is deliberately **no catch-all rule on the public ALB**. Anything else gets the ALB's default fixed-response 404 and never reaches the editor. A test asserts this, because adding a helpful-looking `/` rule later would quietly undo the entire example.
 
 The internal ALB needs the webhook prefixes for a less obvious reason. Without them its catch-all hands `/webhook` to the main pods, which run with production webhooks disabled, so the request falls through to the editor's SPA handler and returns **200 with an HTML body**. An internal system delivering a webhook would read that as success while nothing executed. This was found by testing the live deployment, not by reading the config.
+
+## Why the public ALB also routes /rest/projects
+
+n8n's Agents chat integrations build the Slack app-install URL and the platform event callbacks by appending `/rest/projects/<id>/agents/...` onto `getWebhookBaseUrl()` — which is `WEBHOOK_URL`, which is the webhook hostname. Those are main-pod routes: the webhook processors register no `/rest` handlers at all. Without the rule, connecting a Slack agent returns **404 at the end of the OAuth flow**, after the admin has already granted consent, and nothing in n8n logs it.
+
+This is upstream n8n's construction, not a module or chart setting, so no amount of configuration moves it: the path has to be routed on the webhook hostname for those flows to complete. It also has to be reachable from the **internet**, not just from inside the VPC, because the platform event webhooks are server-to-server POSTs from Slack and Telegram.
+
+It is scoped to `/rest/projects` rather than all of `/rest`, because that is the whole surface those constructions use. `/rest/login`, `/rest/credentials` and the rest of the authenticated REST API stay off the public hostname, which is what the missing catch-all is for. It is a literal prefix, so it needs no regex and no ALB-specific annotation.
+
+If you do not use Agents chat integrations, delete the `/rest/projects` block in `ingress.tf` and the public surface goes back to webhooks only.
+
+The **OAuth2 credential callback is a different flow** and is unaffected either way. That one is built from `N8N_EDITOR_BASE_URL`, which the module now sets to `https://<n8n_domain>`, so it lands on the internal ALB and only needs to be reachable by the admin's browser — register `https://<n8n_domain>/rest/oauth2-credential/callback` with your OAuth provider. Before that variable was set, n8n fell back to `WEBHOOK_URL` and advertised the callback on the webhook hostname, where it 404s twice over: the public ALB routes only the webhook prefixes, and the webhook processors serve no `/rest` routes even when reached. Webhook delivery keeps working the whole time, which is what makes it hard to find (n8n-io/terraform-aws-n8n#92).
 
 ## Hardening
 
@@ -109,6 +126,14 @@ curl --max-time 10 -o /dev/null -w '%{http_code}\n' https://n8n.example.com/
 
 # From inside the VPC / on the VPN, it should return 200
 curl -o /dev/null -w '%{http_code}\n' https://n8n.example.com/
+
+# The agents callback prefix is routed publicly. n8n answers a Slack URL
+# verification handshake by echoing the challenge back, so this checks the
+# routing without installing a Slack app. Anything else, above all the ALB's
+# own 404 page, means /rest/projects is not reaching the main pods.
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"type":"url_verification","challenge":"probe456"}' \
+  https://hooks.n8n.example.com/rest/projects/x/agents/v2/y/webhooks/slack
 
 # Both ALBs and their schemes
 kubectl get ingress -n n8n

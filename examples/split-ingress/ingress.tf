@@ -19,11 +19,15 @@ locals {
   }
 }
 
-# ── Public ALB: webhooks only ─────────────────────────────────────────────────
-# Routes exactly the prefixes n8n disables on the main pods, taken from the
-# module output rather than hardcoded so this example cannot drift as n8n adds
-# endpoints. There is deliberately no catch-all rule: a request to any other
-# path gets the ALB's default 404 and never reaches the editor UI.
+# ── Public ALB: webhooks, plus the agents callback prefix ─────────────────────
+# Routes the prefixes n8n disables on the main pods, taken from the module
+# output rather than hardcoded so this example cannot drift as n8n adds
+# endpoints, plus /rest/projects, which goes to the mains instead. There is
+# deliberately no catch-all rule: a request to any other path gets the ALB's
+# default 404 and never reaches the editor UI.
+#
+# /rest/projects is on this hostname for a reason that is not obvious. See the
+# note on the rule itself.
 
 resource "kubernetes_ingress_v1" "webhook_public" {
   metadata {
@@ -65,6 +69,47 @@ resource "kubernetes_ingress_v1" "webhook_public" {
                 name = module.n8n.n8n_webhook_service_name
                 port { number = module.n8n.n8n_service_port }
               }
+            }
+          }
+        }
+
+        # Agents chat integrations, and the reason this hostname serves
+        # anything that is not a webhook. n8n builds the Slack app-install URL
+        # and the platform event callbacks by appending
+        # /rest/projects/<id>/agents/... onto getWebhookBaseUrl(), which is
+        # WEBHOOK_URL, which is this hostname. Those are main-pod routes: the
+        # webhook processors register no /rest handlers at all. Without this
+        # rule, connecting a Slack agent 404s at the end of the OAuth flow,
+        # after the admin has already granted consent, and nothing in n8n logs
+        # it.
+        #
+        # This is upstream n8n's construction, not a module or chart setting,
+        # so N8N_EDITOR_BASE_URL does not move it: the path has to be routed
+        # here for those OAuth flows to complete at all. It also has to be
+        # reachable from the internet rather than only in-VPC, because the
+        # platform event webhooks are server-to-server POSTs from Slack and
+        # Telegram.
+        #
+        # Scoped to /rest/projects rather than all of /rest, because that is
+        # the whole surface those constructions use. /rest/login,
+        # /rest/credentials and the rest of the authenticated REST API stay off
+        # this hostname, which is what the missing catch-all above is for.
+        # A literal prefix, so it needs no regex and no ALB-specific
+        # annotation. Delete this block if you do not use Agents chat
+        # integrations, and the public surface goes back to webhooks only.
+        #
+        # Hardcoded rather than read from a module output: unlike the webhook
+        # prefixes, which the mains genuinely cannot serve, this is one path
+        # family on one topology, and the module has no equivalent list to
+        # expose. Kept here so the exposure decision stays visible in the
+        # example that makes it.
+        path {
+          path      = "/rest/projects"
+          path_type = "Prefix"
+          backend {
+            service {
+              name = module.n8n.n8n_service_name
+              port { number = module.n8n.n8n_service_port }
             }
           }
         }

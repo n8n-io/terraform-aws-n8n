@@ -245,12 +245,16 @@ run "public_alb_routes_every_webhook_prefix" {
     error_message = "The public ALB must route all five webhook prefixes"
   }
 
+  # Every webhook prefix goes to the webhook processors. /rest/projects is the
+  # one path on this ALB that does not, and it is asserted separately below, so
+  # this excludes it by name rather than loosening to "most paths": a webhook
+  # prefix silently repointed at the mains is exactly what this catches.
   assert {
     condition = alltrue([
       for p in kubernetes_ingress_v1.webhook_public.spec[0].rule[0].http[0].path :
-      p.backend[0].service[0].name == "n8n-webhook-processor"
+      p.backend[0].service[0].name == "n8n-webhook-processor" if p.path != "/rest/projects"
     ])
-    error_message = "Every path on the public ALB must target the webhook processor Service"
+    error_message = "Every webhook path on the public ALB must target the webhook processor Service"
   }
 
   # No catch-all: the editor UI must not be reachable from the internet even by
@@ -262,6 +266,55 @@ run "public_alb_routes_every_webhook_prefix" {
       "/"
     )
     error_message = "The public ALB must NOT have a catch-all / rule, which would expose the editor UI"
+  }
+
+  # The authenticated REST API stays off the public hostname. /rest/projects is
+  # deliberate and scoped; a bare /rest would put /rest/login and
+  # /rest/credentials on the internet-facing ALB.
+  assert {
+    condition = !contains(
+      [for p in kubernetes_ingress_v1.webhook_public.spec[0].rule[0].http[0].path : p.path],
+      "/rest"
+    )
+    error_message = "The public ALB must NOT route all of /rest, which would expose the authenticated REST API"
+  }
+}
+
+# n8n builds the Slack app-install URL and the Agents platform event callbacks
+# by appending /rest/projects/<id>/agents/... onto getWebhookBaseUrl(), which is
+# WEBHOOK_URL, which is the webhook hostname. Those are main-pod routes, so
+# without this rule connecting a Slack agent 404s at the end of the OAuth flow,
+# after the admin has already granted consent, and nothing in n8n logs it.
+# See n8n-io/terraform-aws-n8n#92.
+
+run "public_alb_routes_agent_callbacks_to_the_main_service" {
+  command = plan
+
+  assert {
+    condition = contains(
+      [for p in kubernetes_ingress_v1.webhook_public.spec[0].rule[0].http[0].path : p.path],
+      "/rest/projects"
+    )
+    error_message = "The public ALB must route /rest/projects, or connecting a Slack agent 404s at the end of the OAuth flow."
+  }
+
+  assert {
+    condition = one([
+      for p in kubernetes_ingress_v1.webhook_public.spec[0].rule[0].http[0].path :
+      p.backend[0].service[0].name if p.path == "/rest/projects"
+    ]) == "n8n-main"
+    error_message = "/rest/projects on the webhook host must reach the main pods; the webhook processors register no /rest routes."
+  }
+
+  # Prefix, not Exact: every URL n8n actually calls is
+  # /rest/projects/<id>/agents/..., never /rest/projects itself, so an Exact
+  # match routes none of them.
+  assert {
+    condition = one([
+      for p in kubernetes_ingress_v1.webhook_public.spec[0].rule[0].http[0].path :
+      p.path_type if p.path == "/rest/projects"
+    ]) == "Prefix"
+    error_message = "/rest/projects must be a Prefix match; an Exact match routes none of the agent callback paths."
   }
 }
 
