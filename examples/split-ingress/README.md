@@ -101,6 +101,8 @@ n8n's Agents chat integrations build the Slack app-install URL and the platform 
 
 This is upstream n8n's construction, not a module or chart setting, so no amount of configuration moves it: the path has to be routed on the webhook hostname for those flows to complete. It also has to be reachable from the **internet**, not just from inside the VPC, because the platform event webhooks are server-to-server POSTs from Slack and Telegram.
 
+One more upstream prerequisite: the `agents` backend module is **opt-in** on current n8n releases (it is not in the default module list), so the `/rest/projects/<id>/agents/...` routes only exist when n8n runs with `N8N_ENABLED_MODULES=agents` — settable through the module's `n8n_extra_env`. The ingress rule is correct and inert without it; requests still reach the main pods, which answer 404 for the unregistered route.
+
 It is scoped to `/rest/projects` rather than all of `/rest`, because that is the whole surface those constructions use. Note the prefix still routes the entire authenticated Projects API (project CRUD and project-scoped resources under `/rest/projects/<id>/...`) to the mains from the internet, not only the agents sub-routes: ALB prefix matching cannot narrow to `/rest/projects/<id>/agents/*`, so that auth-gated surface is accepted alongside the callbacks. `/rest/login`, `/rest/credentials` and the rest of the authenticated REST API stay off the public hostname, which is what the missing catch-all is for. It is a literal prefix, so it needs no regex and no ALB-specific annotation.
 
 If you do not use Agents chat integrations, delete the `/rest/projects` block in `ingress.tf` and the public surface goes back to webhooks only. Also remove the `public_alb_routes_agent_callbacks_to_the_main_service` run and the `/rest/projects` exclusion in `tests/defaults.tftest.hcl`, which pin that block's presence.
@@ -127,13 +129,22 @@ curl --max-time 10 -o /dev/null -w '%{http_code}\n' https://n8n.example.com/
 # From inside the VPC / on the VPN, it should return 200
 curl -o /dev/null -w '%{http_code}\n' https://n8n.example.com/
 
-# The agents callback prefix is routed publicly. n8n answers a Slack URL
-# verification handshake by echoing the challenge back, so this checks the
-# routing without installing a Slack app. Anything else, above all the ALB's
-# own 404 page, means /rest/projects is not reaching the main pods.
+# /rest/projects is routed publicly and reaches the main pods. A version-
+# independent check: the mains answer this with n8n's JSON 401, while a
+# webhook processor would answer an HTML "Cannot GET" 404 and the ALB's own
+# 404 page means the rule is missing entirely.
+curl -s https://hooks.n8n.example.com/rest/projects
+# → {"status":"error","message":"Unauthorized"}
+
+# End-to-end agents check. n8n answers a Slack URL verification handshake by
+# echoing the challenge back, so this checks the full path without installing
+# a Slack app. It requires the opt-in agents module (see above): without
+# N8N_ENABLED_MODULES=agents the mains answer an HTML "Cannot POST" 404 even
+# though the routing itself is fine.
 curl -s -X POST -H 'Content-Type: application/json' \
   -d '{"type":"url_verification","challenge":"probe456"}' \
   https://hooks.n8n.example.com/rest/projects/x/agents/v2/y/webhooks/slack
+# → {"challenge":"probe456"}
 
 # Both ALBs and their schemes
 kubectl get ingress -n n8n
