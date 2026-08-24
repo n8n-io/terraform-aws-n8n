@@ -91,12 +91,20 @@ resource "kubernetes_ingress_v1" "webhook_public" {
         # Telegram.
         #
         # Scoped to /rest/projects rather than all of /rest, because that is
-        # the whole surface those constructions use. /rest/login,
-        # /rest/credentials and the rest of the authenticated REST API stay off
-        # this hostname, which is what the missing catch-all above is for.
-        # A literal prefix, so it needs no regex and no ALB-specific
-        # annotation. Delete this block if you do not use Agents chat
-        # integrations, and the public surface goes back to webhooks only.
+        # the whole surface those constructions use. Note this still routes the
+        # entire authenticated Projects API (project CRUD and project-scoped
+        # resources under /rest/projects/<id>/...) to the mains from the
+        # internet, not only the agents sub-routes: ALB prefix matching cannot
+        # narrow to /rest/projects/<id>/agents/*, so that auth-gated surface is
+        # accepted alongside the callbacks. /rest/login, /rest/credentials and
+        # the rest of the authenticated REST API stay off this hostname, which
+        # is what the missing catch-all above is for. A literal prefix, so it
+        # needs no regex and no ALB-specific annotation. Delete this block if
+        # you do not use Agents chat integrations, and the public surface goes
+        # back to webhooks only; also remove the
+        # public_alb_routes_agent_callbacks_to_the_main_service run and the
+        # /rest/projects exclusion in tests/defaults.tftest.hcl, which pin this
+        # block's presence.
         #
         # Hardcoded rather than read from a module output: unlike the webhook
         # prefixes, which the mains genuinely cannot serve, this is one path
