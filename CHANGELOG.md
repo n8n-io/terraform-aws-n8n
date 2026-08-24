@@ -5,6 +5,33 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to the stability contract in
 [README.md → Stability & versioning](./README.md#stability--versioning).
 
+## [Unreleased]
+
+### Changed
+
+- **The module now sets `N8N_EDITOR_BASE_URL`** to `https://<n8n_domain>`,
+  emitted next to `WEBHOOK_URL` in the chart's `config.extraEnv`. The name was
+  already reserved in the module's managed env list but never assigned, so n8n
+  fell back to `WEBHOOK_URL` when building the editor's base URL, including the
+  OAuth2 credential callback. Deployments where `n8n_webhook_url` names a
+  different host than `n8n_domain` previously advertised that callback on the
+  webhook host, where a split ingress 404s it; it now moves to
+  `https://<n8n_domain>/rest/oauth2-credential/callback`. Update any OAuth
+  provider registrations that point at the old host. Every other configuration
+  renders the value n8n already resolved to, so nothing changes there.
+
+### Fixed
+
+- **`examples/split-ingress`: the public ALB now routes `/rest/projects`** to
+  the main pods, alongside the existing webhook-prefix routing. n8n's Agents
+  chat integrations build the Slack app-install URL and the platform event
+  callbacks by appending `/rest/projects/<id>/agents/...` onto
+  `getWebhookBaseUrl()`, which is the webhook hostname on this topology, and
+  those are main-pod routes the webhook processors do not serve. Without the
+  rule, connecting a Slack agent 404s at the end of the OAuth flow (#92). The
+  rule is scoped to `/rest/projects`; the rest of the authenticated REST API
+  stays off the internet-facing ALB and there is still no catch-all.
+
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):
