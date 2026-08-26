@@ -5,6 +5,34 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to the stability contract in
 [README.md → Stability & versioning](./README.md#stability--versioning).
 
+## [Unreleased]
+
+### Added
+
+- `n8n_db_ping_timeout_ms`, `n8n_db_ping_interval_seconds` and
+  `n8n_db_ping_max_failures_before_recovery`: expose n8n's database health-check
+  ping settings (`DB_PING_TIMEOUT_MS`, `DB_PING_INTERVAL_SECONDS`,
+  `DB_PING_MAX_FAILURES_BEFORE_RECOVERY`). All default to `null`, which omits the
+  variable and leaves n8n's own defaults (2s, 5000ms, 3), so this is additive.
+
+  Previously unsettable by any means: the chart has no values path for them, and
+  `DB_` is a module-managed prefix so `n8n_extra_env` rejects them at plan time.
+
+  These govern a failure mode worth understanding before tuning anything else.
+  n8n's ping acquires a connection from the same pool that serves request
+  traffic (`pool.connect()` in `db-connection-monitor.ts`, raced against
+  `pingTimeoutMs`), so a pool saturated by ordinary load makes the ping time out
+  while the database is entirely healthy. A single timed-out ping sets
+  `connectionState.connected = false`, and the global middleware in
+  `abstract-server.ts` then answers every request to that pod with a 503,
+  creating no execution row and logging nothing at the failure site. After
+  `DB_PING_MAX_FAILURES_BEFORE_RECOVERY` consecutive failures, roughly 6 seconds
+  at the default interval, n8n destroys and recreates the pool and suspends
+  acquisition while it does, which on a pool saturated by legitimate traffic is a
+  feedback loop rather than a recovery. Sizing the pool above peak demand removes
+  the queue outright where possible; raising these settings is a mitigation for
+  when it isn't.
+
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):

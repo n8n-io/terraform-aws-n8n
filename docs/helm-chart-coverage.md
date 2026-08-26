@@ -59,6 +59,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `secretRefs.env` | Not used; the module injects core config through `existingSecret` plus `config.extraEnv` instead |
 | `database.{type,useExternal,host,port,database,schema,user,passwordSecret}` | Fully wired (module-managed RDS or caller-supplied `db_host`/`db_password`) |
 | `database.ssl.*` | Not set via this chart key; the module sets `DB_POSTGRESDB_SSL_ENABLED`/`DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED` environment variables directly, gated by `db_postgresdb_ssl_enabled` |
+| *(no chart key)* DB health-check ping tuning | The chart has no values path for this, and `DB_` is a module-managed prefix so `n8n_extra_env` rejects it at plan time. Set directly as environment variables: `n8n_db_ping_timeout_ms` / `n8n_db_ping_interval_seconds` / `n8n_db_ping_max_failures_before_recovery` → the `DB_PING_*` family (all null = n8n's own defaults). See each variable's description for the pool-saturation failure mode this exists to mitigate |
 | `redis.{enabled,useExternal,host,port}` | Module-managed ElastiCache or caller-supplied `redis_host`/`redis_port` |
 | `redis.tls` | Wired to `redis_transit_encryption_enabled` (default `false`, requires `create_elasticache = true`) |
 | `redis.passwordSecret` | Module-managed when Redis AUTH is active |
