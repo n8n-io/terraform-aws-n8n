@@ -67,7 +67,11 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `redis.timeout` | `n8n_redis_timeout_threshold` (null = chart default) |
 | `redis.username` | `redis_username` (null = chart default, Redis's default user) |
 | `redis.prefix` | `redis_key_prefix` (null = chart default `"bull"`; also sets `N8N_REDIS_KEY_PREFIX` directly, since the chart has no key for it: see [README → Two deployments on one Redis](../README.md#two-deployments-on-one-redis-need-redis_key_prefix)) |
-| `redis.database`, `redis.dualstack`, `redis.clusterNodes`, `redis.worker.*`, `redis.healthCheck` | Not exposed; chart defaults used |
+| `redis.worker.lockDuration` | `n8n_queue_worker_lock_duration` (null = chart default `60000`). Chart schema enforces a minimum of `1000`, mirrored in the variable's validation so the failure lands at plan time |
+| `redis.worker.lockRenewTime` | `n8n_queue_worker_lock_renew_time` (null = chart default `10000`). Validated to be at least `1000` and strictly below the lock duration, since a renew interval at or above it guarantees the lock expires before renewal fires |
+| `redis.worker.stalledInterval` | `n8n_queue_worker_stalled_interval` (null = chart default `30000`). n8n documents `0` as "disable stall checking" but the chart's schema sets `minimum: 1000`, so `0` is unreachable through this chart and the variable rejects it at plan time with that explanation |
+| `redis.worker.maxStalledCount` | Deliberately not exposed. The chart still renders it (default `1`), but n8n v2 removed `QUEUE_WORKER_MAX_STALLED_COUNT` and ships a breaking-change rule stating it is ignored; `scaling.service.ts` hardcodes Bull's `maxStalledCount` to `0`. Exposing it would offer control that does not exist |
+| `redis.database`, `redis.dualstack`, `redis.clusterNodes`, `redis.healthCheck` | Not exposed; chart defaults used |
 | `s3.enabled/bucket.name/bucket.region/auth.autoDetect/storage.mode/storage.availableModes` | Hardcoded `true` / module-managed bucket / hardcoded `true` (Pod Identity) / hardcoded `"s3"` / hardcoded `"filesystem,s3"` |
 | `s3.bucket.host`, `s3.storage.forcePathStyle`, `s3.storage.extraEnv`, `s3.auth.accessKeyId/secretAccessKeySecret` | Not exposed; not needed given `auth.autoDetect = true` |
 

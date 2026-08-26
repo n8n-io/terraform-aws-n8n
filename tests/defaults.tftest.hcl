@@ -3721,6 +3721,130 @@ run "redis_key_prefix_rejects_whitespace" {
   expect_failures = [var.redis_key_prefix]
 }
 
+# ── Queue worker lock/stall tuning ────────────────────────────────────────────
+# QUEUE_WORKER_LOCK_DURATION / _LOCK_RENEW_TIME / _STALLED_INTERVAL are
+# chart-templated from redis.worker.* (values.yaml). helm_release.values is
+# unknown at plan time under the mock provider (see AGENTS.md's "Known mock
+# provider limitations"), so these assert at the variable-contract level only:
+# defaults, accepted values, and validator rejection.
+run "queue_worker_lock_settings_default_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_queue_worker_lock_duration == null
+    error_message = "n8n_queue_worker_lock_duration must default to null so the chart keeps its own default (60000ms)."
+  }
+
+  assert {
+    condition     = var.n8n_queue_worker_lock_renew_time == null
+    error_message = "n8n_queue_worker_lock_renew_time must default to null so the chart keeps its own default (10000ms)."
+  }
+
+  assert {
+    condition     = var.n8n_queue_worker_stalled_interval == null
+    error_message = "n8n_queue_worker_stalled_interval must default to null so the chart keeps its own default (30000ms)."
+  }
+
+  assert {
+    condition     = length(local.n8n_queue_worker_settings) == 0
+    error_message = "local.n8n_queue_worker_settings must be empty when none of the three variables is set, so the chart's worker key is omitted entirely and rendered values stay byte-identical to before these variables existed."
+  }
+}
+
+run "queue_worker_lock_settings_accept_valid_values" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_duration    = 180000
+    n8n_queue_worker_lock_renew_time  = 15000
+    n8n_queue_worker_stalled_interval = 45000
+  }
+
+  assert {
+    condition     = var.n8n_queue_worker_lock_duration == 180000
+    error_message = "n8n_queue_worker_lock_duration should accept a value at or above the chart's 1000ms schema minimum."
+  }
+
+  assert {
+    # jsonencode both sides rather than comparing objects directly: merge()
+    # of object()-typed branches produces a structural object type that
+    # Terraform's == treats as distinct from a plain map/object literal's
+    # inferred type even when every value matches, so a direct comparison
+    # fails on "LHS and RHS values are of different types" despite identical
+    # content.
+    condition = jsonencode(local.n8n_queue_worker_settings) == jsonencode({
+      lockDuration    = 180000
+      lockRenewTime   = 15000
+      stalledInterval = 45000
+    })
+    error_message = "local.n8n_queue_worker_settings must assemble all three values into the chart's redis.worker map when all three variables are set."
+  }
+}
+
+run "queue_worker_lock_duration_rejects_below_1000" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_duration = 999
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_duration]
+}
+
+run "queue_worker_lock_renew_time_rejects_below_1000" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_renew_time = 999
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_renew_time]
+}
+
+run "queue_worker_lock_renew_time_rejects_at_or_above_lock_duration" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_duration   = 5000
+    n8n_queue_worker_lock_renew_time = 5000
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_renew_time]
+}
+
+run "queue_worker_lock_renew_time_rejects_default_lock_duration_ceiling" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_renew_time = 60000
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_renew_time]
+}
+
+run "queue_worker_stalled_interval_rejects_below_1000" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_stalled_interval = 999
+  }
+
+  expect_failures = [var.n8n_queue_worker_stalled_interval]
+}
+
+run "queue_worker_stalled_interval_rejects_zero" {
+  command = plan
+
+  variables {
+    # n8n documents 0 as "disable stall checking", but the chart's schema sets
+    # minimum: 1000, so 0 is unreachable through this chart. See the
+    # variable's description.
+    n8n_queue_worker_stalled_interval = 0
+  }
+
+  expect_failures = [var.n8n_queue_worker_stalled_interval]
+}
+
 run "redis_mode_tuning_ignored_on_external_redis_warns" {
   command = plan
 

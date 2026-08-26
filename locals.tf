@@ -584,4 +584,30 @@ locals {
   n8n_disabled_modules = concat(
     var.n8n_external_secrets_enabled ? [] : ["external-secrets"],
   )
+
+  # The chart's redis.worker.* block, assembled once from three independent
+  # variables. Built here rather than inline in n8n.tf because the
+  # surrounding merge() in that file is SHALLOW: three separate
+  # `{ worker = {...} }` entries would silently overwrite one another and
+  # only the last would survive, so setting lock duration and stalled
+  # interval together would quietly drop one of them. Assembling the inner
+  # map first is what makes them composable.
+  #
+  # All three values are passed through as plain integers. The chart's
+  # values.schema.json types every one of them as `{"type": "integer",
+  # "minimum": 1000}`, so a quoted string is rejected outright ("got string,
+  # want integer") and so is any value below 1000. The matching >= 1000
+  # validations on the variables exist to surface that as a plan-time error
+  # rather than a Helm schema failure at apply.
+  n8n_queue_worker_settings = merge(
+    var.n8n_queue_worker_lock_duration != null ? {
+      lockDuration = var.n8n_queue_worker_lock_duration
+    } : {},
+    var.n8n_queue_worker_lock_renew_time != null ? {
+      lockRenewTime = var.n8n_queue_worker_lock_renew_time
+    } : {},
+    var.n8n_queue_worker_stalled_interval != null ? {
+      stalledInterval = var.n8n_queue_worker_stalled_interval
+    } : {},
+  )
 }
