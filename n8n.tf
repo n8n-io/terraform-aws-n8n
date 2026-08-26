@@ -565,28 +565,26 @@ resource "helm_release" "n8n" {
         var.redis_key_prefix != null ? [
           { name = "N8N_REDIS_KEY_PREFIX", value = var.redis_key_prefix },
         ] : [],
-        # Database health-check ping. The chart has no values path for any of
-        # these and `DB_` is a module-managed prefix, so n8n_extra_env cannot
-        # reach them: without these entries they are unsettable through this
-        # module at all. Each is omitted on the null path, leaving n8n's own
-        # defaults (2s interval, 5000ms timeout, 3 failures before recovery).
+        # Database connection acquisition and health-check ping settings. The
+        # chart has no values path for these and `DB_` is a module-managed
+        # prefix, so n8n_extra_env cannot reach them. Each is omitted on the
+        # null path, leaving n8n's own defaults.
         #
-        # These matter far more than their names suggest. n8n's ping acquires a
-        # connection from the SAME pool that serves request traffic
-        # (`pool.connect()` in db-connection-monitor.ts, raced against
-        # pingTimeoutMs), so a pool saturated by ordinary load makes the ping
-        # time out even when the database is entirely healthy. A single timed-out
-        # ping sets `connectionState.connected = false`, and the global middleware
-        # in abstract-server.ts then answers EVERY request to that pod with a 503,
-        # creating no execution row and logging nothing at the failure site.
-        # Measured on a production deployment: 91 of 160 webhook-processor pods, two
-        # thirds of all requests failing, with Aurora and PgBouncer both idle.
+        # DB_POSTGRESDB_CONNECTION_TIMEOUT becomes pg-pool's
+        # connectionTimeoutMillis, which bounds both connection establishment
+        # and waiting for the shared pool to free a slot. The database monitor
+        # also calls pool.connect(), so its acquisition is subject to this
+        # timeout and to the separate DB_PING_TIMEOUT_MS race. The effective
+        # health-check acquisition deadline is whichever timeout fires first.
         #
-        # Raising the timeout is the mitigation available without an n8n change:
-        # it stops a busy pool from being misread as a dead database. Raising the
-        # failure threshold widens the margin before the more destructive
-        # response, which is that n8n destroys and recreates the pool outright,
-        # suspending every in-flight acquisition on that pod.
+        # This interaction matters under load. A pool saturated by ordinary
+        # database operations can make the ping time out while the database is
+        # healthy. One timed-out ping marks the pod disconnected, so its global
+        # middleware returns 503. Repeated failures make n8n destroy and
+        # recreate the pool, suspending in-flight acquisition on that pod.
+        var.db_postgresdb_connection_timeout_ms != null ? [
+          { name = "DB_POSTGRESDB_CONNECTION_TIMEOUT", value = tostring(var.db_postgresdb_connection_timeout_ms) },
+        ] : [],
         var.db_ping_timeout_ms != null ? [
           { name = "DB_PING_TIMEOUT_MS", value = tostring(var.db_ping_timeout_ms) },
         ] : [],

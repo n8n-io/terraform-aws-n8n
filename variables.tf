@@ -1495,10 +1495,16 @@ variable "db_ping_timeout_ms" {
     webhook-processor pods affected, roughly two thirds of all requests failing,
     with Aurora and PgBouncer both idle throughout and `cl_waiting` at zero.
 
-    Sizing the pool above peak demand is the better fix where possible, since it
-    removes the queue rather than tolerating it. Raise this timeout when you cannot,
-    or as defence in depth: it costs only a slower reaction to a genuinely dead
-    database, which is a far cheaper failure than silently 503ing live traffic.
+    This ping calls `pool.connect()`, so it is also subject to
+    db_postgresdb_connection_timeout_ms when that timeout fires first. Raising
+    only this value above the connection timeout does not extend the health
+    check's acquisition deadline.
+
+    Size the pool from measured concurrent database operations and pool-wait
+    time, while keeping aggregate capacity across all replicas within PgBouncer
+    and database limits. Raise this timeout when the queue cannot be removed, or
+    as defence in depth: it costs a slower reaction to a genuinely dead database,
+    which is a far cheaper failure than silently returning 503 for live traffic.
   EOT
   type        = number
   default     = null
@@ -1566,8 +1572,49 @@ variable "db_ping_max_failures_before_recovery" {
   }
 }
 
+variable "db_postgresdb_connection_timeout_ms" {
+  description = <<-EOT
+    Milliseconds pg-pool allows for establishing a PostgreSQL connection or
+    waiting for the per-process pool to free a slot
+    (`DB_POSTGRESDB_CONNECTION_TIMEOUT`). Leave null for n8n's own default of
+    20000. Zero disables pg-pool's acquisition timeout. Neither the chart nor
+    `n8n_extra_env` can set this: the chart has no values path for it and `DB_`
+    is a module-managed prefix.
+
+    This also applies to the database monitor's `pool.connect()` call. The
+    monitor separately races that call against `DB_PING_TIMEOUT_MS`, so the two
+    settings are configured separately but are not runtime-independent. The
+    effective health-check acquisition deadline is whichever timeout fires
+    first.
+
+    Raising this is not a fix for pool saturation. Measured on a live
+    deployment, acquire time climbed smoothly past 25 seconds over a two-hour
+    run, so any fixed value is crossed eventually and only the timing moves.
+    Size db_postgresdb_pool_size from measured concurrent database operations
+    and pool-wait time, and verify that the aggregate maximum across all main,
+    worker, and webhook replicas fits the PgBouncer and database connection
+    budgets. Exposed here because the knob governing the failure should be
+    settable, including downward for fail-fast behaviour.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition = var.db_postgresdb_connection_timeout_ms == null ? true : (
+      var.db_postgresdb_connection_timeout_ms >= 0 &&
+      var.db_postgresdb_connection_timeout_ms <= 2147483647
+    )
+    error_message = "db_postgresdb_connection_timeout_ms must be between 0 and 2147483647 milliseconds, or null to use n8n's own default of 20000. Zero disables the pg-pool acquisition timeout. Values above 2147483647 overflow Node.js's timer and are reduced to 1 millisecond."
+  }
+
+  validation {
+    condition     = var.db_postgresdb_connection_timeout_ms == null ? true : var.db_postgresdb_connection_timeout_ms == floor(var.db_postgresdb_connection_timeout_ms)
+    error_message = "db_postgresdb_connection_timeout_ms must be a whole number of milliseconds, or null to use n8n's own default of 20000."
+  }
+}
+
 variable "db_postgresdb_pool_size" {
-  description = "Number of TypeORM connection pool slots per n8n pod. Each pod holds this many persistent PostgreSQL connections. Rule of thumb: pool_size >= worker_concurrency / 4. With PgBouncer in transaction mode a lower value (5) is sufficient; without PgBouncer use a value matching concurrency (10-20)."
+  description = "Maximum TypeORM connection pool slots per n8n process. pg-pool creates connections lazily and checks out a slot only while a database query or transaction is active, so this is not a one-to-one match for concurrent workflows or requests. Size it from measured concurrent database operations and pool-wait time. Multiply it by the maximum main, worker, and webhook replica counts to verify that aggregate capacity fits the PgBouncer and database connection budgets. A waiter is bounded by db_postgresdb_connection_timeout_ms unless that timeout is zero."
   type        = number
   default     = 10
 

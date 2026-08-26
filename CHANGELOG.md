@@ -49,8 +49,41 @@ this project adheres to the stability contract in
   immediately, but roughly 21 seconds after monitoring begins when each ping
   consumes the full 5-second timeout, as it does when `pool.connect()` is queued
   behind saturated traffic. In that case recovery is a feedback loop rather
-  than a recovery. Sizing the pool above peak demand removes the queue outright
-  where possible; raising these settings is a mitigation for when it isn't.
+  than a recovery. Size the pool from measured concurrent database operations
+  and pool-wait time, while keeping aggregate capacity across all replicas
+  within PgBouncer and database limits. Raising these settings is a mitigation
+  when the queue cannot be removed.
+
+- `db_postgresdb_connection_timeout_ms`: expose `DB_POSTGRESDB_CONNECTION_TIMEOUT`.
+  Defaults to `null`, which omits the variable and leaves n8n's own default of
+  20000ms, so this is additive. Zero disables pg-pool's acquisition timeout;
+  values above 2147483647 are rejected because Node.js reduces larger timer
+  delays to 1ms.
+
+  Previously unsettable by any means: the chart has no values path for it and
+  `DB_` is a module-managed prefix, so `n8n_extra_env` rejects it at plan time.
+
+  n8n passes it to pg-pool as `connectionTimeoutMillis`, where it bounds both
+  establishing a connection and waiting for a busy pool to free a slot. That
+  includes the database monitor's `pool.connect()` call. The monitor separately
+  races the call against `DB_PING_TIMEOUT_MS`, so the two settings are configured
+  separately but are not runtime-independent: health-check acquisition stops
+  when whichever timeout fires first.
+
+  Raising it is not a fix. Measured over a two-hour run, acquire time on
+  individual pods climbed smoothly from 0.4s past 25s while the fleet average
+  stayed near 3s and Aurora sat at 2.3% CPU, so any fixed threshold is
+  crossed eventually and only the timing moves. Exposed so the knob
+  governing the failure is settable, including downward for fail-fast
+  behaviour.
+
+### Changed
+
+- `db_postgresdb_pool_size` is now documented as a lazy per-process maximum,
+  not as one connection per concurrent workflow or request. Size it from
+  measured concurrent database operations and pool-wait time, then verify that
+  the aggregate maximum across main, worker, and webhook replicas fits the
+  PgBouncer and database connection budgets.
 
 ## [0.3.0] - 2026-08-13
 
