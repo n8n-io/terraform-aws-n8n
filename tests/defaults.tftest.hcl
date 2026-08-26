@@ -7142,6 +7142,107 @@ run "extra_env_rejects_execution_data_storage_mode_name" {
   expect_failures = [var.n8n_extra_env]
 }
 
+# ── n8n_executions_data_save_on_success / n8n_executions_data_save_on_error ──
+# Replace two previously-hardcoded "all" literals in config.data. Asserted at
+# the variable-contract level for the same reason as
+# n8n_execution_data_storage_mode above: config.data is inside
+# helm_release.n8n.values, unknown at plan time under the mock provider.
+run "executions_data_save_on_success_defaults_to_all" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_executions_data_save_on_success == "all"
+    error_message = "n8n_executions_data_save_on_success should default to \"all\", matching n8n's own default and the literal it replaces, so no existing deployment's rendered values change."
+  }
+}
+
+run "executions_data_save_on_error_defaults_to_all" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_executions_data_save_on_error == "all"
+    error_message = "n8n_executions_data_save_on_error should default to \"all\", matching n8n's own default and the literal it replaces, so no existing deployment's rendered values change."
+  }
+}
+
+run "executions_data_save_on_success_accepts_none" {
+  command = plan
+
+  variables {
+    n8n_executions_data_save_on_success = "none"
+  }
+
+  assert {
+    condition     = var.n8n_executions_data_save_on_success == "none"
+    error_message = "n8n_executions_data_save_on_success should accept \"none\"."
+  }
+}
+
+run "executions_data_save_on_error_accepts_none" {
+  command = plan
+
+  variables {
+    n8n_executions_data_save_on_error = "none"
+  }
+
+  assert {
+    condition     = var.n8n_executions_data_save_on_error == "none"
+    error_message = "n8n_executions_data_save_on_error should accept \"none\"."
+  }
+}
+
+# n8n itself has no "first" value on 2.35.7 (packages/@n8n/config/src/configs/
+# executions.config.ts); reject anything other than the two valid values.
+run "executions_data_save_on_success_rejects_first" {
+  command = plan
+
+  variables {
+    n8n_executions_data_save_on_success = "first"
+  }
+
+  expect_failures = [var.n8n_executions_data_save_on_success]
+}
+
+run "executions_data_save_on_error_rejects_unknown_value" {
+  command = plan
+
+  variables {
+    n8n_executions_data_save_on_error = "on"
+  }
+
+  expect_failures = [var.n8n_executions_data_save_on_error]
+}
+
+# Regression guard: both keys became module-managed alongside the two inputs
+# above, so the escape hatch must reject them. The chart renders both keys
+# unconditionally, so an extraEnv override would silently duplicate the name
+# rather than being visibly rejected by Kubernetes (unlike, e.g., a
+# chart-ConfigMap-templated key), which is exactly the failure mode these
+# inputs exist to close.
+run "extra_env_rejects_execution_data_save_on_success_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "EXECUTIONS_DATA_SAVE_ON_SUCCESS", value = "none" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_env_rejects_execution_data_save_on_error_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "EXECUTIONS_DATA_SAVE_ON_ERROR", value = "none" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
 # ── EKS control-plane hardening (issue #27) ───────────────────────────────────
 # These assertions exist because checkov no longer covers them. CKV_AWS_58
 # (secrets encryption) carries a checkov:skip in eks.tf: the check reads

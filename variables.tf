@@ -1053,6 +1053,62 @@ variable "n8n_worker_concurrency" {
   }
 }
 
+variable "n8n_executions_data_save_on_success" {
+  description = <<-EOT
+    Whether n8n persists execution data for SUCCESSFUL executions: "all" or "none".
+    Verified against n8n source (packages/@n8n/config/src/configs/executions.config.ts:149,
+    `saveDataOnSuccess: 'all' | 'none' = 'all'`): there is no "first" on 2.35.7, and
+    the n8n default when the variable is unset is "all".
+
+    THE REASON THIS EXISTS AS A VARIABLE. The chart renders
+    `EXECUTIONS_DATA_SAVE_ON_SUCCESS` from this values path unconditionally. If a
+    caller ALSO sets the same key through `n8n_extra_env`, the main and worker
+    Deployments end up with the key listed twice in one container's env list.
+    That is not merely untidy, it silently breaks updates: the merge key for a
+    container `env` list is `name`, so a duplicated name makes Kubernetes'
+    strategic-merge-patch ambiguous, and a later change can land on one
+    occurrence while leaving the other stale. Kubernetes then honours the LAST
+    entry at container start, so the stale value wins and the pod runs a
+    configuration nobody selected.
+
+    Observed on a live cluster 2026-08-24: after flipping the value to "all", the
+    webhook-processor (which rendered the key once) correctly reported "all",
+    while main and worker (which rendered it twice) both still reported "none"
+    five minutes and three rollout checks later. The Helm release's own manifest
+    said "all" in both positions; only the live Deployment objects disagreed.
+
+    Set the value HERE. `n8n_extra_env` now rejects both
+    EXECUTIONS_DATA_SAVE_ON_SUCCESS and EXECUTIONS_DATA_SAVE_ON_ERROR outright at
+    plan time (see local.n8n_managed_env_names), so the failure mode above can no
+    longer be reproduced through this module.
+  EOT
+  type        = string
+  default     = "all"
+  validation {
+    condition     = contains(["all", "none"], var.n8n_executions_data_save_on_success)
+    error_message = "n8n_executions_data_save_on_success must be \"all\" or \"none\"."
+  }
+}
+
+variable "n8n_executions_data_save_on_error" {
+  description = <<-EOT
+    Whether n8n persists execution data for FAILED executions: "all" or "none".
+    Verified against n8n source (packages/@n8n/config/src/configs/executions.config.ts:145,
+    `saveDataOnError: 'all' | 'none' = 'all'`): there is no "first", and the n8n
+    default when the variable is unset is "all".
+
+    Same duplicate-key hazard as `n8n_executions_data_save_on_success`: set it
+    here, never through `n8n_extra_env`, which now rejects this exact name
+    outright at plan time (see local.n8n_managed_env_names).
+  EOT
+  type        = string
+  default     = "all"
+  validation {
+    condition     = contains(["all", "none"], var.n8n_executions_data_save_on_error)
+    error_message = "n8n_executions_data_save_on_error must be \"all\" or \"none\"."
+  }
+}
+
 variable "n8n_execution_timeout" {
   description = "Default execution timeout in seconds (-1 to disable)"
   type        = number
