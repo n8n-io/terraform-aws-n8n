@@ -201,8 +201,17 @@ this project adheres to the stability contract in
   The ConfigMap replaces the whole launcher config rather than one key, so
   derive it from the running image (`kubectl exec deploy/<release>-worker -c
   task-runner -- cat /etc/n8n-task-runners.json`) and re-derive it when the
-  runner image changes. Validation rejects an empty ConfigMap name, and
+  runner image changes. Validation holds `config_map_name` to the DNS-1123
+  subdomain rule Kubernetes applies to a ConfigMap name and `config_map_key` to
+  the separate, case-sensitive rule it applies to a key, rejects both empty, and
   requires `n8n_task_runners_enabled = true`.
+
+  Editing the ConfigMap later does not restart anything. The chart mounts the
+  key with `subPath`, which never picks up subsequent ConfigMap updates, and the
+  module is given the ConfigMap's name rather than its contents, so it has
+  nothing to hash into a pod annotation the way it does for a module-managed
+  Redis auth token. Roll the deployments yourself after every launcher-config
+  change: `kubectl rollout restart deploy/<release> deploy/<release>-worker`.
 
 ## [0.3.0] - 2026-08-13
 

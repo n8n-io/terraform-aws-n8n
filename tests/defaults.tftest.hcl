@@ -6437,6 +6437,105 @@ run "task_runner_custom_config_rejects_an_empty_config_map_name" {
   expect_failures = [var.n8n_task_runner_custom_config]
 }
 
+run "task_runner_custom_config_rejects_a_whitespace_padded_config_map_name" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = " n8n-task-runners-custom "
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_rejects_an_uppercase_config_map_name" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = "N8N-Task-Runners"
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_rejects_an_overlong_config_map_name" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      # 254 characters, one past the Kubernetes limit.
+      config_map_name = "n8n-task-runners-custom-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_rejects_an_empty_config_map_key" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = "n8n-task-runners-custom"
+      config_map_key  = ""
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_rejects_a_config_map_key_with_a_slash" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = "n8n-task-runners-custom"
+      config_map_key  = "nested/n8n-task-runners.json"
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_rejects_a_dot_dot_config_map_key" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = "n8n-task-runners-custom"
+      config_map_key  = ".."
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_accepts_an_underscored_config_map_key" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = "n8n-task-runners-custom"
+      config_map_key  = "N8N_task_runners.json"
+    }
+  }
+
+  assert {
+    condition     = var.n8n_task_runner_custom_config.config_map_key == "N8N_task_runners.json"
+    error_message = "n8n_task_runner_custom_config.config_map_key should accept the underscores and uppercase a ConfigMap key allows, unlike the DNS-1123 rule the ConfigMap name is held to."
+  }
+}
+
 run "task_runner_custom_config_requires_task_runners_enabled" {
   command = plan
 
