@@ -627,4 +627,29 @@ locals {
       stalledInterval = var.n8n_queue_worker_stalled_interval
     } : {},
   )
+
+  # var.n8n_dns_config with unset keys removed.
+  #
+  # Necessary because the variable's optional() attributes materialise as null
+  # rather than being absent, and the chart renders dnsConfig with a bare
+  # `{{- toYaml . }}`. Passing the variable through directly would emit
+  # `nameservers: null` / `searches: null` into the pod spec, which the API
+  # server rejects (it expects a list, not null) with an error that names the
+  # pod rather than the Helm value, so it is slow to trace back to here.
+  #
+  # `options` is rebuilt element-by-element for the same reason: an option with
+  # no value is legal DNS (`options edns0` carries no value) and must render as
+  # `{name: edns0}`, not `{name: edns0, value: null}`.
+  n8n_dns_config_options = var.n8n_dns_config == null ? [] : [
+    for o in coalesce(var.n8n_dns_config.options, []) :
+    o.value == null ? { name = o.name } : { name = o.name, value = o.value }
+  ]
+
+  n8n_dns_config = var.n8n_dns_config == null ? null : {
+    for k, v in {
+      nameservers = var.n8n_dns_config.nameservers
+      searches    = var.n8n_dns_config.searches
+      options     = length(local.n8n_dns_config_options) == 0 ? null : local.n8n_dns_config_options
+    } : k => v if v != null
+  }
 }

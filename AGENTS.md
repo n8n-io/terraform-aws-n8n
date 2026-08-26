@@ -367,6 +367,7 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
   | `Community packages` | Custom-node loading, OTEL export, log streaming, the `n8n_extra_env` escape hatch |
   | `External Secrets` | External Secrets Operator integration |
   | `KEDA: worker pods` | Queue-depth autoscaling |
+  | `Pod DNS` | Pod-level DNS settings (`n8n_dns_config`) to work around Kubernetes' `ndots:5` search-path amplification |
 
   `scripts/check-variable-banners.sh` hardcodes this same list, in this same
   order, and fails if `variables.tf` disagrees with it. Update the table and
