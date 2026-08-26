@@ -182,6 +182,28 @@ this project adheres to the stability contract in
   `n8n_extra_env` entry. Per the stability contract this change rides a minor
   release, not a patch.
 
+- `n8n_task_runner_custom_config` mounts a custom task-runner launcher config
+  (`n8n-task-runners.json`) from a caller-created ConfigMap, wiring the chart's
+  `taskRunners.customConfig`. Defaults to `null`, which keeps the previous
+  behavior of using the runner image's baked-in config, so this is additive and
+  no existing deployment changes.
+
+  This is the only way to set the runner allow-lists. The runner image ships
+  the native Python runner with `N8N_RUNNERS_STDLIB_ALLOW` as an empty string,
+  which refuses every stdlib import, so a Python Code node doing `import time`
+  or `import math` fails with "Import of standard library module 'x' is
+  disallowed" even with `n8n_task_runner_python_enabled = true`. There is no
+  env-var equivalent: the allow-list names are absent from each runner's
+  `allowed-env`, so the launcher never forwards a pod-level env var to the
+  runner process, and the file's own `env-overrides` block is applied
+  regardless and would win.
+
+  The ConfigMap replaces the whole launcher config rather than one key, so
+  derive it from the running image (`kubectl exec deploy/<release>-worker -c
+  task-runner -- cat /etc/n8n-task-runners.json`) and re-derive it when the
+  runner image changes. Validation rejects an empty ConfigMap name, and
+  requires `n8n_task_runners_enabled = true`.
+
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):

@@ -6394,6 +6394,62 @@ run "task_runner_image_tag_rejects_whitespace_padded_value" {
   expect_failures = [var.n8n_task_runner_image_tag]
 }
 
+run "task_runner_custom_config_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_task_runner_custom_config == null
+    error_message = "n8n_task_runner_custom_config should default to null so the chart keeps using the runner image's baked-in launcher config."
+  }
+}
+
+run "task_runner_custom_config_accepts_a_config_map_name" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = "n8n-task-runners-custom"
+    }
+  }
+
+  assert {
+    condition     = var.n8n_task_runner_custom_config.config_map_name == "n8n-task-runners-custom"
+    error_message = "n8n_task_runner_custom_config.config_map_name should accept a caller-supplied ConfigMap name."
+  }
+
+  assert {
+    condition     = var.n8n_task_runner_custom_config.config_map_key == "n8n-task-runners.json"
+    error_message = "n8n_task_runner_custom_config.config_map_key should default to the chart's own default filename when not set."
+  }
+}
+
+run "task_runner_custom_config_rejects_an_empty_config_map_name" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = ""
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_requires_task_runners_enabled" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = false
+    n8n_task_runner_custom_config = {
+      config_map_name = "n8n-task-runners-custom"
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
 # ── Custom image check blocks ─────────────────────────────────────────────────
 # These warn rather than fail, so expect_failures on the check is how a warning
 # is asserted (same pattern as the ingress and RDS tuning checks above).

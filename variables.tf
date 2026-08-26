@@ -1443,6 +1443,53 @@ variable "n8n_task_runner_python_enabled" {
   default     = true
 }
 
+variable "n8n_task_runner_custom_config" {
+  description = <<-EOT
+    Mount a custom task-runner launcher config (`n8n-task-runners.json`) over the
+    one baked into the runner image, from a ConfigMap you create separately. Wires
+    the chart's `taskRunners.customConfig`; leave null to use the image default.
+
+    The launcher config is the ONLY way to set the runner allow-lists, most
+    notably `N8N_RUNNERS_STDLIB_ALLOW` for the native Python runner. The runner
+    image ships that as an empty string, which refuses every stdlib import
+    including `time` and `math`, so Python Code nodes that import anything fail
+    with "Import of standard library module 'x' is disallowed".
+
+    There is no env-var route to the same result, for two independent reasons:
+    the allow-list names are absent from each runner's `allowed-env` list, so the
+    launcher never forwards a pod-level env var to the runner process, and the
+    file's own `env-overrides` block is applied regardless and would win anyway.
+
+    The ConfigMap replaces the whole file, not one key, so derive it from the
+    running image rather than writing it from scratch, and re-derive it when the
+    runner image changes:
+
+      kubectl exec deploy/<release>-worker -c task-runner -- \
+        cat /etc/n8n-task-runners.json > n8n-task-runners.json
+      # edit the python runner's env-overrides, then:
+      kubectl create configmap n8n-task-runners-custom -n <namespace> \
+        --from-file=n8n-task-runners.json
+
+    `config_map_key` defaults to the chart's own default, `n8n-task-runners.json`.
+  EOT
+
+  type = object({
+    config_map_name = string
+    config_map_key  = optional(string, "n8n-task-runners.json")
+  })
+  default = null
+
+  validation {
+    condition     = var.n8n_task_runner_custom_config == null ? true : length(trimspace(var.n8n_task_runner_custom_config.config_map_name)) > 0
+    error_message = "n8n_task_runner_custom_config.config_map_name must be a non-empty ConfigMap name. The chart mounts by name and does not create the ConfigMap, so an empty value renders a broken volume and the task-runner sidecar fails to start."
+  }
+
+  validation {
+    condition     = var.n8n_task_runner_custom_config == null ? true : var.n8n_task_runners_enabled
+    error_message = "n8n_task_runner_custom_config requires n8n_task_runners_enabled = true. Without task runners there is no launcher and no sidecar to mount the config into."
+  }
+}
+
 # ── RDS PostgreSQL ─────────────────────────────────────────────────────────────
 
 variable "db_instance_class" {
@@ -2361,7 +2408,8 @@ variable "n8n_extra_volumes" {
 
   validation {
     # `data` is the chart's own volume, mounted at /home/node/.n8n on main pods.
-    # `task-runner-config` appears when taskRunners.customConfig is enabled.
+    # `task-runner-config` appears when taskRunners.customConfig is enabled,
+    # i.e. whenever n8n_task_runner_custom_config is set.
     # Reusing either name collides inside the rendered pod spec.
     condition = alltrue([
       for volume in var.n8n_extra_volumes :
