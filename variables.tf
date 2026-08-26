@@ -1611,6 +1611,14 @@ variable "db_postgresdb_connection_timeout_ms" {
     condition     = var.db_postgresdb_connection_timeout_ms == null ? true : var.db_postgresdb_connection_timeout_ms == floor(var.db_postgresdb_connection_timeout_ms)
     error_message = "db_postgresdb_connection_timeout_ms must be a whole number of milliseconds, or null to use n8n's own default of 20000."
   }
+
+  # n8n receives this verbatim (tostring in n8n.tf), so a fractional value
+  # reaches pg-pool's connectionTimeoutMillis unrounded rather than being
+  # rejected anywhere downstream.
+  validation {
+    condition     = var.n8n_db_postgresdb_connection_timeout_ms == null || try(var.n8n_db_postgresdb_connection_timeout_ms == floor(var.n8n_db_postgresdb_connection_timeout_ms), false)
+    error_message = "n8n_db_postgresdb_connection_timeout_ms must be a whole number of milliseconds."
+  }
 }
 
 variable "db_postgresdb_pool_size" {

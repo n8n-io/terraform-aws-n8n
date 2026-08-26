@@ -8599,6 +8599,19 @@ run "db_postgresdb_connection_timeout_ms_accepts_a_positive_value" {
   }
 }
 
+run "db_postgresdb_connection_timeout_ms_accepts_zero" {
+  command = plan
+
+  variables {
+    n8n_db_postgresdb_connection_timeout_ms = 0
+  }
+
+  assert {
+    condition     = var.n8n_db_postgresdb_connection_timeout_ms == 0
+    error_message = "n8n_db_postgresdb_connection_timeout_ms must accept zero, which disables the pg-pool acquisition timeout."
+  }
+}
+
 run "db_postgresdb_connection_timeout_ms_rejects_a_negative_value" {
   command = plan
 
@@ -8607,4 +8620,14 @@ run "db_postgresdb_connection_timeout_ms_rejects_a_negative_value" {
   }
 
   expect_failures = [var.db_postgresdb_connection_timeout_ms]
+}
+
+run "db_postgresdb_connection_timeout_ms_rejects_a_fractional_value" {
+  command = plan
+
+  variables {
+    n8n_db_postgresdb_connection_timeout_ms = 20000.5
+  }
+
+  expect_failures = [var.n8n_db_postgresdb_connection_timeout_ms]
 }
