@@ -29,11 +29,17 @@ this project adheres to the stability contract in
   five minutes and three rollout checks later, with the Helm release's own
   manifest already showing `"all"` in both positions.
 
-  `n8n_extra_env` now rejects `EXECUTIONS_DATA_SAVE_ON_SUCCESS` and
-  `EXECUTIONS_DATA_SAVE_ON_ERROR` outright at plan time (added to
+  `n8n_extra_env` now rejects all four keys the chart renders from
+  `config.data`, `EXECUTIONS_DATA_SAVE_ON_SUCCESS`,
+  `EXECUTIONS_DATA_SAVE_ON_ERROR`, `EXECUTIONS_DATA_SAVE_ON_PROGRESS` and
+  `EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS`, outright at plan time (added to
   `local.n8n_managed_env_names`), matching the existing guard on
   `N8N_EXECUTION_DATA_STORAGE_MODE`, so the duplicate-key failure mode above
-  can no longer be reproduced through this module.
+  can no longer be reproduced through this module. The last two are not
+  configurable inputs, the module still hardcodes `saveOnProgress = false` and
+  `saveManualExecutions = true`, but they reach the container through the same
+  unconditional code path, so leaving them reachable would have left the same
+  hazard open.
 
 ## [0.3.0] - 2026-08-13
 
