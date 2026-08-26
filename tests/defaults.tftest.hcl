@@ -8353,6 +8353,38 @@ run "fractional_node_count_is_rejected" {
   expect_failures = [var.node_max]
 }
 
+run "node_disk_size_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.node_disk_size == null
+    error_message = "node_disk_size must default to null so the node group keeps the EKS managed-node-group default of 20 GiB unless a caller opts in."
+  }
+}
+
+run "node_disk_size_accepts_a_larger_volume" {
+  command = plan
+
+  variables {
+    node_disk_size = 100
+  }
+
+  assert {
+    condition     = var.node_disk_size == 100
+    error_message = "node_disk_size should accept a value above the 20 GiB EKS default."
+  }
+}
+
+run "node_disk_size_rejects_a_volume_below_the_eks_default" {
+  command = plan
+
+  variables {
+    node_disk_size = 10
+  }
+
+  expect_failures = [var.node_disk_size]
+}
+
 # ── Chart version pinning ─────────────────────────────────────────────────────
 # The four controller charts had no `version` at all, so the installed version
 # was whatever the repository index served at first apply.
