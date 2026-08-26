@@ -1206,10 +1206,10 @@ variable "n8n_executions_data_save_on_success" {
     five minutes and three rollout checks later. The Helm release's own manifest
     said "all" in both positions; only the live Deployment objects disagreed.
 
-    Set the value HERE. `n8n_extra_env` now rejects both
-    EXECUTIONS_DATA_SAVE_ON_SUCCESS and EXECUTIONS_DATA_SAVE_ON_ERROR outright at
-    plan time (see local.n8n_managed_env_names), so the failure mode above can no
-    longer be reproduced through this module.
+    Set the value HERE. `n8n_extra_env` now rejects every EXECUTIONS_DATA_SAVE_*
+    key the chart renders from config.data outright at plan time (see
+    local.n8n_managed_env_names), so the failure mode above can no longer be
+    reproduced through this module.
   EOT
   type        = string
   default     = "all"

@@ -7608,6 +7608,35 @@ run "extra_env_rejects_execution_data_save_on_error_name" {
   expect_failures = [var.n8n_extra_env]
 }
 
+# The other two config.data keys have no input of their own: the module
+# hardcodes saveOnProgress = false and saveManualExecutions = true. They are
+# guarded anyway because the chart renders them through the same unconditional
+# path as the two above, so an extraEnv duplicate reproduces the identical
+# last-wins hazard on a key no input would ever contradict.
+run "extra_env_rejects_execution_data_save_on_progress_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "EXECUTIONS_DATA_SAVE_ON_PROGRESS", value = "true" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_env_rejects_execution_data_save_manual_executions_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS", value = "false" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
 # ── EKS control-plane hardening (issue #27) ───────────────────────────────────
 # These assertions exist because checkov no longer covers them. CKV_AWS_58
 # (secrets encryption) carries a checkov:skip in eks.tf: the check reads
