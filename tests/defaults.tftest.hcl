@@ -8494,3 +8494,70 @@ run "n8n_dns_config_rejects_ndots_without_a_value" {
 
   expect_failures = [var.n8n_dns_config]
 }
+
+run "n8n_dns_config_rejects_a_fractional_ndots_value" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      options = [{ name = "ndots", value = "1.5" }]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_accepts_valid_search_domains" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      searches = ["n8n.svc.cluster.local", "svc.cluster.local", "example.com."]
+    }
+  }
+
+  assert {
+    condition     = length(local.n8n_dns_config.searches) == 3
+    error_message = "local.n8n_dns_config must carry through a valid searches list unchanged."
+  }
+}
+
+run "n8n_dns_config_rejects_more_than_thirty_two_search_domains" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      searches = [for i in range(33) : "search-${i}.example.com"]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_rejects_an_oversized_search_list" {
+  command = plan
+
+  variables {
+    # 30 entries of ~241 valid characters each joins to roughly 7,200, well past
+    # the 2048-character ceiling, while staying under the 32-entry limit and the
+    # 253-character per-entry limit so this run pins the joined-length branch
+    # rather than the count or syntax branches.
+    n8n_dns_config = {
+      searches = [for i in range(30) : "${i}.${join(".", [for j in range(24) : "abcdefghi"])}"]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_rejects_a_malformed_search_domain" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      searches = ["Example.COM"]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}

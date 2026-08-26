@@ -2423,9 +2423,10 @@ variable "n8n_dns_config" {
     domains into every pod. A name with FEWER than 5 dots is tried against every
     search domain BEFORE being tried as written. Every AWS endpoint n8n talks to
     that has 4 dots or fewer therefore costs FIVE DNS queries, four of them
-    guaranteed NXDOMAIN. Measured on a 246-pod deployment at 671 req/s: 15,098
-    DNS queries/s, of which 80.0% were NXDOMAIN, which is exactly the predicted
-    4-in-5. That volume saturated the cluster's two CoreDNS replicas and produced
+    guaranteed NXDOMAIN. Measured on a 246-pod deployment at roughly 670 req/s:
+    12,794 DNS queries/s sustained, peaking at 15,098 (22.5 per HTTP request),
+    of which 80.0% were NXDOMAIN, which is exactly the predicted 4-in-5. That
+    volume saturated the cluster's two CoreDNS replicas and produced
     `getaddrinfo EAI_AGAIN` on S3 writes, surfacing to callers as HTTP 500s.
 
     Which endpoints are affected depends only on their dot count:
@@ -2470,11 +2471,36 @@ variable "n8n_dns_config" {
   validation {
     condition = (
       var.n8n_dns_config == null ||
+      (
+        length(coalesce(var.n8n_dns_config.searches, [])) <= 32 &&
+        length(join(" ", coalesce(var.n8n_dns_config.searches, []))) <= 2048
+      )
+    )
+    error_message = "n8n_dns_config.searches accepts at most 32 entries totalling 2048 characters (the API server measures the list joined by single spaces, as counted here). Clusters older than 1.32 that do not have the ExpandedDNSConfig feature gate enabled cap this far lower, at 6 entries and 256 characters, so stay under those if you target one."
+  }
+
+  validation {
+    condition = (
+      var.n8n_dns_config == null ||
       alltrue([
-        for o in coalesce(var.n8n_dns_config.options, []) :
-        o.name != "ndots" || (o.value != null && can(tonumber(o.value)) && tonumber(o.value) >= 0 && tonumber(o.value) <= 15)
+        for s in coalesce(var.n8n_dns_config.searches, []) :
+        s == "." || (
+          length(trimsuffix(s, ".")) <= 253 &&
+          can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*\\.?$", s))
+        )
       ])
     )
-    error_message = "n8n_dns_config: the ndots option must carry a numeric value between 0 and 15. glibc silently ignores an out-of-range or non-numeric ndots and falls back to its default of 1, which looks like the setting worked while leaving resolution behaviour unchanged."
+    error_message = "n8n_dns_config.searches entries must each be a lowercase DNS-1123 subdomain of at most 253 characters, with labels of at most 63 characters (a bare \".\" and a single trailing dot are both accepted). The API server applies the same rule, but rejects the pod at admission time rather than at plan time, so an uppercase or malformed search domain otherwise surfaces as a failed rollout."
+  }
+
+  validation {
+    condition = (
+      var.n8n_dns_config == null ||
+      alltrue([
+        for o in coalesce(var.n8n_dns_config.options, []) :
+        o.name != "ndots" || (o.value != null && can(regex("^[0-9]+$", o.value)) && tonumber(o.value) <= 15)
+      ])
+    )
+    error_message = "n8n_dns_config: the ndots option must carry a whole number between 0 and 15, written as a string (\"1\", not \"1.5\"). glibc parses ndots with strtol and silently ignores a fractional, non-numeric or out-of-range value, falling back to its default of 1, which looks like the setting worked while leaving resolution behaviour unchanged."
   }
 }

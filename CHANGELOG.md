@@ -23,7 +23,7 @@ this project adheres to the stability contract in
   unaffected.
 
   Measured on a 246-pod deployment at roughly 670 req/s: setting `ndots: 1`
-  cut DNS query volume by 80% (12,794 to 2,559 queries/s), eliminated 341
+  cut DNS query volume by 80% (12,794 to 2,559 queries/s sustained), eliminated 341
   failed requests out of 122,505 caused by `getaddrinfo EAI_AGAIN` under
   CoreDNS saturation, and dropped max request latency from 15.1s to 1.9s.
   `ndots: 1` only affects names that already contain a dot; a bare
