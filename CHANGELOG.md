@@ -30,7 +30,7 @@ this project adheres to the stability contract in
   `n8n_db_ping_max_failures_before_recovery`: expose n8n's database health-check
   ping settings (`DB_PING_TIMEOUT_MS`, `DB_PING_INTERVAL_SECONDS`,
   `DB_PING_MAX_FAILURES_BEFORE_RECOVERY`). All default to `null`, which omits the
-  variable and leaves n8n's own defaults (2s, 5000ms, 3), so this is additive.
+  variable and leaves n8n's own defaults (5000ms, 2s, 3), so this is additive.
 
   Previously unsettable by any means: the chart has no values path for them, and
   `DB_` is a module-managed prefix so `n8n_extra_env` rejects them at plan time.
