@@ -862,6 +862,16 @@ resource "helm_release" "n8n" {
     # nothing to hash, and local.redis_pod_annotations resolves to {} on that
     # path for the same reason.
     (local.redis_auth_active && var.redis_auth_token_secret_ref == null) ? { podAnnotations = local.redis_pod_annotations } : {},
+
+    # Pod DNS. Omitted entirely unless n8n_dns_config is set, so this is a no-op
+    # by default. See that variable for why it exists (ndots:5 search-path
+    # amplification measured at 80% wasted DNS queries under load).
+    #
+    # local.n8n_dns_config, not var.n8n_dns_config: the variable's optional()
+    # attributes materialise as nulls when unset, and yamlencode would emit
+    # `nameservers: null` into the chart's `{{- toYaml . }}`, which the API
+    # server rejects as an invalid pod spec. The local strips unset keys.
+    local.n8n_dns_config == null ? {} : { dnsConfig = local.n8n_dns_config },
   ))]
 
   depends_on = [

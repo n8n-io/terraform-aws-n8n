@@ -8407,3 +8407,90 @@ run "chart_version_rejects_a_leading_v" {
 
   expect_failures = [var.lbc_chart_version]
 }
+
+# ── Pod DNS (n8n_dns_config) ──────────────────────────────────────────────────
+# Plan-time variable-contract assertions only, per AGENTS.md's documented mock
+# provider limitation: helm_release.values is unknown at plan time, so the
+# rendered dnsConfig cannot be asserted on here.
+
+run "n8n_dns_config_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_dns_config == null
+    error_message = "n8n_dns_config must default to null so Kubernetes' own DNS defaults apply unless a caller opts in."
+  }
+
+  assert {
+    condition     = local.n8n_dns_config == null
+    error_message = "local.n8n_dns_config must resolve to null when the variable is unset, so the dnsConfig key is omitted entirely rather than rendering an empty map."
+  }
+}
+
+run "n8n_dns_config_accepts_an_ndots_override" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      options = [{ name = "ndots", value = "1" }]
+    }
+  }
+
+  assert {
+    condition     = local.n8n_dns_config.options[0].name == "ndots" && local.n8n_dns_config.options[0].value == "1"
+    error_message = "local.n8n_dns_config must carry through a valid ndots option unchanged."
+  }
+
+  assert {
+    condition     = !contains(keys(local.n8n_dns_config), "nameservers") && !contains(keys(local.n8n_dns_config), "searches")
+    error_message = "local.n8n_dns_config must omit nameservers/searches keys entirely when unset, not render them as null: the chart's bare toYaml would emit `nameservers: null`, which the Kubernetes API server rejects."
+  }
+}
+
+run "n8n_dns_config_rejects_more_than_three_nameservers" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      nameservers = ["10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5"]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_rejects_a_non_numeric_ndots_value" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      options = [{ name = "ndots", value = "many" }]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_rejects_an_out_of_range_ndots_value" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      options = [{ name = "ndots", value = "16" }]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_rejects_ndots_without_a_value" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      options = [{ name = "ndots" }]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}

@@ -29,7 +29,8 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `persistence` | Not exposed. n8n itself is stateless and needs no PVC (see README) |
 | `extraVolumes`, `extraVolumeMounts` | `n8n_extra_volumes` / `n8n_extra_volume_mounts` |
 | `extraContainers`, `extraInitContainers` | Not exposed |
-| `dnsPolicy`, `dnsConfig` | Not exposed |
+| `dnsPolicy` | Not exposed; chart default used |
+| `dnsConfig` | `n8n_dns_config` (null = not set, Kubernetes' own `ndots:5` default applies). Setting `options = [{ name = "ndots", value = "1" }]` addresses `ndots:5` search-path amplification: measured 80% DNS query reduction on a 246-pod deployment, see the variable's description |
 | `resources.main/worker/webhookProcessor` | `n8n_{main,worker,webhook}_{cpu,memory}_{request,limit}` |
 | `nodeSelector`, `tolerations`, `affinity`, `nodePlacement` | Not exposed. Node-level placement is controlled at the EKS node group instead (`node_instance_type`, `node_min`/`node_max`), not per-pod scheduling within the chart |
 | `securityContext` | Not exposed; chart default (`fsGroup`/`runAsUser`/`runAsGroup` 1000) used |
