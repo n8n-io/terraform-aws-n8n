@@ -1599,11 +1599,13 @@ data is unambiguously the right thing to add.
 Three things that repeatedly surprise operators of this module, all learned
 the hard way during sustained load validation:
 
-1. **Worker replicas are KEDA-owned.** `kubectl scale deployment/n8n-worker`
-   reverts within seconds: KEDA's ScaledObject reconciles the replica count
-   from queue depth continuously. To pin the worker fleet, set
-   `n8n_worker_keda_min_replicas` = `n8n_worker_keda_max_replicas` and apply;
-   to resize it, change those variables. There is no imperative path.
+1. **Worker replicas are KEDA-owned.** `kubectl -n n8n scale
+   deployment/n8n-worker` reverts within seconds: KEDA's ScaledObject
+   reconciles the replica count from queue depth continuously. To pin the
+   worker fleet, set `n8n_worker_keda_min_replicas` =
+   `n8n_worker_keda_max_replicas` and apply; to resize it, change those
+   variables. There is no imperative path. (Substitute your own `namespace`
+   if you changed it from the default `n8n`.)
 
 2. **Bull queue depth must come from redis_exporter in multi-main.** Every
    tier example in this module runs multiple main pods, and n8n's own
