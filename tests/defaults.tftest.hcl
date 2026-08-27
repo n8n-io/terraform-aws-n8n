@@ -4555,15 +4555,6 @@ run "redis_apply_immediately_reaches_the_single_node_cluster" {
   }
 }
 
-run "redis_apply_immediately_is_unset_by_default_on_the_single_node_cluster" {
-  command = plan
-
-  assert {
-    condition     = local.redis_apply_immediately == null
-    error_message = "The default must stay null rather than false on the single-node path too, so existing clusters see no in-place update for a flag that changes nothing."
-  }
-}
-
 # ── RDS apply_immediately ─────────────────────────────────────────────────────
 # Same request-time-flag reasoning as the Redis pair above, on the database.
 # Without it a db_instance_class change reports "Apply complete" while AWS
@@ -4576,6 +4567,25 @@ run "db_apply_immediately_is_unset_by_default" {
     condition     = aws_db_instance.n8n[0].apply_immediately == null
     error_message = "apply_immediately must be null rather than false at its default. It is a request-time flag the API never reports back, so an instance created before this input existed has it null in state and an explicit false would render as an in-place update that changes nothing."
   }
+}
+
+# Parity with redis_apply_immediately_with_external_redis_warns: the input is
+# module-managed-only, so setting it against a caller-supplied database plans
+# and applies clean while doing nothing at all. The check block warns rather
+# than fails, matching how every other ignored-input warning in this module
+# behaves.
+run "db_apply_immediately_with_external_database_warns" {
+  command = plan
+
+  variables {
+    create_database = false
+    db_host         = "db.internal.example.com"
+    db_password     = "external-db-password"
+
+    db_apply_immediately = true
+  }
+
+  expect_failures = [check.rds_tuning_requires_module_managed_database]
 }
 
 run "db_apply_immediately_reaches_the_instance" {
