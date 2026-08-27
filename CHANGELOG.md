@@ -5,6 +5,30 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to the stability contract in
 [README.md → Stability & versioning](./README.md#stability--versioning).
 
+## [Unreleased]
+
+### Changed
+
+- `db_instance_class` and `n8n_execution_data_storage_mode` descriptions now
+  carry the evidence behind their guidance. Description-only: no default, type
+  or behaviour changes, and no plan output moves.
+
+  `db_instance_class` gains a sizing rule measured rather than guessed. Load
+  validation found a narrow band of **41 to 51 database transactions per
+  completed execution** across every clean workload type tested (no-op webhook,
+  a representative 34-node real workflow, HTTP-heavy and binary-heavy
+  variants), so required database TPS is roughly `target executions/s x 45`,
+  with a `db.r6g.8xlarge`-class Aurora writer sustaining 22,512 TPS as an upper
+  reference point. The band is per *execution*, so workflows triggering
+  sub-executions or heavy Code-node database access sit above it.
+
+  `n8n_execution_data_storage_mode` now says why `database` is the default:
+  in a matched A/B on the representative workflow, database execution storage
+  **outperformed s3 by 37.8% to 45.2%** in sustained throughput, because the
+  per-execution S3 write path costs more than the database write it replaces
+  long before the database itself becomes the bottleneck. `s3` is the lever
+  for a measured database constraint, not a default optimization.
+
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):
