@@ -304,6 +304,14 @@ this project adheres to the stability contract in
   this reads it directly, along with eviction counts, connected clients and
   engine load.
 
+  Queue depth is exported explicitly via `REDIS_EXPORTER_CHECK_SINGLE_KEYS`,
+  not by default: the exporter's standard metrics come from Redis `INFO`, which
+  carries aggregate database statistics and no per-key lengths, so without it
+  the exporter would ship everything except the number it exists for. The keys
+  are the same `:jobs:wait` / `:jobs:active` pair the KEDA ScaledObject scales
+  on, built from the same local, so the autoscaler and any dashboard read one
+  queue rather than two, and both follow `redis_key_prefix`.
+
   The exporter reuses the module's own Redis endpoint and, when AUTH is active,
   the same token Secret the chart mounts as `QUEUE_BULL_REDIS_PASSWORD`, so it
   cannot end up watching a different queue than n8n is running on. All three

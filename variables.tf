@@ -2402,14 +2402,20 @@ variable "redis_exporter_enabled" {
 }
 
 variable "redis_exporter_image" {
-  description = "Image for the optional redis_exporter. Only used when redis_exporter_enabled = true. Defaults to a tag-pinned upstream image; override it to pull from a private mirror, or to pin a digest if your registry policy requires one. Two things to preserve if you do override it. The image must carry a CA bundle (/etc/ssl/certs) or every TLS connection fails: the upstream image copies one in, which is what lets certificate verification stay on against ElastiCache, whose certificates are signed by the Amazon Root CA. And the module pins the container UID to 59000 to match the upstream image's own USER, so a rebuild that runs as root will be rejected by run_as_non_root rather than starting. On TLS: when redis_transit_encryption_enabled is set the exporter is pointed at rediss:// with verification left on, which is correct for a module-managed Redis because local.redis_host is the replication group's own AWS endpoint and the certificate covers that name. The exception is an external Redis (create_elasticache = false) reached through a friendly CNAME: the certificate names the target rather than the alias, so verification fails and the endpoint needs REDIS_EXPORTER_TLS_SERVER_NAME set to the real hostname. That is not exposed as an input yet; open an issue if you need it, and do not reach for REDIS_EXPORTER_SKIP_TLS_VERIFICATION instead."
+  description = "Image for the optional redis_exporter. Only used when redis_exporter_enabled = true. Defaults to a tag-pinned upstream image; override it to pull from a private mirror, or to pin a digest if your registry policy requires one. Two things to preserve if you do override it. The image must carry a CA bundle (/etc/ssl/certs) or every TLS connection fails: the upstream image copies one in, which is what lets certificate verification stay on against ElastiCache, whose certificates are signed by the Amazon Root CA. And the module pins the container UID to 59000, matching the upstream image's own USER. Note that a pinned run_as_user WINS over whatever USER an image declares, so a custom image runs as 59000 regardless of its own default and must work as that UID: it cannot rely on files owned by another user, and run_as_non_root will not catch an image that would otherwise have run as root. On TLS: when redis_transit_encryption_enabled is set the exporter is pointed at rediss:// with verification left on, which is correct for a module-managed Redis because local.redis_host is the replication group's own AWS endpoint and the certificate covers that name. The exception is an external Redis (create_elasticache = false) reached through a friendly CNAME: the certificate names the target rather than the alias, so verification fails and the endpoint needs REDIS_EXPORTER_TLS_SERVER_NAME set to the real hostname. That is not exposed as an input yet; open an issue if you need it, and do not reach for REDIS_EXPORTER_SKIP_TLS_VERIFICATION instead."
   type        = string
   default     = "oliver006/redis_exporter:v1.66.0"
   nullable    = false
 
+  # Whitespace is rejected, not trimmed. A padded or internally-spaced
+  # reference survives a blank check but reaches Kubernetes as an unpullable
+  # image, so the pod sits in ImagePullBackOff with an error naming the
+  # registry rather than this input. Same succeeds-then-fails-at-runtime shape
+  # the redis_host validations exist to prevent, and rejected at its source so
+  # the value the caller sets is the value that gets deployed.
   validation {
-    condition     = trimspace(var.redis_exporter_image) != ""
-    error_message = "redis_exporter_image must not be blank. Leave the default in place, or set a reachable image reference."
+    condition     = can(regex("^[^[:space:]]+$", var.redis_exporter_image))
+    error_message = "redis_exporter_image must be non-blank and contain no whitespace. Leave the default in place, or set a reachable image reference."
   }
 }
 

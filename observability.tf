@@ -108,6 +108,28 @@ resource "kubernetes_deployment_v1" "redis_exporter" {
             value = "${local.redis_tls_active ? "rediss" : "redis"}://${local.redis_host}:${local.redis_port}"
           }
 
+          # Bull queue depth, which is the whole reason this exporter exists.
+          # It does NOT come for free: the default metric set is built from
+          # Redis INFO, which carries aggregate database statistics and no
+          # per-key lengths at all, so without this the exporter would export
+          # everything EXCEPT the number anyone turned it on for.
+          #
+          # check-single-keys names exact keys rather than patterns, so it
+          # costs one O(1) LLEN per key per scrape and never scans the keyspace
+          # (check-keys takes glob patterns and can SCAN, which is not
+          # something to point at a production queue). Each key is exported as
+          # redis_key_size{key="..."}.
+          #
+          # The two keys are the same pair the KEDA ScaledObject already scales
+          # on, built from the same local, so the exporter and the autoscaler
+          # cannot end up watching different lists: :jobs:wait is the backlog
+          # KEDA reacts to, :jobs:active is what workers currently hold. If
+          # redis_key_prefix changes, all four call sites move together.
+          env {
+            name  = "REDIS_EXPORTER_CHECK_SINGLE_KEYS"
+            value = "${local.redis_key_prefix_value}:jobs:wait,${local.redis_key_prefix_value}:jobs:active"
+          }
+
           # ACL username, external Redis only (local.redis_username_value is
           # null whenever the module manages the cluster). Same treatment as
           # redis.username in the Helm values: not a credential, so it is a
@@ -190,14 +212,22 @@ resource "kubernetes_deployment_v1" "redis_exporter" {
             read_only_root_filesystem  = true
             run_as_non_root            = true
             # 59000 is the UID the upstream image already declares
-            # (USER 59000:59000 in its Dockerfile), so this matches rather than
-            # overrides it. Stated explicitly anyway, because run_as_non_root =
-            # true only checks that the resolved UID is non-zero: a mirrored or
-            # rebuilt image that dropped the USER line would fail at container
-            # start with CreateContainerConfigError, naming nothing in this
-            # repo. Pinning the UID keeps redis_exporter_image overridable
-            # without that trap. The exporter reads a socket and writes
-            # nothing, so it needs no writable filesystem either.
+            # (USER 59000:59000 in its Dockerfile), so this matches it rather
+            # than overriding it.
+            #
+            # Note what pinning the UID actually does, since it is easy to get
+            # backwards: run_as_user WINS over the image's own USER, so this
+            # decides the UID outright and run_as_non_root can no longer reject
+            # an image that would otherwise have run as root. That is the
+            # trade. It buys a container that starts predictably whatever a
+            # mirrored or rebuilt image declares, and it costs the ability to
+            # detect such a rebuild through the non-root check. The consequence
+            # for anyone overriding redis_exporter_image: the container runs as
+            # 59000 regardless, so a custom image has to work as that UID.
+            # Documented on the variable too.
+            #
+            # The exporter reads a socket and writes nothing, so it needs no
+            # writable filesystem either.
             run_as_user = 59000
             capabilities {
               drop = ["ALL"]
@@ -207,6 +237,15 @@ resource "kubernetes_deployment_v1" "redis_exporter" {
       }
     }
   }
+
+  # local.namespace_name only carries an ordering edge on the create_namespace
+  # path, where it resolves to the namespace resource's own attribute. With
+  # create_namespace = false it is a plain literal, leaving these resources
+  # with no edge to the node group at all: on a first apply they can be
+  # scheduled before any node exists. Every other kubernetes_* resource in this
+  # module carries the same explicit depends_on for exactly this reason (see
+  # kubernetes_secret.n8n_redis in n8n.tf).
+  depends_on = [aws_eks_node_group.n8n]
 }
 
 resource "kubernetes_service_v1" "redis_exporter" {
@@ -234,4 +273,7 @@ resource "kubernetes_service_v1" "redis_exporter" {
       protocol    = "TCP"
     }
   }
+
+  # Same reasoning as the Deployment above.
+  depends_on = [aws_eks_node_group.n8n]
 }
