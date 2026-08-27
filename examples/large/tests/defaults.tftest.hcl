@@ -251,11 +251,14 @@ run "vpc_cni_addon_warm_ip_tuning" {
 }
 
 # ── PgBouncer ────────────────────────────────────────────────────────────────
-# Required anti-affinity, two replicas, and the PDB together guarantee that
-# no single-node failure or voluntary drain can take all n8n DB traffic down.
-# These were the live-validated fixes from PR #4; pinning them at plan time
-# means a future refactor can't silently regress to `preferred` anti-affinity
-# or a single replica.
+# Required anti-affinity, four replicas, and the PDB together guarantee that
+# no single-node failure or voluntary drain can take all n8n DB traffic down,
+# and that the client-connection budget stays above the fleet ceiling (see
+# the replica assertion's message). Anti-affinity and the PDB were the
+# live-validated fixes from PR #4; the replica count was raised from two
+# during load validation. Pinning all of it at plan time means a future
+# refactor can't silently regress to `preferred` anti-affinity or an
+# undersized replica count.
 
 run "pgbouncer_namespace_and_replicas" {
   command = plan
