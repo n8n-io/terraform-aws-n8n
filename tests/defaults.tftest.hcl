@@ -8370,8 +8370,8 @@ run "node_disk_size_accepts_a_larger_volume" {
   }
 
   assert {
-    condition     = var.node_disk_size == 100
-    error_message = "node_disk_size should accept a value above the 20 GiB EKS default."
+    condition     = aws_eks_node_group.n8n[0].disk_size == 100
+    error_message = "node_disk_size must reach the node group's disk_size, otherwise the root volume keeps the 20 GiB EKS default however the variable is set."
   }
 }
 
@@ -8380,6 +8380,16 @@ run "node_disk_size_rejects_a_volume_below_the_eks_default" {
 
   variables {
     node_disk_size = 10
+  }
+
+  expect_failures = [var.node_disk_size]
+}
+
+run "node_disk_size_rejects_a_fractional_volume" {
+  command = plan
+
+  variables {
+    node_disk_size = 20.5
   }
 
   expect_failures = [var.node_disk_size]

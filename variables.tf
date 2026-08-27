@@ -505,6 +505,11 @@ variable "node_disk_size" {
     condition     = var.node_disk_size == null ? true : var.node_disk_size >= 20
     error_message = "node_disk_size must be at least 20 GiB (the EKS default), or null to use that default."
   }
+
+  validation {
+    condition     = var.node_disk_size == null || try(var.node_disk_size == floor(var.node_disk_size), false)
+    error_message = "node_disk_size must be a whole number of GiB."
+  }
 }
 
 variable "node_instance_type" {
