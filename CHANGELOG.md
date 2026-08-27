@@ -97,6 +97,20 @@ this project adheres to the stability contract in
   the last: setting a lock duration and a stalled interval together would
   have dropped one of them with no error.
 
+  The renewal interval must stay strictly below the lock duration, and the
+  validations enforce that against the effective value rather than the
+  literal one. Lowering `n8n_queue_worker_lock_duration` to `10000` ms or
+  less while leaving `n8n_queue_worker_lock_renew_time` null is rejected,
+  because the chart would keep its own `10000` ms renewal default: the lock
+  would expire at or before the first renewal ever fired, and Bull would
+  treat every job on a perfectly healthy worker as stalled. Set the renewal
+  interval explicitly below the duration to run a short lock.
+
+  All three are validated as whole numbers. The chart's `values.schema.json`
+  declares every `redis.worker.*` key as `{"type": "integer"}`, so a
+  fractional value would otherwise pass the module and fail later during
+  Helm schema validation at apply time.
+
   `n8n_queue_worker_stalled_interval` cannot be set to `0`. n8n documents
   `0` as "disable stall checking", but the chart's `values.schema.json`
   declares the key as `{"type": "integer", "minimum": 1000}`, so `0` is

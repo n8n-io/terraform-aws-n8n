@@ -1093,13 +1093,18 @@ variable "n8n_worker_concurrency" {
 }
 
 variable "n8n_queue_worker_lock_duration" {
-  description = "Milliseconds a worker holds a Bull job lock before it must renew it. Maps to the chart's redis.worker.lockDuration value (QUEUE_WORKER_LOCK_DURATION on the pods); must go through this chart value rather than config.extraEnv, because the chart's ConfigMap entry for this key renders unconditionally and a duplicate produces a container env entry carrying both value and valueFrom, which the Kubernetes API rejects. Leave null for n8n's own default (60000ms)."
+  description = "Milliseconds a worker holds a Bull job lock before it must renew it. Maps to the chart's redis.worker.lockDuration value (QUEUE_WORKER_LOCK_DURATION on the pods); must go through this chart value rather than config.extraEnv, because the chart's ConfigMap entry for this key renders unconditionally and a duplicate produces a container env entry carrying both value and valueFrom, which the Kubernetes API rejects. Leave null for n8n's own default (60000ms). Lowering it to 10000ms or less additionally requires setting n8n_queue_worker_lock_renew_time explicitly below it: the chart's renewal default is 10000ms, so an unset renewal interval would otherwise outlast the lock. That pairing is validated on n8n_queue_worker_lock_renew_time, because Terraform forbids two variables' validations from referencing each other, so a violation is reported against that variable."
   type        = number
   default     = null
 
   validation {
     condition     = var.n8n_queue_worker_lock_duration == null ? true : var.n8n_queue_worker_lock_duration >= 1000
     error_message = "n8n_queue_worker_lock_duration must be at least 1000 milliseconds, or null to use n8n's own default. The chart's values.schema.json enforces a minimum of 1000 on redis.worker.lockDuration, so lower values are rejected during Helm schema validation."
+  }
+
+  validation {
+    condition     = var.n8n_queue_worker_lock_duration == null ? true : var.n8n_queue_worker_lock_duration == floor(var.n8n_queue_worker_lock_duration)
+    error_message = "n8n_queue_worker_lock_duration must be a whole number of milliseconds. The chart's values.schema.json declares redis.worker.lockDuration as {\"type\": \"integer\"}, so a fractional value is rejected during Helm schema validation at apply time rather than here."
   }
 }
 
@@ -1109,11 +1114,24 @@ variable "n8n_queue_worker_lock_renew_time" {
   default     = null
 
   validation {
-    condition = var.n8n_queue_worker_lock_renew_time == null ? true : (
-      var.n8n_queue_worker_lock_renew_time >= 1000 &&
-      var.n8n_queue_worker_lock_renew_time < coalesce(var.n8n_queue_worker_lock_duration, 60000)
-    )
-    error_message = "n8n_queue_worker_lock_renew_time must be at least 1000 milliseconds (the chart's values.schema.json enforces this minimum on redis.worker.lockRenewTime) and strictly less than n8n_queue_worker_lock_duration, or less than n8n's 60000ms default when that variable is null, otherwise the lock always expires before it can be renewed."
+    condition     = var.n8n_queue_worker_lock_renew_time == null ? true : var.n8n_queue_worker_lock_renew_time >= 1000
+    error_message = "n8n_queue_worker_lock_renew_time must be at least 1000 milliseconds, or null to use n8n's own default. The chart's values.schema.json enforces a minimum of 1000 on redis.worker.lockRenewTime, so lower values are rejected during Helm schema validation."
+  }
+
+  # Compared against effective values rather than literal ones, so this single
+  # check also covers a lock duration lowered to 10000ms or below while this
+  # variable is left null, where the chart would keep its own 10000ms renewal
+  # default. Terraform forbids two variables' validations from referencing each
+  # other (it reports a cycle), so the whole invariant is hosted here instead of
+  # being split across both variables.
+  validation {
+    condition     = coalesce(var.n8n_queue_worker_lock_renew_time, 10000) < coalesce(var.n8n_queue_worker_lock_duration, 60000)
+    error_message = "The effective Bull lock renewal interval must stay strictly below the effective lock duration, otherwise the lock expires at or before the first renewal ever fires and Bull treats every job as stalled however healthy the worker is. Unset values fall back to the chart's own defaults, 10000ms for n8n_queue_worker_lock_renew_time and 60000ms for n8n_queue_worker_lock_duration, so lowering n8n_queue_worker_lock_duration to 10000ms or less requires setting n8n_queue_worker_lock_renew_time explicitly below it."
+  }
+
+  validation {
+    condition     = var.n8n_queue_worker_lock_renew_time == null ? true : var.n8n_queue_worker_lock_renew_time == floor(var.n8n_queue_worker_lock_renew_time)
+    error_message = "n8n_queue_worker_lock_renew_time must be a whole number of milliseconds. The chart's values.schema.json declares redis.worker.lockRenewTime as {\"type\": \"integer\"}, so a fractional value is rejected during Helm schema validation at apply time rather than here."
   }
 }
 
@@ -1156,6 +1174,11 @@ variable "n8n_queue_worker_stalled_interval" {
   validation {
     condition     = var.n8n_queue_worker_stalled_interval == null ? true : var.n8n_queue_worker_stalled_interval >= 1000
     error_message = "n8n_queue_worker_stalled_interval must be at least 1000 milliseconds, or null to use n8n's own default. The chart's values.schema.json enforces a minimum of 1000 on redis.worker.stalledInterval, so lower values (including 0 to disable stall checking) are rejected during Helm schema validation and cannot be set through this module."
+  }
+
+  validation {
+    condition     = var.n8n_queue_worker_stalled_interval == null ? true : var.n8n_queue_worker_stalled_interval == floor(var.n8n_queue_worker_stalled_interval)
+    error_message = "n8n_queue_worker_stalled_interval must be a whole number of milliseconds. The chart's values.schema.json declares redis.worker.stalledInterval as {\"type\": \"integer\"}, so a fractional value is rejected during Helm schema validation at apply time rather than here."
   }
 }
 

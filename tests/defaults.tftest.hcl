@@ -3781,6 +3781,67 @@ run "queue_worker_lock_settings_accept_valid_values" {
   }
 }
 
+# Each key is emitted by its own conditional branch in
+# local.n8n_queue_worker_settings. The all-set and none-set runs above would
+# both still pass if one branch emitted its key unconditionally, or carried a
+# condition copy-pasted from a sibling variable, so these three runs pin each
+# branch in isolation.
+run "queue_worker_lock_duration_alone_emits_only_its_key" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_duration = 180000
+  }
+
+  assert {
+    condition     = jsonencode(local.n8n_queue_worker_settings) == jsonencode({ lockDuration = 180000 })
+    error_message = "local.n8n_queue_worker_settings must carry only lockDuration when n8n_queue_worker_lock_duration is the only variable set, so the chart keeps its own lockRenewTime and stalledInterval defaults."
+  }
+}
+
+run "queue_worker_lock_renew_time_alone_emits_only_its_key" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_renew_time = 15000
+  }
+
+  assert {
+    condition     = jsonencode(local.n8n_queue_worker_settings) == jsonencode({ lockRenewTime = 15000 })
+    error_message = "local.n8n_queue_worker_settings must carry only lockRenewTime when n8n_queue_worker_lock_renew_time is the only variable set, so the chart keeps its own lockDuration and stalledInterval defaults."
+  }
+}
+
+run "queue_worker_stalled_interval_alone_emits_only_its_key" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_stalled_interval = 45000
+  }
+
+  assert {
+    condition     = jsonencode(local.n8n_queue_worker_settings) == jsonencode({ stalledInterval = 45000 })
+    error_message = "local.n8n_queue_worker_settings must carry only stalledInterval when n8n_queue_worker_stalled_interval is the only variable set, so the chart keeps its own lockDuration and lockRenewTime defaults."
+  }
+}
+
+run "queue_worker_lock_duration_accepts_low_value_with_explicit_renew_time" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_duration   = 5000
+    n8n_queue_worker_lock_renew_time = 2000
+  }
+
+  assert {
+    condition = jsonencode(local.n8n_queue_worker_settings) == jsonencode({
+      lockDuration  = 5000
+      lockRenewTime = 2000
+    })
+    error_message = "A lock duration at or below the chart's 10000ms renewal default must still be accepted when n8n_queue_worker_lock_renew_time is set explicitly below it."
+  }
+}
+
 run "queue_worker_lock_duration_rejects_below_1000" {
   command = plan
 
@@ -3788,6 +3849,9 @@ run "queue_worker_lock_duration_rejects_below_1000" {
     n8n_queue_worker_lock_duration = 999
   }
 
+  # Only the duration's own floor is reported. The renewal invariant lives on
+  # n8n_queue_worker_lock_renew_time and reads this variable, so Terraform
+  # skips it once this variable is already invalid: one root cause, one error.
   expect_failures = [var.n8n_queue_worker_lock_duration]
 }
 
@@ -3840,6 +3904,63 @@ run "queue_worker_stalled_interval_rejects_zero" {
     # minimum: 1000, so 0 is unreachable through this chart. See the
     # variable's description.
     n8n_queue_worker_stalled_interval = 0
+  }
+
+  expect_failures = [var.n8n_queue_worker_stalled_interval]
+}
+
+# The renewal invariant is hosted on n8n_queue_worker_lock_renew_time (see that
+# variable), so these two runs lower the duration but expect the failure there.
+run "queue_worker_renewal_invariant_rejects_low_duration_with_default_renew_time" {
+  command = plan
+
+  variables {
+    # Renewal left null, so the chart keeps its own 10000ms default. That
+    # outlasts this lock, so the lock expires before the first renewal fires
+    # and Bull treats every job as stalled.
+    n8n_queue_worker_lock_duration = 5000
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_renew_time]
+}
+
+run "queue_worker_renewal_invariant_rejects_duration_at_chart_renew_default" {
+  command = plan
+
+  variables {
+    # Exactly the chart's renewal default: the renewal timer fires at the same
+    # instant the lock expires, so the renewal is a race it can only lose.
+    n8n_queue_worker_lock_duration = 10000
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_renew_time]
+}
+
+run "queue_worker_lock_duration_rejects_fractional_value" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_duration = 60000.5
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_duration]
+}
+
+run "queue_worker_lock_renew_time_rejects_fractional_value" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_renew_time = 15000.5
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_renew_time]
+}
+
+run "queue_worker_stalled_interval_rejects_fractional_value" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_stalled_interval = 45000.5
   }
 
   expect_failures = [var.n8n_queue_worker_stalled_interval]
