@@ -178,6 +178,18 @@ module "n8n" {
   # propagation across the cluster.
   n8n_helm_timeout = 1800
 
+  # ── Pod DNS ───────────────────────────────────────────────────────────────────
+  # ndots:1. Kubernetes' default ndots:5 makes every AWS endpoint with 4 or
+  # fewer dots (S3 bucket endpoints, in-cluster service FQDNs) cost five DNS
+  # queries, four of them guaranteed NXDOMAIN. Measured at 246 pods: 15,098
+  # DNS queries/s, 80.0% NXDOMAIN, saturating CoreDNS and surfacing as
+  # getaddrinfo EAI_AGAIN on S3 writes (round-2 D11; the pass27a A/B measured
+  # the fix directly). Safe because the module addresses every in-cluster
+  # dependency by FQDN; bare single-label names still use the search path.
+  n8n_dns_config = {
+    options = [{ name = "ndots", value = "1" }]
+  }
+
   tags = local.common_tags
 
   depends_on = [module.vpc, aws_rds_cluster_instance.writer]
