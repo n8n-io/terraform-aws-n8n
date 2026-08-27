@@ -1481,7 +1481,11 @@ variable "n8n_task_runner_custom_config" {
     annotation, exactly as with `redis_auth_token_secret_ref`. Restart the
     deployments after every launcher-config change:
 
-      kubectl rollout restart deploy/<release> deploy/<release>-worker -n <namespace>
+      kubectl rollout restart deploy/n8n-main deploy/n8n-worker -n <namespace>
+
+    The names are literal: the module pins the Helm release name to "n8n", and
+    the chart's only Deployments mounting this config are <fullname>-main and
+    <fullname>-worker (the webhook processor runs no task runners).
   EOT
 
   type = object({
