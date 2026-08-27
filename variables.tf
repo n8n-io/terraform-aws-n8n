@@ -2385,9 +2385,32 @@ variable "n8n_webhook_hpa_scale_up_stabilization_window_seconds" {
 # ── Observability ─────────────────────────────────────────────────────────────
 
 variable "n8n_metrics_enabled" {
-  description = "Enable n8n's built-in Prometheus metrics endpoint. When true, the module appends N8N_METRICS=true to the n8n Helm release's config.extraEnv, which the chart applies to every n8n container (main, worker, webhook processor). n8n exposes /metrics on its existing HTTP port (5678) — the same port and service the chart already publishes for the UI/API. The n8n Helm chart at the currently pinned version (see n8n_chart_version) exposes no top-level metrics / serviceMonitor block of its own, so this toggle is intentionally env-var-only. Scrape configuration (Prometheus scrape annotations or a ServiceMonitor CR) is left to the caller's monitoring stack — in practice the main pod's Service is the meaningful scrape target. Defaults to false; when false the env var is omitted entirely so n8n's own defaults apply."
+  description = "Enable n8n's built-in Prometheus metrics endpoint. When true, the module appends N8N_METRICS=true to the n8n Helm release's config.extraEnv, which the chart applies to every n8n container (main, worker, webhook processor). n8n exposes /metrics on its existing HTTP port (5678) — the same port and service the chart already publishes for the UI/API. The n8n Helm chart at the currently pinned version (see n8n_chart_version) exposes no top-level metrics / serviceMonitor block of its own, so this toggle is intentionally env-var-only. Scrape configuration (Prometheus scrape annotations or a ServiceMonitor CR) is left to the caller's monitoring stack — in practice the main pod's Service is the meaningful scrape target. Defaults to false; when false the env var is omitted entirely so n8n's own defaults apply. Note that this endpoint does NOT give you a usable Bull queue depth in the multi-main topology this module deploys; see redis_exporter_enabled for that signal."
   type        = bool
   default     = false
+}
+
+variable "redis_exporter_enabled" {
+  description = "Deploy a redis_exporter (one pod, plus a Service on :9121) pointed at the module's Redis. Off by default. Turn it on when you scrape Prometheus metrics: Bull queue depth is the signal KEDA scales workers on and the first thing worth looking at during an incident, and it is NOT reliably available from n8n's own /metrics in a multi-main topology (which is what this module deploys, and what every tier example uses): the queue gauge reports per-main rather than per-queue, so the figure is misleading rather than absent. Redis is the source of truth and this exporter reads it directly, along with eviction counts, connected clients and engine load. Reuses the module's own Redis endpoint and, when AUTH is active, the same token Secret n8n itself uses (the module-managed one, or your own when redis_auth_token_secret_ref is set), so it cannot drift from the queue n8n is actually running on. Scrape it via the prometheus.io annotations on the pod, or point a ServiceMonitor at the Service. Independent of n8n_metrics_enabled: they expose different things and neither implies the other."
+  type        = bool
+  default     = false
+
+  # null is not meaningful here: a caller writing `x = null` in a module block
+  # would otherwise propagate null into the exporter count expressions and die
+  # with an opaque "Invalid count argument". See AGENTS.md on nullable.
+  nullable = false
+}
+
+variable "redis_exporter_image" {
+  description = "Image for the optional redis_exporter. Only used when redis_exporter_enabled = true. Defaults to a tag-pinned upstream image; override it to pull from a private mirror, or to pin a digest if your registry policy requires one. Two things to preserve if you do override it. The image must carry a CA bundle (/etc/ssl/certs) or every TLS connection fails: the upstream image copies one in, which is what lets certificate verification stay on against ElastiCache, whose certificates are signed by the Amazon Root CA. And the module pins the container UID to 59000 to match the upstream image's own USER, so a rebuild that runs as root will be rejected by run_as_non_root rather than starting. On TLS: when redis_transit_encryption_enabled is set the exporter is pointed at rediss:// with verification left on, which is correct for a module-managed Redis because local.redis_host is the replication group's own AWS endpoint and the certificate covers that name. The exception is an external Redis (create_elasticache = false) reached through a friendly CNAME: the certificate names the target rather than the alias, so verification fails and the endpoint needs REDIS_EXPORTER_TLS_SERVER_NAME set to the real hostname. That is not exposed as an input yet; open an issue if you need it, and do not reach for REDIS_EXPORTER_SKIP_TLS_VERIFICATION instead."
+  type        = string
+  default     = "oliver006/redis_exporter:v1.66.0"
+  nullable    = false
+
+  validation {
+    condition     = trimspace(var.redis_exporter_image) != ""
+    error_message = "redis_exporter_image must not be blank. Leave the default in place, or set a reachable image reference."
+  }
 }
 
 variable "n8n_templates_enabled" {
