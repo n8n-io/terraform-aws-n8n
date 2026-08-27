@@ -29,9 +29,6 @@ this project adheres to the stability contract in
   long before the database itself becomes the bottleneck. `s3` is the lever
   for a measured database constraint, not a default optimization.
 
-  `db_postgresdb_pool_size` picks up a typographic fix in the same pass
-  (`--concurrency` in backticks).
-
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):

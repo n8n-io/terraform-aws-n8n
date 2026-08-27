@@ -1435,7 +1435,7 @@ variable "db_password_secret_ref" {
 }
 
 variable "db_postgresdb_pool_size" {
-  description = "Number of TypeORM connection pool slots per n8n pod. Each pod holds this many persistent PostgreSQL connections. n8n's own default is 2. Size it at or above the per-pod concurrency that will touch the database: a worker runs `--concurrency` jobs at once, and a webhook processor has no concurrency ceiling at all, so anything below that queues by configuration. The queue is unbounded and each waiter is bounded only by n8n_db_postgresdb_connection_timeout_ms, so under-sizing this surfaces as a sudden total failure on individual pods rather than as gradual slowdown. PgBouncer in transaction mode does not remove the need: it multiplexes upstream connections, while this setting governs the pod-local pool the requests actually queue in."
+  description = "Number of TypeORM connection pool slots per n8n pod. Each pod holds this many persistent PostgreSQL connections. Rule of thumb: pool_size >= worker_concurrency / 4. With PgBouncer in transaction mode a lower value (5) is sufficient; without PgBouncer use a value matching concurrency (10-20)."
   type        = number
   default     = 10
 
