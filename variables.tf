@@ -473,6 +473,45 @@ variable "alb_ssl_policy" {
 # Multi-main runs 6+ pods (2 main, 2 workers, 2 webhook processors).
 # 3 × t3.medium provides enough headroom at startup; HPA scales further.
 
+variable "node_disk_size" {
+  description = <<-EOT
+    Root EBS volume size in GiB for the EKS worker nodes. Leave null for the EKS
+    managed-node-group default, which is 20 GiB. Previously unsettable: the node
+    group set no disk_size at all and the module exposed no input, so every
+    deployment silently took the 20 GiB default regardless of pod density.
+
+    20 GiB is not much once the node's own baseline is accounted for. Measured on
+    a 42-node m7i.4xlarge cluster running n8n at load, about 7.7 GiB per node is
+    consumed before any workload growth, of which roughly 2.3 GiB is OS files
+    under /usr and 3.5 to 3.8 GiB is container images and layers under
+    /var/lib/containerd. The kubelet begins evicting pods at around 2.1 GiB
+    available. That leaves roughly 11 GiB of usable headroom on a 20 GiB volume,
+    which is a good deal less than the volume size suggests.
+
+    Size it for TRANSIENT SPIKES, not for steady-state growth. The same cluster
+    was observed sitting flat for an hour and then consuming 13 to 14 GiB per node
+    within about four minutes, across 40 of 42 nodes simultaneously, before
+    releasing it again just as quickly. A volume sized to the steady state has no
+    margin for that and the kubelet evicts, which on this workload took out 279
+    pods in one episode.
+
+    NOTE: changing this on an existing cluster replaces every node in the group.
+    Plan for the rollout, and do not change it during a measurement run.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.node_disk_size == null ? true : var.node_disk_size >= 20
+    error_message = "node_disk_size must be at least 20 GiB (the EKS default), or null to use that default."
+  }
+
+  validation {
+    condition     = var.node_disk_size == null || try(var.node_disk_size == floor(var.node_disk_size), false)
+    error_message = "node_disk_size must be a whole number of GiB."
+  }
+}
+
 variable "node_instance_type" {
   description = "EC2 instance type for EKS worker nodes. t3.xlarge (4 vCPU, 16GB) is the recommended minimum for multi-main — the 6 n8n pods (main × 2, worker × 2, webhook × 2) request ~3,600m CPU at minimum replicas, leaving t3.medium nodes with insufficient headroom for HPA to scale."
   type        = string

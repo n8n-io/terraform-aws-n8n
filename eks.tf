@@ -243,6 +243,7 @@ resource "aws_eks_node_group" "n8n" {
   node_role_arn   = aws_iam_role.nodes[0].arn
   subnet_ids      = local.private_subnets
   instance_types  = [var.node_instance_type]
+  disk_size       = var.node_disk_size
 
   scaling_config {
     desired_size = var.node_desired

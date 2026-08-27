@@ -5,6 +5,27 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to the stability contract in
 [README.md → Stability & versioning](./README.md#stability--versioning).
 
+## [Unreleased]
+
+### Added
+
+- `node_disk_size`: root EBS volume size in GiB for the EKS worker nodes.
+  Defaults to `null`, which keeps the EKS managed-node-group default of 20
+  GiB, so this is additive and no existing deployment changes.
+
+  Previously unsettable by any means: `aws_eks_node_group.n8n` set no
+  `disk_size` and there was no input for it, so every deployment took 20
+  GiB regardless of pod density. 20 GiB is tighter than it looks: about 7.7
+  GiB per node is consumed before any workload growth (OS files plus
+  container images), and the kubelet evicts pods at around 2.1 GiB
+  available, leaving roughly 11 GiB of usable headroom rather than 20.
+
+  Size it for transient spikes, not steady state: a 42-node cluster running
+  n8n at load was observed sitting flat for an hour and then consuming 13
+  to 14 GiB per node in about four minutes, across 40 of 42 nodes at once,
+  evicting 279 pods in one episode. Changing this on an existing cluster
+  replaces every node in the group.
+
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):
