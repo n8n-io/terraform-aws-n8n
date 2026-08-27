@@ -1104,7 +1104,7 @@ variable "n8n_queue_worker_lock_duration" {
 
   validation {
     condition     = var.n8n_queue_worker_lock_duration == null ? true : var.n8n_queue_worker_lock_duration == floor(var.n8n_queue_worker_lock_duration)
-    error_message = "n8n_queue_worker_lock_duration must be a whole number of milliseconds. The chart's values.schema.json declares redis.worker.lockDuration as {\"type\": \"integer\"}, so a fractional value is rejected during Helm schema validation at apply time rather than here."
+    error_message = "n8n_queue_worker_lock_duration must be a whole number of milliseconds, so this value is rejected at plan time. The chart's values.schema.json declares redis.worker.lockDuration as {\"type\": \"integer\"}, so a fractional value that slipped past this check would only fail later, during Helm schema validation at apply time."
   }
 }
 
@@ -1131,7 +1131,7 @@ variable "n8n_queue_worker_lock_renew_time" {
 
   validation {
     condition     = var.n8n_queue_worker_lock_renew_time == null ? true : var.n8n_queue_worker_lock_renew_time == floor(var.n8n_queue_worker_lock_renew_time)
-    error_message = "n8n_queue_worker_lock_renew_time must be a whole number of milliseconds. The chart's values.schema.json declares redis.worker.lockRenewTime as {\"type\": \"integer\"}, so a fractional value is rejected during Helm schema validation at apply time rather than here."
+    error_message = "n8n_queue_worker_lock_renew_time must be a whole number of milliseconds, so this value is rejected at plan time. The chart's values.schema.json declares redis.worker.lockRenewTime as {\"type\": \"integer\"}, so a fractional value that slipped past this check would only fail later, during Helm schema validation at apply time."
   }
 }
 
@@ -1178,7 +1178,7 @@ variable "n8n_queue_worker_stalled_interval" {
 
   validation {
     condition     = var.n8n_queue_worker_stalled_interval == null ? true : var.n8n_queue_worker_stalled_interval == floor(var.n8n_queue_worker_stalled_interval)
-    error_message = "n8n_queue_worker_stalled_interval must be a whole number of milliseconds. The chart's values.schema.json declares redis.worker.stalledInterval as {\"type\": \"integer\"}, so a fractional value is rejected during Helm schema validation at apply time rather than here."
+    error_message = "n8n_queue_worker_stalled_interval must be a whole number of milliseconds, so this value is rejected at plan time. The chart's values.schema.json declares redis.worker.stalledInterval as {\"type\": \"integer\"}, so a fractional value that slipped past this check would only fail later, during Helm schema validation at apply time."
   }
 }
 
