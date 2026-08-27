@@ -508,6 +508,16 @@ locals {
     "N8N_COMMUNITY_PACKAGES_PREVENT_LOADING",
     "N8N_COMMUNITY_PACKAGES_REGISTRY",
     "N8N_CUSTOM_EXTENSIONS",
+    # Owned by n8n_node_max_old_space_size_mb. Reserved even though the module
+    # only emits it when that input is non-null, and for a sharper reason than
+    # the other opt-in entries: NODE_OPTIONS is a whole flag STRING, not a
+    # single setting. A caller passing it through n8n_extra_env to add an
+    # unrelated Node flag would not merge with the module's value, it would
+    # replace it wholesale (extraEnv is appended last, Kubernetes resolves
+    # duplicate names last-wins), silently unpinning the heap ceiling the input
+    # says is in force. There is no partial-override path to offer here, so the
+    # name is reserved outright.
+    "NODE_OPTIONS",
     # Owned by redis_key_prefix, which is the single source of truth for the
     # Redis namespace: it sets this, the chart's redis.prefix (QUEUE_BULL_PREFIX)
     # and the KEDA ScaledObject's listName together. QUEUE_BULL_PREFIX is

@@ -1016,6 +1016,81 @@ run "webhook_hpa_scale_up_stabilization_window_rejects_above_max" {
   expect_failures = [var.n8n_webhook_hpa_scale_up_stabilization_window_seconds]
 }
 
+# ── V8 heap ceiling (NODE_OPTIONS) ────────────────────────────────────────────
+# Variable-contract assertions only. The value rides config.extraEnv, and
+# helm_release.values is unknown at plan time under the mock provider (see
+# AGENTS.md, "Known mock provider limitations"), so that NODE_OPTIONS is
+# actually rendered onto the pods is not assertable here.
+#
+# To verify the wiring on a live deployment, exec into any n8n pod and read the
+# ceiling V8 actually applied rather than the env var it was asked for:
+#
+#   kubectl exec -n n8n deploy/n8n-webhook -- \
+#     node -e 'console.log(require("v8").getHeapStatistics().heap_size_limit)'
+#
+# With the variable unset that prints ~2,133,000,000 (V8's own default, the
+# ~2,033 MB ceiling this input exists to lift) regardless of the container
+# memory limit. With it set the figure tracks the value. When
+# n8n_metrics_enabled is on, n8n_nodejs_heap_size_total_bytes on /metrics shows
+# the same ceiling without an exec.
+
+run "node_max_old_space_size_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_node_max_old_space_size_mb == null
+    error_message = "n8n_node_max_old_space_size_mb must default to null so NODE_OPTIONS is omitted entirely and V8 keeps its own default ceiling."
+  }
+}
+
+run "node_max_old_space_size_accepts_a_whole_number_of_mb" {
+  command = plan
+
+  variables {
+    n8n_node_max_old_space_size_mb = 3072
+  }
+
+  assert {
+    condition     = var.n8n_node_max_old_space_size_mb == 3072
+    error_message = "n8n_node_max_old_space_size_mb should accept a whole number of MB (3072 suits the 4Gi memory limits the module defaults to, leaving ~25% for non-heap memory)."
+  }
+}
+
+run "node_max_old_space_size_accepts_its_floor" {
+  command = plan
+
+  variables {
+    n8n_node_max_old_space_size_mb = 256
+  }
+
+  assert {
+    condition     = var.n8n_node_max_old_space_size_mb == 256
+    error_message = "n8n_node_max_old_space_size_mb should accept its documented minimum of 256."
+  }
+}
+
+run "node_max_old_space_size_rejects_below_the_floor" {
+  command = plan
+
+  variables {
+    n8n_node_max_old_space_size_mb = 255
+  }
+
+  expect_failures = [var.n8n_node_max_old_space_size_mb]
+}
+
+# Node truncates a fractional --max-old-space-size at the decimal point rather
+# than rounding, so 0.5 would reach the pods as a heap ceiling of zero.
+run "node_max_old_space_size_rejects_a_fractional_value" {
+  command = plan
+
+  variables {
+    n8n_node_max_old_space_size_mb = 3072.5
+  }
+
+  expect_failures = [var.n8n_node_max_old_space_size_mb]
+}
+
 run "rds_hardened_defaults" {
   command = plan
 
@@ -5895,6 +5970,23 @@ run "extra_env_rejects_license_detach_floating_on_shutdown_name" {
   variables {
     n8n_extra_env = [
       { name = "N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN", value = "true" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# NODE_OPTIONS is reserved for a sharper reason than the other opt-in entries:
+# it is a whole flag string rather than a single setting, so an override here
+# would replace the module's --max-old-space-size wholesale instead of adding
+# to it, silently unpinning the ceiling n8n_node_max_old_space_size_mb claims
+# to set. Use that input; there is no partial-override path to offer.
+run "extra_env_rejects_node_options_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "NODE_OPTIONS", value = "--max-old-space-size=8192" },
     ]
   }
 

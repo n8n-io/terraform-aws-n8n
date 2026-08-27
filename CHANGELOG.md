@@ -210,6 +210,32 @@ this project adheres to the stability contract in
   single-label service reference still uses the search path and needs
   rewriting to an FQDN first.
 
+- `n8n_node_max_old_space_size_mb`: set V8's old-space heap ceiling, emitted as
+  `NODE_OPTIONS=--max-old-space-size=<value>` on every n8n container. Defaults
+  to `null`, which omits the variable entirely and leaves V8's own default, so
+  this is additive and no existing deployment changes.
+
+  Previously unsettable by any means: nothing in the chart or the module set
+  `NODE_OPTIONS`, so every container took V8's default ceiling regardless of
+  its memory limit.
+
+  That default is the point. V8 caps old-space at roughly 2,033 MB on the
+  pinned image no matter how large the container memory limit is, so
+  `n8n_main_memory_limit` / `n8n_worker_memory_limit` /
+  `n8n_webhook_memory_limit` above about 2.5Gi buy memory the Node process can
+  never allocate. Measured during load validation: webhook pods died at the
+  2,033 MB ceiling with half of their 4 GiB container limit unused, peak heap
+  sitting at 97% of the ceiling when the pods were lost.
+
+  `config.extraEnv` is chart-global and the chart has no per-tier env path, so
+  one value applies to main, worker and webhook processor alike. Size it
+  against the smallest of the three memory limits, leaving roughly 25% for
+  non-heap memory. Note the caveat in the variable description: on builds
+  affected by the webhook-tier heap leak, a higher ceiling delays the fleet
+  death rather than preventing it, and GC pauses lengthen as heap approaches
+  any ceiling, so it belongs alongside a scheduled rolling restart of that
+  tier rather than in place of one.
+
 ### Changed
 
 - **The module now sets `N8N_EDITOR_BASE_URL`** to `https://<n8n_domain>`,
@@ -250,6 +276,15 @@ this project adheres to the stability contract in
   `_on_error` / `_on_progress` / `_manual_executions`) and remove the
   `n8n_extra_env` entry. Per the stability contract this change rides a minor
   release, not a patch.
+
+- `n8n_extra_env` now rejects `NODE_OPTIONS`, which joins the module-managed
+  names. Unlike a normal env var, `NODE_OPTIONS` is a whole flag string, so a
+  caller entry would replace the module's `--max-old-space-size` outright
+  rather than merging with it (`config.extraEnv` is appended last and
+  Kubernetes resolves duplicate names last-wins), silently unpinning the
+  ceiling `n8n_node_max_old_space_size_mb` says is in force. Any configuration
+  passing `NODE_OPTIONS` through the escape hatch now fails at plan time with a
+  message pointing at the dedicated input.
 
 ## [0.3.0] - 2026-08-13
 

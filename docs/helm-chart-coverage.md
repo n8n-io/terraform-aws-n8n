@@ -55,6 +55,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `executions.pruning.{hardDeleteBuffer,hardDeleteInterval,softDeleteInterval}`, `executions.extraEnv` | Not exposed |
 | `config.timezone` | `n8n_timezone` |
 | `config.extraEnv` | The module's own escape hatch: dozens of module-managed env vars, then `n8n_extra_env` appended last. See `variables.tf`'s `n8n_extra_env` description for the reserved-name validation |
+| *(no chart key)* V8 heap ceiling | The chart has no values path for this, and `NODE_OPTIONS` is module-managed so `n8n_extra_env` rejects it at plan time (it is a whole flag string, so an override would replace the module's value rather than merge with it). Set directly as an environment variable: `n8n_node_max_old_space_size_mb` → `NODE_OPTIONS=--max-old-space-size=<value>` (null = V8's own ~2,033 MB default, which applies regardless of the container memory limit). `config.extraEnv` is chart-global, so one value covers main, worker and webhook processor; size it against the smallest of the three memory limits |
 | `config.extraEnvFrom` | Not exposed |
 | `license.enabled/activationKey` | Hardcoded `true` / `n8n_license_key` |
 | `license.existingSecret` | Not used; the module always sets `activationKey` directly rather than referencing a pre-existing secret |

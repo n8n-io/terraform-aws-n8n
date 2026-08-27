@@ -1079,6 +1079,50 @@ variable "n8n_webhook_memory_limit" {
   }
 }
 
+variable "n8n_node_max_old_space_size_mb" {
+  description = <<-EOT
+    V8 old-space heap ceiling in MB, emitted as
+    NODE_OPTIONS=--max-old-space-size=<value> on every n8n container (main,
+    worker, and webhook processor; the chart has no per-tier env path).
+    Defaults to null: no NODE_OPTIONS is set and V8 uses its own default,
+    measured at ~2,033 MB on the pinned image, REGARDLESS of the container
+    memory limit. That means memory limits above ~2.5Gi buy memory the Node
+    process can never allocate: measured during load validation, webhook
+    pods died at the 2,033 MB V8 ceiling with half of their 4 GiB container
+    limit unused.
+
+    Size it against the SMALLEST of n8n_main_memory_limit,
+    n8n_worker_memory_limit and n8n_webhook_memory_limit, leaving roughly
+    25% of that limit for non-heap memory (buffers, stacks, binary data in
+    flight). Example: limits of 4Gi across the board support a value around
+    3072.
+
+    On n8n builds affected by the webhook-tier heap leak, raising the
+    ceiling DELAYS the fleet death, it does not prevent it, and GC pauses
+    lengthen as heap approaches any ceiling (gc_frac was measured jumping
+    0.06 to 0.40 in the sample where pods began dying). Pair it with a
+    scheduled rolling restart of the webhook tier rather than treating it as
+    a substitute for one.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.n8n_node_max_old_space_size_mb == null ? true : var.n8n_node_max_old_space_size_mb >= 256
+    error_message = "n8n_node_max_old_space_size_mb must be at least 256 (MB), or null to leave V8's own default in place."
+  }
+
+  # Rejected rather than truncated: --max-old-space-size takes an integer, and
+  # Node parses a fractional value by discarding everything from the decimal
+  # point on. 3072.9 would silently become 3072 and 0.5 would become 0, which
+  # is a heap ceiling of zero on every pod. Same treatment as the other
+  # whole-number inputs in this module (node_disk_size, the DB timeouts).
+  validation {
+    condition     = var.n8n_node_max_old_space_size_mb == null ? true : floor(var.n8n_node_max_old_space_size_mb) == var.n8n_node_max_old_space_size_mb
+    error_message = "n8n_node_max_old_space_size_mb must be a whole number of MB. Node truncates a fractional --max-old-space-size at the decimal point rather than rounding it."
+  }
+}
+
 # ── Execution settings ────────────────────────────────────────────────────────
 
 variable "n8n_worker_concurrency" {
