@@ -1090,8 +1090,11 @@ variable "n8n_executions_data_save_on_success" {
     success-execution data is measured to cost approximately nothing there;
     the "all" default stands on evidence, not caution. What "all" does cost
     is database volume: execution rows and their data accrue at the
-    completion rate, against n8n's hard deletion ceiling of 100 executions/s
-    (see n8n_pruning_max_age).
+    completion rate, against n8n's hard-delete ceiling of 100 executions/s.
+    No module input raises that ceiling: n8n_pruning_max_age and
+    n8n_pruning_max_count set which rows become ELIGIBLE for deletion, not
+    the rate they are deleted at, so at sustained completion rates above
+    ~100/s the table grows regardless of retention settings.
   EOT
   type        = string
   default     = "all"
