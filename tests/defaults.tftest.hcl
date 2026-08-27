@@ -7213,6 +7213,52 @@ run "executions_data_save_on_error_rejects_unknown_value" {
   expect_failures = [var.n8n_executions_data_save_on_error]
 }
 
+# ── n8n_executions_data_save_on_progress / n8n_executions_data_save_manual_executions ──
+
+run "executions_data_save_on_progress_defaults_to_false" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_executions_data_save_on_progress == false
+    error_message = "n8n_executions_data_save_on_progress should default to false, matching n8n's own default and the literal it replaces, so no existing deployment's rendered values change."
+  }
+}
+
+run "executions_data_save_manual_executions_defaults_to_true" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_executions_data_save_manual_executions == true
+    error_message = "n8n_executions_data_save_manual_executions should default to true, matching n8n's own default and the literal it replaces, so no existing deployment's rendered values change."
+  }
+}
+
+run "executions_data_save_on_progress_accepts_true" {
+  command = plan
+
+  variables {
+    n8n_executions_data_save_on_progress = true
+  }
+
+  assert {
+    condition     = var.n8n_executions_data_save_on_progress == true
+    error_message = "n8n_executions_data_save_on_progress should accept true."
+  }
+}
+
+run "executions_data_save_manual_executions_accepts_false" {
+  command = plan
+
+  variables {
+    n8n_executions_data_save_manual_executions = false
+  }
+
+  assert {
+    condition     = var.n8n_executions_data_save_manual_executions == false
+    error_message = "n8n_executions_data_save_manual_executions should accept false."
+  }
+}
+
 # Regression guard: both keys became module-managed alongside the two inputs
 # above, so the escape hatch must reject them. The chart renders both keys
 # unconditionally, so an extraEnv override would silently duplicate the name
@@ -7243,11 +7289,10 @@ run "extra_env_rejects_execution_data_save_on_error_name" {
   expect_failures = [var.n8n_extra_env]
 }
 
-# The other two config.data keys have no input of their own: the module
-# hardcodes saveOnProgress = false and saveManualExecutions = true. They are
-# guarded anyway because the chart renders them through the same unconditional
-# path as the two above, so an extraEnv duplicate reproduces the identical
-# last-wins hazard on a key no input would ever contradict.
+# The other two config.data keys are owned by n8n_executions_data_save_on_progress
+# and n8n_executions_data_save_manual_executions. The chart renders them through
+# the same unconditional path as the two above, so an extraEnv duplicate
+# reproduces the identical last-wins hazard; set the inputs instead.
 run "extra_env_rejects_execution_data_save_on_progress_name" {
   command = plan
 

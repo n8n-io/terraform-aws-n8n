@@ -516,8 +516,8 @@ resource "helm_release" "n8n" {
       data = {
         saveOnError          = var.n8n_executions_data_save_on_error
         saveOnSuccess        = var.n8n_executions_data_save_on_success
-        saveOnProgress       = false
-        saveManualExecutions = true
+        saveOnProgress       = var.n8n_executions_data_save_on_progress
+        saveManualExecutions = var.n8n_executions_data_save_manual_executions
       }
       pruning = {
         enabled            = true

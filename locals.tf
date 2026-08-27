@@ -552,10 +552,10 @@ locals {
     # the LAST entry at container start, so a stale value can silently win.
     # Observed live 2026-08-24: main and worker pods kept reporting "none" for
     # EXECUTIONS_DATA_SAVE_ON_SUCCESS five minutes after the Helm release's own
-    # manifest said "all" in both positions. The first two are owned by
-    # n8n_executions_data_save_on_success / _on_error; the last two are still
-    # module-hardcoded (false / true) but reach the container through the same
-    # unconditional path, so they are guarded on the same grounds.
+    # manifest said "all" in both positions. All four are owned by dedicated
+    # inputs (n8n_executions_data_save_on_success / _on_error / _on_progress /
+    # _manual_executions), so every guarded name here has a supported knob and
+    # none needs the extraEnv path.
     "EXECUTIONS_DATA_SAVE_ON_SUCCESS",
     "EXECUTIONS_DATA_SAVE_ON_ERROR",
     "EXECUTIONS_DATA_SAVE_ON_PROGRESS",
