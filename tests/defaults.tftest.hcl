@@ -766,7 +766,7 @@ run "db_password_secret_ref_rejects_being_set_alongside_the_value" {
 # rendered content is unknown at plan time under the mock provider (see
 # AGENTS.md, "Known mock provider limitations").
 
-run "db_ping_settings_default_to_null" {
+run "db_ping_settings_defaults" {
   command = plan
 
   # The timeout is the deliberate exception: it defaults to the measured

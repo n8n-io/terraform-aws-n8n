@@ -12,8 +12,12 @@ this project adheres to the stability contract in
 - `n8n_db_ping_timeout_ms`, `n8n_db_ping_interval_seconds` and
   `n8n_db_ping_max_failures_before_recovery`: expose n8n's database health-check
   ping settings (`DB_PING_TIMEOUT_MS`, `DB_PING_INTERVAL_SECONDS`,
-  `DB_PING_MAX_FAILURES_BEFORE_RECOVERY`). All default to `null`, which omits the
-  variable and leaves n8n's own defaults (5000ms, 2s, 3), so this is additive.
+  `DB_PING_MAX_FAILURES_BEFORE_RECOVERY`). The interval and failure-count
+  variables default to `null`, which omits them and leaves n8n's own defaults
+  (2s, 3); the timeout defaults to `20000` rather than n8n's 5000 (see the
+  Changed entry below for the measured basis), so a deployment upgrading past
+  this release picks up `DB_PING_TIMEOUT_MS=20000` and rolls its n8n pods
+  once.
 
   Previously unsettable by any means: the chart has no values path for them, and
   `DB_` is a module-managed prefix so `n8n_extra_env` rejects them at plan time.
