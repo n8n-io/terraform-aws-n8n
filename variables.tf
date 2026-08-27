@@ -1437,10 +1437,19 @@ variable "db_password_secret_ref" {
 variable "n8n_db_ping_timeout_ms" {
   description = <<-EOT
     Milliseconds n8n allows for its database health-check ping before declaring the
-    connection down (`DB_PING_TIMEOUT_MS`). Leave null for n8n's own default of
-    5000. Neither the chart nor `n8n_extra_env` can set this: the chart has no
-    values path for it and `DB_` is a module-managed prefix, so this variable is
-    the only way to reach it.
+    connection down (`DB_PING_TIMEOUT_MS`). Defaults to 20000, four times n8n's
+    own 5000, because the failure the larger value prevents is burst-shaped
+    rather than scale-shaped: any deployment whose pool momentarily saturates
+    can have a healthy database misread as dead (details below), and the only
+    cost of the wider timeout is reacting up to 15 seconds slower to a database
+    that is genuinely gone. 20000 is the value that eliminated the measured
+    failure outright as the sole changed variable (605,815 requests, zero 503s,
+    speedy3 arm 3, 2026-08-25) and was kept as standing config. Set null to
+    fall back to n8n's own 5000. Neither the chart nor `n8n_extra_env` can set
+    this: the chart has no values path for it and `DB_` is a module-managed
+    prefix, so this variable is the only way to reach it. Note for existing
+    deployments: upgrading the module past this default adds the env var to the
+    n8n pods, which rolls them.
 
     Raise this when pods return 503s under load while the database itself is idle.
     n8n's ping acquires a connection from the SAME pool that serves request
@@ -1462,7 +1471,7 @@ variable "n8n_db_ping_timeout_ms" {
     database, which is a far cheaper failure than silently 503ing live traffic.
   EOT
   type        = number
-  default     = null
+  default     = 20000
 
   validation {
     condition     = var.n8n_db_ping_timeout_ms == null ? true : var.n8n_db_ping_timeout_ms > 0

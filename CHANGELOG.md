@@ -33,6 +33,19 @@ this project adheres to the stability contract in
   the queue outright where possible; raising these settings is a mitigation for
   when it isn't.
 
+### Changed
+
+- `n8n_db_ping_timeout_ms` default changed from `null` (n8n's 5000) to
+  `20000`. The failure the larger value prevents is burst-shaped, not
+  scale-shaped: a pod-local pool saturated by an ordinary burst makes the
+  health-check ping time out and the pod misdiagnoses a healthy database as
+  dead, silently 503ing every request. 20000 as the sole changed variable
+  eliminated the measured failure outright (605,815 requests, zero 503s) and
+  was kept as standing config for the rest of the validation round. Cost: up
+  to 15 seconds slower reaction to a genuinely dead database. Set `null` to
+  restore n8n's own default. Upgrading past this default adds the env var to
+  the n8n pods, which rolls them once.
+
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):

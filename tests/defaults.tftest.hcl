@@ -769,9 +769,14 @@ run "db_password_secret_ref_rejects_being_set_alongside_the_value" {
 run "db_ping_settings_default_to_null" {
   command = plan
 
+  # The timeout is the deliberate exception: it defaults to the measured
+  # 20000 (the value that eliminated the busy-pool-read-as-dead-DB failure
+  # as the sole changed variable), because the failure it prevents is
+  # burst-shaped rather than scale-shaped. The other two stay null: no
+  # measured evidence supports changing them from n8n's own defaults.
   assert {
-    condition     = var.n8n_db_ping_timeout_ms == null
-    error_message = "n8n_db_ping_timeout_ms must default to null so DB_PING_TIMEOUT_MS is omitted and n8n keeps its own 5000ms default."
+    condition     = var.n8n_db_ping_timeout_ms == 20000
+    error_message = "n8n_db_ping_timeout_ms must default to 20000, the measured value; null falls back to n8n's own 5000."
   }
 
   assert {
