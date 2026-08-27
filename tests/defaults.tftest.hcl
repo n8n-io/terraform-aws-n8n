@@ -928,6 +928,11 @@ run "webhook_restart_schedule_creates_the_cronjob_and_its_rbac" {
     error_message = "The CronJob must carry the caller's schedule verbatim."
   }
 
+  assert {
+    condition     = kubernetes_cron_job_v1.webhook_restart[0].spec[0].timezone == "Etc/UTC"
+    error_message = "The CronJob must pin spec.timeZone to Etc/UTC so wall-clock schedules mean the same thing on any cluster, including create_eks = false clusters whose controller runs in another zone."
+  }
+
   # Forbid, not Allow: two concurrent rollout restarts on the same Deployment
   # would stack rollouts rather than doing anything useful.
   assert {
@@ -1007,7 +1012,7 @@ run "webhook_restart_schedule_rejects_junk_fields" {
   expect_failures = [var.n8n_webhook_restart_schedule]
 }
 
-run "webhook_restart_image_rejects_whitespace_and_schemes" {
+run "webhook_restart_image_rejects_a_url_scheme" {
   command = plan
 
   variables {
@@ -1016,6 +1021,31 @@ run "webhook_restart_image_rejects_whitespace_and_schemes" {
   }
 
   expect_failures = [var.n8n_webhook_restart_image]
+}
+
+run "webhook_restart_image_rejects_embedded_whitespace" {
+  command = plan
+
+  variables {
+    n8n_webhook_restart_schedule = "0 * * * *"
+    n8n_webhook_restart_image    = "registry.k8s.io/kubectl:v1.33.0 --help"
+  }
+
+  expect_failures = [var.n8n_webhook_restart_image]
+}
+
+run "webhook_restart_image_accepts_uppercase_host_and_ipv6" {
+  command = plan
+
+  variables {
+    n8n_webhook_restart_schedule = "0 * * * *"
+    n8n_webhook_restart_image    = "MYREG.example.com:5000/kubectl:v1.33.0"
+  }
+
+  assert {
+    condition     = local.webhook_restart_image == "MYREG.example.com:5000/kubectl:v1.33.0"
+    error_message = "An uppercase registry host is valid per Docker's reference grammar and must be accepted."
+  }
 }
 
 run "webhook_restart_image_can_be_overridden_for_air_gapped_registries" {

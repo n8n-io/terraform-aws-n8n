@@ -96,6 +96,14 @@ resource "kubernetes_cron_job_v1" "webhook_restart" {
     schedule           = var.n8n_webhook_restart_schedule
     concurrency_policy = "Forbid"
 
+    # Pins schedule interpretation to UTC regardless of where the
+    # kube-controller-manager runs (CronJob spec.timeZone, stable since
+    # Kubernetes 1.27; every EKS version this module supports carries it).
+    # The provider attribute is `timezone`, not `time_zone`; an earlier
+    # attempt used the latter name and misread the resulting "Unsupported
+    # argument" as a provider limitation.
+    timezone = "Etc/UTC"
+
     # A missed window (suspended cluster, controller downtime) should fire
     # once when possible again, not stack up: one restart is idempotent and a
     # stale one is still the mitigation working.

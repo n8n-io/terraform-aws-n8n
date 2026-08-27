@@ -1121,15 +1121,14 @@ variable "n8n_prestop_sleep" {
 
 variable "n8n_webhook_restart_schedule" {
   description = <<-EOT
-    Cron schedule (standard 5-field Kubernetes cron) for a scheduled
-    ROLLING restart of the webhook-processor Deployment. The schedule is
-    interpreted in the kube-controller-manager's own time zone: the CronJob
-    sets no spec.timeZone, because the pinned kubernetes provider (~> 2.0)
-    does not support that argument, so pinning a zone here is not possible.
-    On EKS-managed control planes that means UTC; a create_eks = false
-    cluster whose controller runs in another zone interprets wall-clock
-    times there. For interval schedules like the recommended hourly one the
-    distinction is immaterial. Defaults to null,
+    Cron schedule (standard 5-field Kubernetes cron, interpreted in UTC) for
+    a scheduled ROLLING restart of the webhook-processor Deployment. UTC is
+    pinned on the CronJob itself (spec.timeZone = Etc/UTC, stable since
+    Kubernetes 1.27; every EKS version this module supports carries it), so
+    wall-clock times mean the same thing on any cluster, including
+    create_eks = false clusters whose controller runs in another zone. For
+    interval schedules like the recommended hourly one the zone never
+    mattered; for pinned wall-clock times it now reliably means UTC. Defaults to null,
     which creates nothing. When set, the module creates a CronJob (plus a
     ServiceAccount and a Role scoped to get/patch on that one Deployment)
     that runs `kubectl rollout restart` on it: pods are replaced behind
@@ -1186,21 +1185,23 @@ variable "n8n_webhook_restart_image" {
   type        = string
   default     = null
 
-  # Deliberately a footgun check, not the full Docker reference grammar:
-  # whitespace and URL schemes are the two observed ways a broken override
-  # ships (both leave the restart Job unable to start and the mitigation
-  # silently inactive), while the registry itself validates the rest at
-  # image pull. Repository components must start lowercase-alphanumeric.
+  # Docker's reference grammar, reusing n8n_image_repository's proven host
+  # and path-component pieces (see that validation for the piece-by-piece
+  # derivation and the case-asymmetry rationale) and extending them with the
+  # optional :tag and @sha256 digest a full image reference carries. Uppercase
+  # registry hosts and bracketed IPv6 hosts are valid and accepted; path
+  # components stay lowercase, which is Docker's rule, not ours. A malformed
+  # reference otherwise creates a CronJob whose Job can never start, which
+  # silently disables the leak mitigation.
   validation {
     condition = (
       var.n8n_webhook_restart_image == null ? true :
       (
-        can(regex("^\\S+$", var.n8n_webhook_restart_image)) &&
-        !can(regex("://", var.n8n_webhook_restart_image)) &&
-        can(regex("^[a-z0-9]", var.n8n_webhook_restart_image))
+        length(var.n8n_webhook_restart_image) <= 255 &&
+        can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(?:@sha256:[a-f0-9]{64})?$", var.n8n_webhook_restart_image))
       )
     )
-    error_message = "n8n_webhook_restart_image must look like a container image reference (e.g. registry.k8s.io/kubectl:v1.35.0): no whitespace, no URL scheme like https://, starting with a lowercase alphanumeric. A malformed reference creates a CronJob whose Job can never start, which silently disables the leak mitigation."
+    error_message = "n8n_webhook_restart_image must be a container image reference Docker can pull: an optional registry host (port and bracketed IPv6 allowed, e.g. \"[2001:db8::1]:5000/kubectl\"), lowercase path components, an optional :tag and an optional @sha256 digest (e.g. \"registry.k8s.io/kubectl:v1.35.0\"). No URL scheme, no whitespace, no uppercase path components. A malformed reference creates a CronJob whose Job can never start, which silently disables the leak mitigation."
   }
 }
 
