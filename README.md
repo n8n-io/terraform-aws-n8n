@@ -1594,6 +1594,34 @@ With the default `n8n_execution_data_storage_mode = "database"` no
 `execution_data/` objects exist, and a bucket-wide lifecycle rule for binary
 data is unambiguously the right thing to add.
 
+## Operating the deployment: three field notes
+
+Three things that repeatedly surprise operators of this module, all learned
+the hard way during sustained load validation:
+
+1. **Worker replicas are KEDA-owned.** `kubectl scale deployment/n8n-worker`
+   reverts within seconds: KEDA's ScaledObject reconciles the replica count
+   from queue depth continuously. To pin the worker fleet, set
+   `n8n_worker_keda_min_replicas` = `n8n_worker_keda_max_replicas` and apply;
+   to resize it, change those variables. There is no imperative path.
+
+2. **Bull queue depth must come from redis_exporter in multi-main.** Every
+   tier example in this module runs multiple main pods, and n8n's own
+   `/metrics` queue-depth gauge does not work in multi-main topologies. If
+   you alert on queue depth (you should: it is the KEDA scaling signal),
+   scrape it from a redis_exporter pointed at the module's Redis, or read
+   KEDA's own scaler metrics, never from n8n's endpoint.
+
+3. **Never trust `terraform plan` or `apply` output for an instance class.
+   Read AWS.** Without `db_apply_immediately` / `redis_apply_immediately`
+   set, a class change reports "Apply complete" while AWS queues it in
+   `PendingModifiedValues` for the next maintenance window, which can be
+   days out; nothing in Terraform's output says so. Even with the flags set,
+   the modification takes real time after the API accepts it (a measured
+   ElastiCache resize took 41 minutes). Verify with
+   `aws rds describe-db-instances` / `aws elasticache describe-cache-clusters`
+   before depending on the new size.
+
 ## Prometheus metrics
 
 Set `n8n_metrics_enabled = true` to expose n8n's built-in Prometheus endpoint.
