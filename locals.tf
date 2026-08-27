@@ -497,7 +497,7 @@ locals {
   # chart-rendered identity/topology/storage/license vars not covered by a
   # prefix below. Keep in sync with the extraEnv block in n8n.tf and the chart
   # values the module sets (database/redis/s3/multiMain/license/secretRefs).
-  n8n_managed_env_names = [
+  n8n_managed_env_names = concat([
     # Set by the module in config.extraEnv or the n8n secret.
     "N8N_ENCRYPTION_KEY",
     "N8N_LOG_LEVEL",
@@ -508,16 +508,6 @@ locals {
     "N8N_COMMUNITY_PACKAGES_PREVENT_LOADING",
     "N8N_COMMUNITY_PACKAGES_REGISTRY",
     "N8N_CUSTOM_EXTENSIONS",
-    # Owned by n8n_node_max_old_space_size_mb. Reserved even though the module
-    # only emits it when that input is non-null, and for a sharper reason than
-    # the other opt-in entries: NODE_OPTIONS is a whole flag STRING, not a
-    # single setting. A caller passing it through n8n_extra_env to add an
-    # unrelated Node flag would not merge with the module's value, it would
-    # replace it wholesale (extraEnv is appended last, Kubernetes resolves
-    # duplicate names last-wins), silently unpinning the heap ceiling the input
-    # says is in force. There is no partial-override path to offer here, so the
-    # name is reserved outright.
-    "NODE_OPTIONS",
     # Owned by redis_key_prefix, which is the single source of truth for the
     # Redis namespace: it sets this, the chart's redis.prefix (QUEUE_BULL_PREFIX)
     # and the KEDA ScaledObject's listName together. QUEUE_BULL_PREFIX is
@@ -588,7 +578,21 @@ locals {
     "TZ",
     "N8N_DISABLED_MODULES",
     "N8N_EXTERNAL_SECRETS_UPDATE_INTERVAL",
-  ]
+    ],
+    # NODE_OPTIONS is reserved ONLY while n8n_node_max_old_space_size_mb is
+    # set, unlike every entry above. The distinction matters because it is a
+    # whole flag STRING rather than a single setting: when the module emits it,
+    # a caller entry would replace the module's --max-old-space-size wholesale
+    # rather than adding to it (extraEnv is appended last, Kubernetes resolves
+    # duplicate names last-wins), silently unpinning the ceiling the input says
+    # is in force. When the input is null the module emits nothing, there is no
+    # value to clobber, and a caller passing NODE_OPTIONS for unrelated flags
+    # (--enable-source-maps, --inspect, their own heap flag) is doing something
+    # legitimate that this module has no business rejecting. Reserving it
+    # unconditionally would break those callers at plan time on upgrade, for a
+    # collision that cannot occur.
+    var.n8n_node_max_old_space_size_mb != null ? ["NODE_OPTIONS"] : [],
+  )
 
   # Whole env-var families the module/chart owns, matched by prefix so the guard
   # stays correct when the chart adds new members. This intentionally fails

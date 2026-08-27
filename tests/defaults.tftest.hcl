@@ -1050,9 +1050,14 @@ run "node_max_old_space_size_accepts_a_whole_number_of_mb" {
     n8n_node_max_old_space_size_mb = 3072
   }
 
+  # 3072 is NOT a safe value at the module's own defaults: only
+  # n8n_main_memory_limit is 4Gi, while worker is 2Gi and webhook is 1Gi, so a
+  # 3 GiB ceiling would exceed two of the three tiers. The value is exercised
+  # here purely as a well-formed number; sizing guidance lives in the variable
+  # description, which says to size against the SMALLEST of the three limits.
   assert {
     condition     = var.n8n_node_max_old_space_size_mb == 3072
-    error_message = "n8n_node_max_old_space_size_mb should accept a whole number of MB (3072 suits the 4Gi memory limits the module defaults to, leaving ~25% for non-heap memory)."
+    error_message = "n8n_node_max_old_space_size_mb should accept a whole number of MB. Size it against the smallest of n8n_main/worker/webhook_memory_limit: with 4Gi across all three, a value around 3072 leaves ~25% for non-heap memory."
   }
 }
 
@@ -5976,21 +5981,43 @@ run "extra_env_rejects_license_detach_floating_on_shutdown_name" {
   expect_failures = [var.n8n_extra_env]
 }
 
-# NODE_OPTIONS is reserved for a sharper reason than the other opt-in entries:
-# it is a whole flag string rather than a single setting, so an override here
-# would replace the module's --max-old-space-size wholesale instead of adding
-# to it, silently unpinning the ceiling n8n_node_max_old_space_size_mb claims
-# to set. Use that input; there is no partial-override path to offer.
-run "extra_env_rejects_node_options_name" {
+# NODE_OPTIONS is reserved CONDITIONALLY, unlike every other name in the guard.
+# It is a whole flag string rather than a single setting, so when the module
+# emits it a caller entry would replace the module's --max-old-space-size
+# wholesale instead of adding to it, silently unpinning the ceiling
+# n8n_node_max_old_space_size_mb claims to set.
+run "extra_env_rejects_node_options_when_the_heap_ceiling_is_set" {
   command = plan
 
   variables {
+    n8n_node_max_old_space_size_mb = 3072
     n8n_extra_env = [
       { name = "NODE_OPTIONS", value = "--max-old-space-size=8192" },
     ]
   }
 
   expect_failures = [var.n8n_extra_env]
+}
+
+# The other half of that contract, and the reason the guard is not
+# unconditional: with the input null the module emits no NODE_OPTIONS, there is
+# no value to clobber, and a caller setting it for unrelated Node flags
+# (--enable-source-maps, --inspect, their own heap flag) is doing something
+# legitimate. Reserving the name outright would break those callers at plan
+# time on upgrade, for a collision that cannot occur.
+run "extra_env_accepts_node_options_when_the_heap_ceiling_is_unset" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "NODE_OPTIONS", value = "--enable-source-maps" },
+    ]
+  }
+
+  assert {
+    condition     = var.n8n_extra_env[0].name == "NODE_OPTIONS"
+    error_message = "NODE_OPTIONS must stay settable through n8n_extra_env while n8n_node_max_old_space_size_mb is null, or this change is not additive for existing callers."
+  }
 }
 
 # A genuinely non-managed var that happens to be timezone-related stays allowed:

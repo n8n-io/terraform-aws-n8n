@@ -1115,8 +1115,9 @@ variable "n8n_node_max_old_space_size_mb" {
   # Rejected rather than truncated: --max-old-space-size takes an integer, and
   # Node parses a fractional value by discarding everything from the decimal
   # point on. 3072.9 would silently become 3072 and 0.5 would become 0, which
-  # is a heap ceiling of zero on every pod. Same treatment as the other
-  # whole-number inputs in this module (node_disk_size, the DB timeouts).
+  # is a heap ceiling of zero on every pod. Same treatment the module already
+  # gives its other whole-number inputs, e.g. the node-count and replica
+  # bounds, which reject a fractional value rather than rounding it.
   validation {
     condition     = var.n8n_node_max_old_space_size_mb == null ? true : floor(var.n8n_node_max_old_space_size_mb) == var.n8n_node_max_old_space_size_mb
     error_message = "n8n_node_max_old_space_size_mb must be a whole number of MB. Node truncates a fractional --max-old-space-size at the decimal point rather than rounding it."

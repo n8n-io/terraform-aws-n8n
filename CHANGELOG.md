@@ -277,14 +277,19 @@ this project adheres to the stability contract in
   `n8n_extra_env` entry. Per the stability contract this change rides a minor
   release, not a patch.
 
-- `n8n_extra_env` now rejects `NODE_OPTIONS`, which joins the module-managed
-  names. Unlike a normal env var, `NODE_OPTIONS` is a whole flag string, so a
-  caller entry would replace the module's `--max-old-space-size` outright
-  rather than merging with it (`config.extraEnv` is appended last and
-  Kubernetes resolves duplicate names last-wins), silently unpinning the
-  ceiling `n8n_node_max_old_space_size_mb` says is in force. Any configuration
-  passing `NODE_OPTIONS` through the escape hatch now fails at plan time with a
-  message pointing at the dedicated input.
+- `n8n_extra_env` now rejects `NODE_OPTIONS`, but **only while
+  `n8n_node_max_old_space_size_mb` is set**. Unlike a normal env var,
+  `NODE_OPTIONS` is a whole flag string, so a caller entry would replace the
+  module's `--max-old-space-size` outright rather than merging with it
+  (`config.extraEnv` is appended last and Kubernetes resolves duplicate names
+  last-wins), silently unpinning the ceiling the input says is in force.
+
+  The guard is deliberately conditional rather than a plain reserved name. At
+  the default (`null`) the module emits no `NODE_OPTIONS`, so there is nothing
+  to clobber and a caller passing it for unrelated Node flags
+  (`--enable-source-maps`, `--inspect`, their own heap flag) keeps working
+  untouched. Reserving it outright would have broken those callers at plan time
+  on upgrade, for a collision that cannot occur.
 
 ## [0.3.0] - 2026-08-13
 
