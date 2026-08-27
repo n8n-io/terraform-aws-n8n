@@ -2916,8 +2916,9 @@ variable "n8n_dns_config" {
     (RelaxedDNSSearchValidation, on by default since 1.33 and GA in 1.34):
     lowercase RFC 1123 subdomains of at most 253 characters, underscores
     permitted, and a bare "." accepted. Clusters on 1.32 or older validate
-    strictly at admission and reject "." and underscore-containing domains
-    even though this module's plan accepts them.
+    strictly at admission, unless the RelaxedDNSSearchValidation feature
+    gate is enabled by hand, and reject "." and underscore-containing
+    domains even though this module's plan accepts them.
   EOT
 
   type = object({
