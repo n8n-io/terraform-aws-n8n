@@ -2447,6 +2447,13 @@ variable "n8n_dns_config" {
     Setting `ndots` lower than the longest bare name you rely on will break that
     name's resolution, so if you add your own single-label service references,
     either write them as FQDNs or leave this unset.
+
+    Search domains are validated to Kubernetes' relaxed rules
+    (RelaxedDNSSearchValidation, on by default since 1.33 and GA in 1.34):
+    lowercase RFC 1123 subdomains of at most 253 characters, underscores
+    permitted, and a bare "." accepted. Clusters on 1.32 or older validate
+    strictly at admission and reject "." and underscore-containing domains
+    even though this module's plan accepts them.
   EOT
 
   type = object({
@@ -2476,7 +2483,7 @@ variable "n8n_dns_config" {
         length(join(" ", coalesce(var.n8n_dns_config.searches, []))) <= 2048
       )
     )
-    error_message = "n8n_dns_config.searches accepts at most 32 entries totalling 2048 characters (the API server measures the list joined by single spaces, as counted here). Clusters older than 1.32 that do not have the ExpandedDNSConfig feature gate enabled cap this far lower, at 6 entries and 256 characters, so stay under those if you target one."
+    error_message = "n8n_dns_config.searches accepts at most 32 entries totalling 2048 characters (the API server measures the list joined by single spaces, as counted here). Clusters older than 1.26, where the ExpandedDNSConfig feature gate was still off by default, cap this far lower at 6 entries and 256 characters, so stay under those if you target one."
   }
 
   validation {
@@ -2486,11 +2493,11 @@ variable "n8n_dns_config" {
         for s in coalesce(var.n8n_dns_config.searches, []) :
         s == "." || (
           length(trimsuffix(s, ".")) <= 253 &&
-          can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*\\.?$", s))
+          can(regex("^_?[a-z0-9]([-_a-z0-9]*[a-z0-9])?(\\._?[a-z0-9]([-_a-z0-9]*[a-z0-9])?)*\\.?$", s))
         )
       ])
     )
-    error_message = "n8n_dns_config.searches entries must each be a lowercase DNS-1123 subdomain of at most 253 characters, with labels of at most 63 characters (a bare \".\" and a single trailing dot are both accepted). The API server applies the same rule, but rejects the pod at admission time rather than at plan time, so an uppercase or malformed search domain otherwise surfaces as a failed rollout."
+    error_message = "n8n_dns_config.searches entries must each be a lowercase RFC 1123 subdomain of at most 253 characters, with underscores permitted and a bare \".\" or a single trailing dot accepted. This matches Kubernetes' relaxed search-path validation (RelaxedDNSSearchValidation: on by default since 1.33, GA in 1.34); clusters on 1.32 or older validate strictly at admission and additionally reject \".\" and any underscore, so avoid both if you target one. The plan-time check exists because a malformed entry otherwise surfaces as a failed rollout rather than a Helm error."
   }
 
   validation {

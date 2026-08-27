@@ -8522,6 +8522,29 @@ run "n8n_dns_config_accepts_valid_search_domains" {
   }
 }
 
+run "n8n_dns_config_accepts_relaxed_search_domains" {
+  command = plan
+
+  variables {
+    # The three shapes Kubernetes' relaxed validation accepts beyond strict
+    # DNS-1123: an underscore-containing domain, a bare ".", and a label
+    # longer than 63 characters (IsDNS1123Subdomain caps the total at 253
+    # but never the individual label).
+    n8n_dns_config = {
+      searches = [
+        "_msdcs.corp.example.com",
+        ".",
+        "${join("", [for i in range(70) : "a"])}.example.com",
+      ]
+    }
+  }
+
+  assert {
+    condition     = length(local.n8n_dns_config.searches) == 3
+    error_message = "local.n8n_dns_config must carry through relaxed-mode search domains unchanged."
+  }
+}
+
 run "n8n_dns_config_rejects_more_than_thirty_two_search_domains" {
   command = plan
 
