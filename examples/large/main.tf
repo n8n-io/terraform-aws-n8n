@@ -154,6 +154,15 @@ module "n8n" {
   n8n_webhook_memory_request   = "1Gi"
   n8n_webhook_memory_limit     = "4Gi"
 
+  # Hourly rolling restart of the webhook tier: mitigation for n8n's
+  # job-finished heap leak, which at this tier's fleet-wide execution rate
+  # killed an unpatched 160-pod fleet in 2h26m (each pod at V8's ~2,033 MB
+  # default ceiling), and resumes on patched builds after an 88-minute flat
+  # window. Hourly stays inside both. Rolling, behind readiness probes, so
+  # capacity stays up. Remove once running a release with the upstream fix;
+  # see the variable description for the measurements.
+  n8n_webhook_restart_schedule = "0 * * * *"
+
   # ── Workers ───────────────────────────────────────────────────────────────────
   # concurrency=40: doubles throughput per pod vs 20, halves pod count needed.
   # 856 req/s target ÷ concurrency=40 = 22 workers at steady state.

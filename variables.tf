@@ -1119,6 +1119,53 @@ variable "n8n_prestop_sleep" {
   }
 }
 
+variable "n8n_webhook_restart_schedule" {
+  description = <<-EOT
+    Cron schedule (standard 5-field Kubernetes cron, UTC) for a scheduled
+    ROLLING restart of the webhook-processor Deployment. Defaults to null,
+    which creates nothing. When set, the module creates a CronJob (plus a
+    ServiceAccount and a Role scoped to get/patch on that one Deployment)
+    that runs `kubectl rollout restart` on it: pods are replaced behind
+    readiness probes under the Deployment's own rolling-update strategy, so
+    capacity stays up throughout.
+
+    This is a mitigation for an upstream n8n defect, not a tuning knob. The
+    webhook tier leaks heap on every job-finished broadcast, at a rate set by
+    FLEET-WIDE execution completion rate rather than the pod's own traffic
+    (a zero-traffic pod leaks as fast as a loaded one). Measured on 2.35.7
+    under sustained load: an unpatched 160-pod fleet died collectively at
+    2h26m, each pod at V8's default ~2,033 MB heap ceiling with half its
+    container memory limit unused; the patched build (jobResults bounded)
+    held flat for 88.1 minutes and then resumed leaking at +0.73 MB/min per
+    pod.
+
+    Cadence guidance from those measurements: hourly ("0 * * * *") keeps a
+    patched build inside its measured 88-minute flat window and an unpatched
+    build far inside its 2h26m death horizon at heavy sustained load. The
+    leak scales with fleet-wide executions/s, so lighter deployments die in
+    days rather than hours and can restart daily; if in doubt, watch
+    n8n_nodejs_heap_size_used_bytes approach ~2,033 MB and set the cadence
+    from your own slope. Remove (null) once running an n8n release with the
+    upstream fix.
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition = (
+      var.n8n_webhook_restart_schedule == null ? true :
+      length(split(" ", trimspace(var.n8n_webhook_restart_schedule))) == 5
+    )
+    error_message = "n8n_webhook_restart_schedule must be a standard 5-field cron expression (e.g. \"0 * * * *\"), or null to disable."
+  }
+}
+
+variable "n8n_webhook_restart_image" {
+  description = "Image for the webhook restart CronJob's kubectl container. Defaults to null, which derives registry.k8s.io/kubectl:v<kubernetes_version>.0 (the Kubernetes project's own kubectl image; a tag exists for every supported minor, and kubectl's skew policy allows +/- one minor against the API server). Set explicitly for air-gapped registries, or when create_eks = false and the external cluster's version differs from kubernetes_version by more than one minor. Only used when n8n_webhook_restart_schedule is set."
+  type        = string
+  default     = null
+}
+
 # ── Task runners ──────────────────────────────────────────────────────────────
 
 variable "n8n_task_runners_enabled" {

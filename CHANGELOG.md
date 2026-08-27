@@ -5,6 +5,25 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to the stability contract in
 [README.md → Stability & versioning](./README.md#stability--versioning).
 
+## [Unreleased]
+
+### Added
+
+- `n8n_webhook_restart_schedule` and `n8n_webhook_restart_image`: opt-in
+  scheduled ROLLING restart of the webhook-processor Deployment (CronJob plus
+  a ServiceAccount and a Role scoped to get/patch on that one Deployment).
+  Defaults to `null`: nothing is created. Mitigation for an upstream n8n heap
+  leak in the webhook tier (per job-finished broadcast, fleet-rate scaled):
+  measured on 2.35.7, an unpatched 160-pod fleet died collectively at 2h26m,
+  each pod at V8's default ~2,033 MB ceiling; the patched build holds flat
+  for 88.1 minutes and then resumes at +0.73 MB/min per pod. Hourly keeps
+  both inside their measured horizons at heavy sustained load. Rolling and
+  behind readiness probes, so capacity stays up. Remove once the upstream fix
+  ships. The image defaults to `registry.k8s.io/kubectl:v<kubernetes_version>.0`.
+
+  `examples/large` opts in at `"0 * * * *"`, since that tier's fleet-wide
+  execution rate is what the 2h26m figure was measured at.
+
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):

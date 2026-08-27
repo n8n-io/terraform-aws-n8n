@@ -896,6 +896,116 @@ run "webhook_hpa_scale_up_stabilization_window_rejects_above_max" {
   expect_failures = [var.n8n_webhook_hpa_scale_up_stabilization_window_seconds]
 }
 
+# ── Webhook-tier scheduled rolling restart ────────────────────────────────────
+# Everything is gated on n8n_webhook_restart_schedule; the default creates none
+# of the four resources. This is a mitigation for an upstream n8n heap leak,
+# not a tuning knob, so the assertions are about the gate and the blast radius
+# of the RBAC rather than about cadence.
+
+run "webhook_restart_defaults_to_creating_nothing" {
+  command = plan
+
+  assert {
+    condition     = length(kubernetes_cron_job_v1.webhook_restart) == 0
+    error_message = "n8n_webhook_restart_schedule must default to null and create no CronJob."
+  }
+
+  assert {
+    condition     = length(kubernetes_service_account_v1.webhook_restart) == 0 && length(kubernetes_role_v1.webhook_restart) == 0 && length(kubernetes_role_binding_v1.webhook_restart) == 0
+    error_message = "The restart ServiceAccount, Role and RoleBinding must not exist on the default path either."
+  }
+}
+
+run "webhook_restart_schedule_creates_the_cronjob_and_its_rbac" {
+  command = plan
+
+  variables {
+    n8n_webhook_restart_schedule = "0 * * * *"
+  }
+
+  assert {
+    condition     = kubernetes_cron_job_v1.webhook_restart[0].spec[0].schedule == "0 * * * *"
+    error_message = "The CronJob must carry the caller's schedule verbatim."
+  }
+
+  # Forbid, not Allow: two concurrent rollout restarts on the same Deployment
+  # would stack rollouts rather than doing anything useful.
+  assert {
+    condition     = kubernetes_cron_job_v1.webhook_restart[0].spec[0].concurrency_policy == "Forbid"
+    error_message = "Overlapping restart jobs must be forbidden, or a slow rollout stacks a second restart on top of itself."
+  }
+
+  assert {
+    condition     = length(kubernetes_service_account_v1.webhook_restart) == 1 && length(kubernetes_role_binding_v1.webhook_restart) == 1
+    error_message = "Setting the schedule must also create the ServiceAccount and RoleBinding the CronJob authenticates with."
+  }
+}
+
+# The RBAC grant is the part worth pinning: `kubectl rollout restart` is a PATCH
+# on one Deployment, so get+patch on that single resource name is the whole
+# required surface. A widened verb or an empty resource_names would hand this
+# ServiceAccount the ability to patch every Deployment in the namespace.
+run "webhook_restart_rbac_is_scoped_to_one_deployment" {
+  command = plan
+
+  variables {
+    n8n_webhook_restart_schedule = "0 * * * *"
+  }
+
+  assert {
+    condition     = toset(kubernetes_role_v1.webhook_restart[0].rule[0].verbs) == toset(["get", "patch"])
+    error_message = "The restart Role must grant only get and patch, the two verbs kubectl rollout restart needs."
+  }
+
+  assert {
+    condition     = length(kubernetes_role_v1.webhook_restart[0].rule[0].resource_names) == 1
+    error_message = "The restart Role must name exactly one Deployment, or it can patch any Deployment in the namespace."
+  }
+
+  assert {
+    condition     = toset(kubernetes_role_v1.webhook_restart[0].rule[0].api_groups) == toset(["apps"])
+    error_message = "The restart Role must be scoped to the apps API group only."
+  }
+}
+
+run "webhook_restart_image_defaults_to_the_cluster_kubectl_minor" {
+  command = plan
+
+  variables {
+    n8n_webhook_restart_schedule = "0 * * * *"
+    kubernetes_version           = "1.33"
+  }
+
+  assert {
+    condition     = local.webhook_restart_image == "registry.k8s.io/kubectl:v1.33.0"
+    error_message = "The restart image must default to the cluster's own Kubernetes minor, which kubectl's skew policy always permits."
+  }
+}
+
+run "webhook_restart_image_can_be_overridden_for_air_gapped_registries" {
+  command = plan
+
+  variables {
+    n8n_webhook_restart_schedule = "0 * * * *"
+    n8n_webhook_restart_image    = "registry.internal.example.com/kubectl:v1.32.0"
+  }
+
+  assert {
+    condition     = local.webhook_restart_image == "registry.internal.example.com/kubectl:v1.32.0"
+    error_message = "n8n_webhook_restart_image must win over the derived default, for air-gapped registries and version-skewed external clusters."
+  }
+}
+
+run "webhook_restart_schedule_rejects_a_non_five_field_cron" {
+  command = plan
+
+  variables {
+    n8n_webhook_restart_schedule = "0 * * *"
+  }
+
+  expect_failures = [var.n8n_webhook_restart_schedule]
+}
+
 run "rds_hardened_defaults" {
   command = plan
 
