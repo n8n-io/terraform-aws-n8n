@@ -17,15 +17,23 @@
 #     tags against current PgBouncer releases.
 #   - Transaction mode confirmed compatible with n8n's TypeORM (no prepared
 #     statements or LISTEN/NOTIFY that would force session mode).
-#   - Two replicas with REQUIRED pod anti-affinity guarantee placement on
-#     two distinct nodes (a `preferred` rule was observed losing the race
-#     against node-group startup ordering, co-locating both replicas on the
+#   - Four replicas with REQUIRED pod anti-affinity guarantee placement on
+#     four distinct nodes (a `preferred` rule was observed losing the race
+#     against node-group startup ordering, co-locating replicas on the
 #     first Ready node — a single-node failure would then have taken out
 #     all n8n DB traffic). A PodDisruptionBudget with min_available=1
-#     keeps at least one replica up during voluntary node drains.
-#   - With required anti-affinity, the second replica stays Pending until a
-#     second node is Ready (typically <60s); the deployment as a whole is
-#     never blocked.
+#     keeps replicas up during voluntary node drains. Four is also the
+#     client-connection budget: MAX_CLIENT_CONN=3000 x 4 = 12,000, sized
+#     for the fleet ceiling of ~9,200 (460 pods x pool_size 20; see the
+#     capacity arithmetic in main.tf's Main pods comment). Two replicas
+#     (6,000) would be oversubscribed at those maxima, and exceeding
+#     max_client_conn queues new client connections, recreating exactly
+#     the pool-acquisition backlog the pool sizing exists to prevent.
+#     Four replicas is also the topology the sustained-load validation
+#     actually ran.
+#   - With required anti-affinity, later replicas stay Pending until
+#     enough nodes are Ready (typically <60s); the deployment as a whole
+#     is never blocked.
 #   - n8n connects over plain TCP (in-cluster); PgBouncer terminates SSL on
 #     its upstream leg to Aurora.
 #   - AUTH_TYPE=plain stores the plaintext password in userlist.txt so
@@ -75,7 +83,7 @@ resource "kubernetes_deployment" "pgbouncer" {
   }
 
   spec {
-    replicas = 2
+    replicas = 4
 
     selector {
       match_labels = { app = "pgbouncer" }
