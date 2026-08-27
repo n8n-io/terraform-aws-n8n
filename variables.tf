@@ -1464,7 +1464,7 @@ variable "n8n_task_runner_custom_config" {
     running image rather than writing it from scratch, and re-derive it when the
     runner image changes:
 
-      kubectl exec deploy/n8n-worker -c task-runner -- \
+      kubectl exec deploy/n8n-worker -c task-runner -n <namespace> -- \
         cat /etc/n8n-task-runners.json > n8n-task-runners.json
       # edit the python runner's env-overrides, then:
       kubectl create configmap n8n-task-runners-custom -n <namespace> \
