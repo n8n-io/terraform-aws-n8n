@@ -1238,6 +1238,47 @@ variable "n8n_executions_data_save_on_error" {
   }
 }
 
+variable "n8n_executions_data_save_on_progress" {
+  description = <<-EOT
+    Whether n8n saves execution data as each node executes, not just at the end
+    of the run. Maps to the chart's `executions.data.saveOnProgress`
+    (`EXECUTIONS_DATA_SAVE_ON_PROGRESS` on the pods). Verified against n8n
+    source (packages/@n8n/config/src/configs/executions.config.ts:153,
+    `saveExecutionProgress: boolean = false`): n8n's own default is false, and
+    this variable defaults to the same, matching the literal it replaces, so no
+    existing deployment's rendered values change. Enabling it adds a database
+    write per node execution, which is a real cost at high throughput; it earns
+    that cost when you need mid-run progress to survive a crash.
+
+    Same duplicate-key hazard as `n8n_executions_data_save_on_success`: the
+    chart renders this key unconditionally, so set it here, never through
+    `n8n_extra_env`, which rejects this exact name outright at plan time (see
+    local.n8n_managed_env_names).
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "n8n_executions_data_save_manual_executions" {
+  description = <<-EOT
+    Whether n8n persists execution data for MANUAL executions (runs started
+    from the editor). Maps to the chart's
+    `executions.data.saveManualExecutions`
+    (`EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS` on the pods). Verified against
+    n8n source (packages/@n8n/config/src/configs/executions.config.ts:157,
+    `saveDataManualExecutions: boolean = true`): n8n's own default is true, and
+    this variable defaults to the same, matching the literal it replaces, so no
+    existing deployment's rendered values change.
+
+    Same duplicate-key hazard as `n8n_executions_data_save_on_success`: the
+    chart renders this key unconditionally, so set it here, never through
+    `n8n_extra_env`, which rejects this exact name outright at plan time (see
+    local.n8n_managed_env_names).
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "n8n_execution_timeout" {
   description = "Default execution timeout in seconds (-1 to disable)"
   type        = number

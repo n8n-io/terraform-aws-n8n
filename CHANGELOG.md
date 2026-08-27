@@ -153,11 +153,16 @@ this project adheres to the stability contract in
   `EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS`, outright at plan time (added to
   `local.n8n_managed_env_names`), matching the existing guard on
   `N8N_EXECUTION_DATA_STORAGE_MODE`, so the duplicate-key failure mode above
-  can no longer be reproduced through this module. The last two are not
-  configurable inputs, the module still hardcodes `saveOnProgress = false` and
-  `saveManualExecutions = true`, but they reach the container through the same
-  unconditional code path, so leaving them reachable would have left the same
-  hazard open.
+  can no longer be reproduced through this module.
+
+- `n8n_executions_data_save_on_progress` and
+  `n8n_executions_data_save_manual_executions` replace the remaining two
+  hardcoded `config.data` literals (`saveOnProgress = false`,
+  `saveManualExecutions = true`), so every guarded `EXECUTIONS_DATA_SAVE_*`
+  name has a dedicated, validated input rather than a blocked escape hatch.
+  Both default to the previous hardcoded values (which are also n8n's own
+  defaults), so this is additive: no existing deployment's rendered values
+  change.
 
 ### Changed
 
