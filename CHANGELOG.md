@@ -46,6 +46,19 @@ this project adheres to the stability contract in
   defaults), so this is additive: no existing deployment's rendered values
   change.
 
+### Changed
+
+- `n8n_executions_data_save_on_success` description now carries the measured
+  cost of the "all" default (description-only, no behaviour change): a
+  matched A/B on a representative real workflow at 400 VUs read 153.20 req/s
+  ("all") vs 151.48 req/s ("none"), a 1.1% delta inside the suite's 1.41%
+  run-to-run noise band, so keeping full success-execution data costs
+  approximately nothing in throughput at that operating point. The
+  description also names what "all" does cost: database volume accruing at
+  the completion rate against n8n's hardcoded 100 deletions/s pruning
+  ceiling.
+
+
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):

@@ -1081,6 +1081,17 @@ variable "n8n_executions_data_save_on_success" {
     key the chart renders from config.data outright at plan time (see
     local.n8n_managed_env_names), so the failure mode above can no longer be
     reproduced through this module.
+
+    MEASURED COST OF "all", so nobody has to guess: a matched A/B on a
+    representative 34-node real workflow at 400 VUs measured 153.20 req/s
+    ("all") vs 151.48 req/s ("none"), a 1.1% delta INSIDE the suite's 1.41%
+    run-to-run noise band, i.e. no measurable throughput cost either way at
+    that operating point (load validation round 2, 2026-08-25). Keeping full
+    success-execution data is measured to cost approximately nothing there;
+    the "all" default stands on evidence, not caution. What "all" does cost
+    is database volume: execution rows and their data accrue at the
+    completion rate, against n8n's hard deletion ceiling of 100 executions/s
+    (see n8n_pruning_max_age).
   EOT
   type        = string
   default     = "all"
