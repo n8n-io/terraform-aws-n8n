@@ -862,11 +862,12 @@ check "rds_tuning_requires_module_managed_database" {
       var.db_allocated_storage == 50 &&
       var.db_multi_az &&
       var.db_storage_encrypted &&
-      var.db_backup_retention_period == 7
+      var.db_backup_retention_period == 7 &&
+      !var.db_apply_immediately
     )
     error_message = join("", [
       "An RDS sizing or hardening input (db_instance_class, db_allocated_storage, ",
-      "db_multi_az, db_storage_encrypted, db_backup_retention_period) is set while ",
+      "db_multi_az, db_storage_encrypted, db_backup_retention_period, db_apply_immediately) is set while ",
       "create_database = false. The module creates no RDS instance in that mode, so none of them apply. ",
       "Configure these on the database you supply via db_host.",
     ])
