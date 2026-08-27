@@ -186,6 +186,16 @@ resource "aws_elasticache_cluster" "n8n" {
   # requirement.
   snapshot_retention_limit = var.redis_snapshot_retention_limit
 
+  # Same `? true : null` local and rationale as the replication group below:
+  # request-time flag, so an explicit false would diff on every existing
+  # deployment. Before this line, redis_apply_immediately silently did
+  # nothing on this default single-node topology, and a redis_node_type
+  # change reported "Apply complete" while AWS queued the resize in
+  # PendingModifiedValues for the next maintenance window (measured: the
+  # forced resize then took 41 minutes to complete; see the variable
+  # description).
+  apply_immediately = local.redis_apply_immediately
+
   tags = merge(local.common_tags, { Name = "${local.cluster_name}-redis" })
 }
 

@@ -5,6 +5,30 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to the stability contract in
 [README.md → Stability & versioning](./README.md#stability--versioning).
 
+## [Unreleased]
+
+### Added
+
+- `db_apply_immediately`: apply RDS instance modifications immediately instead
+  of deferring them to the next maintenance window. Defaults to `false` (the
+  AWS default), wired as `? true : null` so existing instances see no plan
+  change. Exists because a `db_instance_class` change otherwise reports
+  "Apply complete" while AWS queues the change in `PendingModifiedValues` for
+  a window that can be days out, with nothing in the plan or apply output
+  saying so (measured incident during load validation; both the database and
+  Redis had to be forced through the AWS CLI). Set it true for the apply that
+  carries a resize, verify the live class through AWS, then unset it.
+
+### Changed
+
+- `redis_apply_immediately` is now wired into the default single-node
+  `aws_elasticache_cluster` as well as the replication group. Previously it
+  silently did nothing on the single-node topology, so a `redis_node_type`
+  resize reported "Apply complete" while AWS queued it for the maintenance
+  window (measured: the forced resize then took 41 minutes to complete).
+  Same `? true : null` wiring, so deployments that leave it false see no plan
+  change.
+
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):
