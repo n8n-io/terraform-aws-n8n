@@ -267,9 +267,9 @@ run "pgbouncer_namespace_and_replicas" {
 
   assert {
     # The kubernetes provider returns replicas as a string per its schema, not
-    # an int — compare to "2" rather than 2.
-    condition     = kubernetes_deployment.pgbouncer.spec[0].replicas == "2"
-    error_message = "PgBouncer must run 2 replicas; a single replica is a single point of failure for all n8n DB traffic"
+    # an int — compare to "4" rather than 4.
+    condition     = kubernetes_deployment.pgbouncer.spec[0].replicas == "4"
+    error_message = "PgBouncer must run 4 replicas: fewer is a client-connection budget below the fleet ceiling (460 pods x pool_size 20 is about 9,200 potential connections against MAX_CLIENT_CONN 3,000 per replica), and exceeding max_client_conn queues new client connections, recreating the very pool-acquisition backlog the pool sizing exists to prevent"
   }
 }
 
