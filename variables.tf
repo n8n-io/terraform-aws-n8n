@@ -1621,6 +1621,38 @@ variable "db_multi_az" {
   default     = true
 }
 
+variable "db_apply_immediately" {
+  description = <<-EOT
+    Apply RDS instance modifications as soon as the apply runs, rather than
+    deferring them to the next maintenance window. Defaults to false, matching
+    the AWS default and leaving every existing deployment's behaviour
+    unchanged.
+
+    Without it, changing db_instance_class reports "Apply complete" from
+    Terraform while AWS quietly queues the class change in
+    PendingModifiedValues for a maintenance window that can be days out, so
+    the instance keeps running on the old class with nothing in the plan or
+    apply output saying so. Measured incident during load validation: a resize
+    reported clean while both the database and Redis stayed on their old
+    classes, and both had to be forced through the AWS CLI with
+    --apply-immediately. Set this true for the apply that carries a resize,
+    verify the live class through AWS (never through terraform plan or apply
+    output), then unset it so unrelated later modifications go back to
+    honouring the maintenance window. Ignored when create_database = false;
+    an external database (for example an Aurora cluster you manage yourself)
+    needs apply_immediately set on your own aws_rds_cluster_instance
+    resources, where the same silent-deferral behaviour applies.
+  EOT
+  type        = bool
+  default     = false
+
+  # null is not meaningful here: the resource wiring is a `? true : null`
+  # ternary (see database.tf), which requires a bool condition. A caller
+  # writing `x = null` would otherwise die with an opaque "Invalid
+  # conditional condition". See AGENTS.md on nullable.
+  nullable = false
+}
+
 variable "db_storage_encrypted" {
   description = "When true (the default), encrypt the RDS instance's storage, Performance Insights data, and the postgresql CloudWatch log group with a KMS key: a module-created Customer Managed KMS Key (aws_kms_key.db) unless db_kms_key_arn supplies an existing one, in which case the log group also needs db_logs_kms_key_arn before it is encrypted with that key rather than with CloudWatch's AWS-managed one. Clears Checkov findings CKV_AWS_16, CKV_AWS_354, and CKV_AWS_158. Flipping this from false to true on an existing RDS instance forces a replacement, because AWS does not support enabling storage encryption in place, so the upgrade path is snapshot then restore into a new encrypted instance. Set to false in your tfvars to preserve current behavior on pre-existing unencrypted deployments. The module-created CMK rotates annually and uses a 7-day deletion window (AWS minimum). Ignored when create_database = false."
   type        = bool
@@ -2062,7 +2094,7 @@ variable "redis_transit_encryption_mode" {
 }
 
 variable "redis_apply_immediately" {
-  description = "Apply ElastiCache modifications as soon as the apply runs, rather than deferring them to the next maintenance window. Defaults to false, matching the AWS default and leaving every existing deployment's behaviour unchanged. Set true when changing redis_transit_encryption_mode: AWS rejects any transit-encryption modification outright without it, with `InvalidParameterValue: Transit encryption modification should be called with applied immediately option.`, so the migration cannot proceed while this is false. Turning it on makes other modifications immediate too, which for a replication group can mean a node reboot outside the window you picked, so prefer scoping it to the applies that need it rather than leaving it on."
+  description = "Apply ElastiCache modifications as soon as the apply runs, rather than deferring them to the next maintenance window. Applies to both Redis topologies the module can manage: the default single-node aws_elasticache_cluster and the replication group. Defaults to false, matching the AWS default and leaving every existing deployment's behaviour unchanged. Set true when changing redis_transit_encryption_mode: AWS rejects any transit-encryption modification outright without it, with `InvalidParameterValue: Transit encryption modification should be called with applied immediately option.`, so the migration cannot proceed while this is false. Also set it true for the apply that carries a redis_node_type resize, then verify the live class through AWS rather than Terraform output: without it the resize reports \"Apply complete\" while AWS queues the class change in PendingModifiedValues for the next maintenance window, and nothing in the plan or apply says so (measured incident during load validation; the forced resize then took 41 minutes to complete, so plan the window either way). Turning it on makes other modifications immediate too, which for a replication group can mean a node reboot outside the window you picked, so prefer scoping it to the applies that need it rather than leaving it on."
   type        = bool
   default     = false
 

@@ -4536,6 +4536,61 @@ run "redis_apply_immediately_reaches_the_replication_group" {
   }
 }
 
+# The single-node cluster is the DEFAULT topology, and it ignored this input
+# entirely until the resource gained the argument: a redis_node_type resize
+# reported "Apply complete" while AWS queued it for the maintenance window
+# (measured: the forced resize then took 41 minutes). The replication-group
+# assertion above passing is exactly why that went unnoticed, so this asserts
+# the other topology explicitly.
+run "redis_apply_immediately_reaches_the_single_node_cluster" {
+  command = plan
+
+  variables {
+    redis_apply_immediately = true
+  }
+
+  assert {
+    condition     = aws_elasticache_cluster.n8n[0].apply_immediately == true
+    error_message = "redis_apply_immediately must reach the default single-node aws_elasticache_cluster, not only the replication group, or a node_type resize on the default topology defers silently."
+  }
+}
+
+run "redis_apply_immediately_is_unset_by_default_on_the_single_node_cluster" {
+  command = plan
+
+  assert {
+    condition     = local.redis_apply_immediately == null
+    error_message = "The default must stay null rather than false on the single-node path too, so existing clusters see no in-place update for a flag that changes nothing."
+  }
+}
+
+# ── RDS apply_immediately ─────────────────────────────────────────────────────
+# Same request-time-flag reasoning as the Redis pair above, on the database.
+# Without it a db_instance_class change reports "Apply complete" while AWS
+# queues the class change in PendingModifiedValues for a window days out.
+
+run "db_apply_immediately_is_unset_by_default" {
+  command = plan
+
+  assert {
+    condition     = aws_db_instance.n8n[0].apply_immediately == null
+    error_message = "apply_immediately must be null rather than false at its default. It is a request-time flag the API never reports back, so an instance created before this input existed has it null in state and an explicit false would render as an in-place update that changes nothing."
+  }
+}
+
+run "db_apply_immediately_reaches_the_instance" {
+  command = plan
+
+  variables {
+    db_apply_immediately = true
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].apply_immediately == true
+    error_message = "db_apply_immediately must reach aws_db_instance, or a resize defers to the maintenance window while Terraform reports it applied."
+  }
+}
+
 run "redis_apply_immediately_with_external_redis_warns" {
   command = plan
 
