@@ -1121,8 +1121,15 @@ variable "n8n_prestop_sleep" {
 
 variable "n8n_webhook_restart_schedule" {
   description = <<-EOT
-    Cron schedule (standard 5-field Kubernetes cron, UTC) for a scheduled
-    ROLLING restart of the webhook-processor Deployment. Defaults to null,
+    Cron schedule (standard 5-field Kubernetes cron) for a scheduled
+    ROLLING restart of the webhook-processor Deployment. The schedule is
+    interpreted in the kube-controller-manager's own time zone: the CronJob
+    sets no spec.timeZone, because the pinned kubernetes provider (~> 2.0)
+    does not support that argument, so pinning a zone here is not possible.
+    On EKS-managed control planes that means UTC; a create_eks = false
+    cluster whose controller runs in another zone interprets wall-clock
+    times there. For interval schedules like the recommended hourly one the
+    distinction is immaterial. Defaults to null,
     which creates nothing. When set, the module creates a CronJob (plus a
     ServiceAccount and a Role scoped to get/patch on that one Deployment)
     that runs `kubectl rollout restart` on it: pods are replaced behind
@@ -1151,12 +1158,26 @@ variable "n8n_webhook_restart_schedule" {
   type        = string
   default     = null
 
+  # Tokenizes on runs of whitespace (so doubled spaces or tabs between fields
+  # are fine) and checks each field against the cron character set. This is a
+  # charset-and-shape check, not a full grammar: "99 * * * *" still fails in
+  # the controller, but junk fields, wrong field counts and URL-ish strings
+  # fail here at plan time instead of as a CronJob that never fires.
   validation {
     condition = (
       var.n8n_webhook_restart_schedule == null ? true :
-      length(split(" ", trimspace(var.n8n_webhook_restart_schedule))) == 5
+      (
+        can(regex("^@(yearly|annually|monthly|weekly|daily|midnight|hourly)$", trimspace(var.n8n_webhook_restart_schedule))) ||
+        (
+          length(regexall("\\S+", trimspace(var.n8n_webhook_restart_schedule))) == 5 &&
+          alltrue([
+            for f in regexall("\\S+", trimspace(var.n8n_webhook_restart_schedule)) :
+            can(regex("^[0-9A-Za-z*,/?-]+$", f))
+          ])
+        )
+      )
     )
-    error_message = "n8n_webhook_restart_schedule must be a standard 5-field cron expression (e.g. \"0 * * * *\"), or null to disable."
+    error_message = "n8n_webhook_restart_schedule must be a standard 5-field cron expression (e.g. \"0 * * * *\", any whitespace between fields) or one of the @hourly-style descriptors Kubernetes accepts, or null to disable. Each field may contain digits, name abbreviations (MON, JAN), and * , - / ? only."
   }
 }
 
@@ -1164,6 +1185,23 @@ variable "n8n_webhook_restart_image" {
   description = "Image for the webhook restart CronJob's kubectl container. Defaults to null, which derives registry.k8s.io/kubectl:v<kubernetes_version>.0 (the Kubernetes project's own kubectl image; a tag exists for every supported minor, and kubectl's skew policy allows +/- one minor against the API server). Set explicitly for air-gapped registries, or when create_eks = false and the external cluster's version differs from kubernetes_version by more than one minor. Only used when n8n_webhook_restart_schedule is set."
   type        = string
   default     = null
+
+  # Deliberately a footgun check, not the full Docker reference grammar:
+  # whitespace and URL schemes are the two observed ways a broken override
+  # ships (both leave the restart Job unable to start and the mitigation
+  # silently inactive), while the registry itself validates the rest at
+  # image pull. Repository components must start lowercase-alphanumeric.
+  validation {
+    condition = (
+      var.n8n_webhook_restart_image == null ? true :
+      (
+        can(regex("^\\S+$", var.n8n_webhook_restart_image)) &&
+        !can(regex("://", var.n8n_webhook_restart_image)) &&
+        can(regex("^[a-z0-9]", var.n8n_webhook_restart_image))
+      )
+    )
+    error_message = "n8n_webhook_restart_image must look like a container image reference (e.g. registry.k8s.io/kubectl:v1.35.0): no whitespace, no URL scheme like https://, starting with a lowercase alphanumeric. A malformed reference creates a CronJob whose Job can never start, which silently disables the leak mitigation."
+  }
 }
 
 # ── Task runners ──────────────────────────────────────────────────────────────

@@ -958,8 +958,8 @@ run "webhook_restart_rbac_is_scoped_to_one_deployment" {
   }
 
   assert {
-    condition     = length(kubernetes_role_v1.webhook_restart[0].rule[0].resource_names) == 1
-    error_message = "The restart Role must name exactly one Deployment, or it can patch any Deployment in the namespace."
+    condition     = tolist(kubernetes_role_v1.webhook_restart[0].rule[0].resource_names) == tolist([local.n8n_webhook_service_name])
+    error_message = "The restart Role must name exactly the webhook-processor Deployment and nothing else; a Role repointed at any other Deployment (or widened to several) still restarts SOMETHING on schedule while silently abandoning the tier the mitigation exists for."
   }
 
   assert {
@@ -980,6 +980,42 @@ run "webhook_restart_image_defaults_to_the_cluster_kubectl_minor" {
     condition     = local.webhook_restart_image == "registry.k8s.io/kubectl:v1.33.0"
     error_message = "The restart image must default to the cluster's own Kubernetes minor, which kubectl's skew policy always permits."
   }
+}
+
+run "webhook_restart_schedule_tokenizes_on_any_whitespace" {
+  command = plan
+
+  # Doubled spaces between fields are valid cron; the validation tokenizes on
+  # whitespace runs rather than splitting on single literal spaces.
+  variables {
+    n8n_webhook_restart_schedule = "0  *\t* * *"
+  }
+
+  assert {
+    condition     = length(kubernetes_cron_job_v1.webhook_restart) == 1
+    error_message = "A cron expression with doubled spaces or tabs between fields must be accepted."
+  }
+}
+
+run "webhook_restart_schedule_rejects_junk_fields" {
+  command = plan
+
+  variables {
+    n8n_webhook_restart_schedule = "not-a-cron! * * * *"
+  }
+
+  expect_failures = [var.n8n_webhook_restart_schedule]
+}
+
+run "webhook_restart_image_rejects_whitespace_and_schemes" {
+  command = plan
+
+  variables {
+    n8n_webhook_restart_schedule = "0 * * * *"
+    n8n_webhook_restart_image    = "https://registry.k8s.io/kubectl:v1.33.0"
+  }
+
+  expect_failures = [var.n8n_webhook_restart_image]
 }
 
 run "webhook_restart_image_can_be_overridden_for_air_gapped_registries" {
