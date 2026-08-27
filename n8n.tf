@@ -579,7 +579,7 @@ resource "helm_release" "n8n" {
         # ping sets `connectionState.connected = false`, and the global middleware
         # in abstract-server.ts then answers EVERY request to that pod with a 503,
         # creating no execution row and logging nothing at the failure site.
-        # Measured on speedy3 2026-08-25: 91 of 160 webhook-processor pods, two
+        # Measured on a production deployment: 91 of 160 webhook-processor pods, two
         # thirds of all requests failing, with Aurora and PgBouncer both idle.
         #
         # Raising the timeout is the mitigation available without an n8n change:
@@ -587,14 +587,14 @@ resource "helm_release" "n8n" {
         # failure threshold widens the margin before the more destructive
         # response, which is that n8n destroys and recreates the pool outright,
         # suspending every in-flight acquisition on that pod.
-        var.n8n_db_ping_timeout_ms != null ? [
-          { name = "DB_PING_TIMEOUT_MS", value = tostring(var.n8n_db_ping_timeout_ms) },
+        var.db_ping_timeout_ms != null ? [
+          { name = "DB_PING_TIMEOUT_MS", value = tostring(var.db_ping_timeout_ms) },
         ] : [],
-        var.n8n_db_ping_interval_seconds != null ? [
-          { name = "DB_PING_INTERVAL_SECONDS", value = tostring(var.n8n_db_ping_interval_seconds) },
+        var.db_ping_interval_seconds != null ? [
+          { name = "DB_PING_INTERVAL_SECONDS", value = tostring(var.db_ping_interval_seconds) },
         ] : [],
-        var.n8n_db_ping_max_failures_before_recovery != null ? [
-          { name = "DB_PING_MAX_FAILURES_BEFORE_RECOVERY", value = tostring(var.n8n_db_ping_max_failures_before_recovery) },
+        var.db_ping_max_failures_before_recovery != null ? [
+          { name = "DB_PING_MAX_FAILURES_BEFORE_RECOVERY", value = tostring(var.db_ping_max_failures_before_recovery) },
         ] : [],
         [
           { name = "DB_POSTGRESDB_POOL_SIZE", value = tostring(var.db_postgresdb_pool_size) },

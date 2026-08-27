@@ -26,8 +26,8 @@ this project adheres to the stability contract in
   evicting 279 pods in one episode. Changing this on an existing cluster
   replaces every node in the group.
 
-- `n8n_db_ping_timeout_ms`, `n8n_db_ping_interval_seconds` and
-  `n8n_db_ping_max_failures_before_recovery`: expose n8n's database health-check
+- `db_ping_timeout_ms`, `db_ping_interval_seconds` and
+  `db_ping_max_failures_before_recovery`: expose n8n's database health-check
   ping settings (`DB_PING_TIMEOUT_MS`, `DB_PING_INTERVAL_SECONDS`,
   `DB_PING_MAX_FAILURES_BEFORE_RECOVERY`). All default to `null`, which omits the
   variable and leaves n8n's own defaults (5000ms, 2s, 3), so this is additive.

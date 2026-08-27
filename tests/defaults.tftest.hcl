@@ -770,18 +770,18 @@ run "db_ping_settings_default_to_null" {
   command = plan
 
   assert {
-    condition     = var.n8n_db_ping_timeout_ms == null
-    error_message = "n8n_db_ping_timeout_ms must default to null so DB_PING_TIMEOUT_MS is omitted and n8n keeps its own 5000ms default."
+    condition     = var.db_ping_timeout_ms == null
+    error_message = "db_ping_timeout_ms must default to null so DB_PING_TIMEOUT_MS is omitted and n8n keeps its own 5000ms default."
   }
 
   assert {
-    condition     = var.n8n_db_ping_interval_seconds == null
-    error_message = "n8n_db_ping_interval_seconds must default to null so DB_PING_INTERVAL_SECONDS is omitted and n8n keeps its own 2s default."
+    condition     = var.db_ping_interval_seconds == null
+    error_message = "db_ping_interval_seconds must default to null so DB_PING_INTERVAL_SECONDS is omitted and n8n keeps its own 2s default."
   }
 
   assert {
-    condition     = var.n8n_db_ping_max_failures_before_recovery == null
-    error_message = "n8n_db_ping_max_failures_before_recovery must default to null so DB_PING_MAX_FAILURES_BEFORE_RECOVERY is omitted and n8n keeps its own default of 3."
+    condition     = var.db_ping_max_failures_before_recovery == null
+    error_message = "db_ping_max_failures_before_recovery must default to null so DB_PING_MAX_FAILURES_BEFORE_RECOVERY is omitted and n8n keeps its own default of 3."
   }
 }
 
@@ -789,24 +789,24 @@ run "db_ping_settings_accept_valid_values" {
   command = plan
 
   variables {
-    n8n_db_ping_timeout_ms                   = 20000
-    n8n_db_ping_interval_seconds             = 5
-    n8n_db_ping_max_failures_before_recovery = 6
+    db_ping_timeout_ms                   = 20000
+    db_ping_interval_seconds             = 5
+    db_ping_max_failures_before_recovery = 6
   }
 
   assert {
-    condition     = var.n8n_db_ping_timeout_ms == 20000
-    error_message = "n8n_db_ping_timeout_ms should accept a positive millisecond value."
+    condition     = var.db_ping_timeout_ms == 20000
+    error_message = "db_ping_timeout_ms should accept a positive millisecond value."
   }
 
   assert {
-    condition     = var.n8n_db_ping_interval_seconds == 5
-    error_message = "n8n_db_ping_interval_seconds should accept a positive second value."
+    condition     = var.db_ping_interval_seconds == 5
+    error_message = "db_ping_interval_seconds should accept a positive second value."
   }
 
   assert {
-    condition     = var.n8n_db_ping_max_failures_before_recovery == 6
-    error_message = "n8n_db_ping_max_failures_before_recovery should accept a value of 1 or greater."
+    condition     = var.db_ping_max_failures_before_recovery == 6
+    error_message = "db_ping_max_failures_before_recovery should accept a value of 1 or greater."
   }
 }
 
@@ -814,30 +814,64 @@ run "db_ping_timeout_ms_rejects_zero" {
   command = plan
 
   variables {
-    n8n_db_ping_timeout_ms = 0
+    db_ping_timeout_ms = 0
   }
 
-  expect_failures = [var.n8n_db_ping_timeout_ms]
+  expect_failures = [var.db_ping_timeout_ms]
 }
 
 run "db_ping_interval_seconds_rejects_zero" {
   command = plan
 
   variables {
-    n8n_db_ping_interval_seconds = 0
+    db_ping_interval_seconds = 0
   }
 
-  expect_failures = [var.n8n_db_ping_interval_seconds]
+  expect_failures = [var.db_ping_interval_seconds]
 }
 
 run "db_ping_max_failures_before_recovery_rejects_zero" {
   command = plan
 
   variables {
-    n8n_db_ping_max_failures_before_recovery = 0
+    db_ping_max_failures_before_recovery = 0
   }
 
-  expect_failures = [var.n8n_db_ping_max_failures_before_recovery]
+  expect_failures = [var.db_ping_max_failures_before_recovery]
+}
+
+# All three ride tostring() into an env var n8n parses as an integer, so a
+# fractional number would render (e.g.) "2.5" into the pod env and fail only
+# inside n8n. Reject it at plan time instead, matching the floor() pattern
+# used by node_min, db_backup_retention_period and n8n_redis_timeout_threshold.
+run "db_ping_timeout_ms_rejects_fractional_values" {
+  command = plan
+
+  variables {
+    db_ping_timeout_ms = 5000.5
+  }
+
+  expect_failures = [var.db_ping_timeout_ms]
+}
+
+run "db_ping_interval_seconds_rejects_fractional_values" {
+  command = plan
+
+  variables {
+    db_ping_interval_seconds = 2.5
+  }
+
+  expect_failures = [var.db_ping_interval_seconds]
+}
+
+run "db_ping_max_failures_before_recovery_rejects_fractional_values" {
+  command = plan
+
+  variables {
+    db_ping_max_failures_before_recovery = 2.5
+  }
+
+  expect_failures = [var.db_ping_max_failures_before_recovery]
 }
 
 # ── Redis AUTH token secret ref ──────────────────────────────────────────────

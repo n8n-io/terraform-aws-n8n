@@ -1473,7 +1473,7 @@ variable "db_password_secret_ref" {
   }
 }
 
-variable "n8n_db_ping_timeout_ms" {
+variable "db_ping_timeout_ms" {
   description = <<-EOT
     Milliseconds n8n allows for its database health-check ping before declaring the
     connection down (`DB_PING_TIMEOUT_MS`). Leave null for n8n's own default of
@@ -1490,7 +1490,7 @@ variable "n8n_db_ping_timeout_ms" {
     `abstract-server.ts` then answers every request to that pod with a 503,
     creating no execution row and writing no log line at the failure site.
 
-    Measured on speedy3 2026-08-25 with a pool size of 5: 16 to 54 connection
+    Measured on a production deployment with a pool size of 5: 16 to 54 connection
     requests pending per pod, acquire times of 2 to 14 seconds, 91 of 160
     webhook-processor pods affected, roughly two thirds of all requests failing,
     with Aurora and PgBouncer both idle throughout and `cl_waiting` at zero.
@@ -1504,28 +1504,43 @@ variable "n8n_db_ping_timeout_ms" {
   default     = null
 
   validation {
-    condition     = var.n8n_db_ping_timeout_ms == null ? true : var.n8n_db_ping_timeout_ms > 0
-    error_message = "n8n_db_ping_timeout_ms must be a positive number of milliseconds, or null to use n8n's own default of 5000."
+    condition = var.db_ping_timeout_ms == null ? true : (
+      var.db_ping_timeout_ms > 0 &&
+      var.db_ping_timeout_ms == floor(var.db_ping_timeout_ms)
+    )
+    error_message = "db_ping_timeout_ms must be a positive whole number of milliseconds, or null to use n8n's own default of 5000."
   }
 }
 
-variable "n8n_db_ping_interval_seconds" {
-  description = "Seconds between n8n's database health-check pings (`DB_PING_INTERVAL_SECONDS`). Leave null for n8n's own default of 2. Unsettable through the chart or `n8n_extra_env`, see n8n_db_ping_timeout_ms. Each ping consumes a connection from the same pool that serves request traffic, so on a saturated pool a shorter interval adds contention to the resource already under pressure. Lengthening it reduces that contention at the cost of slower detection of a genuinely lost connection."
+variable "db_ping_interval_seconds" {
+  description = <<-EOT
+    Seconds between n8n's database health-check pings
+    (`DB_PING_INTERVAL_SECONDS`). Leave null for n8n's own default of 2.
+    Unsettable through the chart or `n8n_extra_env`, see db_ping_timeout_ms.
+
+    Each ping consumes a connection from the same pool that serves request
+    traffic, so on a saturated pool a shorter interval adds contention to the
+    resource already under pressure. Lengthening it reduces that contention at
+    the cost of slower detection of a genuinely lost connection.
+  EOT
   type        = number
   default     = null
 
   validation {
-    condition     = var.n8n_db_ping_interval_seconds == null ? true : var.n8n_db_ping_interval_seconds > 0
-    error_message = "n8n_db_ping_interval_seconds must be a positive number of seconds, or null to use n8n's own default of 2."
+    condition = var.db_ping_interval_seconds == null ? true : (
+      var.db_ping_interval_seconds > 0 &&
+      var.db_ping_interval_seconds == floor(var.db_ping_interval_seconds)
+    )
+    error_message = "db_ping_interval_seconds must be a positive whole number of seconds, or null to use n8n's own default of 2."
   }
 }
 
-variable "n8n_db_ping_max_failures_before_recovery" {
+variable "db_ping_max_failures_before_recovery" {
   description = <<-EOT
     Consecutive failed database pings before n8n destroys and recreates the
     connection pool (`DB_PING_MAX_FAILURES_BEFORE_RECOVERY`). Leave null for n8n's
     own default of 3. Unsettable through the chart or `n8n_extra_env`, see
-    n8n_db_ping_timeout_ms.
+    db_ping_timeout_ms.
 
     At the default interval of 2 seconds this fires after roughly 6 seconds of
     failed pings, and the response is destructive: n8n tears down the pool,
@@ -1546,8 +1561,11 @@ variable "n8n_db_ping_max_failures_before_recovery" {
   default     = null
 
   validation {
-    condition     = var.n8n_db_ping_max_failures_before_recovery == null ? true : var.n8n_db_ping_max_failures_before_recovery >= 1
-    error_message = "n8n_db_ping_max_failures_before_recovery must be at least 1, or null to use n8n's own default of 3."
+    condition = var.db_ping_max_failures_before_recovery == null ? true : (
+      var.db_ping_max_failures_before_recovery >= 1 &&
+      var.db_ping_max_failures_before_recovery == floor(var.db_ping_max_failures_before_recovery)
+    )
+    error_message = "db_ping_max_failures_before_recovery must be a whole number of at least 1, or null to use n8n's own default of 3."
   }
 }
 
