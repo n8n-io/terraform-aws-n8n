@@ -43,12 +43,14 @@ this project adheres to the stability contract in
   `connectionState.connected = false`, and the global middleware in
   `abstract-server.ts` then answers every request to that pod with a 503,
   creating no execution row and logging nothing at the failure site. After
-  `DB_PING_MAX_FAILURES_BEFORE_RECOVERY` consecutive failures, roughly 6 seconds
-  at the default interval, n8n destroys and recreates the pool and suspends
-  acquisition while it does, which on a pool saturated by legitimate traffic is a
-  feedback loop rather than a recovery. Sizing the pool above peak demand removes
-  the queue outright where possible; raising these settings is a mitigation for
-  when it isn't.
+  `DB_PING_MAX_FAILURES_BEFORE_RECOVERY` consecutive failures, n8n destroys and
+  recreates the pool and suspends acquisition while it does. At the defaults,
+  recovery starts roughly 6 seconds after monitoring begins when each ping fails
+  immediately, but roughly 21 seconds after monitoring begins when each ping
+  consumes the full 5-second timeout, as it does when `pool.connect()` is queued
+  behind saturated traffic. In that case recovery is a feedback loop rather
+  than a recovery. Sizing the pool above peak demand removes the queue outright
+  where possible; raising these settings is a mitigation for when it isn't.
 
 ## [0.3.0] - 2026-08-13
 

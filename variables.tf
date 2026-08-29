@@ -1504,11 +1504,8 @@ variable "db_ping_timeout_ms" {
   default     = null
 
   validation {
-    condition = var.db_ping_timeout_ms == null ? true : (
-      var.db_ping_timeout_ms > 0 &&
-      var.db_ping_timeout_ms == floor(var.db_ping_timeout_ms)
-    )
-    error_message = "db_ping_timeout_ms must be a positive whole number of milliseconds, or null to use n8n's own default of 5000."
+    condition     = var.db_ping_timeout_ms == null ? true : var.db_ping_timeout_ms > 0
+    error_message = "db_ping_timeout_ms must be greater than 0 milliseconds, or null to use n8n's own default of 5000."
   }
 }
 
@@ -1527,11 +1524,8 @@ variable "db_ping_interval_seconds" {
   default     = null
 
   validation {
-    condition = var.db_ping_interval_seconds == null ? true : (
-      var.db_ping_interval_seconds > 0 &&
-      var.db_ping_interval_seconds == floor(var.db_ping_interval_seconds)
-    )
-    error_message = "db_ping_interval_seconds must be a positive whole number of seconds, or null to use n8n's own default of 2."
+    condition     = var.db_ping_interval_seconds == null ? true : var.db_ping_interval_seconds > 0
+    error_message = "db_ping_interval_seconds must be greater than 0 seconds, or null to use n8n's own default of 2."
   }
 }
 
@@ -1542,13 +1536,16 @@ variable "db_ping_max_failures_before_recovery" {
     own default of 3. Unsettable through the chart or `n8n_extra_env`, see
     db_ping_timeout_ms.
 
-    At the default interval of 2 seconds this fires after roughly 6 seconds of
-    failed pings, and the response is destructive: n8n tears down the pool,
-    recreates it, and suspends connection acquisition while it does, so every
-    in-flight query on that pod waits. When the pings are failing because the pool
-    is saturated rather than because the database is unreachable, that is a
-    feedback loop: saturation causes ping failure causes teardown causes every
-    query stalling causes more saturation.
+    n8n waits for the interval before each attempt and schedules the next attempt
+    only after the previous one finishes. At the defaults, three failures therefore
+    trigger recovery after roughly 6 seconds when each ping fails immediately, but
+    after roughly 21 seconds when each ping consumes the full 5-second timeout, as
+    happens when pool saturation leaves `pool.connect()` queued. The response is
+    destructive: n8n tears down the pool, recreates it, and suspends connection
+    acquisition while it does, so every in-flight query on that pod waits. When the
+    pings are failing because the pool is saturated rather than because the database
+    is unreachable, that is a feedback loop: saturation causes ping failure causes
+    teardown causes every query stalling causes more saturation.
 
     n8n's own source acknowledges this shape. The class comment in
     `db-connection-monitor.ts` notes that a failed ping can mean "a saturated pool

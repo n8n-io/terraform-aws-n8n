@@ -764,7 +764,9 @@ run "db_password_secret_ref_rejects_being_set_alongside_the_value" {
 # prefix), so these variables are the only route to them. Plan-time
 # variable-contract assertions only: the values ride config.extraEnv, whose
 # rendered content is unknown at plan time under the mock provider (see
-# AGENTS.md, "Known mock provider limitations").
+# AGENTS.md, "Known mock provider limitations"). Verify the wiring after a real
+# apply by inspecting the DB_PING_* environment variables on the n8n-main,
+# n8n-worker, and n8n-webhook-processor Deployments.
 
 run "db_ping_settings_default_to_null" {
   command = plan
@@ -840,28 +842,26 @@ run "db_ping_max_failures_before_recovery_rejects_zero" {
   expect_failures = [var.db_ping_max_failures_before_recovery]
 }
 
-# All three ride tostring() into an env var n8n parses as an integer, so a
-# fractional number would render (e.g.) "2.5" into the pod env and fail only
-# inside n8n. Reject it at plan time instead, matching the floor() pattern
-# used by node_min, db_backup_retention_period and n8n_redis_timeout_threshold.
-run "db_ping_timeout_ms_rejects_fractional_values" {
+# n8n parses timeout and interval as numbers, so fractional values are valid.
+# In particular, an interval of 2.5 seconds becomes a 2500ms timer. The failure
+# threshold is different: n8n explicitly requires it to be an integer >= 1.
+run "db_ping_timeout_and_interval_accept_fractional_values" {
   command = plan
 
   variables {
-    db_ping_timeout_ms = 5000.5
-  }
-
-  expect_failures = [var.db_ping_timeout_ms]
-}
-
-run "db_ping_interval_seconds_rejects_fractional_values" {
-  command = plan
-
-  variables {
+    db_ping_timeout_ms       = 5000.5
     db_ping_interval_seconds = 2.5
   }
 
-  expect_failures = [var.db_ping_interval_seconds]
+  assert {
+    condition     = var.db_ping_timeout_ms == 5000.5
+    error_message = "db_ping_timeout_ms should accept the fractional number shape n8n accepts."
+  }
+
+  assert {
+    condition     = var.db_ping_interval_seconds == 2.5
+    error_message = "db_ping_interval_seconds should accept fractional seconds such as 2.5 (2500ms)."
+  }
 }
 
 run "db_ping_max_failures_before_recovery_rejects_fractional_values" {
