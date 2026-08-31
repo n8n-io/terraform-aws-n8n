@@ -8603,12 +8603,25 @@ run "db_postgresdb_connection_timeout_ms_accepts_zero" {
   command = plan
 
   variables {
-    n8n_db_postgresdb_connection_timeout_ms = 0
+    db_postgresdb_connection_timeout_ms = 0
   }
 
   assert {
-    condition     = var.n8n_db_postgresdb_connection_timeout_ms == 0
-    error_message = "n8n_db_postgresdb_connection_timeout_ms must accept zero, which disables the pg-pool acquisition timeout."
+    condition     = var.db_postgresdb_connection_timeout_ms == 0
+    error_message = "db_postgresdb_connection_timeout_ms must accept zero, which disables the pg-pool acquisition timeout."
+  }
+}
+
+run "db_postgresdb_connection_timeout_ms_accepts_the_maximum_node_timer" {
+  command = plan
+
+  variables {
+    db_postgresdb_connection_timeout_ms = 2147483647
+  }
+
+  assert {
+    condition     = var.db_postgresdb_connection_timeout_ms == 2147483647
+    error_message = "db_postgresdb_connection_timeout_ms must accept Node.js's maximum timer value."
   }
 }
 
@@ -8626,8 +8639,18 @@ run "db_postgresdb_connection_timeout_ms_rejects_a_fractional_value" {
   command = plan
 
   variables {
-    n8n_db_postgresdb_connection_timeout_ms = 20000.5
+    db_postgresdb_connection_timeout_ms = 20000.5
   }
 
-  expect_failures = [var.n8n_db_postgresdb_connection_timeout_ms]
+  expect_failures = [var.db_postgresdb_connection_timeout_ms]
+}
+
+run "db_postgresdb_connection_timeout_ms_rejects_a_node_timer_overflow" {
+  command = plan
+
+  variables {
+    db_postgresdb_connection_timeout_ms = 2147483648
+  }
+
+  expect_failures = [var.db_postgresdb_connection_timeout_ms]
 }
