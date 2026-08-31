@@ -109,8 +109,11 @@ module "n8n" {
   # here: one leader plus two followers, so a node drain still leaves two serving
   # the editor while the PodDisruptionBudget only guarantees one.
   #
-  # Costs 28,800m of the ~115,000m this node group can schedule at the ceiling,
-  # and 240 of db.m6g.2xlarge's ~3,600 connections at pool_size=10.
+  # Costs 28,800m of the ~115,000m this node group can schedule at the ceiling.
+  # At pool_size=10, all maximum replicas (24 main + 50 webhook + 40 worker)
+  # expose an aggregate maximum of 1,140 connections against db.m6g.2xlarge's
+  # roughly 3,600-connection limit. pg-pool creates these lazily, so measure
+  # concurrent database operations and pool-wait time before changing the cap.
   n8n_main_hpa_min_replicas = 3
   n8n_main_hpa_max_replicas = 24
 
@@ -125,7 +128,9 @@ module "n8n" {
 
   # ── Workers ───────────────────────────────────────────────────────────────────
   # concurrency=20: doubles throughput per pod vs the default 10.
-  # pool_size=10 satisfies the rule pool_size >= concurrency / 2 for direct RDS.
+  # pool_size=10 is a per-process lazy maximum, not a value derived from worker
+  # or workflow concurrency. Keep aggregate database capacity within the budget
+  # described above.
   n8n_worker_keda_min_replicas = 5
   n8n_worker_keda_max_replicas = 40
   n8n_worker_concurrency       = 20

@@ -8569,3 +8569,88 @@ run "chart_version_rejects_a_leading_v" {
 
   expect_failures = [var.lbc_chart_version]
 }
+
+# ── db_postgresdb_connection_timeout_ms ───────────────────────────────────────
+# Chart wiring (DB_POSTGRESDB_CONNECTION_TIMEOUT in config.extraEnv) cannot be
+# asserted under command = plan: helm_release.values is unknown at plan time
+# because the resource depends on kubernetes_namespace, whose attributes are
+# (known after apply) under the mock provider. See AGENTS.md's "Known mock
+# provider limitations". These assertions cover the variable contract only.
+
+run "db_postgresdb_connection_timeout_ms_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.db_postgresdb_connection_timeout_ms == null
+    error_message = "db_postgresdb_connection_timeout_ms must default to null so n8n keeps its own default of 20000ms."
+  }
+}
+
+run "db_postgresdb_connection_timeout_ms_accepts_a_positive_value" {
+  command = plan
+
+  variables {
+    db_postgresdb_connection_timeout_ms = 45000
+  }
+
+  assert {
+    condition     = var.db_postgresdb_connection_timeout_ms == 45000
+    error_message = "db_postgresdb_connection_timeout_ms must accept a caller-supplied positive millisecond value."
+  }
+}
+
+run "db_postgresdb_connection_timeout_ms_accepts_zero" {
+  command = plan
+
+  variables {
+    db_postgresdb_connection_timeout_ms = 0
+  }
+
+  assert {
+    condition     = var.db_postgresdb_connection_timeout_ms == 0
+    error_message = "db_postgresdb_connection_timeout_ms must accept zero, which disables the pg-pool acquisition timeout."
+  }
+}
+
+run "db_postgresdb_connection_timeout_ms_accepts_the_maximum_node_timer" {
+  command = plan
+
+  variables {
+    db_postgresdb_connection_timeout_ms = 2147483647
+  }
+
+  assert {
+    condition     = var.db_postgresdb_connection_timeout_ms == 2147483647
+    error_message = "db_postgresdb_connection_timeout_ms must accept Node.js's maximum timer value."
+  }
+}
+
+run "db_postgresdb_connection_timeout_ms_rejects_a_negative_value" {
+  command = plan
+
+  variables {
+    db_postgresdb_connection_timeout_ms = -1
+  }
+
+  expect_failures = [var.db_postgresdb_connection_timeout_ms]
+}
+
+run "db_postgresdb_connection_timeout_ms_rejects_a_fractional_value" {
+  command = plan
+
+  variables {
+    db_postgresdb_connection_timeout_ms = 20000.5
+  }
+
+  expect_failures = [var.db_postgresdb_connection_timeout_ms]
+}
+
+run "db_postgresdb_connection_timeout_ms_rejects_a_node_timer_overflow" {
+  command = plan
+
+  variables {
+    db_postgresdb_connection_timeout_ms = 2147483648
+  }
+
+  expect_failures = [var.db_postgresdb_connection_timeout_ms]
+}
