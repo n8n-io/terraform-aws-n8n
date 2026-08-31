@@ -77,6 +77,56 @@ this project adheres to the stability contract in
   governing the failure is settable, including downward for fail-fast
   behaviour.
 
+- `n8n_queue_worker_lock_duration`, `n8n_queue_worker_lock_renew_time` and
+  `n8n_queue_worker_stalled_interval` - expose the chart's
+  `redis.worker.lockDuration`, `redis.worker.lockRenewTime` and
+  `redis.worker.stalledInterval` (`QUEUE_WORKER_LOCK_DURATION`,
+  `QUEUE_WORKER_LOCK_RENEW_TIME` and `QUEUE_WORKER_STALLED_INTERVAL` on the
+  pods). All default to `null`, which omits the key entirely and leaves the
+  chart's own defaults (60000 / 10000 / 30000 ms), so this is additive.
+
+  These three keys are chart-templated from `redis.worker.*` and are not
+  names `n8n_extra_env` can safely set: the chart's ConfigMap entries for
+  them render unconditionally, so a duplicate in `extraEnv` produces a
+  container env entry carrying both `value` and `valueFrom`, which the
+  Kubernetes API rejects outright.
+
+  The three keys are assembled in a single `local.n8n_queue_worker_settings`
+  map. The surrounding `merge()` in `n8n.tf` is shallow, so passing them as
+  three separate `{ worker = {...} }` entries would have silently kept only
+  the last: setting a lock duration and a stalled interval together would
+  have dropped one of them with no error.
+
+  The renewal interval must stay strictly below the lock duration, and the
+  validations enforce that against the effective value rather than the
+  literal one. Lowering `n8n_queue_worker_lock_duration` to `10000` ms or
+  less while leaving `n8n_queue_worker_lock_renew_time` null is rejected,
+  because the chart would keep its own `10000` ms renewal default: the lock
+  would expire at or before the first renewal ever fired, and Bull would
+  treat every job on a perfectly healthy worker as stalled. Set the renewal
+  interval explicitly below the duration to run a short lock.
+
+  All three are validated as whole numbers. The chart's `values.schema.json`
+  declares every `redis.worker.*` key as `{"type": "integer"}`, so a
+  fractional value would otherwise pass the module and fail later during
+  Helm schema validation at apply time.
+
+  `n8n_queue_worker_stalled_interval` cannot be set to `0`. n8n documents
+  `0` as "disable stall checking", but the chart's `values.schema.json`
+  declares the key as `{"type": "integer", "minimum": 1000}`, so `0` is
+  rejected during Helm schema validation and a quoted `"0"` is rejected as
+  the wrong type. The variable validates for `>= 1000` so this surfaces at
+  plan time with an explanation, rather than as a Helm schema error naming
+  a values path and no reason. Disabling stall checking requires an
+  upstream chart change.
+
+  `QUEUE_WORKER_MAX_STALLED_COUNT` is deliberately not exposed. The chart
+  still renders it (`redis.worker.maxStalledCount`, default `1`), but n8n
+  v2 removed the environment variable and ships a breaking-change rule
+  stating it is ignored, while `packages/cli/src/scaling/scaling.service.ts`
+  hardcodes Bull's `maxStalledCount` to `0`. Exposing it would offer
+  control that does not exist.
+
 ### Changed
 
 - `db_postgresdb_pool_size` is now documented as a lazy per-process maximum,

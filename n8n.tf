@@ -392,7 +392,23 @@ resource "helm_release" "n8n" {
       # N8N_REDIS_KEY_PREFIX env var lives in config.extraEnv below, and the
       # KEDA listName values a few blocks down are kept in sync with this same
       # variable: all three have to move together, see redis_key_prefix.
-      var.redis_key_prefix != null ? { prefix = var.redis_key_prefix } : {}
+      var.redis_key_prefix != null ? { prefix = var.redis_key_prefix } : {},
+      # QUEUE_WORKER_LOCK_DURATION, QUEUE_WORKER_LOCK_RENEW_TIME and
+      # QUEUE_WORKER_STALLED_INTERVAL are chart-templated from redis.worker.*
+      # (values.yaml), and are NOT names config.extraEnv can safely set: the
+      # chart's own ConfigMap entries for these keys render unconditionally,
+      # so an extraEnv duplicate produces a container env entry with both
+      # `value` and a `valueFrom.configMapKeyRef` set, which the Kubernetes
+      # API rejects outright ("may not be specified when value is not
+      # empty"). The whole `worker` key is omitted when none of the three is
+      # set, leaving the chart's own defaults (60000 / 10000 / 30000 ms).
+      #
+      # local.n8n_queue_worker_settings, not the variables directly: this
+      # merge is shallow, so three separate `worker` entries would overwrite
+      # each other and only the last would survive. See locals.tf.
+      length(local.n8n_queue_worker_settings) > 0 ? {
+        worker = local.n8n_queue_worker_settings
+      } : {}
     )
 
     s3 = {

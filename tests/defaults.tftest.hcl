@@ -3721,6 +3721,251 @@ run "redis_key_prefix_rejects_whitespace" {
   expect_failures = [var.redis_key_prefix]
 }
 
+# ── Queue worker lock/stall tuning ────────────────────────────────────────────
+# QUEUE_WORKER_LOCK_DURATION / _LOCK_RENEW_TIME / _STALLED_INTERVAL are
+# chart-templated from redis.worker.* (values.yaml). helm_release.values is
+# unknown at plan time under the mock provider (see AGENTS.md's "Known mock
+# provider limitations"), so these assert at the variable-contract level only:
+# defaults, accepted values, and validator rejection.
+run "queue_worker_lock_settings_default_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_queue_worker_lock_duration == null
+    error_message = "n8n_queue_worker_lock_duration must default to null so the chart keeps its own default (60000ms)."
+  }
+
+  assert {
+    condition     = var.n8n_queue_worker_lock_renew_time == null
+    error_message = "n8n_queue_worker_lock_renew_time must default to null so the chart keeps its own default (10000ms)."
+  }
+
+  assert {
+    condition     = var.n8n_queue_worker_stalled_interval == null
+    error_message = "n8n_queue_worker_stalled_interval must default to null so the chart keeps its own default (30000ms)."
+  }
+
+  assert {
+    condition     = length(local.n8n_queue_worker_settings) == 0
+    error_message = "local.n8n_queue_worker_settings must be empty when none of the three variables is set, so the chart's worker key is omitted entirely and rendered values stay byte-identical to before these variables existed."
+  }
+}
+
+run "queue_worker_lock_settings_accept_valid_values" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_duration    = 180000
+    n8n_queue_worker_lock_renew_time  = 15000
+    n8n_queue_worker_stalled_interval = 45000
+  }
+
+  assert {
+    condition     = var.n8n_queue_worker_lock_duration == 180000
+    error_message = "n8n_queue_worker_lock_duration should accept a value at or above the chart's 1000ms schema minimum."
+  }
+
+  assert {
+    # jsonencode both sides rather than comparing objects directly: merge()
+    # of object()-typed branches produces a structural object type that
+    # Terraform's == treats as distinct from a plain map/object literal's
+    # inferred type even when every value matches, so a direct comparison
+    # fails on "LHS and RHS values are of different types" despite identical
+    # content.
+    condition = jsonencode(local.n8n_queue_worker_settings) == jsonencode({
+      lockDuration    = 180000
+      lockRenewTime   = 15000
+      stalledInterval = 45000
+    })
+    error_message = "local.n8n_queue_worker_settings must assemble all three values into the chart's redis.worker map when all three variables are set."
+  }
+}
+
+# Each key is emitted by its own conditional branch in
+# local.n8n_queue_worker_settings. The all-set and none-set runs above would
+# both still pass if one branch emitted its key unconditionally, or carried a
+# condition copy-pasted from a sibling variable, so these three runs pin each
+# branch in isolation.
+run "queue_worker_lock_duration_alone_emits_only_its_key" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_duration = 180000
+  }
+
+  assert {
+    condition     = jsonencode(local.n8n_queue_worker_settings) == jsonencode({ lockDuration = 180000 })
+    error_message = "local.n8n_queue_worker_settings must carry only lockDuration when n8n_queue_worker_lock_duration is the only variable set, so the chart keeps its own lockRenewTime and stalledInterval defaults."
+  }
+}
+
+run "queue_worker_lock_renew_time_alone_emits_only_its_key" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_renew_time = 15000
+  }
+
+  assert {
+    condition     = jsonencode(local.n8n_queue_worker_settings) == jsonencode({ lockRenewTime = 15000 })
+    error_message = "local.n8n_queue_worker_settings must carry only lockRenewTime when n8n_queue_worker_lock_renew_time is the only variable set, so the chart keeps its own lockDuration and stalledInterval defaults."
+  }
+}
+
+run "queue_worker_stalled_interval_alone_emits_only_its_key" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_stalled_interval = 45000
+  }
+
+  assert {
+    condition     = jsonencode(local.n8n_queue_worker_settings) == jsonencode({ stalledInterval = 45000 })
+    error_message = "local.n8n_queue_worker_settings must carry only stalledInterval when n8n_queue_worker_stalled_interval is the only variable set, so the chart keeps its own lockDuration and lockRenewTime defaults."
+  }
+}
+
+run "queue_worker_lock_duration_accepts_low_value_with_explicit_renew_time" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_duration   = 5000
+    n8n_queue_worker_lock_renew_time = 2000
+  }
+
+  assert {
+    condition = jsonencode(local.n8n_queue_worker_settings) == jsonencode({
+      lockDuration  = 5000
+      lockRenewTime = 2000
+    })
+    error_message = "A lock duration at or below the chart's 10000ms renewal default must still be accepted when n8n_queue_worker_lock_renew_time is set explicitly below it."
+  }
+}
+
+run "queue_worker_lock_duration_rejects_below_1000" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_duration = 999
+  }
+
+  # Only the duration's own floor is reported. The renewal invariant lives on
+  # n8n_queue_worker_lock_renew_time and reads this variable, so Terraform
+  # skips it once this variable is already invalid: one root cause, one error.
+  expect_failures = [var.n8n_queue_worker_lock_duration]
+}
+
+run "queue_worker_lock_renew_time_rejects_below_1000" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_renew_time = 999
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_renew_time]
+}
+
+run "queue_worker_lock_renew_time_rejects_at_or_above_lock_duration" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_duration   = 5000
+    n8n_queue_worker_lock_renew_time = 5000
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_renew_time]
+}
+
+run "queue_worker_lock_renew_time_rejects_default_lock_duration_ceiling" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_renew_time = 60000
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_renew_time]
+}
+
+run "queue_worker_stalled_interval_rejects_below_1000" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_stalled_interval = 999
+  }
+
+  expect_failures = [var.n8n_queue_worker_stalled_interval]
+}
+
+run "queue_worker_stalled_interval_rejects_zero" {
+  command = plan
+
+  variables {
+    # n8n documents 0 as "disable stall checking", but the chart's schema sets
+    # minimum: 1000, so 0 is unreachable through this chart. See the
+    # variable's description.
+    n8n_queue_worker_stalled_interval = 0
+  }
+
+  expect_failures = [var.n8n_queue_worker_stalled_interval]
+}
+
+# The renewal invariant is hosted on n8n_queue_worker_lock_renew_time (see that
+# variable), so these two runs lower the duration but expect the failure there.
+run "queue_worker_renewal_invariant_rejects_low_duration_with_default_renew_time" {
+  command = plan
+
+  variables {
+    # Renewal left null, so the chart keeps its own 10000ms default. That
+    # outlasts this lock, so the lock expires before the first renewal fires
+    # and Bull treats every job as stalled.
+    n8n_queue_worker_lock_duration = 5000
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_renew_time]
+}
+
+run "queue_worker_renewal_invariant_rejects_duration_at_chart_renew_default" {
+  command = plan
+
+  variables {
+    # Exactly the chart's renewal default: the renewal timer fires at the same
+    # instant the lock expires, so the renewal is a race it can only lose.
+    n8n_queue_worker_lock_duration = 10000
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_renew_time]
+}
+
+run "queue_worker_lock_duration_rejects_fractional_value" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_duration = 60000.5
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_duration]
+}
+
+run "queue_worker_lock_renew_time_rejects_fractional_value" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_lock_renew_time = 15000.5
+  }
+
+  expect_failures = [var.n8n_queue_worker_lock_renew_time]
+}
+
+run "queue_worker_stalled_interval_rejects_fractional_value" {
+  command = plan
+
+  variables {
+    n8n_queue_worker_stalled_interval = 45000.5
+  }
+
+  expect_failures = [var.n8n_queue_worker_stalled_interval]
+}
+
 run "redis_mode_tuning_ignored_on_external_redis_warns" {
   command = plan
 
