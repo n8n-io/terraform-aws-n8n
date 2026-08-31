@@ -844,7 +844,12 @@ run "db_ping_max_failures_before_recovery_rejects_zero" {
 
 # n8n parses timeout and interval as numbers, so fractional values are valid.
 # In particular, an interval of 2.5 seconds becomes a 2500ms timer. The failure
-# threshold is different: n8n explicitly requires it to be an integer >= 1.
+# threshold is different: unlike the other two, its @Env carries an explicit
+# zod schema, z.coerce.number().int().gte(1) (database.config.ts in
+# packages/@n8n/config), so n8n requires an integer >= 1 for it. A value
+# failing that schema is not even an error in n8n: the config decorator warns
+# and silently falls back to the default of 3 (decorators.ts), so the module's
+# floor() check is what turns that silent fallback into a plan-time failure.
 run "db_ping_timeout_and_interval_accept_fractional_values" {
   command = plan
 
