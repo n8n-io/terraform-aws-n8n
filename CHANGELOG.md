@@ -127,6 +127,37 @@ this project adheres to the stability contract in
   hardcodes Bull's `maxStalledCount` to `0`. Exposing it would offer
   control that does not exist.
 
+- `n8n_executions_data_save_on_success` and `n8n_executions_data_save_on_error`
+  replace two hardcoded `"all"` literals in `config.data.saveOnSuccess` /
+  `saveOnError`, so execution-data retention on success and failure can be
+  configured independently. Both default to `"all"`, matching the previous
+  hardcoded behavior, so this is additive: no existing deployment's rendered
+  values change.
+
+  The chart renders both keys unconditionally from these values. If a caller
+  also set the same key through `n8n_extra_env`, the main and worker
+  Deployments ended up with the key listed twice in one container's env list,
+  which is not merely untidy: the merge key for a container `env` list is
+  `name`, so a duplicate makes Kubernetes' strategic-merge-patch ambiguous
+  about which occurrence a later change lands on, and Kubernetes honors the
+  *last* entry at container start, so a stale value can silently win. Observed
+  on a live cluster 2026-08-24: after flipping the value to `"all"`, the
+  webhook-processor (which rendered the key once) correctly reported `"all"`,
+  while main and worker (which rendered it twice) both still reported `"none"`
+  five minutes and three rollout checks later, with the Helm release's own
+  manifest already showing `"all"` in both positions. That failure mode is
+  closed by the `n8n_extra_env` guard tightening described under **Changed**,
+  below.
+
+- `n8n_executions_data_save_on_progress` and
+  `n8n_executions_data_save_manual_executions` replace the remaining two
+  hardcoded `config.data` literals (`saveOnProgress = false`,
+  `saveManualExecutions = true`), so every guarded `EXECUTIONS_DATA_SAVE_*`
+  name has a dedicated, validated input rather than a blocked escape hatch.
+  Both default to the previous hardcoded values (which are also n8n's own
+  defaults), so this is additive: no existing deployment's rendered values
+  change.
+
 ### Changed
 
 - `db_postgresdb_pool_size` is now documented as a lazy per-process maximum,
@@ -134,6 +165,22 @@ this project adheres to the stability contract in
   measured concurrent database operations and pool-wait time, then verify that
   the aggregate maximum across main, worker, and webhook replicas fits the
   PgBouncer and database connection budgets.
+
+- `n8n_extra_env` now rejects all four keys the chart renders from
+  `config.data`, `EXECUTIONS_DATA_SAVE_ON_SUCCESS`,
+  `EXECUTIONS_DATA_SAVE_ON_ERROR`, `EXECUTIONS_DATA_SAVE_ON_PROGRESS` and
+  `EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS`, outright at plan time (added to
+  `local.n8n_managed_env_names`), matching the existing guard on
+  `N8N_EXECUTION_DATA_STORAGE_MODE`, so the duplicate-key failure mode
+  described under **Added** can no longer be reproduced through this module.
+
+  **Upgrade note.** This tightens the plan-time contract: a configuration that
+  previously set any of these names through `n8n_extra_env` planned cleanly
+  (and deployed the duplicate-key hazard above) but now fails validation. Move
+  the value to the dedicated input (`n8n_executions_data_save_on_success` /
+  `_on_error` / `_on_progress` / `_manual_executions`) and remove the
+  `n8n_extra_env` entry. Per the stability contract this change rides a minor
+  release, not a patch.
 
 ## [0.3.0] - 2026-08-13
 

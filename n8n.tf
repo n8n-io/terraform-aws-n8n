@@ -530,10 +530,10 @@ resource "helm_release" "n8n" {
       timeoutMax  = var.n8n_execution_timeout_max
       concurrency = { productionLimit = var.n8n_execution_concurrency_limit }
       data = {
-        saveOnError          = "all"
-        saveOnSuccess        = "all"
-        saveOnProgress       = false
-        saveManualExecutions = true
+        saveOnError          = var.n8n_executions_data_save_on_error
+        saveOnSuccess        = var.n8n_executions_data_save_on_success
+        saveOnProgress       = var.n8n_executions_data_save_on_progress
+        saveManualExecutions = var.n8n_executions_data_save_manual_executions
       }
       pruning = {
         enabled            = true

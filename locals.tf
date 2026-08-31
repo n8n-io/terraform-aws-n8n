@@ -543,6 +543,23 @@ locals {
     # onto S3 (or off it) without the input saying so, and in s3 mode without a
     # licensed n8n every pod refuses to start.
     "N8N_EXECUTION_DATA_STORAGE_MODE",
+    # Owned by the module's config.data block. The chart renders all four of its
+    # keys unconditionally (_environment-helpers.tpl carries no {{- if }} guard
+    # on them, unlike the EXECUTIONS_TIMEOUT and EXECUTIONS_DATA_MAX_AGE entries
+    # beside them), so an extraEnv duplicate produces a container env entry
+    # listed twice under the same name. Kubernetes' strategic-merge-patch is
+    # then ambiguous about which occurrence a later change lands on, and honours
+    # the LAST entry at container start, so a stale value can silently win.
+    # Observed live 2026-08-24: main and worker pods kept reporting "none" for
+    # EXECUTIONS_DATA_SAVE_ON_SUCCESS five minutes after the Helm release's own
+    # manifest said "all" in both positions. All four are owned by dedicated
+    # inputs (n8n_executions_data_save_on_success / _on_error / _on_progress /
+    # _manual_executions), so every guarded name here has a supported knob and
+    # none needs the extraEnv path.
+    "EXECUTIONS_DATA_SAVE_ON_SUCCESS",
+    "EXECUTIONS_DATA_SAVE_ON_ERROR",
+    "EXECUTIONS_DATA_SAVE_ON_PROGRESS",
+    "EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS",
     # Rendered by the chart from module values (identity, topology, storage,
     # license). DB_*, QUEUE_*, N8N_RUNNERS_*, N8N_EXTERNAL_STORAGE_S3_*,
     # N8N_MULTI_MAIN_*, and AWS_* are covered by n8n_managed_env_prefixes.

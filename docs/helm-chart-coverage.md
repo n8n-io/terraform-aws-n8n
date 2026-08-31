@@ -49,7 +49,8 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `webhook.enabled/timeout/extraEnv` | Not exposed; chart defaults used |
 | `executions.timeout/timeoutMax/concurrency.productionLimit` | `n8n_execution_timeout` / `n8n_execution_timeout_max` / `n8n_execution_concurrency_limit` |
 | `executions.pruning.enabled/maxAge/maxCount` | Hardcoded `true` / `n8n_pruning_max_age` / `n8n_pruning_max_count` |
-| `executions.data.*`, `executions.pruning.{hardDeleteBuffer,hardDeleteInterval,softDeleteInterval}`, `executions.extraEnv` | Hardcoded (data.\*) or not exposed (pruning timing, extraEnv) |
+| `executions.data.{saveOnError,saveOnSuccess,saveOnProgress,saveManualExecutions}` | `n8n_executions_data_save_on_error` / `n8n_executions_data_save_on_success` / `n8n_executions_data_save_on_progress` / `n8n_executions_data_save_manual_executions` |
+| `executions.pruning.{hardDeleteBuffer,hardDeleteInterval,softDeleteInterval}`, `executions.extraEnv` | Not exposed |
 | `config.timezone` | `n8n_timezone` |
 | `config.extraEnv` | The module's own escape hatch: dozens of module-managed env vars, then `n8n_extra_env` appended last. See `variables.tf`'s `n8n_extra_env` description for the reserved-name validation |
 | `config.extraEnvFrom` | Not exposed |
