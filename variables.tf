@@ -1495,15 +1495,12 @@ variable "n8n_task_runner_custom_config" {
   default = null
 
   validation {
-    condition     = var.n8n_task_runner_custom_config == null ? true : length(trimspace(var.n8n_task_runner_custom_config.config_map_name)) > 0
-    error_message = "n8n_task_runner_custom_config.config_map_name must be a non-empty ConfigMap name. The chart mounts by name and does not create the ConfigMap, so an empty value renders a broken volume and the task-runner sidecar fails to start."
-  }
-
-  validation {
     # A ConfigMap name is a DNS-1123 subdomain, the same rule the image pull
-    # secret names above are held to. Catching a malformed one here beats the
-    # alternative: Helm renders a volume Kubernetes rejects, and the sidecar
-    # never starts.
+    # secret names above are held to. The regex also rejects an empty or
+    # whitespace-padded name, so no separate non-empty check is needed.
+    # Catching a malformed one here beats the alternative: the chart mounts by
+    # name and does not create the ConfigMap, so Helm renders a volume
+    # Kubernetes rejects, and the task-runner sidecar never starts.
     condition = (
       var.n8n_task_runner_custom_config == null ? true :
       can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$", var.n8n_task_runner_custom_config.config_map_name))
@@ -1517,6 +1514,9 @@ variable "n8n_task_runner_custom_config" {
     # allows underscores, so the name rule above would reject valid filenames
     # like n8n-task-runners.json only by luck and Foo_Bar.json wrongly. These
     # are Kubernetes' own key rules, including the "." and ".." carve-outs.
+    # The contains() and startswith() checks overlap on ".." on purpose: they
+    # mirror Kubernetes' own hasChDirPrefix cases one-to-one, so do not
+    # "simplify" one away.
     # The chart passes this value straight into subPath, where an empty string
     # mounts the whole ConfigMap directory over the file and the launcher finds
     # no config at all.
