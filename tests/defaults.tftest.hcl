@@ -759,6 +759,126 @@ run "db_password_secret_ref_rejects_being_set_alongside_the_value" {
   expect_failures = [var.db_password_secret_ref]
 }
 
+# ── Database health-check ping tuning ─────────────────────────────────────────
+# Neither the chart nor n8n_extra_env can set these (DB_ is a module-managed
+# prefix), so these variables are the only route to them. Plan-time
+# variable-contract assertions only: the values ride config.extraEnv, whose
+# rendered content is unknown at plan time under the mock provider (see
+# AGENTS.md, "Known mock provider limitations"). Verify the wiring after a real
+# apply by inspecting the DB_PING_* environment variables on the n8n-main,
+# n8n-worker, and n8n-webhook-processor Deployments.
+
+run "db_ping_settings_default_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.db_ping_timeout_ms == null
+    error_message = "db_ping_timeout_ms must default to null so DB_PING_TIMEOUT_MS is omitted and n8n keeps its own 5000ms default."
+  }
+
+  assert {
+    condition     = var.db_ping_interval_seconds == null
+    error_message = "db_ping_interval_seconds must default to null so DB_PING_INTERVAL_SECONDS is omitted and n8n keeps its own 2s default."
+  }
+
+  assert {
+    condition     = var.db_ping_max_failures_before_recovery == null
+    error_message = "db_ping_max_failures_before_recovery must default to null so DB_PING_MAX_FAILURES_BEFORE_RECOVERY is omitted and n8n keeps its own default of 3."
+  }
+}
+
+run "db_ping_settings_accept_valid_values" {
+  command = plan
+
+  variables {
+    db_ping_timeout_ms                   = 20000
+    db_ping_interval_seconds             = 5
+    db_ping_max_failures_before_recovery = 6
+  }
+
+  assert {
+    condition     = var.db_ping_timeout_ms == 20000
+    error_message = "db_ping_timeout_ms should accept a positive millisecond value."
+  }
+
+  assert {
+    condition     = var.db_ping_interval_seconds == 5
+    error_message = "db_ping_interval_seconds should accept a positive second value."
+  }
+
+  assert {
+    condition     = var.db_ping_max_failures_before_recovery == 6
+    error_message = "db_ping_max_failures_before_recovery should accept a value of 1 or greater."
+  }
+}
+
+run "db_ping_timeout_ms_rejects_zero" {
+  command = plan
+
+  variables {
+    db_ping_timeout_ms = 0
+  }
+
+  expect_failures = [var.db_ping_timeout_ms]
+}
+
+run "db_ping_interval_seconds_rejects_zero" {
+  command = plan
+
+  variables {
+    db_ping_interval_seconds = 0
+  }
+
+  expect_failures = [var.db_ping_interval_seconds]
+}
+
+run "db_ping_max_failures_before_recovery_rejects_zero" {
+  command = plan
+
+  variables {
+    db_ping_max_failures_before_recovery = 0
+  }
+
+  expect_failures = [var.db_ping_max_failures_before_recovery]
+}
+
+# n8n parses timeout and interval as numbers, so fractional values are valid.
+# In particular, an interval of 2.5 seconds becomes a 2500ms timer. The failure
+# threshold is different: unlike the other two, its @Env carries an explicit
+# zod schema, z.coerce.number().int().gte(1) (database.config.ts in
+# packages/@n8n/config), so n8n requires an integer >= 1 for it. A value
+# failing that schema is not even an error in n8n: the config decorator warns
+# and silently falls back to the default of 3 (decorators.ts), so the module's
+# floor() check is what turns that silent fallback into a plan-time failure.
+run "db_ping_timeout_and_interval_accept_fractional_values" {
+  command = plan
+
+  variables {
+    db_ping_timeout_ms       = 5000.5
+    db_ping_interval_seconds = 2.5
+  }
+
+  assert {
+    condition     = var.db_ping_timeout_ms == 5000.5
+    error_message = "db_ping_timeout_ms should accept the fractional number shape n8n accepts."
+  }
+
+  assert {
+    condition     = var.db_ping_interval_seconds == 2.5
+    error_message = "db_ping_interval_seconds should accept fractional seconds such as 2.5 (2500ms)."
+  }
+}
+
+run "db_ping_max_failures_before_recovery_rejects_fractional_values" {
+  command = plan
+
+  variables {
+    db_ping_max_failures_before_recovery = 2.5
+  }
+
+  expect_failures = [var.db_ping_max_failures_before_recovery]
+}
+
 # ── Redis AUTH token secret ref ──────────────────────────────────────────────
 # External-Redis path only, mirroring db_password_secret_ref above:
 # aws_elasticache_replication_group.n8n needs the token's actual value to

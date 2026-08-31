@@ -1473,6 +1473,99 @@ variable "db_password_secret_ref" {
   }
 }
 
+variable "db_ping_timeout_ms" {
+  description = <<-EOT
+    Milliseconds n8n allows for its database health-check ping before declaring the
+    connection down (`DB_PING_TIMEOUT_MS`). Leave null for n8n's own default of
+    5000. Neither the chart nor `n8n_extra_env` can set this: the chart has no
+    values path for it and `DB_` is a module-managed prefix, so this variable is
+    the only way to reach it.
+
+    Raise this when pods return 503s under load while the database itself is idle.
+    n8n's ping acquires a connection from the SAME pool that serves request
+    traffic (`pool.connect()` in `db-connection-monitor.ts`, raced against this
+    timeout), so a pool saturated by ordinary load makes the ping time out even
+    though the database is perfectly healthy. One timed-out ping sets
+    `connectionState.connected = false`, and a global middleware in
+    `abstract-server.ts` then answers every request to that pod with a 503,
+    creating no execution row and writing no log line at the failure site.
+
+    Measured on a production deployment with a pool size of 5: 16 to 54 connection
+    requests pending per pod, acquire times of 2 to 14 seconds, 91 of 160
+    webhook-processor pods affected, roughly two thirds of all requests failing,
+    with Aurora and PgBouncer both idle throughout and `cl_waiting` at zero.
+
+    Sizing the pool above peak demand is the better fix where possible, since it
+    removes the queue rather than tolerating it. Raise this timeout when you cannot,
+    or as defence in depth: it costs only a slower reaction to a genuinely dead
+    database, which is a far cheaper failure than silently 503ing live traffic.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.db_ping_timeout_ms == null ? true : var.db_ping_timeout_ms > 0
+    error_message = "db_ping_timeout_ms must be greater than 0 milliseconds, or null to use n8n's own default of 5000."
+  }
+}
+
+variable "db_ping_interval_seconds" {
+  description = <<-EOT
+    Seconds between n8n's database health-check pings
+    (`DB_PING_INTERVAL_SECONDS`). Leave null for n8n's own default of 2.
+    Unsettable through the chart or `n8n_extra_env`, see db_ping_timeout_ms.
+
+    Each ping consumes a connection from the same pool that serves request
+    traffic, so on a saturated pool a shorter interval adds contention to the
+    resource already under pressure. Lengthening it reduces that contention at
+    the cost of slower detection of a genuinely lost connection.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.db_ping_interval_seconds == null ? true : var.db_ping_interval_seconds > 0
+    error_message = "db_ping_interval_seconds must be greater than 0 seconds, or null to use n8n's own default of 2."
+  }
+}
+
+variable "db_ping_max_failures_before_recovery" {
+  description = <<-EOT
+    Consecutive failed database pings before n8n destroys and recreates the
+    connection pool (`DB_PING_MAX_FAILURES_BEFORE_RECOVERY`). Leave null for n8n's
+    own default of 3. Unsettable through the chart or `n8n_extra_env`, see
+    db_ping_timeout_ms.
+
+    n8n waits for the interval before each attempt and schedules the next attempt
+    only after the previous one finishes. At the defaults, three failures therefore
+    trigger recovery after roughly 6 seconds when each ping fails immediately, but
+    after roughly 21 seconds when each ping consumes the full 5-second timeout, as
+    happens when pool saturation leaves `pool.connect()` queued. The response is
+    destructive: n8n tears down the pool, recreates it, and suspends connection
+    acquisition while it does, so every in-flight query on that pod waits. When the
+    pings are failing because the pool is saturated rather than because the database
+    is unreachable, that is a feedback loop: saturation causes ping failure causes
+    teardown causes every query stalling causes more saturation.
+
+    n8n's own source acknowledges this shape. The class comment in
+    `db-connection-monitor.ts` notes that a failed ping can mean "a saturated pool
+    rather than a lost connection, and destroying the pool would abort every
+    pending acquisition", then applies that reasoning only to sqlite and performs
+    the destructive recovery on Postgres regardless. Raising this widens the margin
+    before that path is taken.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition = var.db_ping_max_failures_before_recovery == null ? true : (
+      var.db_ping_max_failures_before_recovery >= 1 &&
+      var.db_ping_max_failures_before_recovery == floor(var.db_ping_max_failures_before_recovery)
+    )
+    error_message = "db_ping_max_failures_before_recovery must be a whole number of at least 1, or null to use n8n's own default of 3."
+  }
+}
+
 variable "db_postgresdb_pool_size" {
   description = "Number of TypeORM connection pool slots per n8n pod. Each pod holds this many persistent PostgreSQL connections. Rule of thumb: pool_size >= worker_concurrency / 4. With PgBouncer in transaction mode a lower value (5) is sufficient; without PgBouncer use a value matching concurrency (10-20)."
   type        = number

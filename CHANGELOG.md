@@ -26,6 +26,32 @@ this project adheres to the stability contract in
   evicting 279 pods in one episode. Changing this on an existing cluster
   replaces every node in the group.
 
+- `db_ping_timeout_ms`, `db_ping_interval_seconds` and
+  `db_ping_max_failures_before_recovery`: expose n8n's database health-check
+  ping settings (`DB_PING_TIMEOUT_MS`, `DB_PING_INTERVAL_SECONDS`,
+  `DB_PING_MAX_FAILURES_BEFORE_RECOVERY`). All default to `null`, which omits the
+  variable and leaves n8n's own defaults (5000ms, 2s, 3), so this is additive.
+
+  Previously unsettable by any means: the chart has no values path for them, and
+  `DB_` is a module-managed prefix so `n8n_extra_env` rejects them at plan time.
+
+  These govern a failure mode worth understanding before tuning anything else.
+  n8n's ping acquires a connection from the same pool that serves request
+  traffic (`pool.connect()` in `db-connection-monitor.ts`, raced against
+  `pingTimeoutMs`), so a pool saturated by ordinary load makes the ping time out
+  while the database is entirely healthy. A single timed-out ping sets
+  `connectionState.connected = false`, and the global middleware in
+  `abstract-server.ts` then answers every request to that pod with a 503,
+  creating no execution row and logging nothing at the failure site. After
+  `DB_PING_MAX_FAILURES_BEFORE_RECOVERY` consecutive failures, n8n destroys and
+  recreates the pool and suspends acquisition while it does. At the defaults,
+  recovery starts roughly 6 seconds after monitoring begins when each ping fails
+  immediately, but roughly 21 seconds after monitoring begins when each ping
+  consumes the full 5-second timeout, as it does when `pool.connect()` is queued
+  behind saturated traffic. In that case recovery is a feedback loop rather
+  than a recovery. Sizing the pool above peak demand removes the queue outright
+  where possible; raising these settings is a mitigation for when it isn't.
+
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):
