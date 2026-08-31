@@ -6394,6 +6394,12 @@ run "task_runner_image_tag_rejects_whitespace_padded_value" {
   expect_failures = [var.n8n_task_runner_image_tag]
 }
 
+# These runs stop at the variable contract (default, key default, validator
+# accept/reject). The taskRunners.customConfig wiring in n8n.tf cannot be
+# asserted here: helm_release.n8n depends on kubernetes_namespace.n8n, whose
+# mocked attributes are unknown at plan, so the whole resource — values
+# included — is deferred (see "Known mock provider limitations" in AGENTS.md).
+# Verify the rendered values with a real plan from a caller configuration.
 run "task_runner_custom_config_defaults_to_null" {
   command = plan
 
