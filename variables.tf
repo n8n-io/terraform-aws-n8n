@@ -1443,6 +1443,99 @@ variable "n8n_task_runner_python_enabled" {
   default     = true
 }
 
+variable "n8n_task_runner_custom_config" {
+  description = <<-EOT
+    Mount a custom task-runner launcher config (`n8n-task-runners.json`) over the
+    one baked into the runner image, from a ConfigMap you create separately. Wires
+    the chart's `taskRunners.customConfig`; leave null to use the image default.
+
+    The launcher config is the ONLY way to set the runner allow-lists, most
+    notably `N8N_RUNNERS_STDLIB_ALLOW` for the native Python runner. The runner
+    image ships that as an empty string, which refuses every stdlib import
+    including `time` and `math`, so Python Code nodes that import anything fail
+    with "Import of standard library module 'x' is disallowed".
+
+    There is no env-var route to the same result, for two independent reasons:
+    the allow-list names are absent from each runner's `allowed-env` list, so the
+    launcher never forwards a pod-level env var to the runner process, and the
+    file's own `env-overrides` block is applied regardless and would win anyway.
+
+    The ConfigMap replaces the whole file, not one key, so derive it from the
+    running image rather than writing it from scratch, and re-derive it when the
+    runner image changes:
+
+      kubectl exec deploy/n8n-worker -c task-runner -n <namespace> -- \
+        cat /etc/n8n-task-runners.json > n8n-task-runners.json
+      # edit the python runner's env-overrides, then:
+      kubectl create configmap n8n-task-runners-custom -n <namespace> \
+        --from-file=n8n-task-runners.json
+
+    `config_map_key` defaults to the chart's own default, `n8n-task-runners.json`.
+
+    Editing the ConfigMap afterwards does not restart anything, and the running
+    pods keep the old file until you roll them yourself. The chart mounts this
+    key with `subPath`, and a subPath mount never receives later updates to its
+    ConfigMap, so the file on disk does not change even after kubelet's usual
+    refresh. The module cannot roll the pods for you here: it is given the
+    ConfigMap's name, never its contents, so it has nothing to hash into a pod
+    annotation, exactly as with `redis_auth_token_secret_ref`. Restart the
+    deployments after every launcher-config change:
+
+      kubectl rollout restart deploy/n8n-main deploy/n8n-worker -n <namespace>
+
+    The names are literal: the module pins the Helm release name to "n8n", and
+    the chart's only Deployments mounting this config are <fullname>-main and
+    <fullname>-worker (the webhook processor runs no task runners).
+  EOT
+
+  type = object({
+    config_map_name = string
+    config_map_key  = optional(string, "n8n-task-runners.json")
+  })
+  default = null
+
+  validation {
+    # A ConfigMap name is a DNS-1123 subdomain, the same rule the image pull
+    # secret names above are held to. The regex also rejects an empty or
+    # whitespace-padded name, so no separate non-empty check is needed.
+    # Catching a malformed one here beats the alternative: the chart mounts by
+    # name and does not create the ConfigMap, so Helm renders a volume
+    # Kubernetes rejects, and the task-runner sidecar never starts.
+    condition = (
+      var.n8n_task_runner_custom_config == null ? true :
+      can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$", var.n8n_task_runner_custom_config.config_map_name))
+      && length(var.n8n_task_runner_custom_config.config_map_name) <= 253
+    )
+    error_message = "n8n_task_runner_custom_config.config_map_name must be a DNS-1123 subdomain of 253 characters or fewer, which is what Kubernetes requires of a ConfigMap name: lowercase alphanumerics, hyphens and dots, starting and ending with an alphanumeric, with no empty label (e.g. \"n8n-task-runners-custom\"). Surrounding whitespace is not trimmed for you."
+  }
+
+  validation {
+    # A ConfigMap key is NOT a DNS-1123 subdomain: it is case-sensitive and
+    # allows underscores, so the name rule above would reject valid filenames
+    # like n8n-task-runners.json only by luck and Foo_Bar.json wrongly. These
+    # are Kubernetes' own key rules, including the "." and ".." carve-outs.
+    # The contains() and startswith() checks overlap on ".." on purpose: they
+    # mirror Kubernetes' own hasChDirPrefix cases one-to-one, so do not
+    # "simplify" one away.
+    # The chart passes this value straight into subPath, where an empty string
+    # mounts the whole ConfigMap directory over the file and the launcher finds
+    # no config at all.
+    condition = (
+      var.n8n_task_runner_custom_config == null ? true :
+      can(regex("^[-._a-zA-Z0-9]+$", var.n8n_task_runner_custom_config.config_map_key))
+      && length(var.n8n_task_runner_custom_config.config_map_key) <= 253
+      && !contains([".", ".."], var.n8n_task_runner_custom_config.config_map_key)
+      && !startswith(var.n8n_task_runner_custom_config.config_map_key, "..")
+    )
+    error_message = "n8n_task_runner_custom_config.config_map_key must be a valid ConfigMap key of 253 characters or fewer: alphanumerics, '-', '_' and '.' only, and not \".\", \"..\" or a name starting with \"..\". The chart renders this as the volume mount's subPath, so an empty or malformed key leaves the launcher without its config."
+  }
+
+  validation {
+    condition     = var.n8n_task_runner_custom_config == null ? true : var.n8n_task_runners_enabled
+    error_message = "n8n_task_runner_custom_config requires n8n_task_runners_enabled = true. Without task runners there is no launcher and no sidecar to mount the config into."
+  }
+}
+
 # ── RDS PostgreSQL ─────────────────────────────────────────────────────────────
 
 variable "db_instance_class" {
@@ -2361,7 +2454,8 @@ variable "n8n_extra_volumes" {
 
   validation {
     # `data` is the chart's own volume, mounted at /home/node/.n8n on main pods.
-    # `task-runner-config` appears when taskRunners.customConfig is enabled.
+    # `task-runner-config` appears when taskRunners.customConfig is enabled,
+    # i.e. whenever n8n_task_runner_custom_config is set.
     # Reusing either name collides inside the rendered pod spec.
     condition = alltrue([
       for volume in var.n8n_extra_volumes :

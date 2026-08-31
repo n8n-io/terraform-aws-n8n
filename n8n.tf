@@ -836,6 +836,26 @@ resource "helm_release" "n8n" {
       }
       },
       var.n8n_task_runner_image_tag == null ? {} : { image = { tag = var.n8n_task_runner_image_tag } },
+
+      # Custom launcher config, mounted over the runner image's baked-in
+      # /etc/n8n-task-runners.json from a ConfigMap the caller creates.
+      #
+      # This is the only route to the runner allow-lists. The image ships the
+      # native Python runner with N8N_RUNNERS_STDLIB_ALLOW set to "", which
+      # refuses every stdlib import, and neither allow-list can be set by an env
+      # var: the names are absent from each runner's `allowed-env`, so the
+      # launcher never forwards them to the runner process, and the file's own
+      # `env-overrides` is applied regardless and would win anyway.
+      #
+      # Merged in only when set, so the chart's default (customConfig disabled,
+      # image config used) stays the default.
+      var.n8n_task_runner_custom_config == null ? {} : {
+        customConfig = {
+          enabled       = true
+          configMapName = var.n8n_task_runner_custom_config.config_map_name
+          configMapKey  = var.n8n_task_runner_custom_config.config_map_key
+        }
+      },
     )
 
     # ── Pod Disruption Budget ─────────────────────────────────────────────────

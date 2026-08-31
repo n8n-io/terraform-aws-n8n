@@ -6394,6 +6394,168 @@ run "task_runner_image_tag_rejects_whitespace_padded_value" {
   expect_failures = [var.n8n_task_runner_image_tag]
 }
 
+# These runs stop at the variable contract (default, key default, validator
+# accept/reject). The taskRunners.customConfig wiring in n8n.tf cannot be
+# asserted here: helm_release.n8n depends on kubernetes_namespace.n8n, whose
+# mocked attributes are unknown at plan, so the whole resource — values
+# included — is deferred (see "Known mock provider limitations" in AGENTS.md).
+# Verify the rendered values with a real plan from a caller configuration.
+run "task_runner_custom_config_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_task_runner_custom_config == null
+    error_message = "n8n_task_runner_custom_config should default to null so the chart keeps using the runner image's baked-in launcher config."
+  }
+}
+
+run "task_runner_custom_config_accepts_a_config_map_name" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = "n8n-task-runners-custom"
+    }
+  }
+
+  assert {
+    condition     = var.n8n_task_runner_custom_config.config_map_name == "n8n-task-runners-custom"
+    error_message = "n8n_task_runner_custom_config.config_map_name should accept a caller-supplied ConfigMap name."
+  }
+
+  assert {
+    condition     = var.n8n_task_runner_custom_config.config_map_key == "n8n-task-runners.json"
+    error_message = "n8n_task_runner_custom_config.config_map_key should default to the chart's own default filename when not set."
+  }
+}
+
+run "task_runner_custom_config_rejects_an_empty_config_map_name" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = ""
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_rejects_a_whitespace_padded_config_map_name" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = " n8n-task-runners-custom "
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_rejects_an_uppercase_config_map_name" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = "N8N-Task-Runners"
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_rejects_an_overlong_config_map_name" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      # 254 characters, one past the Kubernetes limit, so only the length rule
+      # can be what rejects it (every character is otherwise DNS-1123 legal).
+      config_map_name = "n8n-task-runners-custom-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_rejects_an_empty_config_map_key" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = "n8n-task-runners-custom"
+      config_map_key  = ""
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_rejects_a_config_map_key_with_a_slash" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = "n8n-task-runners-custom"
+      config_map_key  = "nested/n8n-task-runners.json"
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_rejects_a_dot_dot_config_map_key" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = "n8n-task-runners-custom"
+      config_map_key  = ".."
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
+run "task_runner_custom_config_accepts_an_underscored_config_map_key" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = true
+    n8n_task_runner_custom_config = {
+      config_map_name = "n8n-task-runners-custom"
+      config_map_key  = "N8N_task_runners.json"
+    }
+  }
+
+  assert {
+    condition     = var.n8n_task_runner_custom_config.config_map_key == "N8N_task_runners.json"
+    error_message = "n8n_task_runner_custom_config.config_map_key should accept the underscores and uppercase a ConfigMap key allows, unlike the DNS-1123 rule the ConfigMap name is held to."
+  }
+}
+
+run "task_runner_custom_config_requires_task_runners_enabled" {
+  command = plan
+
+  variables {
+    n8n_task_runners_enabled = false
+    n8n_task_runner_custom_config = {
+      config_map_name = "n8n-task-runners-custom"
+    }
+  }
+
+  expect_failures = [var.n8n_task_runner_custom_config]
+}
+
 # ── Custom image check blocks ─────────────────────────────────────────────────
 # These warn rather than fail, so expect_failures on the check is how a warning
 # is asserted (same pattern as the ingress and RDS tuning checks above).

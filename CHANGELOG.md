@@ -158,6 +158,37 @@ this project adheres to the stability contract in
   defaults), so this is additive: no existing deployment's rendered values
   change.
 
+- `n8n_task_runner_custom_config` mounts a custom task-runner launcher config
+  (`n8n-task-runners.json`) from a caller-created ConfigMap, wiring the chart's
+  `taskRunners.customConfig`. Defaults to `null`, which keeps the previous
+  behavior of using the runner image's baked-in config, so this is additive and
+  no existing deployment changes.
+
+  This is the only way to set the runner allow-lists. The runner image ships
+  the native Python runner with `N8N_RUNNERS_STDLIB_ALLOW` as an empty string,
+  which refuses every stdlib import, so a Python Code node doing `import time`
+  or `import math` fails with "Import of standard library module 'x' is
+  disallowed" even with `n8n_task_runner_python_enabled = true`. There is no
+  env-var equivalent: the allow-list names are absent from each runner's
+  `allowed-env`, so the launcher never forwards a pod-level env var to the
+  runner process, and the file's own `env-overrides` block is applied
+  regardless and would win.
+
+  The ConfigMap replaces the whole launcher config rather than one key, so
+  derive it from the running image (`kubectl exec deploy/n8n-worker -c
+  task-runner -- cat /etc/n8n-task-runners.json`) and re-derive it when the
+  runner image changes. Validation holds `config_map_name` to the DNS-1123
+  subdomain rule Kubernetes applies to a ConfigMap name and `config_map_key` to
+  the separate, case-sensitive rule it applies to a key, rejects both empty, and
+  requires `n8n_task_runners_enabled = true`.
+
+  Editing the ConfigMap later does not restart anything. The chart mounts the
+  key with `subPath`, which never picks up subsequent ConfigMap updates, and the
+  module is given the ConfigMap's name rather than its contents, so it has
+  nothing to hash into a pod annotation the way it does for a module-managed
+  Redis auth token. Roll the deployments yourself after every launcher-config
+  change: `kubectl rollout restart deploy/n8n-main deploy/n8n-worker`.
+
 ### Changed
 
 - `db_postgresdb_pool_size` is now documented as a lazy per-process maximum,
