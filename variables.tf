@@ -1213,6 +1213,7 @@ variable "n8n_executions_data_save_on_success" {
   EOT
   type        = string
   default     = "all"
+  nullable    = false
   validation {
     condition     = contains(["all", "none"], var.n8n_executions_data_save_on_success)
     error_message = "n8n_executions_data_save_on_success must be \"all\" or \"none\"."
@@ -1232,6 +1233,7 @@ variable "n8n_executions_data_save_on_error" {
   EOT
   type        = string
   default     = "all"
+  nullable    = false
   validation {
     condition     = contains(["all", "none"], var.n8n_executions_data_save_on_error)
     error_message = "n8n_executions_data_save_on_error must be \"all\" or \"none\"."
@@ -1257,6 +1259,7 @@ variable "n8n_executions_data_save_on_progress" {
   EOT
   type        = bool
   default     = false
+  nullable    = false
 }
 
 variable "n8n_executions_data_save_manual_executions" {
@@ -1277,6 +1280,7 @@ variable "n8n_executions_data_save_manual_executions" {
   EOT
   type        = bool
   default     = true
+  nullable    = false
 }
 
 variable "n8n_execution_timeout" {

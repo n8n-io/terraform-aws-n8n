@@ -145,15 +145,9 @@ this project adheres to the stability contract in
   webhook-processor (which rendered the key once) correctly reported `"all"`,
   while main and worker (which rendered it twice) both still reported `"none"`
   five minutes and three rollout checks later, with the Helm release's own
-  manifest already showing `"all"` in both positions.
-
-  `n8n_extra_env` now rejects all four keys the chart renders from
-  `config.data`, `EXECUTIONS_DATA_SAVE_ON_SUCCESS`,
-  `EXECUTIONS_DATA_SAVE_ON_ERROR`, `EXECUTIONS_DATA_SAVE_ON_PROGRESS` and
-  `EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS`, outright at plan time (added to
-  `local.n8n_managed_env_names`), matching the existing guard on
-  `N8N_EXECUTION_DATA_STORAGE_MODE`, so the duplicate-key failure mode above
-  can no longer be reproduced through this module.
+  manifest already showing `"all"` in both positions. That failure mode is
+  closed by the `n8n_extra_env` guard tightening described under **Changed**,
+  below.
 
 - `n8n_executions_data_save_on_progress` and
   `n8n_executions_data_save_manual_executions` replace the remaining two
@@ -171,6 +165,23 @@ this project adheres to the stability contract in
   measured concurrent database operations and pool-wait time, then verify that
   the aggregate maximum across main, worker, and webhook replicas fits the
   PgBouncer and database connection budgets.
+
+- `n8n_extra_env` now rejects all four keys the chart renders from
+  `config.data`, `EXECUTIONS_DATA_SAVE_ON_SUCCESS`,
+  `EXECUTIONS_DATA_SAVE_ON_ERROR`, `EXECUTIONS_DATA_SAVE_ON_PROGRESS` and
+  `EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS`, outright at plan time (added to
+  `local.n8n_managed_env_names`), matching the existing guard on
+  `N8N_EXECUTION_DATA_STORAGE_MODE`, so the duplicate-key failure mode
+  described under **Added** can no longer be reproduced through this module.
+
+  **Upgrade note.** This tightens the plan-time contract: a configuration that
+  previously set any of these names through `n8n_extra_env` planned cleanly
+  (and deployed the duplicate-key hazard above) but now fails validation. Move
+  the value to the dedicated input (`n8n_executions_data_save_on_success` /
+  `_on_error` / `_on_progress` / `_manual_executions`) and remove the
+  `n8n_extra_env` entry. Per the stability contract this change rides a minor
+  release, not a patch.
+
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):
