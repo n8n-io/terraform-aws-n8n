@@ -141,8 +141,10 @@ locals {
 
   # Pool quantities are read for the same reason the four above are: an
   # unreadable one silences the check rather than warning off a guess. Pool
-  # cpu_request carries no grammar validation of its own, so this is the only
-  # place a pool's quantity is checked at all.
+  # cpu_request has its own grammar validation (variables.tf), so in practice
+  # this only catches a quantity inherited from an unreadable module-wide value.
+  # Kept anyway, because the cost of getting it wrong is a check that passes
+  # vacuously for every pod family rather than only for the pool at fault.
   n8n_cpu_requests_readable = alltrue([
     for quantity in concat(values(local.n8n_cpu_requests), values(local.n8n_pool_cpu_requests)) :
     can(tonumber(trimsuffix(quantity, "m")))
