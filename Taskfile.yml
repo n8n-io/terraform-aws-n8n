@@ -14,7 +14,7 @@ vars:
   # which made `task ci` pass locally on a change that broke
   # examples/customer-managed-everything in CI: an example this wrapper never
   # visited was, in practice, an example nobody validated before pushing.
-  EXAMPLES: small medium large cloudflare godaddy split-ingress customer-managed-redis customer-managed-s3 customer-managed-cluster customer-managed-everything
+  EXAMPLES: small medium large cloudflare godaddy split-ingress worker-pools customer-managed-redis customer-managed-s3 customer-managed-cluster customer-managed-everything
 
 env:
   # The veksh/godaddy-dns provider requires credentials even in plan-time tests.
