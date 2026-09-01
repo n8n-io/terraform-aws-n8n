@@ -4,6 +4,8 @@ Sizing-equivalent to [`small`](../small/) apart from `node_max`, with one topolo
 
 `node_max` goes from small's 6 to 8. Pools are additional autoscalers on the same node group rather than a redistribution of the ceilings already there, so their pods have to fit alongside the main, default-worker and webhook maxima. See the comment on `node_max` in `main.tf` for the arithmetic.
 
+> **Budget database connections before raising these ceilings.** Node capacity is not the only thing extra pools consume. Every n8n process opens up to `db_postgresdb_pool_size` connections (default 10), so the ceiling here is roughly 6 main + 10 default worker + 8 webhook + 10 pool pods, about 34 processes, or ~340 connections against a `db.t3.small` whose `max_connections` is around 225. That budget is already tight in [`small`](../small/) before any pool is added, and pools make it tighter rather than causing it. The module does not manage a connection pooler, so if you intend to run near these maxima rather than at the floors, raise `db_instance_class`, lower `db_postgresdb_pool_size`, or put PgBouncer in front. At the replica floors this example actually runs at, the draw is a small fraction of that.
+
 n8n's worker pools pin a project's executions to a named set of workers. A worker started with `N8N_WORKER_POOL_NAME=<name>` stops consuming the default `jobs` Bull queue and consumes `jobs-<name>` instead; a project assigned to that pool has its executions enqueued there. Assign a project to a pool in the n8n UI under **Project, Settings, Worker Pools**.
 
 Use this example when some executions need different hardware or isolation: heavier jobs on bigger workers, or one team's projects kept off the shared pool.
