@@ -110,6 +110,10 @@ jobs:
         working-directory: examples/split-ingress
         run: terraform-docs --output-check .
 
+      - name: terraform-docs --output-check (examples/worker-pools)
+        working-directory: examples/worker-pools
+        run: terraform-docs --output-check .
+
       - name: terraform-docs --output-check (examples/customer-managed-redis)
         working-directory: examples/customer-managed-redis
         run: terraform-docs --output-check .
@@ -132,7 +136,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/worker-pools", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
     steps:
       - uses: actions/checkout@v4
 
@@ -171,7 +175,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/worker-pools", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
     steps:
       - uses: actions/checkout@v4
 
@@ -200,7 +204,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/worker-pools", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
     steps:
       - uses: actions/checkout@v4
 
