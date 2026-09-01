@@ -173,3 +173,56 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+# ── Worker pools alpha test ───────────────────────────────────────────────────
+# Added for the worker-pools branch build. n8n_extra_env carries
+# N8N_WORKER_POOLS_ENABLED to every pod type: mains and workers both need it,
+# and webhook pods ignore it. The KEDA bounds give the default, unlabelled
+# worker deployment enough replicas to act as a control group beside the cloned
+# pool deployments.
+
+variable "n8n_extra_env" {
+  description = "Additional environment variables injected into all n8n pods via the chart's config.extraEnv list."
+  type = list(object({
+    name  = string
+    value = string
+  }))
+  default  = []
+  nullable = false
+}
+
+variable "n8n_worker_keda_min_replicas" {
+  description = "Minimum worker replicas KEDA keeps running for the default (unlabelled) worker deployment."
+  type        = number
+  default     = 1
+  nullable    = false
+}
+
+variable "n8n_worker_keda_max_replicas" {
+  description = "Maximum worker replicas KEDA may scale the default (unlabelled) worker deployment to."
+  type        = number
+  default     = 10
+  nullable    = false
+}
+
+variable "n8n_worker_pools" {
+  description = "Labelled worker pools to run beside the default worker deployment. Each entry gets its own Deployment and its own KEDA scaler watching that pool's jobs-<name> queue."
+  type = list(object({
+    name         = string
+    min_replicas = optional(number, 1)
+    max_replicas = optional(number, 5)
+
+    concurrency    = optional(number, null)
+    cpu_request    = optional(string, null)
+    cpu_limit      = optional(string, null)
+    memory_request = optional(string, null)
+    memory_limit   = optional(string, null)
+
+    extra_env = optional(list(object({
+      name  = string
+      value = string
+    })), [])
+  }))
+  default  = []
+  nullable = false
+}

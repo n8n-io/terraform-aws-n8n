@@ -2981,3 +2981,117 @@ variable "n8n_dns_config" {
     error_message = "n8n_dns_config: the ndots option must carry a whole number between 0 and 15, written as a string (\"1\", not \"1.5\"). glibc parses ndots with strtol and silently ignores a fractional, non-numeric or out-of-range value, falling back to its default of 1, which looks like the setting worked while leaving resolution behaviour unchanged."
   }
 }
+
+# ── Worker pools ──────────────────────────────────────────────────────────────
+# n8n's worker pools (alpha) pin a project's executions to a labelled set of
+# workers. A worker started with N8N_WORKER_POOL_NAME=<name> stops listening to
+# the default `jobs` Bull queue and listens to `jobs-<name>` instead; a project
+# assigned to that pool has its executions enqueued there. Mains and webhook
+# pods ignore the pool name, so only workers need it.
+#
+# The upstream Helm chart renders exactly one worker Deployment and exposes
+# worker-only env solely through queueMode.workerExtraEnv, so it can express at
+# most a single pool. Anything beyond that has to be built outside the chart,
+# which is what n8n_worker_pools does: one Deployment and one KEDA ScaledObject
+# per entry, alongside the chart's own unlabelled worker deployment.
+
+variable "n8n_worker_extra_env" {
+  description = "Additional environment variables injected into the chart's own (unlabelled) worker pods only, via queueMode.workerExtraEnv. Use this for worker-only tuning that must not reach main or webhook-processor pods; n8n_extra_env is the equivalent for all three. N8N_WORKER_POOL_NAME is rejected here along with the other module-managed names: pool membership is owned by n8n_worker_pools, which also builds the queue and the KEDA scaler that go with it, and pinning the chart's own worker deployment to a pool through this input would leave those workers consuming a pool queue that nothing scales. Rejected at plan time for the same module-managed names as n8n_extra_env."
+  type = list(object({
+    name  = string
+    value = string
+  }))
+  default  = []
+  nullable = false
+
+  validation {
+    condition     = alltrue([for e in var.n8n_worker_extra_env : e.name != "" && e.name == trimspace(e.name)])
+    error_message = "Each n8n_worker_extra_env entry must have a non-empty name with no leading or trailing whitespace."
+  }
+
+  validation {
+    condition     = length(distinct([for e in var.n8n_worker_extra_env : e.name])) == length(var.n8n_worker_extra_env)
+    error_message = "n8n_worker_extra_env contains duplicate names; each environment variable may be set only once."
+  }
+
+  validation {
+    condition = alltrue([
+      for e in var.n8n_worker_extra_env : !(
+        contains(local.n8n_managed_env_names, e.name) ||
+        anytrue([for p in local.n8n_managed_env_prefixes : startswith(e.name, p)])
+      )
+    ])
+    error_message = "n8n_worker_extra_env must not set module-managed variables. Reserved: any name starting with one of ${join(", ", local.n8n_managed_env_prefixes)}, plus the exact names ${join(", ", local.n8n_managed_env_names)}. Use the dedicated module inputs instead."
+  }
+}
+
+variable "n8n_worker_pools" {
+  description = "Labelled worker pools to run beside the chart's own unlabelled worker deployment. Each entry becomes one queueMode.workerGroups entry in the Helm release, which renders one Deployment (identical to the chart's worker pods but carrying N8N_WORKER_POOL_NAME) and one KEDA ScaledObject watching that pool's own `jobs-<name>` queue, so a pool autoscales on its own backlog rather than the default queue's. Requires an n8n_chart_version whose chart supports queueMode.workerGroups. Declaring any pool also switches N8N_WORKER_POOLS_ENABLED on across mains, workers and webhook pods, which the feature needs in order to route at all. Leave empty (the default) and nothing is created and no env var is emitted. Pool names are lowercase alphanumerics and hyphens, 1-63 chars, starting alphanumeric: n8n validates the same pattern at worker startup but only logs a warning and silently falls back to the default queue, so this input rejects a bad name at plan time instead."
+  type = list(object({
+    name         = string
+    min_replicas = optional(number, 1)
+    max_replicas = optional(number, 5)
+
+    # Null inherits the module-wide worker setting of the same name.
+    concurrency    = optional(number, null)
+    cpu_request    = optional(string, null)
+    cpu_limit      = optional(string, null)
+    memory_request = optional(string, null)
+    memory_limit   = optional(string, null)
+
+    # Extra env for this pool's workers only, on top of what every worker gets.
+    extra_env = optional(list(object({
+      name  = string
+      value = string
+    })), [])
+  }))
+  default  = []
+  nullable = false
+
+  validation {
+    condition     = alltrue([for p in var.n8n_worker_pools : can(regex("^[a-z0-9][a-z0-9-]{0,62}$", p.name))])
+    error_message = "Each n8n_worker_pools name must be 1-63 characters of lowercase letters, digits and hyphens, starting with a letter or digit. Uppercase and underscores are rejected by n8n's own schema (for example \"ITop\" or \"sec_team\" are invalid; use \"itop\" and \"sec-team\"). This is enforced here because n8n only logs a warning for a bad name and then starts the worker on the default queue anyway, so the pod reports healthy while serving the wrong jobs."
+  }
+
+  validation {
+    condition     = alltrue([for p in var.n8n_worker_pools : p.name != "default"])
+    error_message = "\"default\" is not a usable n8n_worker_pools name. A pool called \"default\" would listen to a queue literally named `jobs-default`, which is a separate queue from the unlabelled default `jobs` queue and would not receive the work you expect. The chart's own worker deployment already serves the default queue; size it with n8n_worker_keda_min_replicas and n8n_worker_keda_max_replicas instead."
+  }
+
+  validation {
+    condition     = length(distinct([for p in var.n8n_worker_pools : p.name])) == length(var.n8n_worker_pools)
+    error_message = "n8n_worker_pools contains duplicate pool names. Each pool maps to one Deployment and one queue, so a repeated name would collide on both."
+  }
+
+  validation {
+    condition     = alltrue([for p in var.n8n_worker_pools : p.min_replicas <= p.max_replicas])
+    error_message = "Each n8n_worker_pools entry must have min_replicas <= max_replicas; KEDA rejects a ScaledObject whose minReplicaCount is above its maxReplicaCount."
+  }
+
+  validation {
+    condition = alltrue([
+      for p in var.n8n_worker_pools :
+      p.min_replicas == floor(p.min_replicas) && p.min_replicas >= 0 &&
+      p.max_replicas == floor(p.max_replicas) && p.max_replicas >= 1
+    ])
+    error_message = "Each n8n_worker_pools entry needs whole-number replica bounds, with min_replicas >= 0 and max_replicas >= 1. KEDA scales a pool to zero natively, so 0 is a valid floor; a pool parked at 0 has no live workers, and its projects fall back to the default queue until it scales up."
+  }
+
+  validation {
+    condition     = alltrue([for p in var.n8n_worker_pools : p.concurrency == null ? true : (p.concurrency == floor(p.concurrency) && p.concurrency >= 1)])
+    error_message = "n8n_worker_pools concurrency must be a whole number of concurrent jobs, 1 or greater, or null to inherit n8n_worker_concurrency."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for p in var.n8n_worker_pools : [
+        for e in p.extra_env : !(
+          contains(local.n8n_managed_env_names, e.name) ||
+          anytrue([for pre in local.n8n_managed_env_prefixes : startswith(e.name, pre)]) ||
+          e.name == "N8N_WORKER_POOL_NAME"
+        )
+      ]
+    ]))
+    error_message = "n8n_worker_pools extra_env must not set module-managed variables, and must not set N8N_WORKER_POOL_NAME: that name is owned by the pool's own `name` attribute, and overriding it would put the pool's workers on a different queue than the one this module creates a scaler for."
+  }
+}

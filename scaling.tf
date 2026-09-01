@@ -127,8 +127,25 @@ locals {
     worker      = var.n8n_worker_cpu_request
   }
 
+  # Every worker pool is a fourth claim on the same nodes. Each pool carries its
+  # own KEDA ScaledObject and can reach its own max_replicas independently of
+  # the default worker deployment, and a pool that overrides nothing inherits
+  # n8n_worker_cpu_request, so its per-pod cost is the same coalesce the Helm
+  # values use (worker-pools.tf). Left out of the model, the check below would
+  # go quiet exactly as pools were added, which is when the arithmetic starts
+  # to matter.
+  n8n_pool_cpu_requests = {
+    for p in var.n8n_worker_pools :
+    p.name => coalesce(p.cpu_request, var.n8n_worker_cpu_request)
+  }
+
+  # Pool quantities are read for the same reason the four above are: an
+  # unreadable one silences the check rather than warning off a guess. Pool
+  # cpu_request carries no grammar validation of its own, so this is the only
+  # place a pool's quantity is checked at all.
   n8n_cpu_requests_readable = alltrue([
-    for quantity in values(local.n8n_cpu_requests) : can(tonumber(trimsuffix(quantity, "m")))
+    for quantity in concat(values(local.n8n_cpu_requests), values(local.n8n_pool_cpu_requests)) :
+    can(tonumber(trimsuffix(quantity, "m")))
   ])
 
   n8n_cpu_request_millis = {
@@ -139,14 +156,32 @@ locals {
     )
   }
 
-  # What the three pod families request when every autoscaler sits at its
-  # ceiling simultaneously. Not a forecast: the point is that this number must
-  # be schedulable at all, because each autoscaler can independently reach its
-  # own maximum.
+  n8n_pool_cpu_request_millis = {
+    for name, quantity in local.n8n_pool_cpu_requests : name => (
+      can(tonumber(trimsuffix(quantity, "m")))
+      ? (endswith(quantity, "m") ? tonumber(trimsuffix(quantity, "m")) : tonumber(quantity) * 1000)
+      : 0
+    )
+  }
+
+  # Pool pods render from the chart's shared worker pod template, the same one
+  # the default worker deployment uses, so they carry the task runner sidecar
+  # too. sum() rejects an empty list, hence the [0] seed for the no-pools
+  # default, which keeps this at 0 and the totals below unchanged.
+  n8n_pool_peak_cpu_request_millis = sum(concat([0], [
+    for p in var.n8n_worker_pools :
+    p.max_replicas * (local.n8n_pool_cpu_request_millis[p.name] + local.n8n_cpu_request_millis["task_runner"])
+  ]))
+
+  # What the pod families request when every autoscaler sits at its ceiling
+  # simultaneously. Not a forecast: the point is that this number must be
+  # schedulable at all, because each autoscaler can independently reach its own
+  # maximum, and every declared pool adds one more autoscaler that can.
   n8n_peak_cpu_request_millis = local.n8n_cpu_requests_readable ? (
     var.n8n_main_hpa_max_replicas * (local.n8n_cpu_request_millis["main"] + local.n8n_cpu_request_millis["task_runner"]) +
     var.n8n_worker_keda_max_replicas * (local.n8n_cpu_request_millis["worker"] + local.n8n_cpu_request_millis["task_runner"]) +
-    var.n8n_webhook_hpa_max_replicas * local.n8n_cpu_request_millis["webhook"]
+    var.n8n_webhook_hpa_max_replicas * local.n8n_cpu_request_millis["webhook"] +
+    local.n8n_pool_peak_cpu_request_millis
   ) : 0
 
   # vCPU per node, read off the instance size rather than from the EC2 API.
@@ -291,13 +326,19 @@ check "autoscaling_maxima_fit_node_group_capacity" {
       "request ${local.n8n_peak_cpu_request_millis}m CPU ",
       "(main ${var.n8n_main_hpa_max_replicas} × ${local.n8n_cpu_request_millis["main"] + local.n8n_cpu_request_millis["task_runner"]}m, ",
       "worker ${var.n8n_worker_keda_max_replicas} × ${local.n8n_cpu_request_millis["worker"] + local.n8n_cpu_request_millis["task_runner"]}m, ",
-      "webhook ${var.n8n_webhook_hpa_max_replicas} × ${local.n8n_cpu_request_millis["webhook"]}m), ",
+      "webhook ${var.n8n_webhook_hpa_max_replicas} × ${local.n8n_cpu_request_millis["webhook"]}m",
+      length(var.n8n_worker_pools) > 0 ? join("", [
+        ", worker pools ${local.n8n_pool_peak_cpu_request_millis}m across ",
+        "${length(var.n8n_worker_pools)} pool(s) at their ceilings",
+      ]) : "",
+      "), ",
       "but ${var.node_max} × ${var.node_instance_type} leaves only about ",
       "${local.n8n_schedulable_cpu_millis}m for them ",
       "(${local.node_vcpus} vCPU per node, less kubelet reservations, the aws-node and kube-proxy ",
       "DaemonSets, and this module's cluster add-ons). The autoscalers will still scale toward those ",
       "maxima, leaving pods Pending with \"Insufficient cpu\" once the Cluster Autoscaler reaches node_max. ",
-      "Either lower the maxima, lower the CPU requests, or raise node_max / node_instance_type. ",
+      "Either lower the maxima (including any n8n_worker_pools max_replicas), lower the CPU requests, ",
+      "or raise node_max / node_instance_type. ",
       "See README.md → \"Sizing autoscaling against node capacity\".",
     ])
   }

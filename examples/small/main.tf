@@ -74,6 +74,11 @@ module "n8n" {
 
   n8n_additional_domains = var.n8n_additional_domains
 
+  n8n_extra_env                = var.n8n_extra_env
+  n8n_worker_keda_min_replicas = var.n8n_worker_keda_min_replicas
+  n8n_worker_keda_max_replicas = var.n8n_worker_keda_max_replicas
+  n8n_worker_pools             = var.n8n_worker_pools
+
   # ── Execution data ──────────────────────────────────────────────────────────
   # Left at "database" so this example applies without the feat:executionDataS3
   # entitlement. This sizing sees the least traffic but has the least database

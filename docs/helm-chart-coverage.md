@@ -15,7 +15,8 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `image.pullPolicy` | Not exposed; chart default used |
 | `commonLabels`, `commonAnnotations`, `podLabels` | Not exposed |
 | `queueMode.enabled/workerReplicaCount/workerConcurrency` | Hardcoded `true` / `n8n_worker_keda_min_replicas` / `n8n_worker_concurrency` |
-| `queueMode.workerExtraEnv` | Not exposed (worker-only env); use `n8n_extra_env` for env vars applied to *all* pods instead |
+| `queueMode.workerExtraEnv` | `n8n_worker_extra_env` (worker-only env; `n8n_extra_env` is the equivalent for *all* pods) |
+| `queueMode.workerGroups` | `n8n_worker_pools`, one group per pool with `poolName` set to the pool's name. Per-pool sizing falls back to the module-wide `n8n_worker_*` values rather than the chart's, and pool names are validated at plan time |
 | `webhookProcessor.enabled/replicaCount/disableProductionWebhooksOnMainProcess` | Hardcoded `true` / `n8n_webhook_hpa_min_replicas` / hardcoded `true` |
 | `multiMain.enabled/replicas/antiAffinity.type` | Hardcoded `true` / `n8n_main_hpa_min_replicas` / hardcoded `"preferred"` |
 | `multiMain.topologySpreadConstraints`, `multiMain.setup.keyTtl/checkInterval` | Not exposed; chart default used |
@@ -43,7 +44,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `lifecycle.{main,worker,webhookProcessor}.terminationGracePeriodSeconds/preStop` | `n8n_termination_grace_period` / `n8n_prestop_sleep` |
 | `hpa.main`, `hpa.webhookProcessor` | `n8n_{main,webhook}_hpa_{min,max}_replicas`, `n8n_{main,webhook}_hpa_cpu_threshold` |
 | `hpa.worker` | Not used; the module scales workers via `keda.worker` instead |
-| `keda.enabled/worker.{minReplicaCount,maxReplicaCount,triggers}` | Hardcoded `true` / `n8n_worker_keda_{min,max}_replicas` / two hardcoded Redis-queue-depth triggers sized by `n8n_worker_keda_jobs_per_replica` |
+| `keda.enabled/worker.{minReplicaCount,maxReplicaCount,triggers}` | Hardcoded `true` / `n8n_worker_keda_{min,max}_replicas` / two hardcoded Redis-queue-depth triggers sized by `n8n_worker_keda_jobs_per_replica`. These cover the chart's own unlabelled worker deployment only. Each pool in `n8n_worker_pools` gets its own scaler on its own `jobs-<name>` queue, from the group's `keda` block |
 | `keda.worker.pollingInterval/cooldownPeriod` | Hardcoded `15` / `60` |
 | `keda.webhookProcessor` | Not used; the module creates the webhook HPA externally in `scaling.tf` instead (the chart skips its own webhook HPA when `keda.enabled = true`) |
 | `pdb.enabled/minAvailable` | Hardcoded `true` / `1` |

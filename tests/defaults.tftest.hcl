@@ -9453,3 +9453,379 @@ run "n8n_dns_config_rejects_a_malformed_search_domain" {
 
   expect_failures = [var.n8n_dns_config]
 }
+
+# ── Worker pools (n8n_worker_pools) ──────────────────────────────────────────
+# helm_release.n8n.values is unknown at plan time, so these assert against
+# local.n8n_worker_groups, the list the chart's queueMode.workerGroups is built
+# from, the same way the rest of this file tests chart wiring it cannot reach
+# directly.
+
+run "worker_pools_default_to_none" {
+  command = plan
+
+  assert {
+    condition     = length(local.n8n_worker_groups) == 0
+    error_message = "n8n_worker_pools must default to empty so an untouched deployment renders no workerGroups and sees no diff"
+  }
+}
+
+run "worker_pools_map_each_pool_to_its_own_queue" {
+  command = plan
+
+  variables {
+    # Pools count against the node group budget like any other autoscaler, so
+    # the capacity check warns when their ceilings outgrow it. These runs are
+    # about the mapping, not the sizing, so give them room rather than let an
+    # unrelated advisory fail them.
+    node_max = 20
+
+    n8n_worker_pools = [
+      { name = "gpu" },
+      { name = "sec-team" },
+    ]
+  }
+
+  # poolName is what becomes N8N_WORKER_POOL_NAME, which moves the pod off the
+  # default `jobs` queue and onto `jobs-<poolName>`. name is the Deployment
+  # suffix. They are deliberately the same value, so a pool cannot end up with
+  # a Deployment named after one queue and pods consuming another.
+  assert {
+    condition = (
+      length(local.n8n_worker_groups) == 2 &&
+      local.n8n_worker_groups[0].name == "gpu" &&
+      local.n8n_worker_groups[0].poolName == "gpu" &&
+      local.n8n_worker_groups[1].name == "sec-team" &&
+      local.n8n_worker_groups[1].poolName == "sec-team"
+    )
+    error_message = "each n8n_worker_pools entry must render one worker group whose poolName matches its name"
+  }
+}
+
+# Every per-pool sizing attribute is optional and falls back to the module-wide
+# worker setting. A pool that overrides nothing must be sized exactly like the
+# chart's own workers, or the pools quietly get different resources than the
+# deployment they sit beside.
+run "worker_pools_inherit_module_wide_worker_sizing" {
+  command = plan
+
+  variables {
+    # Pools count against the node group budget like any other autoscaler, so
+    # the capacity check warns when their ceilings outgrow it. These runs are
+    # about the mapping, not the sizing, so give them room rather than let an
+    # unrelated advisory fail them.
+    node_max = 20
+
+    n8n_worker_pools = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition = (
+      local.n8n_worker_groups[0].concurrency == var.n8n_worker_concurrency &&
+      local.n8n_worker_groups[0].resources.requests.cpu == var.n8n_worker_cpu_request &&
+      local.n8n_worker_groups[0].resources.requests.memory == var.n8n_worker_memory_request &&
+      local.n8n_worker_groups[0].resources.limits.cpu == var.n8n_worker_cpu_limit &&
+      local.n8n_worker_groups[0].resources.limits.memory == var.n8n_worker_memory_limit
+    )
+    error_message = "a pool that overrides no sizing must inherit the module-wide n8n_worker_* concurrency and resources"
+  }
+}
+
+run "worker_pools_per_pool_sizing_overrides_the_module_default" {
+  command = plan
+
+  variables {
+    # Pools count against the node group budget like any other autoscaler, so
+    # the capacity check warns when their ceilings outgrow it. These runs are
+    # about the mapping, not the sizing, so give them room rather than let an
+    # unrelated advisory fail them.
+    node_max = 20
+
+    n8n_worker_pools = [{
+      name           = "gpu"
+      concurrency    = 3
+      cpu_request    = "2"
+      cpu_limit      = "4"
+      memory_request = "8Gi"
+      memory_limit   = "16Gi"
+    }]
+  }
+
+  assert {
+    condition = (
+      local.n8n_worker_groups[0].concurrency == 3 &&
+      local.n8n_worker_groups[0].resources.requests.cpu == "2" &&
+      local.n8n_worker_groups[0].resources.requests.memory == "8Gi" &&
+      local.n8n_worker_groups[0].resources.limits.cpu == "4" &&
+      local.n8n_worker_groups[0].resources.limits.memory == "16Gi"
+    )
+    error_message = "per-pool sizing must win over the module-wide n8n_worker_* defaults"
+  }
+}
+
+# Each pool gets a scaler on its own backlog. The chart's default worker
+# ScaledObject only watches `<prefix>:jobs:*` and cannot see a pool's queue, so
+# without these bounds a pool would sit at a fixed replica count.
+run "worker_pools_carry_their_own_keda_bounds" {
+  command = plan
+
+  variables {
+    # Pools count against the node group budget like any other autoscaler, so
+    # the capacity check warns when their ceilings outgrow it. These runs are
+    # about the mapping, not the sizing, so give them room rather than let an
+    # unrelated advisory fail them.
+    node_max = 20
+
+    n8n_worker_pools = [
+      { name = "gpu", min_replicas = 2, max_replicas = 8 },
+      { name = "itop" },
+    ]
+  }
+
+  assert {
+    condition = (
+      local.n8n_worker_groups[0].keda.minReplicaCount == 2 &&
+      local.n8n_worker_groups[0].keda.maxReplicaCount == 8 &&
+      local.n8n_worker_groups[1].keda.minReplicaCount == 1 &&
+      local.n8n_worker_groups[1].keda.maxReplicaCount == 5 &&
+      local.n8n_worker_groups[1].keda.jobsPerReplica == var.n8n_worker_keda_jobs_per_replica
+    )
+    error_message = "each pool must carry its own KEDA bounds, defaulting to 1/5 and inheriting n8n_worker_keda_jobs_per_replica"
+  }
+}
+
+# KEDA scales a ScaledObject to zero natively, so a floor of 0 is legitimate
+# here for the same reason it is on n8n_worker_keda_min_replicas.
+run "worker_pools_min_replicas_accepts_zero" {
+  command = plan
+
+  variables {
+    # Pools count against the node group budget like any other autoscaler, so
+    # the capacity check warns when their ceilings outgrow it. These runs are
+    # about the mapping, not the sizing, so give them room rather than let an
+    # unrelated advisory fail them.
+    node_max = 20
+
+    n8n_worker_pools = [{ name = "itop", min_replicas = 0, max_replicas = 3 }]
+  }
+
+  assert {
+    condition     = local.n8n_worker_groups[0].keda.minReplicaCount == 0
+    error_message = "n8n_worker_pools must accept min_replicas = 0: a pool parked at zero is the documented scale-to-zero shape"
+  }
+}
+
+run "worker_pools_extra_env_reaches_only_that_pool" {
+  command = plan
+
+  variables {
+    # Pools count against the node group budget like any other autoscaler, so
+    # the capacity check warns when their ceilings outgrow it. These runs are
+    # about the mapping, not the sizing, so give them room rather than let an
+    # unrelated advisory fail them.
+    node_max = 20
+
+    n8n_worker_pools = [
+      { name = "gpu", extra_env = [{ name = "CUDA_VISIBLE_DEVICES", value = "0" }] },
+      { name = "itop" },
+    ]
+  }
+
+  assert {
+    condition = (
+      length(local.n8n_worker_groups[0].extraEnv) == 1 &&
+      local.n8n_worker_groups[0].extraEnv[0].name == "CUDA_VISIBLE_DEVICES" &&
+      length(local.n8n_worker_groups[1].extraEnv) == 0
+    )
+    error_message = "per-pool extra_env must land on that pool's workers only"
+  }
+}
+
+# n8n validates the same pattern at worker startup, but only logs a warning and
+# then starts the worker on the default queue, so a rejected name here is the
+# difference between a plan error and a Ready pod serving the wrong jobs.
+run "worker_pools_reject_an_uppercase_name" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "ITop" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_an_underscore_in_a_name" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "sec_team" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_a_name_over_sixty_three_characters" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "p${join("", [for i in range(63) : "a"])}" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+# A pool named "default" would listen on a queue literally called
+# `jobs-default`, which is not the unlabelled default `jobs` queue the chart's
+# own worker deployment serves.
+run "worker_pools_reject_the_name_default" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "default" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_duplicate_names" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "gpu" }, { name = "gpu" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_min_replicas_above_max_replicas" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "gpu", min_replicas = 6, max_replicas = 2 }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_a_fractional_replica_bound" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "gpu", min_replicas = 1.5 }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_max_replicas_of_zero" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "gpu", min_replicas = 0, max_replicas = 0 }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_concurrency_below_one" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "gpu", concurrency = 0 }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+# N8N_WORKER_POOL_NAME is set from the pool's own name. Letting extra_env
+# override it would put the pod on a queue this module never built a scaler for.
+run "worker_pools_reject_extra_env_overriding_the_pool_name" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{
+      name      = "gpu"
+      extra_env = [{ name = "N8N_WORKER_POOL_NAME", value = "somewhere-else" }]
+    }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_extra_env_overriding_a_module_managed_variable" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{
+      name      = "gpu"
+      extra_env = [{ name = "N8N_ENCRYPTION_KEY", value = "nope" }]
+    }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+# ── Worker pools in the node-capacity model ──────────────────────────────────
+# Every pool is a fourth claim on the same nodes, independent of the default
+# worker deployment's own KEDA ceiling. The model missed them at first, which
+# left check "autoscaling_maxima_fit_node_group_capacity" reporting that a
+# config fit while the pools pushed it well past the node group. These pin the
+# arithmetic so the check cannot go quiet again as pools are added.
+
+run "capacity_model_ignores_pools_when_none_are_declared" {
+  command = plan
+
+  assert {
+    condition     = local.n8n_pool_peak_cpu_request_millis == 0
+    error_message = "with no pools declared the pool term must be 0, leaving the model exactly as it was"
+  }
+}
+
+run "capacity_model_counts_each_pool_at_its_ceiling" {
+  command = plan
+
+  variables {
+    # Room for the pools, so this pins the arithmetic rather than tripping the
+    # advisory the arithmetic feeds.
+    node_max = 20
+
+    n8n_worker_pools = [
+      # 4 x (1000m explicit + 200m task runner sidecar) = 4800m
+      { name = "gpu", min_replicas = 1, max_replicas = 4, cpu_request = "1" },
+      # 3 x (500m inherited + 200m) = 2100m
+      { name = "secteam", min_replicas = 1, max_replicas = 3 },
+      # 3 x (500m inherited + 200m) = 2100m. min_replicas 0 is irrelevant here:
+      # the model is about ceilings, and a parked pool can still reach its max.
+      { name = "itop", min_replicas = 0, max_replicas = 3 },
+    ]
+  }
+
+  assert {
+    condition     = local.n8n_pool_peak_cpu_request_millis == 9000
+    error_message = "pool peak is ${local.n8n_pool_peak_cpu_request_millis}m, expected 4800 + 2100 + 2100 = 9000m"
+  }
+
+  # Pool pods render from the chart's shared worker pod template, so each one
+  # carries the task runner sidecar the default worker pods carry.
+  assert {
+    condition     = local.n8n_peak_cpu_request_millis == 16600 + 9000
+    error_message = "total peak is ${local.n8n_peak_cpu_request_millis}m, expected the no-pools 16600m plus 9000m of pools"
+  }
+}
+
+# A pool quantity the model cannot read has to silence the model, the same way
+# an unreadable module-wide quantity does. Counting it as 0 would understate the
+# peak, which is the failure mode this whole section exists to prevent. Pool
+# cpu_request carries no grammar validation of its own, so this is the only
+# place a pool's quantity is checked at all.
+run "capacity_model_goes_unreadable_on_an_unparseable_pool_quantity" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "gpu", cpu_request = "1Ki" }]
+  }
+
+  assert {
+    condition     = local.n8n_cpu_requests_readable == false
+    error_message = "an unreadable pool cpu_request must drop n8n_cpu_requests_readable, not be silently counted as 0"
+  }
+}

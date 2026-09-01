@@ -318,6 +318,13 @@ resource "helm_release" "n8n" {
       enabled            = true
       workerReplicaCount = var.n8n_worker_keda_min_replicas
       workerConcurrency  = var.n8n_worker_concurrency
+      # Worker-only env, appended after config.extraEnv in the worker container
+      # and nowhere else. Distinct from n8n_extra_env, which reaches main and
+      # webhook pods too.
+      workerExtraEnv = var.n8n_worker_extra_env
+      # One additional worker Deployment and ScaledObject per pool. Empty list
+      # on the default path, which renders nothing. See worker-pools.tf.
+      workerGroups = local.n8n_worker_groups
     }
 
     webhookProcessor = {
@@ -767,6 +774,16 @@ resource "helm_release" "n8n" {
           ] : [],
         ) : [],
 
+        # Worker pools (n8n alpha). The feature is inert unless this is set on
+        # the mains, which resolve a project's pool and enqueue to it, as well
+        # as the workers, which read N8N_WORKER_POOL_NAME. Webhook pods ignore
+        # it but are harmless to set, and config.extraEnv reaches all three.
+        # Emitted only when pools are declared, so an untouched deployment sees
+        # no diff. The name is reserved in n8n_managed_env_names, so declaring a
+        # pool is the only way to switch the feature on. See worker-pools.tf.
+        length(var.n8n_worker_pools) > 0 ? [
+          { name = "N8N_WORKER_POOLS_ENABLED", value = "true" },
+        ] : [],
         # Caller-supplied escape hatch, appended last. Kubernetes resolves
         # duplicate env names last-wins, so this would override anything above
         # it; var.n8n_extra_env is validated against local.n8n_managed_env_names
