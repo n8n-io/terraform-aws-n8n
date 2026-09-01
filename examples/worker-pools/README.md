@@ -18,18 +18,18 @@ Use this example when some executions need different hardware or isolation: heav
 
 ## The pool topology
 
-Defined inline in [`main.tf`](./main.tf) rather than behind a variable, since it is the point of the example:
+Defined in [`main.tf`](./main.tf) as a local rather than a variable, since the topology is the point of the example rather than a knob (a local is also reachable from the example's tests, where a literal at the module call site would not be):
 
 | Pool | Replicas | Concurrency | Sizing | Why |
 |---|---|---|---|---|
-| *(unlabelled)* | 2 to 4 | module default | module default | Serves the default `jobs` queue for every unpinned project |
+| *(unlabelled)* | 1 to 10 | module default | module default | Serves the default `jobs` queue for every unpinned project |
 | `gpu` | 1 to 4 | 5 | 1-2 vCPU, 2-4 GiB | Heavier executions, fewer jobs per worker |
 | `secteam` | 1 to 3 | module default | module default | Isolation for one team's projects |
 | `itop` | 0 to 3 | module default | module default | Scales to zero when idle |
 
 A pool with no live workers is not an error. Projects pinned to it fall back to the default queue until KEDA scales it back up, so `itop` costs nothing while idle.
 
-Pool names are lowercase letters, digits and hyphens, 1 to 63 characters, starting and ending alphanumeric. The module rejects anything else at plan time, because n8n itself only logs a warning for a bad name and then starts the worker on the default queue, which leaves a Ready pod quietly serving the wrong jobs. `default` is rejected too: it would mean a queue named `jobs-default`, which is not the real default queue.
+Pool names are lowercase letters, digits and hyphens, 1 to 53 characters, starting and ending alphanumeric. The 53 comes from the chart, which uses the name for both the worker group (capped at 53) and the pool (63); the module enforces the tighter of the two so a name cannot pass plan and fail at apply. The module rejects anything else at plan time, because n8n itself only logs a warning for a bad name and then starts the worker on the default queue, which leaves a Ready pod quietly serving the wrong jobs. `default` is rejected too: it would mean a queue named `jobs-default`, which is not the real default queue.
 
 ## Prerequisites
 

@@ -6,6 +6,54 @@ locals {
     },
     var.tags,
   )
+
+  # ── Worker pools ──────────────────────────────────────────────────────────
+  # The topology this example exists to show, kept as a local rather than a
+  # variable: it is the point of the example, not a knob, and a local is
+  # reachable from tests/defaults.tftest.hcl where a literal at the module call
+  # site would not be.
+  #
+  # Each entry becomes its own worker Deployment plus its own KEDA ScaledObject
+  # watching that pool's `jobs-<name>` queue. Assign a project to a pool in the
+  # n8n UI under Project, Settings, Worker Pools; its executions then run only
+  # on that pool's workers.
+  #
+  # Declaring any pool switches N8N_WORKER_POOLS_ENABLED on across mains,
+  # workers and webhook pods, which the feature needs in order to route at all.
+  #
+  # A pool with no live workers is not an error: projects pinned to it fall
+  # back to the default queue until it scales up again.
+  worker_pools = [
+    # Heavier executions, given more CPU and memory and a lower concurrency so
+    # each worker takes fewer jobs at once.
+    {
+      name           = "gpu"
+      min_replicas   = 1
+      max_replicas   = 4
+      concurrency    = 5
+      cpu_request    = "1"
+      cpu_limit      = "2"
+      memory_request = "2Gi"
+      memory_limit   = "4Gi"
+    },
+
+    # An isolated set for one team's projects, at the module's default worker
+    # sizing.
+    {
+      name         = "secteam"
+      min_replicas = 1
+      max_replicas = 3
+    },
+
+    # Scales to zero when idle. Cheap to leave declared: with no live workers
+    # its projects fall back to the default queue, and KEDA scales it up again
+    # as soon as work is routed to it.
+    {
+      name         = "itop"
+      min_replicas = 0
+      max_replicas = 3
+    },
+  ]
 }
 
 # ── VPC ───────────────────────────────────────────────────────────────────────
@@ -97,47 +145,9 @@ module "n8n" {
   n8n_worker_keda_min_replicas = var.n8n_worker_keda_min_replicas
   n8n_worker_keda_max_replicas = var.n8n_worker_keda_max_replicas
 
-  # Each entry below becomes its own worker Deployment plus its own KEDA
-  # ScaledObject watching that pool's `jobs-<name>` queue. Assign a project to
-  # a pool in the n8n UI under Project, Settings, Worker Pools; its executions
-  # then run only on that pool's workers.
-  #
-  # Declaring any pool switches N8N_WORKER_POOLS_ENABLED on across mains,
-  # workers and webhook pods, which the feature needs in order to route at all.
-  #
-  # A pool with no live workers is not an error: projects pinned to it fall
-  # back to the default queue until it scales up again.
-  n8n_worker_pools = [
-    # Heavier executions, given more CPU and memory and a lower concurrency so
-    # each worker takes fewer jobs at once.
-    {
-      name           = "gpu"
-      min_replicas   = 1
-      max_replicas   = 4
-      concurrency    = 5
-      cpu_request    = "1"
-      cpu_limit      = "2"
-      memory_request = "2Gi"
-      memory_limit   = "4Gi"
-    },
-
-    # An isolated set for one team's projects, at the module's default worker
-    # sizing.
-    {
-      name         = "secteam"
-      min_replicas = 1
-      max_replicas = 3
-    },
-
-    # Scales to zero when idle. Cheap to leave declared: with no live workers
-    # its projects fall back to the default queue, and KEDA scales it up again
-    # as soon as work is routed to it.
-    {
-      name         = "itop"
-      min_replicas = 0
-      max_replicas = 3
-    },
-  ]
+  # The three pools this example exists to demonstrate. Declared at the top of
+  # this file so the test file can assert on them; see the comment there.
+  n8n_worker_pools = local.worker_pools
 
   # ── Execution data ──────────────────────────────────────────────────────────
   # Left at "database" so this example applies without the feat:executionDataS3

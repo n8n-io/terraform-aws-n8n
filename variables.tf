@@ -2996,7 +2996,7 @@ variable "n8n_dns_config" {
 # per entry, alongside the chart's own unlabelled worker deployment.
 
 variable "n8n_worker_extra_env" {
-  description = "Additional environment variables injected into the chart's own (unlabelled) worker pods only, via queueMode.workerExtraEnv. Use this for worker-only tuning that must not reach main or webhook-processor pods; n8n_extra_env is the equivalent for all three. N8N_WORKER_POOL_NAME is rejected here along with the other module-managed names: pool membership is owned by n8n_worker_pools, which also builds the queue and the KEDA scaler that go with it, and pinning the chart's own worker deployment to a pool through this input would leave those workers consuming a pool queue that nothing scales. Rejected at plan time for the same module-managed names as n8n_extra_env."
+  description = "Additional environment variables injected into worker pods only, via queueMode.workerExtraEnv. Use this for worker-only tuning that must not reach main or webhook-processor pods; n8n_extra_env is the equivalent for all three. This reaches every worker, the chart's own unlabelled deployment and each n8n_worker_pools pool alike, because they render from one shared pod template; a pool's own extra_env is applied after this and wins on a repeated name. Set it here for tuning that should apply pool-wide, and on the pool for tuning that should not. N8N_WORKER_POOL_NAME is rejected here along with the other module-managed names: pool membership is owned by n8n_worker_pools, which also builds the queue and the KEDA scaler that go with it, and pinning the chart's own worker deployment to a pool through this input would leave those workers consuming a pool queue that nothing scales. Rejected at plan time for the same module-managed names as n8n_extra_env."
   type = list(object({
     name  = string
     value = string
@@ -3026,7 +3026,7 @@ variable "n8n_worker_extra_env" {
 }
 
 variable "n8n_worker_pools" {
-  description = "Labelled worker pools to run beside the chart's own unlabelled worker deployment. Each entry becomes one queueMode.workerGroups entry in the Helm release, which renders one Deployment (identical to the chart's worker pods but carrying N8N_WORKER_POOL_NAME) and one KEDA ScaledObject watching that pool's own `jobs-<name>` queue, so a pool autoscales on its own backlog rather than the default queue's. Requires an n8n_chart_version whose chart supports queueMode.workerGroups. Declaring any pool also switches N8N_WORKER_POOLS_ENABLED on across mains, workers and webhook pods, which the feature needs in order to route at all. Leave empty (the default) and nothing is created and no env var is emitted. Pool names are lowercase alphanumerics and hyphens, 1-63 chars, starting alphanumeric: n8n validates the same pattern at worker startup but only logs a warning and silently falls back to the default queue, so this input rejects a bad name at plan time instead."
+  description = "Labelled worker pools to run beside the chart's own unlabelled worker deployment. Each entry becomes one queueMode.workerGroups entry in the Helm release, which renders one Deployment (identical to the chart's worker pods but carrying N8N_WORKER_POOL_NAME) and one KEDA ScaledObject watching that pool's own `jobs-<name>` queue, so a pool autoscales on its own backlog rather than the default queue's. Requires an n8n_chart_version whose chart supports queueMode.workerGroups. Declaring any pool also switches N8N_WORKER_POOLS_ENABLED on across mains, workers and webhook pods, which the feature needs in order to route at all. Leave empty (the default) and nothing is created and no env var is emitted. Pool names are lowercase alphanumerics and hyphens, 1-53 chars, starting and ending alphanumeric: n8n validates the same pattern at worker startup but only logs a warning and silently falls back to the default queue, so this input rejects a bad name at plan time instead. The 53-character ceiling is the chart's, which uses this value for both the worker group name (max 53) and the pool name (max 63)."
   type = list(object({
     name         = string
     min_replicas = optional(number, 1)
@@ -3049,8 +3049,8 @@ variable "n8n_worker_pools" {
   nullable = false
 
   validation {
-    condition     = alltrue([for p in var.n8n_worker_pools : can(regex("^[a-z0-9][a-z0-9-]{0,62}$", p.name))])
-    error_message = "Each n8n_worker_pools name must be 1-63 characters of lowercase letters, digits and hyphens, starting with a letter or digit. Uppercase and underscores are rejected by n8n's own schema (for example \"ITop\" or \"sec_team\" are invalid; use \"itop\" and \"sec-team\"). This is enforced here because n8n only logs a warning for a bad name and then starts the worker on the default queue anyway, so the pod reports healthy while serving the wrong jobs."
+    condition     = alltrue([for p in var.n8n_worker_pools : can(regex("^[a-z0-9]([a-z0-9-]{0,51}[a-z0-9])?$", p.name))])
+    error_message = "Each n8n_worker_pools name must be 1-53 characters of lowercase letters, digits and hyphens, starting and ending with a letter or digit. Uppercase and underscores are rejected by n8n's own schema (for example \"ITop\" or \"sec_team\" are invalid; use \"itop\" and \"sec-team\"). This is enforced here because n8n only logs a warning for a bad name and then starts the worker on the default queue anyway, so the pod reports healthy while serving the wrong jobs. The 53-character ceiling and the trailing-character rule come from the chart: the name is used for both queueMode.workerGroups[].name (max 53) and .poolName (max 63), and a value that passes here but not there fails at apply instead of at plan."
   }
 
   validation {
@@ -3093,5 +3093,50 @@ variable "n8n_worker_pools" {
       ]
     ]))
     error_message = "n8n_worker_pools extra_env must not set module-managed variables, and must not set N8N_WORKER_POOL_NAME: that name is owned by the pool's own `name` attribute, and overriding it would put the pool's workers on a different queue than the one this module creates a scaler for."
+  }
+
+  validation {
+    # Same grammar the module-wide n8n_worker_cpu_* inputs enforce, for the same
+    # reason and then one more. A pool quantity scaling.tf cannot read makes
+    # local.n8n_cpu_requests_readable false, and that local gates the whole peak
+    # figure, so one unparseable pool silences
+    # check.autoscaling_maxima_fit_node_group_capacity for main, worker and
+    # webhook too, not only for the pool that carries it.
+    condition = alltrue(flatten([
+      for p in var.n8n_worker_pools : [
+        for q in [p.cpu_request, p.cpu_limit] :
+        q == null ? true : can(regex("^[0-9]+(\\.[0-9]+)?m?$", q))
+      ]
+    ]))
+    error_message = "Each n8n_worker_pools cpu_request and cpu_limit must be a CPU quantity: a plain number of cores (\"1\", \"0.5\") or millicores with an m suffix (\"1000m\"), or null to inherit n8n_worker_cpu_request / n8n_worker_cpu_limit. Memory suffixes (Mi, Gi), units (\"1 core\"), and whitespace are not accepted, because the node-capacity model in scaling.tf reads these and a quantity it cannot parse silences the capacity check for the whole release."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for p in var.n8n_worker_pools : [
+        for q in [p.memory_request, p.memory_limit] :
+        q == null ? true : can(regex("^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$", q))
+      ]
+    ]))
+    error_message = "Each n8n_worker_pools memory_request and memory_limit must be a memory quantity: a number with an optional Kubernetes suffix (\"512Mi\", \"2Gi\", \"1G\", or plain bytes), or null to inherit n8n_worker_memory_request / n8n_worker_memory_limit. \"GB\"/\"MB\", whitespace, and CPU-style m suffixes are not accepted. Prefer the binary suffixes (Mi, Gi): 2G is 2,000,000,000 bytes while 2Gi is 2,147,483,648."
+  }
+
+  validation {
+    # The two checks n8n_extra_env and n8n_worker_extra_env already make on
+    # their own lists, applied per pool so the three inputs behave alike.
+    condition = alltrue(flatten([
+      for p in var.n8n_worker_pools : [
+        for e in p.extra_env : trimspace(e.name) != ""
+      ]
+    ]))
+    error_message = "n8n_worker_pools extra_env entries must each have a non-empty name."
+  }
+
+  validation {
+    condition = alltrue([
+      for p in var.n8n_worker_pools :
+      length(distinct([for e in p.extra_env : e.name])) == length(p.extra_env)
+    ])
+    error_message = "An n8n_worker_pools entry has duplicate extra_env names. Within one pool each variable may be set once; a repeat is silently dropped by the last-wins merge rather than reported."
   }
 }

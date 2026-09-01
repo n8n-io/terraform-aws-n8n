@@ -1,9 +1,9 @@
-# Plan-time tests for the small example using mocked providers.
+# Plan-time tests for the worker-pools example using mocked providers.
 #
 # Exercises the VPC + ACM + module wiring without contacting AWS.
 #
 # Run: terraform test
-#   (from examples/small/, mocks require terraform >= 1.7)
+#   (from examples/worker-pools/, mocks require terraform >= 1.7)
 
 mock_provider "aws" {
   override_data {
@@ -78,4 +78,73 @@ run "execution_data_storage_mode_rejects_filesystem" {
   }
 
   expect_failures = [var.n8n_execution_data_storage_mode]
+}
+
+# The pool topology is what this example is for, so it is asserted rather than
+# left to the plan alone. local.worker_pools in main.tf is the declaration
+# these read; a literal at the module call site would not be reachable here.
+
+run "example_declares_the_three_documented_pools" {
+  command = plan
+
+  assert {
+    condition     = [for p in local.worker_pools : p.name] == ["gpu", "secteam", "itop"]
+    error_message = "The example's pools drifted from the three the README documents: got ${join(", ", [for p in local.worker_pools : p.name])}."
+  }
+
+  # Every name has to satisfy the module's own rule, which is tighter than it
+  # looks: 1-53 characters, lowercase alphanumerics and hyphens, and both ends
+  # alphanumeric, because the chart uses this value for a group name capped at
+  # 53. Asserted here so the example cannot ship a name that plans clean at the
+  # example layer and fails helm schema validation at apply.
+  assert {
+    condition = alltrue([
+      for p in local.worker_pools :
+      can(regex("^[a-z0-9]([a-z0-9-]{0,51}[a-z0-9])?$", p.name))
+    ])
+    error_message = "An example pool name does not satisfy the module's pool-name rule."
+  }
+
+  assert {
+    condition     = length(distinct([for p in local.worker_pools : p.name])) == length(local.worker_pools)
+    error_message = "The example declares two pools with the same name; each pool is one Deployment and one queue, so they would collide."
+  }
+}
+
+run "example_keeps_a_scale_to_zero_pool_and_a_resized_pool" {
+  command = plan
+
+  # itop exists to show min_replicas = 0 is legal. If it stops being 0 the
+  # example silently stops demonstrating scale-to-zero.
+  assert {
+    condition     = one([for p in local.worker_pools : p.min_replicas if p.name == "itop"]) == 0
+    error_message = "The itop pool is the example's scale-to-zero case and must keep min_replicas = 0."
+  }
+
+  # gpu is the one pool that overrides sizing; the other two exist to show the
+  # fallback to the module-wide worker defaults. Asserted on the values the
+  # README's topology table quotes, so the two cannot drift apart silently.
+  assert {
+    condition     = one([for p in local.worker_pools : p.concurrency if p.name == "gpu"]) == 5
+    error_message = "The gpu pool is the example's lower-concurrency case and must keep concurrency = 5, which is the value the README table quotes."
+  }
+
+  assert {
+    condition     = one([for p in local.worker_pools : p.cpu_request if p.name == "gpu"]) == "1"
+    error_message = "The gpu pool is the example's resized case and must keep cpu_request = \"1\"; the node_max arithmetic in main.tf is derived from it."
+  }
+}
+
+run "example_pool_ceilings_match_the_node_max_arithmetic" {
+  command = plan
+
+  # node_max is a literal 8 in main.tf, raised from small's 6 purely to hold
+  # these pools at their maxima. node_max is not reachable from here, so this
+  # guards the other half: if the pool ceilings grow, the arithmetic behind that
+  # 8 no longer holds and the module's capacity check starts warning on the
+  # example this repo ships.
+  assert {
+    condition     = sum([for p in local.worker_pools : p.max_replicas]) == 10
+    error_message = "The example's pool maxima changed (now ${sum([for p in local.worker_pools : p.max_replicas])} pods). Re-check node_max against the arithmetic in main.tf before updating this assertion."
+  }
 }

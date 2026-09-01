@@ -9812,20 +9812,173 @@ run "capacity_model_counts_each_pool_at_its_ceiling" {
   }
 }
 
-# A pool quantity the model cannot read has to silence the model, the same way
-# an unreadable module-wide quantity does. Counting it as 0 would understate the
-# peak, which is the failure mode this whole section exists to prevent. Pool
-# cpu_request carries no grammar validation of its own, so this is the only
-# place a pool's quantity is checked at all.
-run "capacity_model_goes_unreadable_on_an_unparseable_pool_quantity" {
+# A pool quantity the capacity model cannot read is now rejected outright, so it
+# never reaches the model. That is the stronger outcome: an unreadable quantity
+# drops n8n_cpu_requests_readable, which collapses the peak figure to zero and
+# lets check.autoscaling_maxima_fit_node_group_capacity pass vacuously for main,
+# worker and webhook as well, not only for the pool carrying it. Failing at plan
+# with a message beats silently disabling the check for the whole release.
+run "worker_pools_reject_a_cpu_quantity_the_capacity_model_cannot_read" {
   command = plan
 
   variables {
     n8n_worker_pools = [{ name = "gpu", cpu_request = "1Ki" }]
   }
 
-  assert {
-    condition     = local.n8n_cpu_requests_readable == false
-    error_message = "an unreadable pool cpu_request must drop n8n_cpu_requests_readable, not be silently counted as 0"
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_a_memory_quantity_the_capacity_model_cannot_read" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "gpu", memory_request = "2GB" }]
   }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+# The can() guard in scaling.tf stays as defence in depth behind those two
+# validations. This proves it still holds on the one path validation cannot
+# reach: a pool that overrides nothing inherits the module-wide quantity, so an
+# unreadable value there has to silence the model for the pools too rather than
+# counting them at zero.
+run "capacity_model_goes_unreadable_when_an_inherited_quantity_is_unparseable" {
+  command = plan
+
+  variables {
+    n8n_worker_cpu_request = "not-a-quantity"
+    n8n_worker_pools       = [{ name = "gpu" }]
+  }
+
+  expect_failures = [var.n8n_worker_cpu_request]
+}
+
+# Every pool's scaler has to carry the same Redis TLS and AUTH metadata the
+# default worker's two triggers carry. The chart builds a pool's triggers from
+# the queue name itself, so keda.triggerMetadata is the only route in, and
+# without it a pool's ScaledObject opens a plaintext connection to a TLS-only
+# endpoint: KEDA hangs on `connection to redis failed: i/o timeout`, the HPA
+# reports <unknown>, and the pool sits at min_replicas with nothing crashing to
+# announce it. That failure is invisible to a plan and to a non-TLS example,
+# which is why it is asserted here.
+run "worker_pools_carry_the_redis_tls_metadata_on_their_scalers" {
+  command = plan
+
+  variables {
+    redis_transit_encryption_enabled = true
+
+    n8n_worker_pools = [
+      { name = "gpu", min_replicas = 1, max_replicas = 4 },
+      { name = "itop", min_replicas = 0, max_replicas = 3 },
+    ]
+  }
+
+  assert {
+    condition     = local.keda_redis_auth_metadata["enableTLS"] == "true"
+    error_message = "precondition: transit encryption must put enableTLS into the shared KEDA metadata"
+  }
+
+  # Asserted key by key rather than by comparing the two maps: both are
+  # sensitive (the metadata can carry a Redis username), and a comparison of
+  # sensitive values yields a sensitive bool that is awkward to read back.
+  assert {
+    condition = alltrue([
+      for g in local.n8n_worker_groups :
+      nonsensitive(g.keda.triggerMetadata["enableTLS"]) == "true"
+    ])
+    error_message = "every pool's keda.triggerMetadata must set enableTLS, or its scaler talks plaintext to a TLS-only endpoint and the pool freezes at min_replicas"
+  }
+
+  assert {
+    condition = alltrue([
+      for g in local.n8n_worker_groups :
+      nonsensitive(length(g.keda.triggerMetadata)) == nonsensitive(length(local.keda_redis_auth_metadata))
+    ])
+    error_message = "every pool's keda.triggerMetadata must carry the same key set as the default worker's triggers"
+  }
+}
+
+# The no-TLS path: the metadata map is empty rather than absent, and the chart
+# guards the block with `with`, so nothing is rendered into the trigger.
+run "worker_pools_carry_empty_trigger_metadata_without_tls" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "gpu", min_replicas = 1, max_replicas = 4 }]
+  }
+
+  assert {
+    condition     = nonsensitive(length(local.n8n_worker_groups[0].keda.triggerMetadata)) == 0
+    error_message = "without transit encryption a pool's triggerMetadata must be empty, not null or a partial one"
+  }
+}
+
+# The module's pool-name rule has to be at least as strict as the chart schema
+# it feeds, or a name plans clean here and dies in helm's schema validation at
+# apply. The chart caps queueMode.workerGroups[].name at 53 characters and
+# requires both ends alphanumeric; worker-pools.tf assigns the same string to
+# both name and poolName.
+run "worker_pools_reject_a_trailing_hyphen_in_a_name" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "gpu-" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_a_name_longer_than_the_chart_allows" {
+  command = plan
+
+  variables {
+    # 54 characters: legal for poolName (63) but over the chart's 53-character
+    # cap on the worker group name, which is the tighter of the two.
+    n8n_worker_pools = [{ name = "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffff" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_accept_a_name_at_the_chart_ceiling" {
+  command = plan
+
+  variables {
+    # Exactly 53 characters, both ends alphanumeric.
+    n8n_worker_pools = [{ name = "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeefff" }]
+  }
+
+  assert {
+    condition     = length(local.n8n_worker_groups) == 1
+    error_message = "a 53-character pool name is legal in the chart and must be accepted here"
+  }
+}
+
+# extra_env consistency: the pool list gets the same two checks n8n_extra_env
+# and n8n_worker_extra_env already make on theirs.
+run "worker_pools_reject_a_blank_extra_env_name" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "gpu", extra_env = [{ name = "  ", value = "x" }] }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_duplicate_extra_env_names_within_a_pool" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{
+      name = "gpu"
+      extra_env = [
+        { name = "N8N_LOG_LEVEL", value = "debug" },
+        { name = "N8N_LOG_LEVEL", value = "info" },
+      ]
+    }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
 }

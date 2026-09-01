@@ -318,9 +318,11 @@ resource "helm_release" "n8n" {
       enabled            = true
       workerReplicaCount = var.n8n_worker_keda_min_replicas
       workerConcurrency  = var.n8n_worker_concurrency
-      # Worker-only env, appended after config.extraEnv in the worker container
-      # and nowhere else. Distinct from n8n_extra_env, which reaches main and
-      # webhook pods too.
+      # Worker-only env, appended after config.extraEnv in worker containers and
+      # nowhere else. Distinct from n8n_extra_env, which reaches main and webhook
+      # pods too. "Worker" here covers every worker: the chart renders the
+      # unlabelled deployment and each pool from one shared pod template, so this
+      # lands in all of them, with a pool's own extraEnv applied afterwards.
       workerExtraEnv = var.n8n_worker_extra_env
       # One additional worker Deployment and ScaledObject per pool. Empty list
       # on the default path, which renders nothing. See worker-pools.tf.

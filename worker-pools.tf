@@ -42,6 +42,17 @@ locals {
         # Same threshold the module gives the default worker's scaler, so a
         # pool's queue depth is read on the same scale as the default queue's.
         jobsPerReplica = var.n8n_worker_keda_jobs_per_replica
+
+        # The same TLS and AUTH metadata the default worker's two triggers
+        # carry (see the merge sites in n8n.tf). The chart builds a pool's
+        # triggers itself from the queue name, so this is the only route the
+        # metadata has into them, and without it a pool's scaler talks
+        # plaintext to a TLS-only endpoint: KEDA hangs on `connection to redis
+        # failed: i/o timeout`, the HPA reports <unknown>, and the pool sits at
+        # min_replicas forever with nothing crashing to announce it. Empty on a
+        # deployment without transit encryption or AUTH, and the chart guards
+        # the block with `with`, so it renders nothing on that path.
+        triggerMetadata = local.keda_redis_auth_metadata
       }
     }
   ]
