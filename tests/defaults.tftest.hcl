@@ -4308,7 +4308,7 @@ run "keda_triggers_carry_tls_and_auth_when_enabled" {
 
   assert {
     condition     = local.keda_redis_auth_metadata["enableTLS"] == "true"
-    error_message = "KEDA's Redis trigger must enable TLS when the backend is TLS-only, otherwise the metric read hangs until it times out and the HPA reports <unknown>."
+    error_message = "KEDA's Redis trigger must enable TLS when the backend is TLS-only, otherwise the metric read hangs until it times out and the ScaledObject goes READY=False while the workers freeze at their current replica count."
   }
 
   # passwordFromEnv names an environment variable; KEDA resolves it against the

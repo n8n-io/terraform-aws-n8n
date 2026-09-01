@@ -487,8 +487,16 @@ resource "helm_release" "n8n" {
     # the ScaledObject). Both keys are needed and TLS is the one that has to
     # land: without it KEDA opens a plaintext connection to a TLS-only endpoint
     # and hangs on `connection to redis failed: i/o timeout` before it ever
-    # reaches authentication. The HPA then reports `<unknown>` and workers
-    # freeze at their current replica count, which nothing crashes to announce.
+    # reaches authentication, and workers freeze at their current replica count,
+    # which nothing crashes to announce.
+    #
+    # To tell the two states apart, read the ScaledObject's READY condition and
+    # the KEDA operator log, not `kubectl get hpa`. Measured on a live TLS
+    # cluster, the HPA TARGETS column showed `<unknown>` for every worker HPA
+    # while scaling was demonstrably working, and went on showing it once a
+    # scaler was deliberately broken, so it distinguishes nothing in either
+    # direction. A broken scaler reads READY=False; a working one serves a value
+    # through /apis/external.metrics.k8s.io even when TARGETS says otherwise.
     keda = {
       enabled = true
       worker = {
