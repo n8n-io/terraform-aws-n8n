@@ -51,16 +51,32 @@ terraform apply
 ## Verifying the pools
 
 ```bash
-aws eks update-kubeconfig --name "$(terraform output -raw cluster_name)" --region us-east-1
+eval "$(terraform output -raw kubectl_config_command)"
 
 # One Deployment and one ScaledObject per pool, plus the unlabelled default.
 kubectl -n n8n get deploy,scaledobject -l app.kubernetes.io/component=worker
 
-# Each pooled worker reports its pool and queue on startup.
-kubectl -n n8n logs -l n8n.io/pool=gpu -c n8n-worker | grep -E '^ \* (Pool|Queue)'
+# Each pooled worker reports its pool and queue on startup. The chart labels
+# pooled resources n8n.io/worker-pool.
+kubectl -n n8n logs -l n8n.io/worker-pool=gpu -c n8n-worker | grep -E '^ \* (Pool|Queue)'
 ```
 
 The pools also appear in the n8n UI under **Settings, Workers**, which shows each worker's pool and queue, and in a project's **Worker Pools** settings once a worker for that pool is running.
+
+### Checking a pool's autoscaler
+
+A pool that cannot reach Redis does not crash. It sits at its `min_replicas` and the queue simply never drains, so it is worth knowing which signal actually tells you.
+
+```bash
+# READY=True is the one to trust. A scaler that cannot reach Redis reads False.
+kubectl -n n8n get scaledobject
+
+# Queue depth as KEDA sees it, per pool.
+kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/n8n/\
+s0-redis-bull-jobs-gpu-wait?labelSelector=scaledobject.keda.sh/name=n8n-worker-gpu"
+```
+
+Do not read `kubectl get hpa` for this. Its TARGETS column shows `<unknown>` for a KEDA-backed worker HPA whether the scaler is healthy or broken, so it gives a false alarm either way. When something is genuinely wrong, `kubectl -n keda logs -l app=keda-operator` says so in as many words, usually `connection to redis failed: i/o timeout`.
 
 ## Post-deployment
 
