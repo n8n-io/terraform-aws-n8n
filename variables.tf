@@ -3122,14 +3122,18 @@ variable "n8n_worker_pools" {
   }
 
   validation {
-    # The two checks n8n_extra_env and n8n_worker_extra_env already make on
-    # their own lists, applied per pool so the three inputs behave alike.
+    # The same check n8n_extra_env and n8n_worker_extra_env make on their own
+    # lists, applied per pool so the three inputs behave alike. The padded case
+    # matters as much as the empty one: a name like " N8N_ENCRYPTION_KEY " is not
+    # an exact match for anything in local.n8n_managed_env_names, so it slips
+    # past the reserved-name guard below and past the duplicate check, then
+    # renders as a distinct env var Kubernetes rejects at apply.
     condition = alltrue(flatten([
       for p in var.n8n_worker_pools : [
-        for e in p.extra_env : trimspace(e.name) != ""
+        for e in p.extra_env : e.name != "" && e.name == trimspace(e.name)
       ]
     ]))
-    error_message = "n8n_worker_pools extra_env entries must each have a non-empty name."
+    error_message = "n8n_worker_pools extra_env entries must each have a non-empty name with no leading or trailing whitespace. A padded name would bypass the duplicate and module-managed guards while rendering as a distinct, ignored env var."
   }
 
   validation {

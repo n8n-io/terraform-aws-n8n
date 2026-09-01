@@ -9838,12 +9838,21 @@ run "worker_pools_reject_a_memory_quantity_the_capacity_model_cannot_read" {
   expect_failures = [var.n8n_worker_pools]
 }
 
-# The can() guard in scaling.tf stays as defence in depth behind those two
-# validations. This proves it still holds on the one path validation cannot
-# reach: a pool that overrides nothing inherits the module-wide quantity, so an
-# unreadable value there has to silence the model for the pools too rather than
-# counting them at zero.
-run "capacity_model_goes_unreadable_when_an_inherited_quantity_is_unparseable" {
+# The module-wide quantity a pool inherits when it overrides nothing is rejected
+# by its own validation, before the capacity model is reached. Worth stating
+# plainly what this does and does not show: variable validation runs ahead of
+# locals, so the plan halts here and local.n8n_cpu_requests_readable is never
+# evaluated. It does not exercise the can() guard in scaling.tf.
+#
+# That guard is now unreachable through any input path. All four contributors to
+# local.n8n_cpu_requests carry this same regex, as do the pool overrides since
+# the validations above, and every string matching it survives the model's
+# tonumber(trimsuffix(q, "m")). It was reachable before the pool overrides were
+# validated. Keeping it is deliberate defence in depth against a future
+# contributor arriving unvalidated, because the failure it prevents is a
+# capacity check that passes vacuously for every pod family rather than only for
+# the input at fault.
+run "module_wide_cpu_request_rejects_an_unparseable_quantity_a_pool_would_inherit" {
   command = plan
 
   variables {
@@ -9962,6 +9971,23 @@ run "worker_pools_reject_a_blank_extra_env_name" {
 
   variables {
     n8n_worker_pools = [{ name = "gpu", extra_env = [{ name = "  ", value = "x" }] }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+# The padded case, which is the one that actually gets past the other guards: a
+# padded reserved name is not an exact match for anything in
+# local.n8n_managed_env_names, so without this it would clear the module-managed
+# check and the duplicate check and only fail at apply.
+run "worker_pools_reject_a_whitespace_padded_extra_env_name" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{
+      name      = "gpu"
+      extra_env = [{ name = " N8N_ENCRYPTION_KEY ", value = "x" }]
+    }]
   }
 
   expect_failures = [var.n8n_worker_pools]
