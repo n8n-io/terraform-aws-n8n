@@ -645,11 +645,18 @@ locals {
     o.value == null ? { name = o.name } : { name = o.name, value = o.value }
   ]
 
-  n8n_dns_config = var.n8n_dns_config == null ? null : {
+  n8n_dns_config_stripped = var.n8n_dns_config == null ? {} : {
     for k, v in {
       nameservers = var.n8n_dns_config.nameservers
       searches    = var.n8n_dns_config.searches
       options     = length(local.n8n_dns_config_options) == 0 ? null : local.n8n_dns_config_options
     } : k => v if v != null
   }
+
+  # Collapsed to null when nothing survives the stripping, so a caller passing
+  # `n8n_dns_config = {}` (or all-null attributes) omits the dnsConfig key from
+  # the Helm values entirely rather than rendering `dnsConfig: {}`, keeping the
+  # variable's "null omits the block entirely" promise true for every
+  # equivalent-to-unset shape.
+  n8n_dns_config = length(local.n8n_dns_config_stripped) == 0 ? null : local.n8n_dns_config_stripped
 }

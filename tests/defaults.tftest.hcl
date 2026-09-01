@@ -9276,6 +9276,46 @@ run "n8n_dns_config_accepts_an_ndots_override" {
   }
 }
 
+run "n8n_dns_config_empty_object_resolves_to_null" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {}
+  }
+
+  assert {
+    condition     = local.n8n_dns_config == null
+    error_message = "local.n8n_dns_config must collapse an empty object (all attributes unset) to null, so the dnsConfig key is omitted from the Helm values entirely rather than rendering `dnsConfig: {}`. The variable's description promises that an unset config omits the block."
+  }
+}
+
+run "n8n_dns_config_accepts_ipv4_and_ipv6_nameservers" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      nameservers = ["10.0.0.2", "fd00:10::a"]
+    }
+  }
+
+  assert {
+    condition     = length(local.n8n_dns_config.nameservers) == 2
+    error_message = "local.n8n_dns_config must carry through valid IPv4 and IPv6 nameservers unchanged."
+  }
+}
+
+run "n8n_dns_config_rejects_a_non_ip_nameserver" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      nameservers = ["dns.example.com"]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
 run "n8n_dns_config_rejects_more_than_three_nameservers" {
   command = plan
 

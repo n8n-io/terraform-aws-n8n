@@ -2912,6 +2912,9 @@ variable "n8n_dns_config" {
     name's resolution, so if you add your own single-label service references,
     either write them as FQDNs or leave this unset.
 
+    Nameservers are validated as plain IPv4 or IPv6 addresses, at most 3,
+    matching the limits the Kubernetes pod spec enforces at admission.
+
     Search domains are validated to Kubernetes' relaxed rules
     (RelaxedDNSSearchValidation, on by default since 1.33 and GA in 1.34):
     lowercase RFC 1123 subdomains of at most 253 characters, underscores
@@ -2932,47 +2935,49 @@ variable "n8n_dns_config" {
 
   default = null
 
+  # All four guard-style conditions below are written as `guard ? body : true`
+  # rather than `guard-inverted || body`, per AGENTS.md's consistency rule: the
+  # null guard gates the attribute access structurally rather than relying on
+  # short-circuit evaluation.
   validation {
-    condition = (
-      var.n8n_dns_config == null ||
-      try(length(coalesce(var.n8n_dns_config.nameservers, [])), 0) <= 3
+    condition = var.n8n_dns_config == null ? true : (
+      length(coalesce(var.n8n_dns_config.nameservers, [])) <= 3
     )
     error_message = "n8n_dns_config.nameservers accepts at most 3 entries: the Kubernetes pod spec rejects more, and the kubelet reports it as a pod-level validation failure rather than a Helm error, which is slow to diagnose."
   }
 
   validation {
-    condition = (
-      var.n8n_dns_config == null ||
-      (
-        length(coalesce(var.n8n_dns_config.searches, [])) <= 32 &&
-        length(join(" ", coalesce(var.n8n_dns_config.searches, []))) <= 2048
-      )
+    condition = var.n8n_dns_config == null ? true : alltrue([
+      for ns in coalesce(var.n8n_dns_config.nameservers, []) :
+      can(cidrhost("${ns}/32", 0)) || can(cidrhost("${ns}/128", 0))
+    ])
+    error_message = "n8n_dns_config.nameservers entries must each be a plain IPv4 or IPv6 address, without a port, prefix length or hostname. The Kubernetes API server validates each entry as an IP at admission, so a malformed one otherwise surfaces as a rejected pod spec rather than a Helm error."
+  }
+
+  validation {
+    condition = var.n8n_dns_config == null ? true : (
+      length(coalesce(var.n8n_dns_config.searches, [])) <= 32 &&
+      length(join(" ", coalesce(var.n8n_dns_config.searches, []))) <= 2048
     )
     error_message = "n8n_dns_config.searches accepts at most 32 entries totalling 2048 characters (the API server measures the list joined by single spaces, as counted here). Clusters older than 1.26, where the ExpandedDNSConfig feature gate was still off by default, cap this far lower at 6 entries and 256 characters, so stay under those if you target one."
   }
 
   validation {
-    condition = (
-      var.n8n_dns_config == null ||
-      alltrue([
-        for s in coalesce(var.n8n_dns_config.searches, []) :
-        s == "." || (
-          length(trimsuffix(s, ".")) <= 253 &&
-          can(regex("^_?[a-z0-9]([-_a-z0-9]*[a-z0-9])?(\\._?[a-z0-9]([-_a-z0-9]*[a-z0-9])?)*\\.?$", s))
-        )
-      ])
-    )
+    condition = var.n8n_dns_config == null ? true : alltrue([
+      for s in coalesce(var.n8n_dns_config.searches, []) :
+      s == "." || (
+        length(trimsuffix(s, ".")) <= 253 &&
+        can(regex("^_?[a-z0-9]([-_a-z0-9]*[a-z0-9])?(\\._?[a-z0-9]([-_a-z0-9]*[a-z0-9])?)*\\.?$", s))
+      )
+    ])
     error_message = "n8n_dns_config.searches entries must each be a lowercase RFC 1123 subdomain of at most 253 characters, with underscores permitted and a bare \".\" or a single trailing dot accepted. This matches Kubernetes' relaxed search-path validation (RelaxedDNSSearchValidation: on by default since 1.33, GA in 1.34); clusters on 1.32 or older validate strictly at admission and additionally reject \".\" and any underscore, so avoid both if you target one. The plan-time check exists because a malformed entry otherwise surfaces as a failed rollout rather than a Helm error."
   }
 
   validation {
-    condition = (
-      var.n8n_dns_config == null ||
-      alltrue([
-        for o in coalesce(var.n8n_dns_config.options, []) :
-        o.name != "ndots" || (o.value != null && can(regex("^[0-9]+$", o.value)) && tonumber(o.value) <= 15)
-      ])
-    )
+    condition = var.n8n_dns_config == null ? true : alltrue([
+      for o in coalesce(var.n8n_dns_config.options, []) :
+      o.name != "ndots" || (o.value != null && can(regex("^[0-9]+$", o.value)) && tonumber(o.value) <= 15)
+    ])
     error_message = "n8n_dns_config: the ndots option must carry a whole number between 0 and 15, written as a string (\"1\", not \"1.5\"). glibc parses ndots with strtol and silently ignores a fractional, non-numeric or out-of-range value, falling back to its default of 1, which looks like the setting worked while leaving resolution behaviour unchanged."
   }
 }
