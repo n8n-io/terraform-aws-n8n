@@ -7,15 +7,22 @@
 #
 # Production usage of examples/large/ is the Route53 path: set route53_zone_id
 # and the module issues an ACM cert and writes the alias record automatically.
-# We deliberately use the BYO-cert path here (certificate_arn = stub) because
-# the module's dns.tf does `for_each` over
-# aws_acm_certificate.n8n[0].domain_validation_options, an attribute that is
-# unknown at plan time under a mocked AWS provider. mock_resource defaults and
-# override_resource both silently no-op for this specific computed-set-of-
-# object attribute (verified locally with Terraform 1.15.x). The BYO-cert
-# branch of dns.tf is gated by `local.dns_automated = var.route53_zone_id !=
-# null`, so leaving route53_zone_id null and supplying certificate_arn keeps
-# the for_each empty and unblocks the rest of the architecture asserts below.
+# We use the BYO-cert path here (certificate_arn = stub), gated by
+# `local.dns_automated = var.route53_zone_id != null`, so leaving
+# route53_zone_id null and supplying certificate_arn exercises that branch.
+#
+# This was originally a workaround rather than a choice: dns.tf used to
+# `for_each` over aws_acm_certificate.n8n[0].domain_validation_options, which is
+# unknown at plan time under a mocked provider, and mock_resource and
+# override_resource both silently no-op for that computed-set-of-object
+# attribute. That stopped being true at c914416 (#58, multi-hostname
+# certificates), which rekeyed the validation records off local.acm_domain_names
+# so the for_each keys come from the domain inputs and only the record values
+# stay computed. examples/worker-pools plans the Route53 path under mocks today,
+# which is the empirical proof.
+#
+# The path stays BYO-cert here because it is a branch worth covering, not
+# because the Route53 one is blocked.
 
 mock_provider "aws" {
   override_data {

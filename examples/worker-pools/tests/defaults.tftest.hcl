@@ -27,9 +27,12 @@ variables {
 #
 # Every run here is `command = plan`, and the plan covers the child module on
 # the Route53 path: the variables block above sets a non-null route53_zone_id
-# and no certificate_arn, and the mocked provider supplies the ACM
-# domain_validation_options that dns.tf builds its records from. A run whose
-# plan errors fails the run, so this is real coverage rather than a formality.
+# and no certificate_arn. That plans because dns.tf keys its validation records
+# off local.acm_domain_names, which is derived from the domain inputs, while the
+# record values themselves stay `(known after apply)`, which for_each permits.
+# Nothing populates the certificate's computed domain_validation_options, and
+# nothing needs to. A run whose plan errors fails the run, so this is real
+# coverage rather than a formality.
 #
 # What that buys is the plan itself plus asserts on this example's own inputs
 # and locals. Asserts that need to reach inside the module still belong at the
