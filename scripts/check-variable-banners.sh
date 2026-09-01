@@ -39,7 +39,7 @@ FILES=(variables.tf outputs.tf)
 # controllers" / "Chart repositories" / "Chart versions", and predated the
 # "External Secrets" section, so this check failed on an unmodified checkout
 # and `task ci` was red on main for everyone.
-VARIABLE_BANNERS=("Common" "Foundation inputs" "EKS cluster" "Ingress" "Nodes" "Cluster controllers" "Chart repositories" "Chart versions" "n8n resource requests and limits" "Execution settings" "Graceful shutdown" "Task runners" "RDS PostgreSQL" "ElastiCache Redis" "S3" "HPA: main pods" "HPA: webhook processor pods" "Observability" "Community packages" "External Secrets" "KEDA: worker pods")
+VARIABLE_BANNERS=("Common" "Foundation inputs" "EKS cluster" "Ingress" "Nodes" "Cluster controllers" "Chart repositories" "Chart versions" "n8n resource requests and limits" "Execution settings" "Graceful shutdown" "Task runners" "RDS PostgreSQL" "ElastiCache Redis" "S3" "HPA: main pods" "HPA: webhook processor pods" "Observability" "Community packages" "External Secrets" "KEDA: worker pods" "Pod DNS")
 OUTPUT_BANNERS=("App DNS" "Secrets" "Infrastructure")
 BANNER_LOOSE_RE='^#[[:space:]]+[─—-]'
 BANNER_STRICT_RE='^# ── (.+) ─{2,}$'

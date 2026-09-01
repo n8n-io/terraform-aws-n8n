@@ -9236,3 +9236,220 @@ run "db_postgresdb_connection_timeout_ms_rejects_a_node_timer_overflow" {
 
   expect_failures = [var.db_postgresdb_connection_timeout_ms]
 }
+
+# ── Pod DNS (n8n_dns_config) ──────────────────────────────────────────────────
+# Plan-time variable-contract assertions only, per AGENTS.md's documented mock
+# provider limitation: helm_release.values is unknown at plan time, so the
+# rendered dnsConfig cannot be asserted on here.
+
+run "n8n_dns_config_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_dns_config == null
+    error_message = "n8n_dns_config must default to null so Kubernetes' own DNS defaults apply unless a caller opts in."
+  }
+
+  assert {
+    condition     = local.n8n_dns_config == null
+    error_message = "local.n8n_dns_config must resolve to null when the variable is unset, so the dnsConfig key is omitted entirely rather than rendering an empty map."
+  }
+}
+
+run "n8n_dns_config_accepts_an_ndots_override" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      options = [{ name = "ndots", value = "1" }]
+    }
+  }
+
+  assert {
+    condition     = local.n8n_dns_config.options[0].name == "ndots" && local.n8n_dns_config.options[0].value == "1"
+    error_message = "local.n8n_dns_config must carry through a valid ndots option unchanged."
+  }
+
+  assert {
+    condition     = !contains(keys(local.n8n_dns_config), "nameservers") && !contains(keys(local.n8n_dns_config), "searches")
+    error_message = "local.n8n_dns_config must omit nameservers/searches keys entirely when unset, not render them as null: the chart's bare toYaml would emit `nameservers: null`, which the Kubernetes API server rejects."
+  }
+}
+
+run "n8n_dns_config_empty_object_resolves_to_null" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {}
+  }
+
+  assert {
+    condition     = local.n8n_dns_config == null
+    error_message = "local.n8n_dns_config must collapse an empty object (all attributes unset) to null, so the dnsConfig key is omitted from the Helm values entirely rather than rendering `dnsConfig: {}`. The variable's description promises that an unset config omits the block."
+  }
+}
+
+run "n8n_dns_config_accepts_ipv4_and_ipv6_nameservers" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      nameservers = ["10.0.0.2", "fd00:10::a"]
+    }
+  }
+
+  assert {
+    condition     = length(local.n8n_dns_config.nameservers) == 2
+    error_message = "local.n8n_dns_config must carry through valid IPv4 and IPv6 nameservers unchanged."
+  }
+}
+
+run "n8n_dns_config_rejects_a_non_ip_nameserver" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      nameservers = ["dns.example.com"]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_rejects_more_than_three_nameservers" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      nameservers = ["10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5"]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_rejects_a_non_numeric_ndots_value" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      options = [{ name = "ndots", value = "many" }]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_rejects_an_out_of_range_ndots_value" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      options = [{ name = "ndots", value = "16" }]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_rejects_ndots_without_a_value" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      options = [{ name = "ndots" }]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_rejects_a_fractional_ndots_value" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      options = [{ name = "ndots", value = "1.5" }]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_accepts_valid_search_domains" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      searches = ["n8n.svc.cluster.local", "svc.cluster.local", "example.com."]
+    }
+  }
+
+  assert {
+    condition     = length(local.n8n_dns_config.searches) == 3
+    error_message = "local.n8n_dns_config must carry through a valid searches list unchanged."
+  }
+}
+
+run "n8n_dns_config_accepts_relaxed_search_domains" {
+  command = plan
+
+  variables {
+    # The three shapes Kubernetes' relaxed validation accepts beyond strict
+    # DNS-1123: an underscore-containing domain, a bare ".", and a label
+    # longer than 63 characters (IsDNS1123Subdomain caps the total at 253
+    # but never the individual label).
+    n8n_dns_config = {
+      searches = [
+        "_msdcs.corp.example.com",
+        ".",
+        "${join("", [for i in range(70) : "a"])}.example.com",
+      ]
+    }
+  }
+
+  assert {
+    condition     = length(local.n8n_dns_config.searches) == 3
+    error_message = "local.n8n_dns_config must carry through relaxed-mode search domains unchanged."
+  }
+}
+
+run "n8n_dns_config_rejects_more_than_thirty_two_search_domains" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      searches = [for i in range(33) : "search-${i}.example.com"]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_rejects_an_oversized_search_list" {
+  command = plan
+
+  variables {
+    # 30 entries of ~241 valid characters each joins to roughly 7,200, well past
+    # the 2048-character ceiling, while staying under the 32-entry limit and the
+    # 253-character per-entry limit so this run pins the joined-length branch
+    # rather than the count or syntax branches.
+    n8n_dns_config = {
+      searches = [for i in range(30) : "${i}.${join(".", [for j in range(24) : "abcdefghi"])}"]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
+
+run "n8n_dns_config_rejects_a_malformed_search_domain" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      searches = ["Example.COM"]
+    }
+  }
+
+  expect_failures = [var.n8n_dns_config]
+}
