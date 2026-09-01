@@ -9867,10 +9867,10 @@ run "module_wide_cpu_request_rejects_an_unparseable_quantity_a_pool_would_inheri
 # default worker's two triggers carry. The chart builds a pool's triggers from
 # the queue name itself, so keda.triggerMetadata is the only route in, and
 # without it a pool's ScaledObject opens a plaintext connection to a TLS-only
-# endpoint: KEDA hangs on `connection to redis failed: i/o timeout`, the HPA
-# reports <unknown>, and the pool sits at min_replicas with nothing crashing to
-# announce it. That failure is invisible to a plan and to a non-TLS example,
-# which is why it is asserted here.
+# endpoint: KEDA hangs on `connection to redis failed: i/o timeout`, the
+# ScaledObject goes READY=False, and the pool sits at min_replicas with nothing
+# crashing to announce it. That failure is invisible to a plan and to a non-TLS
+# example, which is why it is asserted here.
 run "worker_pools_carry_the_redis_tls_metadata_on_their_scalers" {
   command = plan
 
