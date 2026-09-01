@@ -25,14 +25,21 @@ variables {
 
 # NOTE on test coverage:
 #
-# Only variable-validation tests run here today. Architecture asserts that
-# would require a full `command = plan` over the example are doable via the
-# same BYO-cert workaround used by examples/large/tests/defaults.tftest.hcl
-# (plumb certificate_arn through, set it to a stub in tests, leave
-# route53_zone_id null so the module's dns.tf for_each over
-# domain_validation_options never instantiates), tracked as a separate
-# follow-up. The module itself is already exercised by tests/defaults.tftest.hcl
-# at the repo root, which mocks the lower-level resources directly.
+# Every run here is `command = plan`, and the plan covers the child module on
+# the Route53 path: the variables block above sets a non-null route53_zone_id
+# and no certificate_arn, and the mocked provider supplies the ACM
+# domain_validation_options that dns.tf builds its records from. A run whose
+# plan errors fails the run, so this is real coverage rather than a formality.
+#
+# What that buys is the plan itself plus asserts on this example's own inputs
+# and locals. Asserts that need to reach inside the module still belong at the
+# repo root in tests/defaults.tftest.hcl, which mocks the lower-level resources
+# directly and can see the module's locals.
+#
+# examples/large/tests/defaults.tftest.hcl takes the opposite approach for its
+# own reasons: it pins route53_zone_id to null and supplies a certificate_arn
+# stub so it exercises the BYO-cert branch. That is a deliberate choice about
+# which branch to cover, not a workaround this file needs.
 
 run "cluster_name_length_validation_rejects_long_names" {
   command = plan
