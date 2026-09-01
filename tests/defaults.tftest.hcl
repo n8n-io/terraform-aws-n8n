@@ -9999,12 +9999,54 @@ run "worker_pools_reject_duplicate_extra_env_names_within_a_pool" {
   variables {
     n8n_worker_pools = [{
       name = "gpu"
+      # Deliberately not a module-managed name: with one of those this run
+      # would fail on the reserved-name rule and never reach the duplicate
+      # check it exists to prove.
       extra_env = [
-        { name = "N8N_LOG_LEVEL", value = "debug" },
-        { name = "N8N_LOG_LEVEL", value = "info" },
+        { name = "GPU_DEVICE_ORDER", value = "0" },
+        { name = "GPU_DEVICE_ORDER", value = "1" },
       ]
     }]
   }
 
   expect_failures = [var.n8n_worker_pools]
+}
+
+# Kubernetes requires C_IDENTIFIER for env var names. Without these two the name
+# is only rejected when the API server admits the pod template, which surfaces
+# as a failed Helm release rather than as a bad input.
+run "worker_extra_env_rejects_a_non_identifier_name" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [{ name = "my-var", value = "x" }]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
+
+run "worker_pools_reject_a_non_identifier_extra_env_name" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{ name = "gpu", extra_env = [{ name = "2FA_MODE", value = "x" }] }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_accept_a_conventional_extra_env_name" {
+  command = plan
+
+  variables {
+    n8n_worker_pools = [{
+      name      = "gpu"
+      extra_env = [{ name = "GPU_DEVICE_ORDER", value = "0" }]
+    }]
+  }
+
+  assert {
+    condition     = local.n8n_worker_groups[0].extraEnv[0].name == "GPU_DEVICE_ORDER"
+    error_message = "a conventional env name must survive the new grammar check and reach the worker group"
+  }
 }

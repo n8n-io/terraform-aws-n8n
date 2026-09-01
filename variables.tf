@@ -3015,6 +3015,18 @@ variable "n8n_worker_extra_env" {
   }
 
   validation {
+    # C_IDENTIFIER, which is what Kubernetes requires of an env var name. Without
+    # this a name like "my-var" or "2FA" plans clean and is rejected only when
+    # the API server admits the pod template, which surfaces as a failed Helm
+    # release rather than as a bad input. Applied to this input and to the pool
+    # extra_env because both are new here; n8n_extra_env is deliberately left
+    # alone, since tightening an input callers already use would turn a working
+    # configuration into a plan-time failure on upgrade.
+    condition     = alltrue([for e in var.n8n_worker_extra_env : can(regex("^[A-Za-z_][A-Za-z0-9_]*$", e.name))])
+    error_message = "Each n8n_worker_extra_env name must be a valid Kubernetes environment variable name: letters, digits and underscores only, not starting with a digit (for example N8N_LOG_LEVEL). Hyphens, dots and leading digits are rejected by the API server when the pod template is admitted."
+  }
+
+  validation {
     condition = alltrue([
       for e in var.n8n_worker_extra_env : !(
         contains(local.n8n_managed_env_names, e.name) ||
@@ -3142,5 +3154,17 @@ variable "n8n_worker_pools" {
       length(distinct([for e in p.extra_env : e.name])) == length(p.extra_env)
     ])
     error_message = "An n8n_worker_pools entry has duplicate extra_env names. Within one pool each variable may be set once; a repeat is silently dropped by the last-wins merge rather than reported."
+  }
+
+  validation {
+    # Same C_IDENTIFIER rule n8n_worker_extra_env enforces, for the same reason:
+    # an invalid name is caught by the API server when the pod template is
+    # admitted, which surfaces as a failed Helm release rather than a bad input.
+    condition = alltrue(flatten([
+      for p in var.n8n_worker_pools : [
+        for e in p.extra_env : can(regex("^[A-Za-z_][A-Za-z0-9_]*$", e.name))
+      ]
+    ]))
+    error_message = "Each n8n_worker_pools extra_env name must be a valid Kubernetes environment variable name: letters, digits and underscores only, not starting with a digit (for example N8N_LOG_LEVEL). Hyphens, dots and leading digits are rejected by the API server when the pod template is admitted."
   }
 }
