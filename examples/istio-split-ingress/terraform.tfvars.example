@@ -1,0 +1,70 @@
+# Copy this file to terraform.tfvars and fill in your values.
+
+# Hostname for the n8n editor UI. Served by the INTERNAL Istio gateway's NLB:
+# resolves to private addresses, reachable only from inside the VPC or over VPN.
+n8n_domain = "n8n.example.com"
+
+# Route53 hosted zone ID for the parent domain (e.g. example.com). This example
+# issues one ACM certificate covering both hostnames, validates it, and writes
+# both alias A-records here: single terraform apply, no manual DNS steps.
+route53_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# n8n Enterprise license activation key. Get one at https://n8n.io/pricing.
+n8n_license_key = "your-enterprise-license-key-here"
+
+# Label prepended to n8n_domain for the PUBLIC webhook host. The default gives
+# hooks.n8n.example.com, served by the internet-facing gateway's NLB.
+# webhook_subdomain = "hooks"
+
+# Where TLS terminates. "nlb" (the default) mirrors examples/split-ingress
+# most closely: both NLBs terminate TLS with the module's ACM certificate, and
+# Envoy receives plain HTTP. "gateway" has Envoy terminate TLS itself instead,
+# from a BYO PEM cert/key pair (see the four gateway_tls_* variables below) -
+# needed because an ACM public certificate's private key cannot be exported.
+# istio_tls_mode = "nlb"
+
+# Required only when istio_tls_mode = "gateway". PEM-encoded cert/key pairs
+# for each hostname; Envoy terminates TLS itself from these instead of the
+# module's ACM certificate.
+# gateway_tls_public_cert_pem   = file("hooks.n8n.example.com.crt")
+# gateway_tls_public_key_pem    = file("hooks.n8n.example.com.key")
+# gateway_tls_internal_cert_pem = file("n8n.example.com.crt")
+# gateway_tls_internal_key_pem  = file("n8n.example.com.key")
+
+# NOT SUPPORTED here: AWS WAFv2 cannot attach to a Network Load Balancer.
+# examples/split-ingress accepts waf_acl_arn for its public ALB; this
+# example's equivalent variable exists only to fail loudly instead of
+# silently no-op-ing if you carry the setting over during a migration.
+# waf_acl_arn = null
+
+# Restrict the internal NLB further, via a security group this example
+# creates: your VPN pool or bastion range. Empty allows anything that can
+# route to the private subnets.
+# admin_allowed_cidr_blocks = ["10.20.0.0/16"]
+
+# AWS region. Change if you're deploying outside us-east-1.
+# aws_region = "eu-west-1"
+
+# EKS cluster name. Keep to 14 characters or fewer: ElastiCache cluster IDs
+# derived from this name are capped at 20 chars, and '-redis' consumes 6.
+# cluster_name = "n8n-cluster"
+
+# Version pin for the istio/base, istio/istiod and istio/gateway Helm charts.
+# 1.23.x-1.25.1 are known broken (chart values fail its own schema); verified
+# working range starts at 1.28.10. Verify against Istio's published
+# Kubernetes support matrix before bumping further.
+# istio_chart_version = "1.30.3"
+
+# Pin a concrete n8n version instead of the chart's floating `stable` tag.
+# n8n_image_tag = "2.33.1"
+
+# Extra AWS tags applied to every resource this example creates.
+# tags = {
+#   Environment = "production"
+#   Owner       = "platform-team"
+# }
+
+# Where n8n stores execution data. Default "database" keeps it in PostgreSQL.
+# See examples/split-ingress/terraform.tfvars.example for the full rationale;
+# unchanged here.
+# n8n_execution_data_storage_mode = "s3"

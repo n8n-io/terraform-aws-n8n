@@ -1,0 +1,69 @@
+# ── Internal gateway: webhooks + editor UI / REST API, VPN-only ─────────────
+# selector matches "istio: ingressgateway-internal", the label the internal
+# istio-ingressgateway-internal helm_release (gateways.tf) sets on its own,
+# separate Envoy pods. See templates/public.yaml for why the port number here
+# must track gateways.tf's service.ports mapping.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: n8n-internal
+  labels:
+    app.kubernetes.io/part-of: n8n-split-routes
+spec:
+  selector:
+    istio: {{ .Values.internal.gatewaySelector }}
+  servers:
+    - hosts:
+        - {{ .Values.internal.host | quote }}
+{{- if eq .Values.tlsMode "nlb" }}
+      port:
+        number: 8080
+        name: http
+        protocol: HTTP
+{{- else }}
+      port:
+        number: 8443
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE
+        credentialName: {{ .Values.internal.credentialSecretName | quote }}
+{{- end }}
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: n8n-internal
+  labels:
+    app.kubernetes.io/part-of: n8n-split-routes
+spec:
+  hosts:
+    - {{ .Values.internal.host | quote }}
+  gateways:
+    - n8n-internal
+  http:
+    # Webhook prefixes as their OWN http entry, declared first so Istio's
+    # in-order route evaluation matches them before the catch-all below.
+    # Without this, the catch-all would hand /webhook to n8n-main, which runs
+    # with production webhooks disabled, so the request falls through to the
+    # editor's SPA handler and returns 200 with an HTML body: an in-VPC
+    # caller delivering a webhook would read that as success while nothing
+    # executed. Same trap examples/split-ingress's internal ALB documents and
+    # guards against with the identical ordering.
+    - match:
+{{- range .Values.webhookPrefixes }}
+        - uri:
+            prefix: {{ . | quote }}
+{{- end }}
+      route:
+        - destination:
+            host: {{ printf "%s.%s.svc.cluster.local" .Values.webhookService.name .Release.Namespace }}
+            port:
+              number: {{ .Values.webhookService.port }}
+    # Catch-all last: editor UI and REST API. An http entry with no `match`
+    # field matches every remaining request, which is why this one has none.
+    - route:
+        - destination:
+            host: {{ printf "%s.%s.svc.cluster.local" .Values.mainService.name .Release.Namespace }}
+            port:
+              number: {{ .Values.mainService.port }}

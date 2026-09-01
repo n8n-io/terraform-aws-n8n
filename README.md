@@ -284,7 +284,7 @@ with the toggles above.
 
 ## Examples
 
-Ten runnable examples ship with the module: three sizing tiers (`small`, `medium`, `large`) on Route 53, two DNS-variant examples (`cloudflare`, `godaddy`) at `small` sizing, one topology-variant example (`split-ingress`) at `small` sizing, and four customer-managed-infrastructure examples (`customer-managed-redis`, `customer-managed-s3`, `customer-managed-cluster`, `customer-managed-everything`) at `small` sizing. Sizing decisions for `medium` and `large` are derived from internal load testing.
+Eleven runnable examples ship with the module: three sizing tiers (`small`, `medium`, `large`) on Route 53, two DNS-variant examples (`cloudflare`, `godaddy`) at `small` sizing, two topology-variant examples (`split-ingress`, `istio-split-ingress`) at `small` sizing, and four customer-managed-infrastructure examples (`customer-managed-redis`, `customer-managed-s3`, `customer-managed-cluster`, `customer-managed-everything`) at `small` sizing. Sizing decisions for `medium` and `large` are derived from internal load testing.
 
 | Dimension | [small](./examples/small/) (default) | [medium](./examples/medium/) | [large](./examples/large/) |
 | --- | --- | --- | --- |
@@ -315,6 +315,8 @@ Ten runnable examples ship with the module: three sizing tiers (`small`, `medium
 The DNS-variant examples (`cloudflare`, `godaddy`) are sizing-equivalent to `small` — they only swap the DNS provider for cert validation and the alias record.
 
 [`split-ingress`](./examples/split-ingress/) is also sizing-equivalent to `small`. It swaps the *topology* rather than the DNS provider: `create_ingress = false`, an internet-facing ALB serving only the webhook path prefixes (optionally behind a WAF), and an internal ALB serving the editor UI and REST API. It is the runnable version of the pattern described in the next section.
+
+[`istio-split-ingress`](./examples/istio-split-ingress/) is the same trust-boundary split for callers running Istio instead of an ALB Ingress Controller: two physically separate Istio ingress gateways, each behind its own Network Load Balancer, routed via a local `Gateway`/`VirtualService` Helm chart instead of `kubernetes_ingress_v1` resources. AWS WAFv2 cannot attach to a Network Load Balancer, so it has no WAF equivalent; see its README for that gap.
 
 [`customer-managed-redis`](./examples/customer-managed-redis/), [`customer-managed-s3`](./examples/customer-managed-s3/), [`customer-managed-cluster`](./examples/customer-managed-cluster/), and [`customer-managed-everything`](./examples/customer-managed-everything/) are also sizing-equivalent to `small`. The first three each provision a plain-Terraform stand-in for one piece of infrastructure a customer would already have (a Redis replication group with AUTH and TLS on, an S3 bucket with its own security configuration, or a full EKS cluster and node group) and point the module at it with `create_elasticache = false` / `create_s3_bucket = false` / `create_eks = false`, each doubling as a reference config for the matching row of the "Customer-managed infrastructure" section above. `customer-managed-everything` combines all three stand-ins plus a direct `modules/controllers` invocation, so every layer the module can create (cluster, database, cache, storage, and every cluster controller) is customer-managed at once. `customer-managed-redis` and `customer-managed-s3` are fully `terraform test`-covered under mocked providers; `customer-managed-cluster` and `customer-managed-everything` only have partial coverage (variable-validation assertions, not a full successful-plan assertion), a mocking limitation documented in each example's own `tests/defaults.tftest.hcl` and README.
 
@@ -1460,12 +1462,13 @@ require in queue mode. Nothing else has to be wired up: the bucket, the IAM
 policy, the Pod Identity role, and the `N8N_EXTERNAL_STORAGE_S3_*` connection
 already exist for binary data and are reused as-is.
 
-All ten examples expose this as a passthrough variable, each left at
+All eleven examples expose this as a passthrough variable, each left at
 `"database"` so they still run unchanged. Volume rises with the tier, but
 headroom falls with it: every example on a module-managed database at `small`
 sizing (`small`, `cloudflare`, `godaddy`, `split-ingress`,
-`customer-managed-redis`, `customer-managed-s3`, `customer-managed-cluster`)
-runs `db.t3.small` on 50 GB of gp2 with a 150 IOPS baseline, where sustained
+`istio-split-ingress`, `customer-managed-redis`, `customer-managed-s3`,
+`customer-managed-cluster`) runs `db.t3.small` on 50 GB of gp2 with a 150 IOPS
+baseline, where sustained
 execution-data writes burn burst credits and fill the volume, while `large`
 runs Aurora I/O-Optimized with no IOPS ceiling. So the smallest deployments are
 the ones that feel execution-data growth soonest, and reaching for `"s3"` there
