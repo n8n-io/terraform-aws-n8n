@@ -165,7 +165,7 @@ module "n8n" {
   # webhook) and ~9,200 client connections (460 pods x pool_size 20) against
   # PgBouncer's 12,000 budget (MAX_CLIENT_CONN 3,000 x 4 replicas, sized in
   # pgbouncer.tf to stay above this ceiling).
-  n8n_main_hpa_min_replicas = 6
+  n8n_main_hpa_min_replicas = var.n8n_main_hpa_min_replicas
   n8n_main_hpa_max_replicas = 60
 
   # ── Webhook processors ────────────────────────────────────────────────────────

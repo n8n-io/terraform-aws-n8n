@@ -149,3 +149,12 @@ run "customer_managed_node_desired_rejects_above_max" {
 
   expect_failures = [var.customer_managed_node_desired]
 }
+
+# n8n_main_hpa_min_replicas (passthrough to module "n8n", no local validation
+# block of its own) was tested directly against this rule: a plain, no-
+# failure `command = plan` run asserting its default hits the same two
+# unresolvable check blocks (eks.tf's existing_eks_cluster_kubernetes_version_matches,
+# storage.tf's existing_eks_cluster_needs_its_own_storage_toggle) as any other
+# ordinary plan here, regardless of the assertion's own correctness. It has
+# no validation block to drive an expect_failures run either. Not testable in
+# this file; covered at the repo root's tests/defaults.tftest.hcl instead.

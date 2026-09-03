@@ -42,6 +42,12 @@ variable "n8n_license_key" {
   sensitive   = true
 }
 
+variable "n8n_main_hpa_min_replicas" {
+  description = "Minimum (and therefore default) replica count for n8n main pods, passed straight through to the module's own n8n_main_hpa_min_replicas. Leave null (the default) to use the module's default of 2 (multi-main, needs an Enterprise/Startup license carrying feat:multipleMainInstances). Set to 1 to run a single main pod in plain queue mode instead, which only needs a Business-tier license: n8n's multi-main leader-election gate never engages at 1 replica."
+  type        = number
+  default     = null
+}
+
 variable "n8n_image_repository" {
   description = "Container image repository for the n8n application, without a tag (e.g. \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n\"). Leave null to use the Helm chart's own repository (docker.n8n.io/n8nio/n8n). Set this to run a custom image, for example one with community packages baked in so they are not reinstalled on every pod boot. The image must be pullable by the node group's IAM role (ECR in the same account is) or be public, otherwise name a dockerconfigjson secret in n8n_image_pull_secrets, and n8n_task_runner_image_tag usually has to be set alongside it."
   type        = string
