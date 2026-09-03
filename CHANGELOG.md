@@ -17,7 +17,11 @@ this project adheres to the stability contract in
   2) is unchanged and still requires that entitlement. The main-pod HPA's
   ceiling (`n8n_main_hpa_max_replicas`) is clamped to 1 whenever multi-main
   is disabled, regardless of its own value, so the HPA cannot scale a second,
-  un-electable main pod into duplicate scheduled/cron executions. See #117.
+  un-electable main pod into duplicate scheduled/cron executions. The
+  autoscaling-capacity advisory (`scaling.tf`) reads this same clamped
+  ceiling too, so a single-main plan with a high configured
+  `n8n_main_hpa_max_replicas` no longer reports a false "insufficient CPU"
+  warning against a ceiling the HPA can never actually reach. See #117.
 
 - Every shipped example now exposes `n8n_main_hpa_min_replicas` as a
   passthrough variable (`examples/small`, `medium`, `large`, `cloudflare`,

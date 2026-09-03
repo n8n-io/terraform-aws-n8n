@@ -7305,6 +7305,21 @@ run "pre_fix_main_hpa_maximum_warns" {
   expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
 }
 
+# Same oversized ceiling as the run above, but with single-main active: the
+# capacity model must read local.n8n_main_hpa_effective_max_replicas (clamped
+# to 1), not var.n8n_main_hpa_max_replicas directly, or this would still warn
+# against a ceiling the HPA can never actually reach (#117).
+run "single_main_clamp_prevents_a_false_capacity_warning" {
+  command = plan
+
+  variables {
+    n8n_main_hpa_min_replicas = 1
+    n8n_main_hpa_max_replicas = 20
+  }
+
+  # No expect_failures: the whole point is that this must NOT warn.
+}
+
 run "pre_fix_webhook_hpa_maximum_warns" {
   command = plan
 
