@@ -144,7 +144,7 @@ locals {
   # be schedulable at all, because each autoscaler can independently reach its
   # own maximum.
   n8n_peak_cpu_request_millis = local.n8n_cpu_requests_readable ? (
-    var.n8n_main_hpa_max_replicas * (local.n8n_cpu_request_millis["main"] + local.n8n_cpu_request_millis["task_runner"]) +
+    local.n8n_main_hpa_effective_max_replicas * (local.n8n_cpu_request_millis["main"] + local.n8n_cpu_request_millis["task_runner"]) +
     var.n8n_worker_keda_max_replicas * (local.n8n_cpu_request_millis["worker"] + local.n8n_cpu_request_millis["task_runner"]) +
     var.n8n_webhook_hpa_max_replicas * local.n8n_cpu_request_millis["webhook"]
   ) : 0
@@ -289,7 +289,7 @@ check "autoscaling_maxima_fit_node_group_capacity" {
     error_message = join("", [
       "Autoscaler maxima exceed the CPU the node group can ever schedule. At their ceilings the n8n pods ",
       "request ${local.n8n_peak_cpu_request_millis}m CPU ",
-      "(main ${var.n8n_main_hpa_max_replicas} × ${local.n8n_cpu_request_millis["main"] + local.n8n_cpu_request_millis["task_runner"]}m, ",
+      "(main ${local.n8n_main_hpa_effective_max_replicas} × ${local.n8n_cpu_request_millis["main"] + local.n8n_cpu_request_millis["task_runner"]}m, ",
       "worker ${var.n8n_worker_keda_max_replicas} × ${local.n8n_cpu_request_millis["worker"] + local.n8n_cpu_request_millis["task_runner"]}m, ",
       "webhook ${var.n8n_webhook_hpa_max_replicas} × ${local.n8n_cpu_request_millis["webhook"]}m), ",
       "but ${var.node_max} × ${var.node_instance_type} leaves only about ",
