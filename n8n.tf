@@ -568,6 +568,29 @@ resource "helm_release" "n8n" {
           { name = "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS", value = "true" },
           # Override the internally computed http://host:5678 URL so webhooks show the correct HTTPS address.
           { name = "WEBHOOK_URL", value = coalesce(var.n8n_webhook_url, "https://${local.n8n_domain}") },
+          # The editor's own base URL, and what n8n builds absolute non-webhook
+          # URLs from: UrlService.getInstanceBaseUrl() prefers
+          # N8N_EDITOR_BASE_URL and falls back to WEBHOOK_URL when it is unset.
+          # Above all it forms the OAuth2 credential redirect URI,
+          # <editor base>/rest/oauth2-credential/callback.
+          #
+          # Unset until now, which is harmless only while the two URLs agree.
+          # On a split hostname (n8n_webhook_url naming a second host, as
+          # examples/split-ingress does) the fallback labels the editor with
+          # the webhook hostname, and that callback 404s twice over: a split
+          # ingress routes only the webhook prefixes there, and the webhook
+          # processors serve no /rest routes even when reached. Webhook
+          # delivery keeps working throughout, which points the search at the
+          # wrong half. The chart cannot supply it either: it derives this from
+          # its own ingress host or from webhook.url, and this module sets
+          # neither (docs/helm-chart-coverage.md), so nothing emits it at all.
+          #
+          # n8n_domain rather than the webhook URL because n8n_domain is
+          # canonical: it is the name the editor is served on, what N8N_HOST
+          # already carries, and what n8n_additional_domains is defined
+          # against. Deployments where the two agree render the value n8n
+          # already resolves to today, so only a split hostname sees a change.
+          { name = "N8N_EDITOR_BASE_URL", value = "https://${local.n8n_domain}" },
           { name = "N8N_RUNNERS_TASK_REQUEST_TIMEOUT", value = tostring(var.n8n_task_runner_request_timeout) },
           # Keeps ElastiCache from dropping idle Redis subscriber connections under sustained load.
           # Without this, Bull detects dropped connections, emits queue errors, and pods crash.

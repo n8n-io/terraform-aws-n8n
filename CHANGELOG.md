@@ -212,6 +212,23 @@ this project adheres to the stability contract in
 
 ### Changed
 
+- **The module now sets `N8N_EDITOR_BASE_URL`** to `https://<n8n_domain>`,
+  emitted next to `WEBHOOK_URL` in the chart's `config.extraEnv`. The name was
+  already reserved in `local.n8n_managed_env_names` but never assigned, so
+  neither the module nor an operator (through `n8n_extra_env`, which rejects
+  reserved names) could set it, and n8n fell back to `WEBHOOK_URL` when
+  building the editor's base URL — including the OAuth2 credential callback.
+  Deployments where `n8n_webhook_url` names a different host than `n8n_domain`
+  previously advertised that callback on the webhook host, where it 404s: a
+  split ingress routes only the webhook prefixes there, and the webhook
+  processors serve no `/rest` routes even when reached. It now resolves to
+  `https://<n8n_domain>/rest/oauth2-credential/callback`.
+
+  **Upgrade note.** If `n8n_webhook_url` points at a different host than
+  `n8n_domain`, update the redirect URI registered with any OAuth2 provider to
+  the `n8n_domain` form above. Every other configuration renders the value n8n
+  already resolved to, so nothing changes there.
+
 - `db_postgresdb_pool_size` is now documented as a lazy per-process maximum,
   not as one connection per concurrent workflow or request. Size it from
   measured concurrent database operations and pool-wait time, then verify that
