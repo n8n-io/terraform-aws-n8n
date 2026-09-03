@@ -37,4 +37,10 @@ tags = {
 # section of the root README first, including the durability trade-off (the
 # bucket has no backups and no versioning) and the S3 lifecycle constraint.
 # n8n_execution_data_storage_mode = "s3"
+
+# Minimum (and default) replica count for n8n main pods. Leave commented to
+# use this example's own default of 3 (multi-main, needs an Enterprise/Startup
+# license carrying feat:multipleMainInstances). Set to 1 to run single-main
+# in plain queue mode instead, which only needs a Business-tier license.
+# n8n_main_hpa_min_replicas = 1
 # n8n_image_tag                   = "2.27.4"

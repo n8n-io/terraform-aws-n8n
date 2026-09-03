@@ -7485,6 +7485,61 @@ run "raised_floors_reach_the_module_owned_webhook_hpa" {
   }
 }
 
+# ── multiMain gated on replica count (#117) ──────────────────────────────────
+# n8n gates multi-main mode behind the feat:multipleMainInstances license
+# entitlement, which Business-tier licenses don't carry. n8n.tf's
+# multiMain.enabled reads local.n8n_multi_main_enabled, a pure function of
+# n8n_main_hpa_min_replicas with no resource dependency, so unlike most
+# helm_release.values wiring in this file it IS known at plan time under the
+# mock providers and directly asserts the real wiring, not just the variable
+# contract.
+
+run "main_hpa_min_replicas_default_enables_multi_main" {
+  command = plan
+
+  assert {
+    condition     = local.n8n_multi_main_enabled == true
+    error_message = "multiMain.enabled must stay true at the default n8n_main_hpa_min_replicas (2); this is the existing multi-main behavior and must not regress."
+  }
+
+  assert {
+    condition     = local.n8n_main_hpa_effective_max_replicas == var.n8n_main_hpa_max_replicas
+    error_message = "In multi-main mode the main HPA's effective ceiling must be the configured n8n_main_hpa_max_replicas (6 by default), unclamped."
+  }
+}
+
+run "main_hpa_min_replicas_one_disables_multi_main" {
+  command = plan
+
+  variables {
+    n8n_main_hpa_min_replicas = 1
+  }
+
+  assert {
+    condition     = local.n8n_multi_main_enabled == false
+    error_message = "multiMain.enabled must be false at n8n_main_hpa_min_replicas = 1, so a Business-tier license (no feat:multipleMainInstances) can run this module in single-main mode."
+  }
+
+  assert {
+    condition     = local.n8n_main_hpa_effective_max_replicas == 1
+    error_message = "Single-main mode must pin the main HPA's effective ceiling to 1 even though n8n_main_hpa_max_replicas defaults to 6, or the HPA could still scale a second, un-electable main pod into duplicate scheduled/cron executions."
+  }
+}
+
+run "main_hpa_min_replicas_one_clamps_an_explicit_max_replicas_too" {
+  command = plan
+
+  variables {
+    n8n_main_hpa_min_replicas = 1
+    n8n_main_hpa_max_replicas = 6
+  }
+
+  assert {
+    condition     = local.n8n_main_hpa_effective_max_replicas == 1
+    error_message = "The single-main clamp must override an explicitly-set n8n_main_hpa_max_replicas too, not just the default; the ceiling is not caller-overridable while multi-main is disabled."
+  }
+}
+
 # A floor above the ceiling is rejected by Kubernetes and KEDA at apply, which is
 # a slow way to find a typo now that the floors also drive spec.replicas.
 

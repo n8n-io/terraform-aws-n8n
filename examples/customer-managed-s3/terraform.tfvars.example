@@ -22,3 +22,9 @@ n8n_license_key = "your-enterprise-license-key-here"
 #   Environment = "production"
 #   Owner       = "platform-team"
 # }
+
+# Minimum (and default) replica count for n8n main pods. Leave commented to
+# use the module's default of 2 (multi-main, needs an Enterprise/Startup
+# license carrying feat:multipleMainInstances). Set to 1 to run single-main
+# in plain queue mode instead, which only needs a Business-tier license.
+# n8n_main_hpa_min_replicas = 1

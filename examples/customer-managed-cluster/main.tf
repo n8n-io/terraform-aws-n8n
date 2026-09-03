@@ -276,6 +276,7 @@ module "n8n" {
 
   n8n_additional_domains          = var.n8n_additional_domains
   n8n_execution_data_storage_mode = var.n8n_execution_data_storage_mode
+  n8n_main_hpa_min_replicas       = var.n8n_main_hpa_min_replicas
 
   # ── Customer-managed EKS cluster wiring ─────────────────────────────────────
   create_eks                                   = false

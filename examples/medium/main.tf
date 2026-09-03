@@ -114,7 +114,7 @@ module "n8n" {
   # expose an aggregate maximum of 1,140 connections against db.m6g.2xlarge's
   # roughly 3,600-connection limit. pg-pool creates these lazily, so measure
   # concurrent database operations and pool-wait time before changing the cap.
-  n8n_main_hpa_min_replicas = 3
+  n8n_main_hpa_min_replicas = var.n8n_main_hpa_min_replicas
   n8n_main_hpa_max_replicas = 24
 
   # ── Webhook processors ────────────────────────────────────────────────────────

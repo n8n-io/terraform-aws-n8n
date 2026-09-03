@@ -192,6 +192,13 @@ variable "n8n_execution_data_storage_mode" {
   }
 }
 
+variable "n8n_main_hpa_min_replicas" {
+  description = "Minimum (and default) replica count for n8n main pods, passed straight through to the module's own n8n_main_hpa_min_replicas. Defaults to 6 here, not the module's own default of 2, to match this tier's editor/API concurrency floor (see the comment beside its use in main.tf): mains carry no webhooks or manual executions, so this ceiling tracks concurrent editor and REST API users rather than raw execution throughput. 6 replicas needs an Enterprise/Startup license carrying feat:multipleMainInstances. Set to 1 to run a single main pod in plain queue mode instead, which only needs a Business-tier license: n8n's multi-main leader-election gate never engages at 1 replica."
+  type        = number
+  default     = 6
+  nullable    = false
+}
+
 variable "tags" {
   description = "Additional AWS tags to apply to every resource this example creates."
   type        = map(string)
