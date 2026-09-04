@@ -633,11 +633,11 @@ resource "helm_release" "n8n" {
         var.db_ping_max_failures_before_recovery != null ? [
           { name = "DB_PING_MAX_FAILURES_BEFORE_RECOVERY", value = tostring(var.db_ping_max_failures_before_recovery) },
         ] : [],
-        # V8 heap ceiling. Without it Node caps old-space at ~2,033 MB on this
-        # image regardless of the container memory limit, so any memory limit
-        # above roughly 2.5Gi buys memory the heap can never allocate: measured
-        # during load validation, webhook pods died at that ceiling with half of
-        # their 4 GiB limit unused. Applies to every n8n container, because
+        # V8 heap ceiling. Without it V8 sizes the heap at roughly half the
+        # container memory limit, capped at about 2 GiB on this image, so any
+        # memory limit above roughly 4Gi buys memory the heap can never
+        # allocate: measured during load validation, webhook pods died at that
+        # ~2,033 MB ceiling with half of their 4 GiB limit unused. Applies to every n8n container, because
         # config.extraEnv is chart-global and the chart has no per-tier env
         # path; that is why the variable says to size against the SMALLEST of
         # the three memory limits. Omitted entirely on the null path, leaving

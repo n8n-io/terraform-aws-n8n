@@ -1025,12 +1025,15 @@ run "webhook_hpa_scale_up_stabilization_window_rejects_above_max" {
 # To verify the wiring on a live deployment, exec into any n8n pod and read the
 # ceiling V8 actually applied rather than the env var it was asked for:
 #
-#   kubectl exec -n n8n deploy/n8n-webhook -- \
+#   kubectl exec -n n8n deploy/n8n-webhook-processor -- \
 #     node -e 'console.log(require("v8").getHeapStatistics().heap_size_limit)'
 #
-# With the variable unset that prints ~2,133,000,000 (V8's own default, the
-# ~2,033 MB ceiling this input exists to lift) regardless of the container
-# memory limit. With it set the figure tracks the value. When
+# With the variable unset that prints V8's own default, roughly half the
+# container memory limit capped at about 2 GiB (measured on Node 26: 1Gi limit
+# gives ~562,000,000, 4Gi gives ~2,248,000,000, the cap this input exists to
+# lift). With it set the figure tracks the value plus a small young-generation
+# allowance (768 gives ~830,000,000). Verified live on examples/small for
+# PR #104. When
 # n8n_metrics_enabled is on, n8n_nodejs_heap_size_total_bytes on /metrics shows
 # the same ceiling without an exec.
 

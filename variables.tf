@@ -1084,12 +1084,14 @@ variable "n8n_node_max_old_space_size_mb" {
     V8 old-space heap ceiling in MB, emitted as
     NODE_OPTIONS=--max-old-space-size=<value> on every n8n container (main,
     worker, and webhook processor; the chart has no per-tier env path).
-    Defaults to null: no NODE_OPTIONS is set and V8 uses its own default,
-    measured at ~2,033 MB on the pinned image, REGARDLESS of the container
-    memory limit. That means memory limits above ~2.5Gi buy memory the Node
-    process can never allocate: measured during load validation, webhook
-    pods died at the 2,033 MB V8 ceiling with half of their 4 GiB container
-    limit unused.
+    Defaults to null: no NODE_OPTIONS is set and V8 sizes the heap itself,
+    at roughly half the container memory limit up to a fixed cap of about
+    2 GiB. Measured on the pinned image (Node 26): a 1Gi limit gives a
+    ~536 MiB heap, 2Gi gives ~1072 MiB, 4Gi gives ~2144 MiB, and the cap
+    holds from there. So container memory above about 4Gi buys memory the
+    Node process can never allocate: measured during load validation,
+    webhook pods died at the ~2,033 MB old-space ceiling with half of their
+    4 GiB container limit unused.
 
     Size it against the SMALLEST of n8n_main_memory_limit,
     n8n_worker_memory_limit and n8n_webhook_memory_limit, leaving roughly

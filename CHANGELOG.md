@@ -216,14 +216,13 @@ this project adheres to the stability contract in
   this is additive and no existing deployment changes.
 
   Previously unsettable by any means: nothing in the chart or the module set
-  `NODE_OPTIONS`, so every container took V8's default ceiling regardless of
-  its memory limit.
+  `NODE_OPTIONS`, so every container took V8's default ceiling.
 
-  That default is the point. V8 caps old-space at roughly 2,033 MB on the
-  pinned image no matter how large the container memory limit is, so
-  `n8n_main_memory_limit` / `n8n_worker_memory_limit` /
-  `n8n_webhook_memory_limit` above about 2.5Gi buy memory the Node process can
-  never allocate. Measured during load validation: webhook pods died at the
+  That default is the point. V8 sizes the heap at roughly half the container
+  memory limit, capped at about 2 GiB on the pinned image (measured: 1Gi →
+  ~536 MiB, 2Gi → ~1072 MiB, 4Gi → ~2144 MiB), so `n8n_main_memory_limit` /
+  `n8n_worker_memory_limit` / `n8n_webhook_memory_limit` above about 4Gi buy
+  memory the Node process can never allocate. Measured during load validation: webhook pods died at the
   2,033 MB ceiling with half of their 4 GiB container limit unused, peak heap
   sitting at 97% of the ceiling when the pods were lost.
 
