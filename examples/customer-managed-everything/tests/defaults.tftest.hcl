@@ -190,3 +190,12 @@ run "customer_managed_node_max_rejects_below_min" {
   # relying on this same short-circuit.
   expect_failures = [var.customer_managed_node_max]
 }
+
+# n8n_main_hpa_min_replicas (passthrough to module "n8n", no local validation
+# block of its own, and no root-level resource reads it directly) was tested
+# directly against the rule above: a plain, no-failure `command = plan` run
+# asserting its default hits the same unresolvable check blocks (eks.tf's
+# existing_eks_cluster_kubernetes_version_matches, scaling.tf's
+# webhook_hpa_needs_metrics_server_somewhere) as any other ordinary plan
+# here, regardless of the assertion's own correctness. Not testable in this
+# file; covered at the repo root's tests/defaults.tftest.hcl instead.

@@ -307,7 +307,7 @@ resource "helm_release" "n8n" {
     # autoscaler owns the deployment.
 
     multiMain = {
-      enabled  = true
+      enabled  = local.n8n_multi_main_enabled
       replicas = var.n8n_main_hpa_min_replicas
       antiAffinity = {
         type = "preferred"
@@ -453,7 +453,7 @@ resource "helm_release" "n8n" {
       main = {
         enabled                        = true
         minReplicas                    = var.n8n_main_hpa_min_replicas
-        maxReplicas                    = var.n8n_main_hpa_max_replicas
+        maxReplicas                    = local.n8n_main_hpa_effective_max_replicas
         targetCPUUtilizationPercentage = var.n8n_main_hpa_cpu_threshold
       }
       webhookProcessor = {

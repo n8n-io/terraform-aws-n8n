@@ -91,6 +91,15 @@ run "n8n_image_tag_defaults_to_null" {
   }
 }
 
+run "n8n_main_hpa_min_replicas_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_main_hpa_min_replicas == null
+    error_message = "Example must not override the main-replica count by default; the module's own default of 2 should apply."
+  }
+}
+
 run "n8n_image_tag_rejects_whitespace" {
   command = plan
 

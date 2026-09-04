@@ -340,6 +340,15 @@ run "n8n_image_tag_defaults_to_null" {
   }
 }
 
+run "n8n_main_hpa_min_replicas_defaults_to_six" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_main_hpa_min_replicas == 6
+    error_message = "Example must default to this tier's own main-replica floor of 6, not the module's generic default of 2."
+  }
+}
+
 run "n8n_image_tag_rejects_whitespace" {
   command = plan
 

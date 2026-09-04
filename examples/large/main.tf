@@ -142,7 +142,7 @@ module "n8n" {
   # group has to survive, it is 208,000m of the ~785,000m this node group can
   # schedule (60 × 1,200m main, 160 × 700m worker, 80 × 300m webhook) and ~1,500
   # client connections against a MAX_CLIENT_CONN of 3,000 per PgBouncer replica.
-  n8n_main_hpa_min_replicas = 6
+  n8n_main_hpa_min_replicas = var.n8n_main_hpa_min_replicas
   n8n_main_hpa_max_replicas = 60
 
   # ── Webhook processors ────────────────────────────────────────────────────────

@@ -7427,6 +7427,21 @@ run "pre_fix_main_hpa_maximum_warns" {
   expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
 }
 
+# Same oversized ceiling as the run above, but with single-main active: the
+# capacity model must read local.n8n_main_hpa_effective_max_replicas (clamped
+# to 1), not var.n8n_main_hpa_max_replicas directly, or this would still warn
+# against a ceiling the HPA can never actually reach (#117).
+run "single_main_clamp_prevents_a_false_capacity_warning" {
+  command = plan
+
+  variables {
+    n8n_main_hpa_min_replicas = 1
+    n8n_main_hpa_max_replicas = 20
+  }
+
+  # No expect_failures: the whole point is that this must NOT warn.
+}
+
 run "pre_fix_webhook_hpa_maximum_warns" {
   command = plan
 
@@ -7604,6 +7619,61 @@ run "raised_floors_reach_the_module_owned_webhook_hpa" {
   assert {
     condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].min_replicas == 5
     error_message = "A raised webhook floor must reach the HPA the module creates in scaling.tf"
+  }
+}
+
+# ── multiMain gated on replica count (#117) ──────────────────────────────────
+# n8n gates multi-main mode behind the feat:multipleMainInstances license
+# entitlement, which Business-tier licenses don't carry. n8n.tf's
+# multiMain.enabled reads local.n8n_multi_main_enabled, a pure function of
+# n8n_main_hpa_min_replicas with no resource dependency, so unlike most
+# helm_release.values wiring in this file it IS known at plan time under the
+# mock providers and directly asserts the real wiring, not just the variable
+# contract.
+
+run "main_hpa_min_replicas_default_enables_multi_main" {
+  command = plan
+
+  assert {
+    condition     = local.n8n_multi_main_enabled == true
+    error_message = "multiMain.enabled must stay true at the default n8n_main_hpa_min_replicas (2); this is the existing multi-main behavior and must not regress."
+  }
+
+  assert {
+    condition     = local.n8n_main_hpa_effective_max_replicas == var.n8n_main_hpa_max_replicas
+    error_message = "In multi-main mode the main HPA's effective ceiling must be the configured n8n_main_hpa_max_replicas (6 by default), unclamped."
+  }
+}
+
+run "main_hpa_min_replicas_one_disables_multi_main" {
+  command = plan
+
+  variables {
+    n8n_main_hpa_min_replicas = 1
+  }
+
+  assert {
+    condition     = local.n8n_multi_main_enabled == false
+    error_message = "multiMain.enabled must be false at n8n_main_hpa_min_replicas = 1, so a Business-tier license (no feat:multipleMainInstances) can run this module in single-main mode."
+  }
+
+  assert {
+    condition     = local.n8n_main_hpa_effective_max_replicas == 1
+    error_message = "Single-main mode must pin the main HPA's effective ceiling to 1 even though n8n_main_hpa_max_replicas defaults to 6, or the HPA could still scale a second, un-electable main pod into duplicate scheduled/cron executions."
+  }
+}
+
+run "main_hpa_min_replicas_one_clamps_an_explicit_max_replicas_too" {
+  command = plan
+
+  variables {
+    n8n_main_hpa_min_replicas = 1
+    n8n_main_hpa_max_replicas = 6
+  }
+
+  assert {
+    condition     = local.n8n_main_hpa_effective_max_replicas == 1
+    error_message = "The single-main clamp must override an explicitly-set n8n_main_hpa_max_replicas too, not just the default; the ceiling is not caller-overridable while multi-main is disabled."
   }
 }
 
