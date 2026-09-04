@@ -257,12 +257,16 @@ this project adheres to the stability contract in
 - `db_apply_immediately`: apply RDS instance modifications immediately instead
   of deferring them to the next maintenance window. Defaults to `false` (the
   AWS default), which is also what existing instances already hold in state,
-  so they see no plan change. Exists because a `db_instance_class` change otherwise reports
-  "Apply complete" while AWS queues the change in `PendingModifiedValues` for
-  a window that can be days out, with nothing in the plan or apply output
-  saying so (measured incident during load validation; both the database and
-  Redis had to be forced through the AWS CLI). Set it true for the apply that
-  carries a resize, verify the live class through AWS, then unset it.
+  so they see no plan change. Exists because a `db_instance_class` change
+  otherwise reports "Apply complete" while AWS queues the change in
+  `PendingModifiedValues` for a window that can be days out. The apply output
+  does not say so; the only symptom is that every following `terraform plan`
+  wants to make the same class change again until the window passes (measured
+  incident during load validation; both the database and Redis had to be
+  forced through the AWS CLI). Set it true for the apply that carries a
+  resize, verify the live class through AWS, then unset it. Measured live: a
+  `db.t3.small` to `db.t3.medium` change on a Multi-AZ instance took 17
+  minutes end to end.
 
 ### Changed
 
@@ -393,7 +397,12 @@ this project adheres to the stability contract in
   `aws_elasticache_cluster` as well as the replication group. Previously it
   silently did nothing on the single-node topology, so a `redis_node_type`
   resize reported "Apply complete" while AWS queued it for the maintenance
-  window (measured: the forced resize then took 41 minutes to complete).
+  window, with every following plan wanting the same `node_type` change again
+  until then. Duration of the immediate path depends on the node types: one
+  forced resize measured 41 minutes, a `cache.t3.medium` to `cache.t3.small`
+  change on the single-node topology measured 11 minutes, during which Redis
+  was unavailable for roughly two minutes and n8n's pods went unready and
+  reconnected without restarting.
 
   The input is also now passed to both ElastiCache resources as an explicit
   bool rather than `true`-or-`null`. Verified live: `apply_immediately` is

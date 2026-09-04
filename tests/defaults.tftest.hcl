@@ -4554,7 +4554,7 @@ run "redis_apply_immediately_reaches_the_replication_group" {
 # The single-node cluster is the DEFAULT topology, and it ignored this input
 # entirely until the resource gained the argument: a redis_node_type resize
 # reported "Apply complete" while AWS queued it for the maintenance window
-# (measured: the forced resize then took 41 minutes). The replication-group
+# (verified live in PR #107, both the deferral and the fix). The replication-group
 # assertion above passing is exactly why that went unnoticed, so this asserts
 # the other topology explicitly.
 run "redis_apply_immediately_reaches_the_single_node_cluster" {

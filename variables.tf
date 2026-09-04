@@ -1631,14 +1631,19 @@ variable "db_apply_immediately" {
     Without it, changing db_instance_class reports "Apply complete" from
     Terraform while AWS quietly queues the class change in
     PendingModifiedValues for a maintenance window that can be days out, so
-    the instance keeps running on the old class with nothing in the plan or
-    apply output saying so. Measured incident during load validation: a resize
-    reported clean while both the database and Redis stayed on their old
-    classes, and both had to be forced through the AWS CLI with
-    --apply-immediately. Set this true for the apply that carries a resize,
-    verify the live class through AWS (never through terraform plan or apply
-    output), then unset it so unrelated later modifications go back to
-    honouring the maintenance window. Ignored when create_database = false;
+    the instance keeps running on the old class. The apply output does not
+    say so; the only symptom is that every following terraform plan wants to
+    make the same instance_class change again, because the provider reads the
+    class that is actually running, and that repeats until the window passes.
+    Measured incident during load validation: a resize reported clean while
+    both the database and Redis stayed on their old classes, and both had to
+    be forced through the AWS CLI with --apply-immediately. Set this true for
+    the apply that carries a resize and verify the live class with aws rds
+    describe-db-instances (DBInstanceClass, and PendingModifiedValues empty),
+    then unset it so unrelated later modifications go back to honouring the
+    maintenance window. Expect the immediate path to take a while and, on a
+    Multi-AZ instance, to fail over: a db.t3.small to db.t3.medium change
+    measured 17 minutes end to end. Ignored when create_database = false;
     an external database (for example an Aurora cluster you manage yourself)
     needs apply_immediately set on your own aws_rds_cluster_instance
     resources, where the same silent-deferral behaviour applies.
@@ -2094,7 +2099,7 @@ variable "redis_transit_encryption_mode" {
 }
 
 variable "redis_apply_immediately" {
-  description = "Apply ElastiCache modifications as soon as the apply runs, rather than deferring them to the next maintenance window. Applies to both Redis topologies the module can manage: the default single-node aws_elasticache_cluster and the replication group. Defaults to false, matching the AWS default and leaving every existing deployment's behaviour unchanged. Set true when changing redis_transit_encryption_mode: AWS rejects any transit-encryption modification outright without it, with `InvalidParameterValue: Transit encryption modification should be called with applied immediately option.`, so the migration cannot proceed while this is false. Also set it true for the apply that carries a redis_node_type resize, then verify the live class through AWS rather than Terraform output: without it the resize reports \"Apply complete\" while AWS queues the class change in PendingModifiedValues for the next maintenance window, and nothing in the plan or apply says so (measured incident during load validation; the forced resize then took 41 minutes to complete, so plan the window either way). Turning it on makes other modifications immediate too, which for a replication group can mean a node reboot outside the window you picked, so prefer scoping it to the applies that need it rather than leaving it on."
+  description = "Apply ElastiCache modifications as soon as the apply runs, rather than deferring them to the next maintenance window. Applies to both Redis topologies the module can manage: the default single-node aws_elasticache_cluster and the replication group. Defaults to false, matching the AWS default and leaving every existing deployment's behaviour unchanged. Set true when changing redis_transit_encryption_mode: AWS rejects any transit-encryption modification outright without it, with `InvalidParameterValue: Transit encryption modification should be called with applied immediately option.`, so the migration cannot proceed while this is false. Also set it true for the apply that carries a redis_node_type resize, then verify the live class with aws elasticache describe-cache-clusters (CacheNodeType, and PendingModifiedValues empty) rather than trusting the apply output: without it the resize reports \"Apply complete\" while AWS queues the class change in PendingModifiedValues for the next maintenance window, and the only symptom is that every following terraform plan wants to make the same node_type change again until the window passes. The immediate path is not quick either and the duration depends on the node types involved: one forced resize measured 41 minutes, a cache.t3.medium to cache.t3.small change on a single-node cluster measured 11 minutes, so plan the window. On the single-node topology the node is replaced, which takes Redis away for roughly two minutes; measured live, n8n's mains and webhook processors went unready for that span and reconnected without a restart. Turning it on makes other modifications immediate too, which for a replication group can mean a node reboot outside the window you picked, so prefer scoping it to the applies that need it rather than leaving it on."
   type        = bool
   default     = false
 

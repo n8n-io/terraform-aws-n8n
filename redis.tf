@@ -191,8 +191,8 @@ resource "aws_elasticache_cluster" "n8n" {
   # redis_apply_immediately silently did nothing on this default single-node
   # topology, and a redis_node_type change reported "Apply complete" while AWS
   # queued the resize in PendingModifiedValues for the next maintenance window
-  # (measured: the forced resize then took 41 minutes to complete; see the
-  # variable description).
+  # (measured durations for the immediate path are in the variable
+  # description; verified live on a single-node cluster in PR #107).
   apply_immediately = local.redis_apply_immediately
 
   tags = merge(local.common_tags, { Name = "${local.cluster_name}-redis" })
