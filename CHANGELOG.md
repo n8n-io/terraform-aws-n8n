@@ -290,6 +290,52 @@ this project adheres to the stability contract in
   untouched. Reserving it outright would have broken those callers at plan time
   on upgrade, for a collision that cannot occur.
 
+- `redis_exporter_enabled` and `redis_exporter_image`: opt-in `redis_exporter`
+  (one Deployment plus a Service on `:9121`) pointed at the module's own Redis,
+  in a new `observability.tf`. Defaults to `false`: nothing is created, so this
+  is additive. The Deployment runs one replica with a `Recreate` strategy, so
+  no two exporter pods ever report the same counters at once, not even for one
+  scrape interval during an image bump.
+
+  It exists because the module could not show you the number that matters most.
+  Bull queue depth is the signal KEDA scales workers on and the first thing
+  worth looking at during an incident, and n8n's own `/metrics` does not report
+  it usefully in the multi-main topology this module deploys (and every tier
+  example uses): the queue gauge is per-main rather than per-queue, so the
+  figure misleads rather than going missing. Redis is the source of truth, and
+  this reads it directly, along with eviction counts, connected clients and
+  engine load.
+
+  Queue depth is exported explicitly via `REDIS_EXPORTER_CHECK_SINGLE_KEYS`,
+  not by default: the exporter's standard metrics come from Redis `INFO`, which
+  carries aggregate database statistics and no per-key lengths, so without it
+  the exporter would ship everything except the number it exists for. The keys
+  are the same `:jobs:wait` / `:jobs:active` pair the KEDA ScaledObject scales
+  on, built from the same local, so the autoscaler and any dashboard read one
+  queue rather than two, and both follow `redis_key_prefix`.
+
+  The exporter reuses the module's own Redis endpoint and, when AUTH is active,
+  the same token Secret the chart mounts as `QUEUE_BULL_REDIS_PASSWORD`, so it
+  cannot end up watching a different queue than n8n is running on. All three
+  credential paths are wired and asserted: the module-managed Secret, a
+  caller-managed one via `redis_auth_token_secret_ref`, and an external Redis
+  with an ACL `redis_username`. The endpoint scheme follows
+  `local.redis_tls_active`, the same local n8n and KEDA read.
+
+  Scrape it through the `prometheus.io` annotations on the pod, or point a
+  ServiceMonitor at the Service. Independent of `n8n_metrics_enabled`: the two
+  expose different things and neither implies the other.
+
+  TLS keeps certificate verification on. Both things that usually break it were
+  checked against the exporter rather than assumed: its image copies a CA
+  bundle in, so the Amazon Root CA that signs ElastiCache certificates is
+  present, and no `REDIS_EXPORTER_TLS_SERVER_NAME` is needed on the
+  module-managed path because `local.redis_host` is the replication group's own
+  AWS endpoint, which its certificate covers. The one case that would need it,
+  an external Redis reached through a friendly CNAME rather than its real
+  hostname, is documented in `redis_exporter_image` and left unwired until
+  someone hits it. Not yet exercised against a live TLS cluster end to end.
+
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):

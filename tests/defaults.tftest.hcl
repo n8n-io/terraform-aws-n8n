@@ -963,6 +963,242 @@ run "redis_auth_token_secret_ref_rejects_being_set_alongside_the_value" {
   expect_failures = [var.redis_auth_token_secret_ref]
 }
 
+# ── Redis exporter ───────────────────────────────────────────────────────────
+# Unlike most of this module's opt-in wiring, the exporter is a pair of plain
+# kubernetes_* resources rather than Helm values, so its rendered content IS
+# assertable at plan time (helm_release.values is not; see AGENTS.md, "Known
+# mock provider limitations"). These runs exercise the endpoint string, the
+# queue-depth keys, and the AUTH plumbing across all three Redis credential
+# paths, because that is where an exporter silently pointed at the wrong queue
+# would come from.
+#
+# Env vars are looked up BY NAME rather than by index throughout. The container
+# builds its env list conditionally (REDIS_USER and REDIS_PASSWORD are dynamic
+# blocks), so positions shift with configuration and with any new variable, and
+# index-based assertions here broke the moment one was added.
+
+run "redis_exporter_defaults_to_creating_nothing" {
+  command = plan
+
+  assert {
+    condition     = length(kubernetes_deployment_v1.redis_exporter) == 0
+    error_message = "redis_exporter_enabled must default to false and create no Deployment."
+  }
+
+  assert {
+    condition     = length(kubernetes_service_v1.redis_exporter) == 0
+    error_message = "redis_exporter_enabled must default to false and create no Service."
+  }
+}
+
+run "redis_exporter_targets_the_module_managed_redis" {
+  command = plan
+
+  variables {
+    redis_exporter_enabled = true
+  }
+
+  assert {
+    condition     = length(kubernetes_deployment_v1.redis_exporter) == 1 && length(kubernetes_service_v1.redis_exporter) == 1
+    error_message = "redis_exporter_enabled = true must create both the exporter Deployment and its Service."
+  }
+
+  # Only the scheme is assertable on this path: local.redis_host is the
+  # ElastiCache endpoint, which the mock provider leaves unknown at plan time,
+  # so the address as a whole is unknown too. Terraform refines an unknown
+  # string's known PREFIX, which is what lets startswith resolve here while
+  # endswith would fail with "Unknown condition value". The whole address is
+  # asserted on the external-Redis path below, where the host is a literal.
+  assert {
+    condition     = startswith(one([for e in kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].env : e if e.name == "REDIS_ADDR"]).value, "redis://")
+    error_message = "REDIS_ADDR must use the plain redis:// scheme when the endpoint does not speak TLS."
+  }
+
+  assert {
+    condition     = local.redis_port == 6379
+    error_message = "A module-managed Redis always listens on 6379, which is the port REDIS_ADDR interpolates."
+  }
+
+  assert {
+    condition     = kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].metadata[0].annotations["prometheus.io/port"] == "9121"
+    error_message = "The exporter pod must advertise its scrape port through the prometheus.io annotations."
+  }
+
+  assert {
+    condition     = kubernetes_service_v1.redis_exporter[0].spec[0].port[0].port == 9121
+    error_message = "The exporter Service must publish the metrics port a ServiceMonitor would target."
+  }
+
+  # Single replica plus Recreate is what keeps exactly one exporter running at
+  # any moment. RollingUpdate would overlap old and new pods during an image
+  # bump and double every counter for one scrape interval.
+  assert {
+    condition     = kubernetes_deployment_v1.redis_exporter[0].spec[0].replicas == "1" && kubernetes_deployment_v1.redis_exporter[0].spec[0].strategy[0].type == "Recreate"
+    error_message = "The exporter must run one replica with a Recreate strategy so no two pods ever report the same counters at once."
+  }
+}
+
+# The exporter's whole purpose. Bull queue depth is NOT in the default metric
+# set: those are built from Redis INFO, which has no per-key lengths, so
+# without check-single-keys the exporter would ship everything except the
+# number it was turned on for. The keys must also match the pair KEDA scales
+# on, or the autoscaler and the dashboard disagree about the same queue.
+run "redis_exporter_exports_the_bull_queue_depth_keys" {
+  command = plan
+
+  variables {
+    redis_exporter_enabled = true
+  }
+
+  assert {
+    condition     = one([for e in kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].env : e if e.name == "REDIS_EXPORTER_CHECK_SINGLE_KEYS"]) != null
+    error_message = "The exporter must be told which keys to measure; the default INFO-based metrics carry no per-key lengths, so queue depth would be missing entirely."
+  }
+
+  assert {
+    condition     = one([for e in kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].env : e if e.name == "REDIS_EXPORTER_CHECK_SINGLE_KEYS"]).value == "bull:jobs:wait,bull:jobs:active"
+    error_message = "The exported keys must be the same :jobs:wait / :jobs:active pair the KEDA ScaledObject scales on, at the default bull prefix."
+  }
+}
+
+# redis_key_prefix moves the Bull namespace, and it has to move all four call
+# sites together: the chart's redis.prefix, N8N_REDIS_KEY_PREFIX, KEDA's two
+# listNames, and now the exporter's keys. A stale prefix here would report a
+# permanently empty queue rather than an error.
+run "redis_exporter_queue_keys_follow_redis_key_prefix" {
+  command = plan
+
+  variables {
+    redis_exporter_enabled = true
+    redis_key_prefix       = "n8n-prod"
+  }
+
+  assert {
+    condition     = one([for e in kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].env : e if e.name == "REDIS_EXPORTER_CHECK_SINGLE_KEYS"]).value == "n8n-prod:jobs:wait,n8n-prod:jobs:active"
+    error_message = "The exporter's keys must follow redis_key_prefix, or it measures a queue nothing writes to and reports zero forever."
+  }
+}
+
+# Redis AUTH is only active on the module-managed path once transit encryption
+# is required, which is also the path that turns the scheme to rediss://. Both
+# halves move together here for that reason.
+run "redis_exporter_follows_tls_and_reads_the_module_managed_auth_secret" {
+  command = plan
+
+  variables {
+    redis_exporter_enabled = true
+    # redis_transit_encryption_mode is left at its "required" default, which is
+    # what makes local.redis_auth_active true on the module-managed path.
+    redis_transit_encryption_enabled = true
+  }
+
+  assert {
+    condition     = startswith(one([for e in kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].env : e if e.name == "REDIS_ADDR"]).value, "rediss://")
+    error_message = "REDIS_ADDR must use the rediss:// scheme when local.redis_tls_active is true, or the exporter speaks plaintext to a TLS-only endpoint."
+  }
+
+  assert {
+    condition     = one([for e in kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].env : e if e.name == "REDIS_PASSWORD"]).value_from[0].secret_key_ref[0].name == kubernetes_secret.n8n_redis[0].metadata[0].name
+    error_message = "The exporter must read the same module-managed Secret the chart mounts as QUEUE_BULL_REDIS_PASSWORD, so it cannot drift from n8n's own credential."
+  }
+
+  assert {
+    condition     = one([for e in kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].env : e if e.name == "REDIS_PASSWORD"]).value_from[0].secret_key_ref[0].key == "password"
+    error_message = "The exporter must read the \"password\" key, matching the chart's redis.passwordSecret.key default."
+  }
+
+  # No ACL username on the module-managed path: local.redis_username_value is
+  # null there, so the dynamic block emits nothing.
+  assert {
+    condition     = one([for e in kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].env : e if e.name == "REDIS_USER"]) == null
+    error_message = "REDIS_USER must not be emitted when the module manages the cluster; there is no ACL user to send."
+  }
+}
+
+# The caller-managed Secret path: the module never reads the token's value, so
+# the exporter has to reference the caller's Secret by name exactly as the
+# chart does, rather than the module-managed twin that does not exist here.
+run "redis_exporter_reads_a_caller_managed_auth_secret" {
+  command = plan
+
+  variables {
+    redis_exporter_enabled      = true
+    create_elasticache          = false
+    redis_host                  = "redis.internal.example.com"
+    redis_auth_token_secret_ref = { name = "caller-redis-secret", key = "redis-password" }
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n_redis) == 0
+    error_message = "Precondition: the module-managed Secret must not exist on the caller-managed path."
+  }
+
+  assert {
+    condition     = one([for e in kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].env : e if e.name == "REDIS_PASSWORD"]).value_from[0].secret_key_ref[0].name == "caller-redis-secret"
+    error_message = "The exporter must reference the caller's own Secret when redis_auth_token_secret_ref is set."
+  }
+
+  assert {
+    condition     = one([for e in kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].env : e if e.name == "REDIS_PASSWORD"]).value_from[0].secret_key_ref[0].key == "redis-password"
+    error_message = "The exporter must honour redis_auth_token_secret_ref.key rather than assuming \"password\"."
+  }
+}
+
+# External Redis with an ACL username: REDIS_USER carries a literal, because a
+# username is not a credential, while the token still comes from a Secret.
+run "redis_exporter_emits_the_acl_username_for_external_redis" {
+  command = plan
+
+  variables {
+    redis_exporter_enabled = true
+    create_elasticache     = false
+    redis_host             = "redis.internal.example.com"
+    redis_username         = "n8n"
+    redis_auth_token       = "external-redis-token"
+  }
+
+  # The external-Redis path is the one where local.redis_host is a caller
+  # literal rather than a mocked ElastiCache attribute, so the whole address is
+  # known at plan time and scheme, host and port can be asserted together.
+  assert {
+    condition     = one([for e in kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].env : e if e.name == "REDIS_ADDR"]).value == "redis://redis.internal.example.com:6379"
+    error_message = "REDIS_ADDR must interpolate scheme, local.redis_host and local.redis_port into a single address the exporter can dial."
+  }
+
+  assert {
+    condition     = one([for e in kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].env : e if e.name == "REDIS_USER"]).value == "n8n"
+    error_message = "The exporter must send REDIS_USER when the external Redis uses an ACL username, or AUTH fails as the default user."
+  }
+
+  assert {
+    condition     = one([for e in kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].env : e if e.name == "REDIS_PASSWORD"]) != null
+    error_message = "REDIS_PASSWORD must still be present alongside REDIS_USER on the external-Redis AUTH path."
+  }
+}
+
+run "redis_exporter_image_rejects_a_blank_value" {
+  command = plan
+
+  variables {
+    redis_exporter_image = "   "
+  }
+
+  expect_failures = [var.redis_exporter_image]
+}
+
+# A padded or internally-spaced reference passes a blank check but reaches
+# Kubernetes as an unpullable image, surfacing as ImagePullBackOff rather than
+# as a plan error naming this input.
+run "redis_exporter_image_rejects_embedded_whitespace" {
+  command = plan
+
+  variables {
+    redis_exporter_image = "oliver006/redis_exporter :v1.90.0"
+  }
+
+  expect_failures = [var.redis_exporter_image]
+}
+
 # ── HPA: webhook processor scale-up stabilization ────────────────────────────
 
 run "webhook_hpa_scale_up_stabilization_window_defaults_to_zero" {
