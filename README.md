@@ -1624,8 +1624,9 @@ release: one Deployment plus a Service on port **`9121`**, pointed at the same
 Redis endpoint, TLS setting, key prefix and AUTH Secret n8n and KEDA already
 use, so it cannot watch a different queue than n8n runs on. The two Bull
 lists KEDA scales on are exported as `redis_key_size{key="<prefix>:jobs:wait"}`
-and `redis_key_size{key="<prefix>:jobs:active"}`, alongside the standard
-Redis metrics (evictions, connected clients, engine load). The pod carries
+and `redis_key_size{key="<prefix>:jobs:active"}` (the exporter adds a `db`
+label too, so select on `key` rather than an exact label set), alongside the
+standard Redis metrics (evictions, connected clients, engine load). The pod carries
 `prometheus.io/scrape` annotations; point a `ServiceMonitor` at the
 `redis-exporter` Service if you run the Prometheus Operator. Off by default,
 and independent of `n8n_metrics_enabled`.
