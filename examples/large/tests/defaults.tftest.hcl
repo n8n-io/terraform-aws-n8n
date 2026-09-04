@@ -271,11 +271,18 @@ run "vpc_cni_addon_warm_ip_tuning" {
 # unguarded is this example's choice of value.
 #
 # Verify manually with a real `terraform plan` from this directory: the node
-# group shows disk_size = 100, the cache cluster node_type =
-# "cache.r6g.2xlarge", and the rendered helm values carry
-# DB_POSTGRESDB_POOL_SIZE = 20 and maxReplicaCount = 320. After apply,
+# group shows disk_size = 100 and the cache cluster node_type =
+# "cache.r6g.2xlarge" (confirmed against real providers with no state on
+# 2026-09-04). The helm values are `(known after apply)` in a fresh-create
+# plan even with real providers, because the same yamlencode also carries the
+# Aurora endpoint and the random encryption key, so DB_POSTGRESDB_POOL_SIZE
+# = 20 and maxReplicaCount = 320 only render in a plan against an existing
+# deployment's state, or after apply via
 # `kubectl get scaledobject -n n8n -o yaml` and
-# `kubectl get deploy n8n-main -n n8n -o yaml` show the last two.
+# `kubectl get deploy n8n-main -n n8n -o yaml`. What plan-time does guarantee
+# is that both arguments are accepted module inputs (`terraform validate`
+# rejects an unknown argument), and n8n.tf references each variable directly.
+
 
 # ── PgBouncer ────────────────────────────────────────────────────────────────
 # Required anti-affinity, four replicas, and the PDB together guarantee that
