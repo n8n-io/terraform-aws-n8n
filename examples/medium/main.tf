@@ -96,6 +96,11 @@ module "n8n" {
   db_allocated_storage = 200
 
   # ── Redis ─────────────────────────────────────────────────────────────────────
+  # Kept at large for this tier. Measured upgrade trigger: the no-op webhook
+  # workload capped at 869 req/s on cache.r6g.large and reached 897-906 req/s
+  # on cache.r6g.2xlarge (round-2 T-B/T-C passes). If this tier's sustained
+  # throughput approaches that figure, move Redis up a size before tuning
+  # anything else.
   redis_node_type = "cache.r6g.large"
 
   # ── Main pods ─────────────────────────────────────────────────────────────────
@@ -139,7 +144,10 @@ module "n8n" {
   # ── Execution settings ────────────────────────────────────────────────────────
   # Concurrency limit of 200 gives 2× headroom over the worker floor × concurrency.
   # 7-day pruning keeps the execution_entity table at a manageable size without
-  # losing useful debugging history.
+  # losing useful debugging history. Caveat for sustained high rates: n8n's
+  # hard deletion is hardcoded at a 100 executions/s ceiling (~8.6M/day,
+  # leader-only), so retention math stops holding as sustained completion
+  # rates approach 100/s; see the large example's warning for the mechanism.
   n8n_execution_concurrency_limit = 200
   n8n_pruning_max_age             = 168
   n8n_pruning_max_count           = 500000

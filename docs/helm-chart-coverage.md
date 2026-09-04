@@ -28,7 +28,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `service.annotations`, `service.main.annotations`, `service.webhookProcessor.annotations`, `service.sessionAffinity` | Not exposed |
 | `ingress.*` | Never set by this module. The module manages its own `kubernetes_ingress_v1` (see `create_ingress`, `ingress_annotations`) outside the chart entirely, rather than through the chart's ingress block |
 | `persistence` | Not exposed. n8n itself is stateless and needs no PVC (see README) |
-| `extraVolumes`, `extraVolumeMounts` | `n8n_extra_volumes` / `n8n_extra_volume_mounts` |
+| `extraVolumes`, `extraVolumeMounts` | `n8n_extra_volumes` / `n8n_extra_volume_mounts`, plus one managed `credentials-overwrite` Secret volume and read-only mount appended when `n8n_credentials_overwrite_secret_ref` is set |
 | `extraContainers`, `extraInitContainers` | Not exposed |
 | `dnsPolicy` | Not exposed; chart default used |
 | `dnsConfig` | `n8n_dns_config` (null = not set, Kubernetes' own `ndots:5` default applies). Setting `options = [{ name = "ndots", value = "1" }]` addresses `ndots:5` search-path amplification: measured 80% DNS query reduction on a 246-pod deployment, see the variable's description |

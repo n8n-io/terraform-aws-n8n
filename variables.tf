@@ -2839,6 +2839,83 @@ variable "n8n_extra_env" {
   }
 }
 
+# ── Credential overwrites ────────────────────────────────────────────────────
+
+variable "n8n_credentials_overwrite_secret_ref" {
+  description = <<-EOT
+    Existing Kubernetes Secret containing n8n credential overwrite JSON. The
+    module mounts only the selected key, read-only, at
+    /etc/n8n/credentials-overwrite/<key> on main, worker, and webhook-processor
+    pods and sets CREDENTIALS_OVERWRITE_DATA_FILE to that path. name is the
+    Secret's name in var.namespace; key defaults to
+    "credentials-overwrite.json". The module accepts only this reference and
+    never reads the JSON, so the payload does not enter this module's Helm values
+    or managed resources. If Terraform creates the Secret, its payload can still
+    enter the caller's state.
+
+    n8n reads the file at startup. Updating the caller-managed Secret does not
+    roll pods, and the module cannot add a content checksum without reading the
+    payload into state. After each rotation, manually restart n8n-main,
+    n8n-worker, and n8n-webhook-processor. CREDENTIALS_OVERWRITE_PERSISTENCE is
+    intentionally outside this file-based feature.
+
+    When this input is set, n8n_extra_env may not set
+    CREDENTIALS_OVERWRITE_DATA or CREDENTIALS_OVERWRITE_DATA_FILE,
+    n8n_extra_volumes may not use the reserved name "credentials-overwrite",
+    and n8n_extra_volume_mounts may not use the reserved mount path
+    "/etc/n8n/credentials-overwrite". Null preserves the escape-hatch behavior
+    and rendered Helm values from before this input existed.
+  EOT
+
+  type = object({
+    name = string
+    key  = optional(string, "credentials-overwrite.json")
+  })
+  default = null
+
+  validation {
+    condition = (
+      var.n8n_credentials_overwrite_secret_ref == null ? true :
+      can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$", var.n8n_credentials_overwrite_secret_ref.name))
+      && length(var.n8n_credentials_overwrite_secret_ref.name) <= 253
+    )
+    error_message = "n8n_credentials_overwrite_secret_ref.name must be a DNS-1123 subdomain of 253 characters or fewer, which is what Kubernetes requires of a Secret name: lowercase alphanumerics, hyphens and dots, starting and ending with an alphanumeric, with no empty label (e.g. \"n8n-credentials-overwrite\")."
+  }
+
+  validation {
+    condition = (
+      var.n8n_credentials_overwrite_secret_ref == null ? true :
+      can(regex("^[-._a-zA-Z0-9]+$", var.n8n_credentials_overwrite_secret_ref.key))
+      && length(var.n8n_credentials_overwrite_secret_ref.key) <= 253
+      && !contains([".", ".."], var.n8n_credentials_overwrite_secret_ref.key)
+      && !startswith(var.n8n_credentials_overwrite_secret_ref.key, "..")
+    )
+    error_message = "n8n_credentials_overwrite_secret_ref.key must be a valid Secret key of 253 characters or fewer: alphanumerics, '-', '_' and '.' only, and not \".\", \"..\" or a name starting with \"..\"."
+  }
+
+  validation {
+    condition = var.n8n_credentials_overwrite_secret_ref == null ? true : alltrue([
+      for env in var.n8n_extra_env :
+      !contains(["CREDENTIALS_OVERWRITE_DATA", "CREDENTIALS_OVERWRITE_DATA_FILE"], env.name)
+    ])
+    error_message = "n8n_credentials_overwrite_secret_ref conflicts with CREDENTIALS_OVERWRITE_DATA or CREDENTIALS_OVERWRITE_DATA_FILE in n8n_extra_env. Remove the escape-hatch entry and let the dedicated input set the file path."
+  }
+
+  validation {
+    condition = var.n8n_credentials_overwrite_secret_ref == null ? true : alltrue([
+      for volume in var.n8n_extra_volumes : volume.name != "credentials-overwrite"
+    ])
+    error_message = "n8n_credentials_overwrite_secret_ref reserves the volume name \"credentials-overwrite\". Rename or remove the conflicting n8n_extra_volumes entry."
+  }
+
+  validation {
+    condition = var.n8n_credentials_overwrite_secret_ref == null ? true : alltrue([
+      for mount in var.n8n_extra_volume_mounts : mount.mount_path != "/etc/n8n/credentials-overwrite"
+    ])
+    error_message = "n8n_credentials_overwrite_secret_ref reserves the mount path \"/etc/n8n/credentials-overwrite\". Move or remove the conflicting n8n_extra_volume_mounts entry."
+  }
+}
+
 # ── External Secrets ──────────────────────────────────────────────────────────
 # n8n's own External Secrets feature resolves *workflow credential* values from
 # an external vault at runtime (Settings -> External Secrets in the n8n UI),

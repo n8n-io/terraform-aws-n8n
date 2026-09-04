@@ -27,7 +27,7 @@ Route 53 (alias A-record)
 | Webhook pods | min=5, max=50 | Floor of 5 is warm; 50 ceiling raises both the floor and the ceiling over the module default of 2/8 |
 | Worker pods | min=5, max=40 | Queue-driven via KEDA; floor ensures fast queue drain at any time |
 | Worker concurrency | 20 | Doubles throughput per pod vs default; pool_size=10 matches |
-| Pruning | 7 days / 500k records | Keeps execution_entity at manageable size without losing debug history |
+| Pruning | 7 days / 500k records | Keeps execution_entity at manageable size without losing debug history. Caveat: n8n's hard deletion is hardcoded at 100 executions/s (~8.6M/day, leader-only), so the retention math stops holding as sustained completion rates approach 100/s; see the large example for the mechanism |
 | Webhook memory | 2 Gi limit | 1 Gi limit is tight under sustained concurrent webhook load |
 
 ## Estimated cost (us-east-1, on-demand)
