@@ -250,12 +250,52 @@ run "vpc_cni_addon_warm_ip_tuning" {
   }
 }
 
+# ── Load-validated module inputs ──────────────────────────────────────────────
+# main.tf carries five values that load validation round 2 measured on this
+# deployment class (see the comments beside each): node_disk_size = 100,
+# redis_node_type = "cache.r6g.2xlarge", db_postgresdb_pool_size = 20,
+# n8n_worker_keda_max_replicas = 320, and four PgBouncer replicas. Only the
+# PgBouncer count is pinned at plan time (next section), because it is a
+# resource this configuration creates itself.
+#
+# The other four cannot be asserted here. A run block can only reference the
+# root module's resources, variables and outputs; the module's resources
+# (module.n8n.aws_eks_node_group.n8n, module.n8n.aws_elasticache_cluster.n8n)
+# are "Unsupported attribute" from a test in this directory, the module exposes
+# no output carrying disk_size or node_type, and the values are literals in the
+# module block rather than example variables. The pool size and the KEDA
+# ceiling additionally live only inside the module's helm_release values, which
+# are deferred under the mock providers (see "Known mock provider limitations"
+# in AGENTS.md). The module's own suite pins the node_disk_size and
+# redis_node_type wiring (tests/defaults.tftest.hcl at the repo root); what is
+# unguarded is this example's choice of value.
+#
+# Verify manually with a real `terraform plan` from this directory: the node
+# group shows disk_size = 100 and the cache cluster node_type =
+# "cache.r6g.2xlarge" (confirmed against real providers with no state on
+# 2026-09-04). The helm values are `(known after apply)` in a fresh-create
+# plan even with real providers, because the same yamlencode also carries
+# attributes the module computes at apply time, such as the ElastiCache node
+# address behind local.redis_host (n8n.tf, the queue host and the KEDA
+# trigger address) and aws_iam_role.s3.arn for Pod Identity. One unknown
+# makes the whole string unknown, so DB_POSTGRESDB_POOL_SIZE = 20 and
+# maxReplicaCount = 320 only render in a plan against an existing
+# deployment's state, or after apply via
+# `kubectl get scaledobject -n n8n -o yaml` and
+# `kubectl get deploy n8n-main -n n8n -o yaml`. What plan-time does guarantee
+# is that both arguments are accepted module inputs (`terraform validate`
+# rejects an unknown argument), and n8n.tf references each variable directly.
+
+
 # ── PgBouncer ────────────────────────────────────────────────────────────────
-# Required anti-affinity, two replicas, and the PDB together guarantee that
-# no single-node failure or voluntary drain can take all n8n DB traffic down.
-# These were the live-validated fixes from PR #4; pinning them at plan time
-# means a future refactor can't silently regress to `preferred` anti-affinity
-# or a single replica.
+# Required anti-affinity, four replicas, and the PDB together guarantee that
+# no single-node failure or voluntary drain can take all n8n DB traffic down,
+# and that the client-connection budget stays above the fleet ceiling (see
+# the replica assertion's message). Anti-affinity and the PDB were the
+# live-validated fixes from PR #4; the replica count was raised from two
+# during load validation. Pinning all of it at plan time means a future
+# refactor can't silently regress to `preferred` anti-affinity or an
+# undersized replica count.
 
 run "pgbouncer_namespace_and_replicas" {
   command = plan
@@ -267,9 +307,9 @@ run "pgbouncer_namespace_and_replicas" {
 
   assert {
     # The kubernetes provider returns replicas as a string per its schema, not
-    # an int — compare to "2" rather than 2.
-    condition     = kubernetes_deployment.pgbouncer.spec[0].replicas == "2"
-    error_message = "PgBouncer must run 2 replicas; a single replica is a single point of failure for all n8n DB traffic"
+    # an int — compare to "4" rather than 4.
+    condition     = kubernetes_deployment.pgbouncer.spec[0].replicas == "4"
+    error_message = "PgBouncer must run 4 replicas: fewer is a client-connection budget below the fleet ceiling (460 pods x pool_size 20 is about 9,200 potential connections against MAX_CLIENT_CONN 3,000 per replica), and exceeding max_client_conn queues new client connections, recreating the very pool-acquisition backlog the pool sizing exists to prevent"
   }
 }
 

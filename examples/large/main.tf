@@ -115,14 +115,35 @@ module "n8n" {
   node_min           = 10
   node_max           = 50
 
+  # 100 GiB volumes: the module's default disk filled fleet-wide under n8n's
+  # image plus execution-data churn and evicted every pod on the node group
+  # (the incident behind the node_disk_size variable itself). This tier is
+  # the deployment class that eviction happened on.
+  node_disk_size = 100
+
   # ── Redis ─────────────────────────────────────────────────────────────────────
-  redis_node_type = "cache.r6g.large"
+  # Measured hard ceiling: the no-op webhook workload capped at 869 req/s on
+  # cache.r6g.large and reached 897-906 req/s on cache.r6g.2xlarge with no
+  # other change (round-2 T-B/T-C passes, 2026-08-24). Redis backs the Bull
+  # queue, so every execution crosses it; at this tier's throughput target
+  # the large node IS the bottleneck. If you downsize, 869 req/s is the
+  # measured trigger for moving back up.
+  redis_node_type = "cache.r6g.2xlarge"
 
   # ── DB pool per n8n pod ───────────────────────────────────────────────────────
-  # 5 TypeORM slots per pod. In transaction mode, PgBouncer queues connections
-  # for the ~1ms they are needed — pool of 5 handles concurrency=40 without
-  # timeouts. PgBouncer's own server-pool sizing lives in pgbouncer.tf.
-  db_postgresdb_pool_size = 5
+  # 20 TypeORM slots per pod. This value shipped as 5, defended as "PgBouncer
+  # queues connections for the ~1ms they are needed"; measured under burst,
+  # that assumption fails. Pool acquisition backlogs (33-54 requests pending
+  # per pod, acquire times of 2-14s), n8n's DB health-check ping races the
+  # SAME pool and times out, and the pod misdiagnoses the healthy database as
+  # dead, silently 503ing every request (91 of 160 webhook pods, roughly two
+  # thirds of all requests, with Aurora and PgBouncer both idle throughout).
+  # pool=20 plus DB_PING_TIMEOUT_MS=20000 eliminated the failure and was kept
+  # as standing config for the rest of the round. PgBouncer in transaction
+  # mode absorbs the upstream connection count; it does not remove the
+  # pod-local queue this pool governs. PgBouncer's own server-pool sizing
+  # lives in pgbouncer.tf.
+  db_postgresdb_pool_size = 20
 
   # ── Main pods ─────────────────────────────────────────────────────────────────
   # Mains carry neither webhooks (disableProductionWebhooksOnMainProcess) nor
@@ -137,11 +158,13 @@ module "n8n" {
   # spare during a rollout on a tier where mains span only two AZs.
   #
   # Neither the node group nor PgBouncer is the constraint. Main pods alone at
-  # this ceiling request 72,000m and open 300 client connections at pool_size=5.
-  # With all three families at their ceilings at once, which is what the node
-  # group has to survive, it is 208,000m of the ~785,000m this node group can
-  # schedule (60 × 1,200m main, 160 × 700m worker, 80 × 300m webhook) and ~1,500
-  # client connections against a MAX_CLIENT_CONN of 3,000 per PgBouncer replica.
+  # this ceiling request 72,000m and open 1,200 client connections at
+  # pool_size=20. With all three families at their ceilings at once, which is
+  # what the node group has to survive, it is 320,000m of the ~785,000m this
+  # node group can schedule (60 x 1,200m main, 320 x 700m worker, 80 x 300m
+  # webhook) and ~9,200 client connections (460 pods x pool_size 20) against
+  # PgBouncer's 12,000 budget (MAX_CLIENT_CONN 3,000 x 4 replicas, sized in
+  # pgbouncer.tf to stay above this ceiling).
   n8n_main_hpa_min_replicas = 6
   n8n_main_hpa_max_replicas = 60
 
@@ -155,19 +178,27 @@ module "n8n" {
   n8n_webhook_memory_limit     = "4Gi"
 
   # ── Workers ───────────────────────────────────────────────────────────────────
-  # concurrency=40: doubles throughput per pod vs 20, halves pod count needed.
-  # 856 req/s target ÷ concurrency=40 = 22 workers at steady state.
-  # Floor of 20 keeps the queue draining during idle periods.
+  # concurrency=40: doubles the queue slots per pod vs 20, halving the pod
+  # count needed for a given throughput. Floor of 20 keeps the queue draining
+  # during idle periods. Ceiling of 320: the round-2 endurance headline (587
+  # req/s sustained on the representative real workflow) ran at 320 workers.
+  # Past that concurrency setting, throughput at this tier scales in worker
+  # pod count, not in per-pod CPU, so raise the ceiling before the requests. The previous ceiling of 160 was never
+  # observed reaching this tier's target on a real workload.
   n8n_worker_keda_min_replicas = 20
-  n8n_worker_keda_max_replicas = 160
+  n8n_worker_keda_max_replicas = 320
   n8n_worker_concurrency       = 40
 
   # ── Execution settings ────────────────────────────────────────────────────────
   # Raise the hard concurrency cap from 100 to 2,000 — the default throttles
   # workers before any infrastructure bottleneck at this scale.
-  # 24-hour pruning is critical at this throughput: 14-day retention rapidly
-  # accumulates hundreds of millions of rows in execution_entity, and
-  # autovacuum cannot keep up with concurrent write load at that table size.
+  # WARNING: pruning settings cannot bound table growth at this tier. n8n's
+  # hard deletion runs at a hardcoded, non-configurable ceiling of 100
+  # executions/s (batchSize=100, rescheduled every 1 second, leader-only),
+  # which is ~8.6M deletions/day. This tier sustains multiples of that, so
+  # execution rows accumulate unboundedly whatever these two values say. They
+  # still matter (they set what the pruner is ALLOWED to reclaim), but plan
+  # for net table growth at any sustained completion rate above ~100/s.
   n8n_execution_concurrency_limit = 2000
   n8n_pruning_max_age             = 24
   n8n_pruning_max_count           = 5000000
