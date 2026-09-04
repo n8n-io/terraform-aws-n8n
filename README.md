@@ -1742,7 +1742,7 @@ kubectl rollout restart \
   deployment/n8n-main \
   deployment/n8n-worker \
   deployment/n8n-webhook-processor \
-  -n n8n
+  -n <namespace>
 ```
 
 `CREDENTIALS_OVERWRITE_PERSISTENCE` is separate and remains out of scope.

@@ -7288,9 +7288,13 @@ run "credentials_overwrite_escape_hatch_remains_valid_when_reference_is_null" {
     ]
   }
 
+  # The plan completing without expect_failures is what proves the validation
+  # leaves the escape hatch alone while the reference is null. The assert adds
+  # the other half: the module emits no CREDENTIALS_OVERWRITE_DATA_FILE of its
+  # own, so the caller's entry is the only one in the rendered env list.
   assert {
-    condition     = var.n8n_extra_env[0].name == "CREDENTIALS_OVERWRITE_DATA_FILE"
-    error_message = "Existing escape-hatch configurations must remain valid while the dedicated Secret reference is unset."
+    condition     = length(local.n8n_credentials_overwrite_env) == 0
+    error_message = "With the Secret reference unset, the module must not emit its own CREDENTIALS_OVERWRITE_DATA_FILE next to the caller's escape-hatch entry."
   }
 }
 
