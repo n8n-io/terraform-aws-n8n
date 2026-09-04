@@ -790,6 +790,13 @@ resource "helm_release" "n8n" {
           ] : [],
         ) : [],
 
+        # File-based credential overwrites from a caller-managed Secret. The
+        # matching volume and read-only mount are assembled in locals.tf and
+        # rendered onto all three n8n pod types below. Keep this before the
+        # caller escape hatch; the input validation rejects both overwrite env
+        # names while this entry is active, so nothing appended later can win.
+        local.n8n_credentials_overwrite_env,
+
         # Caller-supplied escape hatch, appended last. Kubernetes resolves
         # duplicate env names last-wins, so this would override anything above
         # it; var.n8n_extra_env is validated against local.n8n_managed_env_names

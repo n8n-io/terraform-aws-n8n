@@ -9,6 +9,25 @@ this project adheres to the stability contract in
 
 ### Added
 
+- `n8n_credentials_overwrite_secret_ref`: mounts one key from a
+  caller-managed Kubernetes Secret read-only on main, worker, and webhook
+  processor pods and points `CREDENTIALS_OVERWRITE_DATA_FILE` at it. The module
+  accepts only the Secret name and key, so the credential overwrite JSON does
+  not enter its Helm values or managed resources. The input defaults to `null`,
+  preserving existing behavior.
+
+  When set, plan-time validation rejects `CREDENTIALS_OVERWRITE_DATA` and
+  `CREDENTIALS_OVERWRITE_DATA_FILE` in `n8n_extra_env`, the managed
+  `credentials-overwrite` volume name in `n8n_extra_volumes`, and the managed
+  `/etc/n8n/credentials-overwrite` path in `n8n_extra_volume_mounts`. These
+  names remain available through the escape hatches while the new input is
+  null, preserving existing configurations.
+
+  n8n reads overwrite data at startup. Rotating the caller-managed Secret does
+  not roll pods because the module deliberately does not read or hash the
+  payload. Restart the `n8n-main`, `n8n-worker`, and
+  `n8n-webhook-processor` deployments manually after rotation.
+
 - `node_disk_size`: root EBS volume size in GiB for the EKS worker nodes.
   Defaults to `null`, which keeps the EKS managed-node-group default of 20
   GiB, so this is additive and no existing deployment changes.

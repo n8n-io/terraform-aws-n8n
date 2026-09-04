@@ -1691,6 +1691,61 @@ Terraform state and the pod environment in plaintext — restrict access
 accordingly. Setting `n8n_log_streaming_managed_by_env` back to `false`
 keeps the last applied destinations but restores UI write access.
 
+## Credential overwrites
+
+n8n [credential overwrites](https://docs.n8n.io/administer/manage-credentials/credential-overwrites/)
+let operators preconfigure shared credential fields and hide those fields from
+users. Supply the JSON through a caller-managed Kubernetes Secret:
+
+```hcl
+resource "kubernetes_secret_v1" "credentials_overwrite" {
+  metadata {
+    name      = "n8n-credentials-overwrite"
+    namespace = module.n8n.namespace
+  }
+
+  data = {
+    "credentials-overwrite.json" = var.credentials_overwrite_json
+  }
+}
+
+module "n8n" {
+  # ...other inputs...
+
+  n8n_credentials_overwrite_secret_ref = {
+    name = kubernetes_secret_v1.credentials_overwrite.metadata[0].name
+    # key defaults to "credentials-overwrite.json"
+  }
+}
+```
+
+The module mounts only the selected key read-only at
+`/etc/n8n/credentials-overwrite/<key>` on main, worker, and webhook-processor
+pods, then sets `CREDENTIALS_OVERWRITE_DATA_FILE` to that file. Passing the
+Secret resource's name attribute also makes the Helm release depend on the
+Secret, so a single apply creates them in the required order.
+
+The module accepts the Secret name and key, not the JSON. The payload therefore
+does not enter this module's Helm values or managed resources. If the caller
+creates the Secret with Terraform as above, the payload can still be stored in
+the caller's root state.
+
+n8n reads the file at startup. Updating the Secret does not restart any pods,
+and the module cannot calculate a rollout checksum without reading the payload
+back into state. Restart all three deployments after every rotation:
+
+```bash
+kubectl rollout restart \
+  deployment/n8n-main \
+  deployment/n8n-worker \
+  deployment/n8n-webhook-processor \
+  -n n8n
+```
+
+`CREDENTIALS_OVERWRITE_PERSISTENCE` is separate and remains out of scope.
+Persistence applies to overwrites submitted through n8n's HTTP endpoint and can
+supersede static file data.
+
 ## External Secrets (Enterprise)
 
 n8n's [External Secrets](https://docs.n8n.io/administer/manage-credentials/use-external-secret-stores)
@@ -1984,6 +2039,7 @@ doing at this node count, but neither removes the fivefold waste at source.
 | <a name="input_n8n_community_packages_registry"></a> [n8n\_community\_packages\_registry](#input\_n8n\_community\_packages\_registry) | npm registry community packages are installed from (e.g. <https://npm.internal.example.com>). Maps to N8N\_COMMUNITY\_PACKAGES\_REGISTRY, which n8n gates behind a specific licensed feature rather than a license key alone: any value other than <https://registry.npmjs.org> makes installs throw FeatureNotLicensedError unless the instance is entitled to COMMUNITY\_NODES\_CUSTOM\_REGISTRY (`getNpmRegistry` in community-packages.service.ts). Confirm that entitlement before setting this, since an unentitled instance breaks community-package installs instead of falling back to the public registry. Point this at a private mirror to install community nodes from an internal registry instead of the public npm one, e.g. when egress to registry.npmjs.org is blocked or packages are vendored. n8n defaults to <https://registry.npmjs.org>; when this is null (the default) the env var is omitted entirely so n8n's own default applies. A mirror that requires authentication also needs N8N\_COMMUNITY\_PACKAGES\_AUTH\_TOKEN, which this module does not manage; pass it via n8n\_extra\_env, keeping in mind that n8n\_extra\_env values are stored in plaintext in the Helm release and Terraform state. Baking packages into a custom image via n8n\_image\_repository avoids registry access at pod start entirely. | `string` | `null` | no |
 | <a name="input_n8n_compression_max_decompressed_size_bytes"></a> [n8n\_compression\_max\_decompressed\_size\_bytes](#input\_n8n\_compression\_max\_decompressed\_size\_bytes) | Largest decompressed payload the Compression node will produce, in bytes. Maps to N8N\_COMPRESSION\_NODE\_MAX\_DECOMPRESSED\_SIZE\_BYTES. Null (the default) omits the env var so n8n's own default applies, which is currently 2 GiB (2147483648) and which n8n has announced will drop to 256 MiB (268435456) in a future version. This is a zip-bomb limit, so the reduction is a hardening rather than a regression; set this only if workflows genuinely decompress archives larger than n8n's default allows, and set it to the value those workflows need rather than to the old default. | `number` | `null` | no |
 | <a name="input_n8n_compression_max_zip_entries"></a> [n8n\_compression\_max\_zip\_entries](#input\_n8n\_compression\_max\_zip\_entries) | Largest number of entries the Compression node will extract from one archive. Maps to N8N\_COMPRESSION\_NODE\_MAX\_ZIP\_ENTRIES. Null (the default) omits the env var so n8n's own default applies, which is currently 5000 and which n8n has announced will drop to 1000 in a future version. Like n8n\_compression\_max\_decompressed\_size\_bytes this is a zip-bomb limit, so the reduction hardens rather than breaks; set it only for workflows that genuinely process archives with more entries than n8n's default allows. | `number` | `null` | no |
+| <a name="input_n8n_credentials_overwrite_secret_ref"></a> [n8n\_credentials\_overwrite\_secret\_ref](#input\_n8n\_credentials\_overwrite\_secret\_ref) | Existing Kubernetes Secret containing n8n credential overwrite JSON. The<br/>module mounts only the selected key, read-only, at<br/>/etc/n8n/credentials-overwrite/<key> on main, worker, and webhook-processor<br/>pods and sets CREDENTIALS\_OVERWRITE\_DATA\_FILE to that path. name is the<br/>Secret's name in var.namespace; key defaults to<br/>"credentials-overwrite.json". The module accepts only this reference and<br/>never reads the JSON, so the payload does not enter this module's Helm values<br/>or managed resources. If Terraform creates the Secret, its payload can still<br/>enter the caller's state.<br/><br/>n8n reads the file at startup. Updating the caller-managed Secret does not<br/>roll pods, and the module cannot add a content checksum without reading the<br/>payload into state. After each rotation, manually restart n8n-main,<br/>n8n-worker, and n8n-webhook-processor. CREDENTIALS\_OVERWRITE\_PERSISTENCE is<br/>intentionally outside this file-based feature.<br/><br/>When this input is set, n8n\_extra\_env may not set<br/>CREDENTIALS\_OVERWRITE\_DATA or CREDENTIALS\_OVERWRITE\_DATA\_FILE,<br/>n8n\_extra\_volumes may not use the reserved name "credentials-overwrite",<br/>and n8n\_extra\_volume\_mounts may not use the reserved mount path<br/>"/etc/n8n/credentials-overwrite". Null preserves the escape-hatch behavior<br/>and rendered Helm values from before this input existed. | <pre>object({<br/>    name = string<br/>    key  = optional(string, "credentials-overwrite.json")<br/>  })</pre> | `null` | no |
 | <a name="input_n8n_custom_extensions_path"></a> [n8n\_custom\_extensions\_path](#input\_n8n\_custom\_extensions\_path) | Absolute path inside the n8n container that n8n scans for custom nodes at startup (e.g. "/opt/n8n-nodes"). Maps to N8N\_CUSTOM\_EXTENSIONS, and is set on every pod type (main, worker, webhook processor). This is the supported way to ship nodes baked into a custom image: since n8n 1.0 the loader no longer picks up nodes from the image's global node\_modules, so a plain npm install into the image is never seen (n8n v10 migration guide, and packages/cli/src/load-nodes-and-credentials.ts). Something has to put files at this path, so either set n8n\_image\_repository to an image that baked them in, or mount a volume that carries them with n8n\_extra\_volumes and n8n\_extra\_volume\_mounts; a path with neither behind it warns at plan time. The path must be outside /home/node/.n8n, which the chart mounts over on main pods (see the validation below). Two caveats that no Terraform input can fix. First, nodes loaded this way are registered under the package name CUSTOM, so a node whose type was n8n-nodes-example.myNode when installed from npm becomes CUSTOM.myNode, and existing workflows referencing the npm-qualified type will not resolve. Second, only one directory is exposed even though n8n accepts a semicolon-separated list, because every custom directory is registered under the same CUSTOM key and each one overwrites the last, so all but the final directory are silently dropped. Leave null (the default) to omit the env var entirely. | `string` | `null` | no |
 | <a name="input_n8n_dns_config"></a> [n8n\_dns\_config](#input\_n8n\_dns\_config) | Pod-level DNS settings applied to the main, worker and webhook-processor pods<br/>(the chart's top-level `dnsConfig`, rendered into all three pod specs).<br/>Defaults to null, which omits the block entirely and leaves Kubernetes'<br/>defaults in place, so this is a no-op unless set.<br/><br/>THE REASON THIS EXISTS: Kubernetes injects `options ndots:5` plus four search<br/>domains into every pod. A name with FEWER than 5 dots is tried against every<br/>search domain BEFORE being tried as written. Every AWS endpoint n8n talks to<br/>that has 4 dots or fewer therefore costs FIVE DNS queries, four of them<br/>guaranteed NXDOMAIN. Measured on a 246-pod deployment at roughly 670 req/s:<br/>12,794 DNS queries/s sustained, peaking at 15,098 (22.5 per HTTP request),<br/>of which 80.0% were NXDOMAIN, which is exactly the predicted 4-in-5. That<br/>volume saturated the cluster's two CoreDNS replicas and produced<br/>`getaddrinfo EAI_AGAIN` on S3 writes, surfacing to callers as HTTP 500s.<br/><br/>Which endpoints are affected depends only on their dot count:<br/>  s3.<region>.amazonaws.com bucket endpoints   4 dots  -> amplified 5x<br/>  <svc>.<ns>.svc.cluster.local                 4 dots  -> amplified 5x<br/>  RDS/Aurora writer endpoints                  5 dots  -> not amplified<br/>  ElastiCache endpoints                        6 dots  -> not amplified<br/><br/>The standard remedy is `ndots: 1`, which makes any name containing at least<br/>one dot resolve directly and cuts DNS volume roughly 5x. It is safe here<br/>because this module addresses every in-cluster dependency by FQDN already;<br/>bare single-label names (0 dots) still use the search path unchanged:<br/><br/>  n8n\_dns\_config = {<br/>    options = [{ name = "ndots", value = "1" }]<br/>  }<br/><br/>Setting `ndots` lower than the longest bare name you rely on will break that<br/>name's resolution, so if you add your own single-label service references,<br/>either write them as FQDNs or leave this unset.<br/><br/>Nameservers are validated as plain IPv4 or IPv6 addresses, at most 3,<br/>matching the limits the Kubernetes pod spec enforces at admission.<br/><br/>Search domains are validated to Kubernetes' relaxed rules<br/>(RelaxedDNSSearchValidation, on by default since 1.33 and GA in 1.34):<br/>lowercase RFC 1123 subdomains of at most 253 characters, underscores<br/>permitted, and a bare "." accepted. Clusters on 1.32 or older validate<br/>strictly at admission, unless the RelaxedDNSSearchValidation feature<br/>gate is enabled by hand, and reject "." and underscore-containing<br/>domains even though this module's plan accepts them. | <pre>object({<br/>    nameservers = optional(list(string))<br/>    searches    = optional(list(string))<br/>    options = optional(list(object({<br/>      name  = string<br/>      value = optional(string)<br/>    })))<br/>  })</pre> | `null` | no |
 | <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate\_arn. | `string` | n/a | yes |

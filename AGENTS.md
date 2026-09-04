@@ -365,6 +365,7 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
   | `HPA: main pods` / `HPA: webhook processor pods` | CPU-based autoscaling |
   | `Observability` | Metrics/telemetry toggles |
   | `Community packages` | Custom-node loading, OTEL export, log streaming, the `n8n_extra_env` escape hatch |
+  | `Credential overwrites` | Caller-managed Kubernetes Secret reference for file-based credential overwrites |
   | `External Secrets` | External Secrets Operator integration |
   | `KEDA: worker pods` | Queue-depth autoscaling |
   | `Pod DNS` | Pod-level DNS settings (`n8n_dns_config`) to work around Kubernetes' `ndots:5` search-path amplification |

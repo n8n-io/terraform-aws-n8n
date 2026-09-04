@@ -7145,6 +7145,199 @@ run "unmounted_extra_volume_warns" {
   expect_failures = [check.extra_volumes_should_be_mounted]
 }
 
+# ── n8n_credentials_overwrite_secret_ref ─────────────────────────────────────
+# The Helm values blob is unknown at plan time under mocked providers, but all
+# three pieces are assembled in locals before that boundary so their exact
+# volume, mount, and environment-variable contract remains testable.
+
+run "credentials_overwrite_secret_ref_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition = (
+      var.n8n_credentials_overwrite_secret_ref == null &&
+      length(local.n8n_credentials_overwrite_env) == 0
+    )
+    error_message = "The credential overwrite Secret reference must default to null and emit no environment variable."
+  }
+}
+
+run "credentials_overwrite_secret_ref_wires_default_key" {
+  command = plan
+
+  variables {
+    n8n_credentials_overwrite_secret_ref = {
+      name = "n8n-credentials-overwrite"
+    }
+  }
+
+  assert {
+    condition = local.n8n_extra_volumes == [
+      {
+        name = "credentials-overwrite"
+        secret = {
+          secretName = "n8n-credentials-overwrite"
+          items = [
+            {
+              key  = "credentials-overwrite.json"
+              path = "credentials-overwrite.json"
+            },
+          ]
+        }
+      },
+    ]
+    error_message = "The managed volume must project only the default credential overwrite key from the caller-managed Secret."
+  }
+
+  assert {
+    condition = local.n8n_extra_volume_mounts == [
+      {
+        name      = "credentials-overwrite"
+        mountPath = "/etc/n8n/credentials-overwrite"
+        readOnly  = true
+      },
+    ]
+    error_message = "The credential overwrite Secret must be mounted read-only at its dedicated directory."
+  }
+
+  assert {
+    condition = (
+      length(local.n8n_credentials_overwrite_env) == 1 &&
+      local.n8n_credentials_overwrite_env[0].name == "CREDENTIALS_OVERWRITE_DATA_FILE" &&
+      local.n8n_credentials_overwrite_env[0].value == "/etc/n8n/credentials-overwrite/credentials-overwrite.json"
+    )
+    error_message = "CREDENTIALS_OVERWRITE_DATA_FILE must point at the projected default key."
+  }
+}
+
+run "credentials_overwrite_secret_ref_wires_custom_key" {
+  command = plan
+
+  variables {
+    n8n_credentials_overwrite_secret_ref = {
+      name = "n8n-credentials-overwrite"
+      key  = "shared_oauth.json"
+    }
+  }
+
+  assert {
+    condition = (
+      local.n8n_extra_volumes[0].secret.items[0].key == "shared_oauth.json" &&
+      local.n8n_credentials_overwrite_env[0].value == "/etc/n8n/credentials-overwrite/shared_oauth.json"
+    )
+    error_message = "A custom Secret key must drive both the projected filename and CREDENTIALS_OVERWRITE_DATA_FILE."
+  }
+}
+
+run "credentials_overwrite_secret_ref_rejects_invalid_secret_name" {
+  command = plan
+
+  variables {
+    n8n_credentials_overwrite_secret_ref = {
+      name = "N8N Credentials"
+    }
+  }
+
+  expect_failures = [var.n8n_credentials_overwrite_secret_ref]
+}
+
+run "credentials_overwrite_secret_ref_rejects_invalid_key" {
+  command = plan
+
+  variables {
+    n8n_credentials_overwrite_secret_ref = {
+      name = "n8n-credentials-overwrite"
+      key  = "nested/credentials.json"
+    }
+  }
+
+  expect_failures = [var.n8n_credentials_overwrite_secret_ref]
+}
+
+run "credentials_overwrite_escape_hatch_remains_valid_when_reference_is_null" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      {
+        name  = "CREDENTIALS_OVERWRITE_DATA_FILE"
+        value = "/existing/credentials-overwrite.json"
+      },
+    ]
+  }
+
+  assert {
+    condition     = var.n8n_extra_env[0].name == "CREDENTIALS_OVERWRITE_DATA_FILE"
+    error_message = "Existing escape-hatch configurations must remain valid while the dedicated Secret reference is unset."
+  }
+}
+
+run "credentials_overwrite_secret_ref_rejects_overwrite_env_conflict" {
+  command = plan
+
+  variables {
+    n8n_credentials_overwrite_secret_ref = {
+      name = "n8n-credentials-overwrite"
+    }
+    n8n_extra_env = [
+      { name = "CREDENTIALS_OVERWRITE_DATA", value = "{}" },
+    ]
+  }
+
+  expect_failures = [var.n8n_credentials_overwrite_secret_ref]
+}
+
+run "credentials_overwrite_secret_ref_rejects_overwrite_file_env_conflict" {
+  command = plan
+
+  variables {
+    n8n_credentials_overwrite_secret_ref = {
+      name = "n8n-credentials-overwrite"
+    }
+    n8n_extra_env = [
+      { name = "CREDENTIALS_OVERWRITE_DATA_FILE", value = "/existing/credentials-overwrite.json" },
+    ]
+  }
+
+  expect_failures = [var.n8n_credentials_overwrite_secret_ref]
+}
+
+run "credentials_overwrite_secret_ref_rejects_volume_name_conflict" {
+  command = plan
+
+  variables {
+    n8n_credentials_overwrite_secret_ref = {
+      name = "n8n-credentials-overwrite"
+    }
+    n8n_extra_volumes = [
+      { name = "credentials-overwrite", secret = { secret_name = "existing-overwrite" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "credentials-overwrite", mount_path = "/existing/credentials-overwrite" },
+    ]
+  }
+
+  expect_failures = [var.n8n_credentials_overwrite_secret_ref]
+}
+
+run "credentials_overwrite_secret_ref_rejects_mount_path_conflict" {
+  command = plan
+
+  variables {
+    n8n_credentials_overwrite_secret_ref = {
+      name = "n8n-credentials-overwrite"
+    }
+    n8n_extra_volumes = [
+      { name = "existing-overwrite", secret = { secret_name = "existing-overwrite" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "existing-overwrite", mount_path = "/etc/n8n/credentials-overwrite" },
+    ]
+  }
+
+  expect_failures = [var.n8n_credentials_overwrite_secret_ref]
+}
+
 # ── n8n_community_packages_registry ───────────────────────────────────────────
 
 run "community_packages_registry_defaults_to_null" {

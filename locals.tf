@@ -443,45 +443,77 @@ locals {
   # default_mode arrives as an octal string and is converted with parseint,
   # because Kubernetes wants the integer. A Terraform number literal cannot do
   # this job: 0644 parses as decimal 644, which is octal 1204.
-  n8n_extra_volumes = [
-    for volume in var.n8n_extra_volumes : merge(
-      { name = volume.name },
-      volume.config_map == null ? {} : {
-        configMap = merge(
-          { name = volume.config_map.name },
-          volume.config_map.default_mode == null ? {} : {
-            defaultMode = parseint(volume.config_map.default_mode, 8)
-          },
-        )
-      },
-      volume.secret == null ? {} : {
-        secret = merge(
-          { secretName = volume.secret.secret_name },
-          volume.secret.default_mode == null ? {} : {
-            defaultMode = parseint(volume.secret.default_mode, 8)
-          },
-        )
-      },
-      volume.persistent_volume_claim == null ? {} : {
-        persistentVolumeClaim = merge(
-          { claimName = volume.persistent_volume_claim.claim_name },
-          volume.persistent_volume_claim.read_only == null ? {} : {
-            readOnly = volume.persistent_volume_claim.read_only
-          },
-        )
-      },
-    )
-  ]
-
-  n8n_extra_volume_mounts = [
-    for mount in var.n8n_extra_volume_mounts : merge(
+  n8n_extra_volumes = concat(
+    [
+      for volume in var.n8n_extra_volumes : merge(
+        { name = volume.name },
+        volume.config_map == null ? {} : {
+          configMap = merge(
+            { name = volume.config_map.name },
+            volume.config_map.default_mode == null ? {} : {
+              defaultMode = parseint(volume.config_map.default_mode, 8)
+            },
+          )
+        },
+        volume.secret == null ? {} : {
+          secret = merge(
+            { secretName = volume.secret.secret_name },
+            volume.secret.default_mode == null ? {} : {
+              defaultMode = parseint(volume.secret.default_mode, 8)
+            },
+          )
+        },
+        volume.persistent_volume_claim == null ? {} : {
+          persistentVolumeClaim = merge(
+            { claimName = volume.persistent_volume_claim.claim_name },
+            volume.persistent_volume_claim.read_only == null ? {} : {
+              readOnly = volume.persistent_volume_claim.read_only
+            },
+          )
+        },
+      )
+    ],
+    var.n8n_credentials_overwrite_secret_ref == null ? [] : [
       {
-        name      = mount.name
-        mountPath = mount.mount_path
-        readOnly  = mount.read_only
+        name = "credentials-overwrite"
+        secret = {
+          secretName = var.n8n_credentials_overwrite_secret_ref.name
+          items = [
+            {
+              key  = var.n8n_credentials_overwrite_secret_ref.key
+              path = var.n8n_credentials_overwrite_secret_ref.key
+            },
+          ]
+        }
       },
-      mount.sub_path == null ? {} : { subPath = mount.sub_path },
-    )
+    ],
+  )
+
+  n8n_extra_volume_mounts = concat(
+    [
+      for mount in var.n8n_extra_volume_mounts : merge(
+        {
+          name      = mount.name
+          mountPath = mount.mount_path
+          readOnly  = mount.read_only
+        },
+        mount.sub_path == null ? {} : { subPath = mount.sub_path },
+      )
+    ],
+    var.n8n_credentials_overwrite_secret_ref == null ? [] : [
+      {
+        name      = "credentials-overwrite"
+        mountPath = "/etc/n8n/credentials-overwrite"
+        readOnly  = true
+      },
+    ],
+  )
+
+  n8n_credentials_overwrite_env = var.n8n_credentials_overwrite_secret_ref == null ? [] : [
+    {
+      name  = "CREDENTIALS_OVERWRITE_DATA_FILE"
+      value = "/etc/n8n/credentials-overwrite/${var.n8n_credentials_overwrite_secret_ref.key}"
+    },
   ]
 
   # ── n8n_extra_env collision guard ──────────────────────────────────────────
