@@ -250,6 +250,33 @@ run "vpc_cni_addon_warm_ip_tuning" {
   }
 }
 
+# ── Load-validated module inputs ──────────────────────────────────────────────
+# main.tf carries five values that load validation round 2 measured on this
+# deployment class (see the comments beside each): node_disk_size = 100,
+# redis_node_type = "cache.r6g.2xlarge", db_postgresdb_pool_size = 20,
+# n8n_worker_keda_max_replicas = 320, and four PgBouncer replicas. Only the
+# PgBouncer count is pinned at plan time (next section), because it is a
+# resource this configuration creates itself.
+#
+# The other four cannot be asserted here. A run block can only reference the
+# root module's resources, variables and outputs; the module's resources
+# (module.n8n.aws_eks_node_group.n8n, module.n8n.aws_elasticache_cluster.n8n)
+# are "Unsupported attribute" from a test in this directory, the module exposes
+# no output carrying disk_size or node_type, and the values are literals in the
+# module block rather than example variables. The pool size and the KEDA
+# ceiling additionally live only inside the module's helm_release values, which
+# are deferred under the mock providers (see "Known mock provider limitations"
+# in AGENTS.md). The module's own suite pins the node_disk_size and
+# redis_node_type wiring (tests/defaults.tftest.hcl at the repo root); what is
+# unguarded is this example's choice of value.
+#
+# Verify manually with a real `terraform plan` from this directory: the node
+# group shows disk_size = 100, the cache cluster node_type =
+# "cache.r6g.2xlarge", and the rendered helm values carry
+# DB_POSTGRESDB_POOL_SIZE = 20 and maxReplicaCount = 320. After apply,
+# `kubectl get scaledobject -n n8n -o yaml` and
+# `kubectl get deploy n8n-main -n n8n -o yaml` show the last two.
+
 # ── PgBouncer ────────────────────────────────────────────────────────────────
 # Required anti-affinity, four replicas, and the PDB together guarantee that
 # no single-node failure or voluntary drain can take all n8n DB traffic down,
