@@ -568,6 +568,9 @@ resource "helm_release" "n8n" {
           { name = "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS", value = "true" },
           # Override the internally computed http://host:5678 URL so webhooks show the correct HTTPS address.
           { name = "WEBHOOK_URL", value = coalesce(var.n8n_webhook_url, "https://${local.n8n_domain}") },
+          # Keep the current n8n webhook URL setting in sync with the legacy
+          # WEBHOOK_URL fallback while older n8n versions still consume it.
+          { name = "N8N_WEBHOOK_URL", value = coalesce(var.n8n_webhook_url, "https://${local.n8n_domain}") },
           # The editor's own base URL, and what n8n builds absolute non-webhook
           # URLs from: UrlService.getInstanceBaseUrl() prefers
           # N8N_EDITOR_BASE_URL and falls back to WEBHOOK_URL when it is unset.

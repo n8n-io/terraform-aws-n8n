@@ -256,6 +256,10 @@ this project adheres to the stability contract in
 
 ### Changed
 
+- The module now sets n8n's current `N8N_WEBHOOK_URL` environment variable
+  alongside the legacy `WEBHOOK_URL`, using the same `n8n_webhook_url` value
+  for both. Existing deployments keep the same webhook base URL while no
+  longer relying only on n8n's legacy compatibility path.
 - **`examples/large` now carries the values load validation round 2 measured
   on this deployment class**, replacing the reasoning that shipped with them.
   `db_postgresdb_pool_size` 5 to 20: pool 5 was the exact value behind a
