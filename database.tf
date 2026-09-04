@@ -455,15 +455,14 @@ resource "aws_db_instance" "n8n" {
   multi_az                = var.db_multi_az
   backup_retention_period = var.db_backup_retention_period
 
-  # Written as `? true : null` rather than passing the bool straight through,
-  # matching redis.tf: apply_immediately is a request-time flag the API never
-  # reports back, so existing instances have it null in state and an explicit
-  # `false` would render as an in-place update on every such deployment for a
-  # change that alters nothing. Without this set, a db_instance_class change
-  # reports "Apply complete" while AWS queues the class change in
-  # PendingModifiedValues for the next maintenance window; see the variable
-  # description for the measured incident.
-  apply_immediately = var.db_apply_immediately ? true : null
+  # Plain passthrough. Unlike the ElastiCache resources (see locals.tf), this
+  # attribute is plain Optional on aws_db_instance and the SDK normalises an
+  # unset bool to false, so instances created before this input existed already
+  # hold false in state (verified live, PR #107) and the default produces no
+  # diff. Without this set, a db_instance_class change reports "Apply complete"
+  # while AWS queues the class change in PendingModifiedValues for the next
+  # maintenance window; see the variable description for the measured incident.
+  apply_immediately = var.db_apply_immediately
 
   # Hardening defaults. Each maps to a Checkov finding that would otherwise
   # ride on `soft_fail = true` in CI. iam_database_authentication_enabled and

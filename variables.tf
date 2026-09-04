@@ -1646,10 +1646,10 @@ variable "db_apply_immediately" {
   type        = bool
   default     = false
 
-  # null is not meaningful here: the resource wiring is a `? true : null`
-  # ternary (see database.tf), which requires a bool condition. A caller
-  # writing `x = null` would otherwise die with an opaque "Invalid
-  # conditional condition". See AGENTS.md on nullable.
+  # null is not meaningful here: the input also feeds a `!var.db_apply_immediately`
+  # term in check.rds_tuning_requires_module_managed_database, and a caller
+  # writing `x = null` in a module block must get false rather than aborting
+  # the plan on a null operand. See AGENTS.md on nullable.
   nullable = false
 }
 
@@ -2098,10 +2098,10 @@ variable "redis_apply_immediately" {
   type        = bool
   default     = false
 
-  # null is not meaningful here: a caller writing `x = null` in a module block
-  # would otherwise propagate null into the `var.redis_apply_immediately ?
-  # true : null` ternary in locals.tf, which requires a bool condition, and
-  # die with an opaque "Invalid conditional condition". See AGENTS.md on
+  # null is not meaningful here, and on ElastiCache it is actively harmful: the
+  # attribute is Optional+Computed, so a null reaching the resource keeps
+  # whatever value is already in state (see locals.tf). A caller writing
+  # `x = null` in a module block must get false, not null. See AGENTS.md on
   # nullable.
   nullable = false
 }

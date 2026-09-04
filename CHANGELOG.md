@@ -256,8 +256,8 @@ this project adheres to the stability contract in
 
 - `db_apply_immediately`: apply RDS instance modifications immediately instead
   of deferring them to the next maintenance window. Defaults to `false` (the
-  AWS default), wired as `? true : null` so existing instances see no plan
-  change. Exists because a `db_instance_class` change otherwise reports
+  AWS default), which is also what existing instances already hold in state,
+  so they see no plan change. Exists because a `db_instance_class` change otherwise reports
   "Apply complete" while AWS queues the change in `PendingModifiedValues` for
   a window that can be days out, with nothing in the plan or apply output
   saying so (measured incident during load validation; both the database and
@@ -394,8 +394,19 @@ this project adheres to the stability contract in
   silently did nothing on the single-node topology, so a `redis_node_type`
   resize reported "Apply complete" while AWS queued it for the maintenance
   window (measured: the forced resize then took 41 minutes to complete).
-  Same `? true : null` wiring, so deployments that leave it false see no plan
-  change.
+
+  The input is also now passed to both ElastiCache resources as an explicit
+  bool rather than `true`-or-`null`. Verified live: `apply_immediately` is
+  Optional+Computed on `aws_elasticache_cluster` and
+  `aws_elasticache_replication_group` and the provider never reads it back,
+  so with the old wiring a deployment that set the input to `true` once and
+  then unset it kept `true` in state with no plan diff, and every later Redis
+  modification skipped the maintenance window silently. An explicit `false`
+  is the only way to turn it back off. **Upgrade note:** deployments created
+  before this release see a one-time in-place `+ apply_immediately = false`
+  on their ElastiCache resource. It is state-only; the provider makes no API
+  call for this attribute on its own, and nothing about the running cache
+  changes.
 
 ## [0.3.0] - 2026-08-13
 
