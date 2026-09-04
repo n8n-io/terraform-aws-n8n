@@ -1016,6 +1016,89 @@ run "webhook_hpa_scale_up_stabilization_window_rejects_above_max" {
   expect_failures = [var.n8n_webhook_hpa_scale_up_stabilization_window_seconds]
 }
 
+# ── V8 heap ceiling (NODE_OPTIONS) ────────────────────────────────────────────
+# Variable-contract assertions only. The value rides config.extraEnv, and
+# helm_release.values is unknown at plan time under the mock provider (see
+# AGENTS.md, "Known mock provider limitations"), so that NODE_OPTIONS is
+# actually rendered onto the pods is not assertable here.
+#
+# To verify the wiring on a live deployment, exec into any n8n pod and read the
+# ceiling V8 actually applied rather than the env var it was asked for:
+#
+#   kubectl exec -n n8n deploy/n8n-webhook-processor -- \
+#     node -e 'console.log(require("v8").getHeapStatistics().heap_size_limit)'
+#
+# With the variable unset that prints V8's own default, roughly half the
+# container memory limit capped at about 2 GiB (measured on Node 26: 1Gi limit
+# gives ~562,000,000, 4Gi gives ~2,248,000,000, the cap this input exists to
+# lift). With it set the figure tracks the value plus a small young-generation
+# allowance (768 gives ~830,000,000). Verified live on examples/small for
+# PR #104. When
+# n8n_metrics_enabled is on, n8n_nodejs_heap_size_total_bytes on /metrics shows
+# the same ceiling without an exec.
+
+run "node_max_old_space_size_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_node_max_old_space_size_mb == null
+    error_message = "n8n_node_max_old_space_size_mb must default to null so NODE_OPTIONS is omitted entirely and V8 keeps its own default ceiling."
+  }
+}
+
+run "node_max_old_space_size_accepts_a_whole_number_of_mb" {
+  command = plan
+
+  variables {
+    n8n_node_max_old_space_size_mb = 3072
+  }
+
+  # 3072 is NOT a safe value at the module's own defaults: only
+  # n8n_main_memory_limit is 4Gi, while worker is 2Gi and webhook is 1Gi, so a
+  # 3 GiB ceiling would exceed two of the three tiers. The value is exercised
+  # here purely as a well-formed number; sizing guidance lives in the variable
+  # description, which says to size against the SMALLEST of the three limits.
+  assert {
+    condition     = var.n8n_node_max_old_space_size_mb == 3072
+    error_message = "n8n_node_max_old_space_size_mb should accept a whole number of MB. Size it against the smallest of n8n_main/worker/webhook_memory_limit: with 4Gi across all three, a value around 3072 leaves ~25% for non-heap memory."
+  }
+}
+
+run "node_max_old_space_size_accepts_its_floor" {
+  command = plan
+
+  variables {
+    n8n_node_max_old_space_size_mb = 256
+  }
+
+  assert {
+    condition     = var.n8n_node_max_old_space_size_mb == 256
+    error_message = "n8n_node_max_old_space_size_mb should accept its documented minimum of 256."
+  }
+}
+
+run "node_max_old_space_size_rejects_below_the_floor" {
+  command = plan
+
+  variables {
+    n8n_node_max_old_space_size_mb = 255
+  }
+
+  expect_failures = [var.n8n_node_max_old_space_size_mb]
+}
+
+# Node truncates a fractional --max-old-space-size at the decimal point rather
+# than rounding, so 0.5 would reach the pods as a heap ceiling of zero.
+run "node_max_old_space_size_rejects_a_fractional_value" {
+  command = plan
+
+  variables {
+    n8n_node_max_old_space_size_mb = 3072.5
+  }
+
+  expect_failures = [var.n8n_node_max_old_space_size_mb]
+}
+
 run "rds_hardened_defaults" {
   command = plan
 
@@ -5899,6 +5982,45 @@ run "extra_env_rejects_license_detach_floating_on_shutdown_name" {
   }
 
   expect_failures = [var.n8n_extra_env]
+}
+
+# NODE_OPTIONS is reserved CONDITIONALLY, unlike every other name in the guard.
+# It is a whole flag string rather than a single setting, so when the module
+# emits it a caller entry would replace the module's --max-old-space-size
+# wholesale instead of adding to it, silently unpinning the ceiling
+# n8n_node_max_old_space_size_mb claims to set.
+run "extra_env_rejects_node_options_when_the_heap_ceiling_is_set" {
+  command = plan
+
+  variables {
+    n8n_node_max_old_space_size_mb = 3072
+    n8n_extra_env = [
+      { name = "NODE_OPTIONS", value = "--max-old-space-size=8192" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# The other half of that contract, and the reason the guard is not
+# unconditional: with the input null the module emits no NODE_OPTIONS, there is
+# no value to clobber, and a caller setting it for unrelated Node flags
+# (--enable-source-maps, --inspect, their own heap flag) is doing something
+# legitimate. Reserving the name outright would break those callers at plan
+# time on upgrade, for a collision that cannot occur.
+run "extra_env_accepts_node_options_when_the_heap_ceiling_is_unset" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "NODE_OPTIONS", value = "--enable-source-maps" },
+    ]
+  }
+
+  assert {
+    condition     = var.n8n_extra_env[0].name == "NODE_OPTIONS"
+    error_message = "NODE_OPTIONS must stay settable through n8n_extra_env while n8n_node_max_old_space_size_mb is null, or this change is not additive for existing callers."
+  }
 }
 
 # A genuinely non-managed var that happens to be timezone-related stays allowed:

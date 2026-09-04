@@ -497,7 +497,7 @@ locals {
   # chart-rendered identity/topology/storage/license vars not covered by a
   # prefix below. Keep in sync with the extraEnv block in n8n.tf and the chart
   # values the module sets (database/redis/s3/multiMain/license/secretRefs).
-  n8n_managed_env_names = [
+  n8n_managed_env_names = concat([
     # Set by the module in config.extraEnv or the n8n secret.
     "N8N_ENCRYPTION_KEY",
     "N8N_LOG_LEVEL",
@@ -578,7 +578,21 @@ locals {
     "TZ",
     "N8N_DISABLED_MODULES",
     "N8N_EXTERNAL_SECRETS_UPDATE_INTERVAL",
-  ]
+    ],
+    # NODE_OPTIONS is reserved ONLY while n8n_node_max_old_space_size_mb is
+    # set, unlike every entry above. The distinction matters because it is a
+    # whole flag STRING rather than a single setting: when the module emits it,
+    # a caller entry would replace the module's --max-old-space-size wholesale
+    # rather than adding to it (extraEnv is appended last, Kubernetes resolves
+    # duplicate names last-wins), silently unpinning the ceiling the input says
+    # is in force. When the input is null the module emits nothing, there is no
+    # value to clobber, and a caller passing NODE_OPTIONS for unrelated flags
+    # (--enable-source-maps, --inspect, their own heap flag) is doing something
+    # legitimate that this module has no business rejecting. Reserving it
+    # unconditionally would break those callers at plan time on upgrade, for a
+    # collision that cannot occur.
+    var.n8n_node_max_old_space_size_mb != null ? ["NODE_OPTIONS"] : [],
+  )
 
   # Whole env-var families the module/chart owns, matched by prefix so the guard
   # stays correct when the chart adds new members. This intentionally fails

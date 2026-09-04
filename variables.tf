@@ -1079,6 +1079,53 @@ variable "n8n_webhook_memory_limit" {
   }
 }
 
+variable "n8n_node_max_old_space_size_mb" {
+  description = <<-EOT
+    V8 old-space heap ceiling in MB, emitted as
+    NODE_OPTIONS=--max-old-space-size=<value> on every n8n container (main,
+    worker, and webhook processor; the chart has no per-tier env path).
+    Defaults to null: no NODE_OPTIONS is set and V8 sizes the heap itself,
+    at roughly half the container memory limit up to a fixed cap of about
+    2 GiB. Measured on the pinned image (Node 26): a 1Gi limit gives a
+    ~536 MiB heap, 2Gi gives ~1072 MiB, 4Gi gives ~2144 MiB, and the cap
+    holds from there. So container memory above about 4Gi buys memory the
+    Node process can never allocate: measured during load validation,
+    webhook pods died at the ~2,033 MB old-space ceiling with half of their
+    4 GiB container limit unused.
+
+    Size it against the SMALLEST of n8n_main_memory_limit,
+    n8n_worker_memory_limit and n8n_webhook_memory_limit, leaving roughly
+    25% of that limit for non-heap memory (buffers, stacks, binary data in
+    flight). Example: limits of 4Gi across the board support a value around
+    3072.
+
+    On n8n builds affected by the webhook-tier heap leak, raising the
+    ceiling DELAYS the fleet death, it does not prevent it, and GC pauses
+    lengthen as heap approaches any ceiling (gc_frac was measured jumping
+    0.06 to 0.40 in the sample where pods began dying). Pair it with a
+    scheduled rolling restart of the webhook tier rather than treating it as
+    a substitute for one.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.n8n_node_max_old_space_size_mb == null ? true : var.n8n_node_max_old_space_size_mb >= 256
+    error_message = "n8n_node_max_old_space_size_mb must be at least 256 (MB), or null to leave V8's own default in place."
+  }
+
+  # Rejected rather than truncated: --max-old-space-size takes an integer, and
+  # Node parses a fractional value by discarding everything from the decimal
+  # point on. 3072.9 would silently become 3072 and 0.5 would become 0, which
+  # is a heap ceiling of zero on every pod. Same treatment the module already
+  # gives its other whole-number inputs, e.g. the node-count and replica
+  # bounds, which reject a fractional value rather than rounding it.
+  validation {
+    condition     = var.n8n_node_max_old_space_size_mb == null ? true : floor(var.n8n_node_max_old_space_size_mb) == var.n8n_node_max_old_space_size_mb
+    error_message = "n8n_node_max_old_space_size_mb must be a whole number of MB. Node truncates a fractional --max-old-space-size at the decimal point rather than rounding it."
+  }
+}
+
 # ── Execution settings ────────────────────────────────────────────────────────
 
 variable "n8n_worker_concurrency" {
@@ -2734,7 +2781,7 @@ variable "n8n_log_streaming_destinations" {
 }
 
 variable "n8n_extra_env" {
-  description = "Additional environment variables to inject into all n8n pods (main, worker, and webhook-processor) via the Helm chart's config.extraEnv list. Each entry is an object with name and value string attributes. config.extraEnv is appended last in every container's env list, so by Kubernetes' last-wins rule any name here overrides the chart's value for that name. To prevent silently breaking the deployment, an entry is rejected at plan time when its name collides with a connection, identity, storage, license, or topology variable the module manages: any name starting with DB_, QUEUE_, N8N_RUNNERS_, N8N_EXTERNAL_STORAGE_S3_, N8N_MULTI_MAIN_, or AWS_, plus names like N8N_ENCRYPTION_KEY, N8N_LICENSE_ACTIVATION_KEY, N8N_HOST, WEBHOOK_URL, and EXECUTIONS_MODE. Use the dedicated module inputs for those. Do not put secret values here, because they render into the Helm release and are stored in plaintext in Terraform state; instead pass a *_FILE companion (e.g. a name ending in _FILE) pointing at a mounted Kubernetes secret, or use n8n credentials. Example: [{name = \"N8N_DEFAULT_LOCALE\", value = \"de\"}]."
+  description = "Additional environment variables to inject into all n8n pods (main, worker, and webhook-processor) via the Helm chart's config.extraEnv list. Each entry is an object with name and value string attributes. config.extraEnv is appended last in every container's env list, so by Kubernetes' last-wins rule any name here overrides the chart's value for that name. To prevent silently breaking the deployment, an entry is rejected at plan time when its name collides with a connection, identity, storage, license, or topology variable the module manages: any name starting with DB_, QUEUE_, N8N_RUNNERS_, N8N_EXTERNAL_STORAGE_S3_, N8N_MULTI_MAIN_, or AWS_, plus names like N8N_ENCRYPTION_KEY, N8N_LICENSE_ACTIVATION_KEY, N8N_HOST, WEBHOOK_URL, and EXECUTIONS_MODE. NODE_OPTIONS is additionally reserved only while n8n_node_max_old_space_size_mb is set: it is a whole flag string rather than a single setting, so a caller entry would replace the module's --max-old-space-size wholesale instead of merging with it. With that input null the module emits no NODE_OPTIONS and callers may set it freely. Use the dedicated module inputs for those. Do not put secret values here, because they render into the Helm release and are stored in plaintext in Terraform state; instead pass a *_FILE companion (e.g. a name ending in _FILE) pointing at a mounted Kubernetes secret, or use n8n credentials. Example: [{name = \"N8N_DEFAULT_LOCALE\", value = \"de\"}]."
   type = list(object({
     name  = string
     value = string
