@@ -293,7 +293,9 @@ this project adheres to the stability contract in
 - `redis_exporter_enabled` and `redis_exporter_image`: opt-in `redis_exporter`
   (one Deployment plus a Service on `:9121`) pointed at the module's own Redis,
   in a new `observability.tf`. Defaults to `false`: nothing is created, so this
-  is additive.
+  is additive. The Deployment runs one replica with a `Recreate` strategy, so
+  no two exporter pods ever report the same counters at once, not even for one
+  scrape interval during an image bump.
 
   It exists because the module could not show you the number that matters most.
   Bull queue depth is the signal KEDA scales workers on and the first thing

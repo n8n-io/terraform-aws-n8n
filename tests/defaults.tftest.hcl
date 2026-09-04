@@ -1028,6 +1028,14 @@ run "redis_exporter_targets_the_module_managed_redis" {
     condition     = kubernetes_service_v1.redis_exporter[0].spec[0].port[0].port == 9121
     error_message = "The exporter Service must publish the metrics port a ServiceMonitor would target."
   }
+
+  # Single replica plus Recreate is what keeps exactly one exporter running at
+  # any moment. RollingUpdate would overlap old and new pods during an image
+  # bump and double every counter for one scrape interval.
+  assert {
+    condition     = kubernetes_deployment_v1.redis_exporter[0].spec[0].replicas == "1" && kubernetes_deployment_v1.redis_exporter[0].spec[0].strategy[0].type == "Recreate"
+    error_message = "The exporter must run one replica with a Recreate strategy so no two pods ever report the same counters at once."
+  }
 }
 
 # The exporter's whole purpose. Bull queue depth is NOT in the default metric
@@ -1185,7 +1193,7 @@ run "redis_exporter_image_rejects_embedded_whitespace" {
   command = plan
 
   variables {
-    redis_exporter_image = "oliver006/redis_exporter :v1.66.0"
+    redis_exporter_image = "oliver006/redis_exporter :v1.90.0"
   }
 
   expect_failures = [var.redis_exporter_image]

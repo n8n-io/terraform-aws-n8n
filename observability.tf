@@ -58,6 +58,15 @@ resource "kubernetes_deployment_v1" "redis_exporter" {
     # exporter holds no state and a restart re-reads Redis from scratch.
     replicas = 1
 
+    # Recreate rather than the RollingUpdate default, for the same reason.
+    # A rolling update briefly runs the old and new pod side by side behind
+    # the same annotations and Service, so one scrape interval during an
+    # image bump would double-count anyway. A gap of a few seconds costs
+    # nothing here; two pods cost the invariant the replica count exists for.
+    strategy {
+      type = "Recreate"
+    }
+
     selector {
       match_labels = { "app" = "redis-exporter" }
     }
