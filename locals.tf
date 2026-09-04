@@ -568,6 +568,21 @@ locals {
     "N8N_DEFAULT_BINARY_DATA_MODE",
     "N8N_AVAILABLE_BINARY_DATA_MODES",
     "N8N_LICENSE_ACTIVATION_KEY",
+    # Owned by var.n8n_worker_pools. N8N_WORKER_POOLS_ENABLED is emitted only
+    # when pools are declared, and N8N_WORKER_POOL_NAME is set per worker group
+    # by the chart. Reached through config.extraEnv (all pods), an override here
+    # would either turn the feature on with no pool to route to, or put every
+    # worker, main and webhook pod into one pool at once, which is not a
+    # topology the feature has.
+    #
+    # This list also gates n8n_worker_extra_env, which reaches workers alone, so
+    # a pool name there is not the same mistake. It is still refused: pool
+    # membership comes with a queue and a KEDA scaler that n8n_worker_pools
+    # builds together, and pinning the chart's own worker deployment to a pool
+    # through the escape hatch would leave those workers on a pool queue nothing
+    # scales. See worker-pools.tf.
+    "N8N_WORKER_POOLS_ENABLED",
+    "N8N_WORKER_POOL_NAME",
     "N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN",
     "N8N_HOST",
     "N8N_PORT",

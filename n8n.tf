@@ -318,6 +318,15 @@ resource "helm_release" "n8n" {
       enabled            = true
       workerReplicaCount = var.n8n_worker_keda_min_replicas
       workerConcurrency  = var.n8n_worker_concurrency
+      # Worker-only env, appended after config.extraEnv in worker containers and
+      # nowhere else. Distinct from n8n_extra_env, which reaches main and webhook
+      # pods too. "Worker" here covers every worker: the chart renders the
+      # unlabelled deployment and each pool from one shared pod template, so this
+      # lands in all of them, with a pool's own extraEnv applied afterwards.
+      workerExtraEnv = var.n8n_worker_extra_env
+      # One additional worker Deployment and ScaledObject per pool. Empty list
+      # on the default path, which renders nothing. See worker-pools.tf.
+      workerGroups = local.n8n_worker_groups
     }
 
     webhookProcessor = {
@@ -478,8 +487,16 @@ resource "helm_release" "n8n" {
     # the ScaledObject). Both keys are needed and TLS is the one that has to
     # land: without it KEDA opens a plaintext connection to a TLS-only endpoint
     # and hangs on `connection to redis failed: i/o timeout` before it ever
-    # reaches authentication. The HPA then reports `<unknown>` and workers
-    # freeze at their current replica count, which nothing crashes to announce.
+    # reaches authentication, and workers freeze at their current replica count,
+    # which nothing crashes to announce.
+    #
+    # To tell the two states apart, read the ScaledObject's READY condition and
+    # the KEDA operator log, not `kubectl get hpa`. Measured on a live TLS
+    # cluster, the HPA TARGETS column showed `<unknown>` for every worker HPA
+    # while scaling was demonstrably working, and went on showing it once a
+    # scaler was deliberately broken, so it distinguishes nothing in either
+    # direction. A broken scaler reads READY=False; a working one serves a value
+    # through /apis/external.metrics.k8s.io even when TARGETS says otherwise.
     keda = {
       enabled = true
       worker = {
@@ -803,6 +820,16 @@ resource "helm_release" "n8n" {
           ] : [],
         ) : [],
 
+        # Worker pools (n8n alpha). The feature is inert unless this is set on
+        # the mains, which resolve a project's pool and enqueue to it, as well
+        # as the workers, which read N8N_WORKER_POOL_NAME. Webhook pods ignore
+        # it but are harmless to set, and config.extraEnv reaches all three.
+        # Emitted only when pools are declared, so an untouched deployment sees
+        # no diff. The name is reserved in n8n_managed_env_names, so declaring a
+        # pool is the only way to switch the feature on. See worker-pools.tf.
+        length(var.n8n_worker_pools) > 0 ? [
+          { name = "N8N_WORKER_POOLS_ENABLED", value = "true" },
+        ] : [],
         # Caller-supplied escape hatch, appended last. Kubernetes resolves
         # duplicate env names last-wins, so this would override anything above
         # it; var.n8n_extra_env is validated against local.n8n_managed_env_names
