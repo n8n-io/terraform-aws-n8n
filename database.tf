@@ -455,6 +455,15 @@ resource "aws_db_instance" "n8n" {
   multi_az                = var.db_multi_az
   backup_retention_period = var.db_backup_retention_period
 
+  # Plain passthrough. Unlike the ElastiCache resources (see locals.tf), this
+  # attribute is plain Optional on aws_db_instance and the SDK normalises an
+  # unset bool to false, so instances created before this input existed already
+  # hold false in state (verified live, PR #107) and the default produces no
+  # diff. Without this set, a db_instance_class change reports "Apply complete"
+  # while AWS queues the class change in PendingModifiedValues for the next
+  # maintenance window; see the variable description for the measured incident.
+  apply_immediately = var.db_apply_immediately
+
   # Hardening defaults. Each maps to a Checkov finding that would otherwise
   # ride on `soft_fail = true` in CI. iam_database_authentication_enabled and
   # the CloudWatch log export are in-place changes. copy_tags_to_snapshot
@@ -852,11 +861,12 @@ check "rds_tuning_requires_module_managed_database" {
       var.db_allocated_storage == 50 &&
       var.db_multi_az &&
       var.db_storage_encrypted &&
-      var.db_backup_retention_period == 7
+      var.db_backup_retention_period == 7 &&
+      !var.db_apply_immediately
     )
     error_message = join("", [
       "An RDS sizing or hardening input (db_instance_class, db_allocated_storage, ",
-      "db_multi_az, db_storage_encrypted, db_backup_retention_period) is set while ",
+      "db_multi_az, db_storage_encrypted, db_backup_retention_period, db_apply_immediately) is set while ",
       "create_database = false. The module creates no RDS instance in that mode, so none of them apply. ",
       "Configure these on the database you supply via db_host.",
     ])

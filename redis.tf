@@ -186,6 +186,15 @@ resource "aws_elasticache_cluster" "n8n" {
   # requirement.
   snapshot_retention_limit = var.redis_snapshot_retention_limit
 
+  # Same local as the replication group below; see locals.tf for why it is a
+  # plain passthrough rather than `? true : null`. Before this line,
+  # redis_apply_immediately silently did nothing on this default single-node
+  # topology, and a redis_node_type change reported "Apply complete" while AWS
+  # queued the resize in PendingModifiedValues for the next maintenance window
+  # (measured durations for the immediate path are in the variable
+  # description; verified live on a single-node cluster in PR #107).
+  apply_immediately = local.redis_apply_immediately
+
   tags = merge(local.common_tags, { Name = "${local.cluster_name}-redis" })
 }
 
@@ -292,12 +301,8 @@ resource "aws_elasticache_replication_group" "n8n" {
   # group".
   transit_encryption_mode = local.redis_transit_encryption_mode
 
-  # Written as `? true : null` rather than passing the bool straight through so
-  # that the default produces no diff at all for deployments that predate this
-  # input. apply_immediately is a request-time flag rather than something the
-  # API reports back, so a group created before this existed has it null in
-  # state, and an explicit `false` would render as an in-place update on every
-  # such deployment for a change that alters nothing.
+  # A plain passthrough via locals.tf, which explains why `? true : null` is
+  # wrong here: the attribute is Optional+Computed and sticks at true once set.
   #
   # Required by AWS for any transit-encryption modification, which is why it is
   # an input at all rather than a constant. Left at the AWS default otherwise:

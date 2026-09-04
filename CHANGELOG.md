@@ -254,6 +254,20 @@ this project adheres to the stability contract in
   any ceiling, so it belongs alongside a scheduled rolling restart of that
   tier rather than in place of one.
 
+- `db_apply_immediately`: apply RDS instance modifications immediately instead
+  of deferring them to the next maintenance window. Defaults to `false` (the
+  AWS default), which is also what existing instances already hold in state,
+  so they see no plan change. Exists because a `db_instance_class` change
+  otherwise reports "Apply complete" while AWS queues the change in
+  `PendingModifiedValues` for a window that can be days out. The apply output
+  does not say so; the only symptom is that every following `terraform plan`
+  wants to make the same class change again until the window passes (measured
+  incident during load validation; both the database and Redis had to be
+  forced through the AWS CLI). Set it true for the apply that carries a
+  resize, verify the live class through AWS, then unset it. Measured live: a
+  `db.t3.small` to `db.t3.medium` change on a Multi-AZ instance took 17
+  minutes end to end.
+
 ### Changed
 
 - The module now sets n8n's current `N8N_WEBHOOK_URL` environment variable
@@ -378,6 +392,30 @@ this project adheres to the stability contract in
   an external Redis reached through a friendly CNAME rather than its real
   hostname, is documented in `redis_exporter_image` and left unwired until
   someone hits it. Not yet exercised against a live TLS cluster end to end.
+
+- `redis_apply_immediately` is now wired into the default single-node
+  `aws_elasticache_cluster` as well as the replication group. Previously it
+  silently did nothing on the single-node topology, so a `redis_node_type`
+  resize reported "Apply complete" while AWS queued it for the maintenance
+  window, with every following plan wanting the same `node_type` change again
+  until then. Duration of the immediate path depends on the node types: one
+  forced resize measured 41 minutes, a `cache.t3.medium` to `cache.t3.small`
+  change on the single-node topology measured 11 minutes, during which Redis
+  was unavailable for roughly two minutes and n8n's pods went unready and
+  reconnected without restarting.
+
+  The input is also now passed to both ElastiCache resources as an explicit
+  bool rather than `true`-or-`null`. Verified live: `apply_immediately` is
+  Optional+Computed on `aws_elasticache_cluster` and
+  `aws_elasticache_replication_group` and the provider never reads it back,
+  so with the old wiring a deployment that set the input to `true` once and
+  then unset it kept `true` in state with no plan diff, and every later Redis
+  modification skipped the maintenance window silently. An explicit `false`
+  is the only way to turn it back off. **Upgrade note:** deployments created
+  before this release see a one-time in-place `+ apply_immediately = false`
+  on their ElastiCache resource. It is state-only; the provider makes no API
+  call for this attribute on its own, and nothing about the running cache
+  changes.
 
 ## [0.3.0] - 2026-08-13
 

@@ -275,7 +275,18 @@ locals {
   # transit_encryption_mode is a property of the replication group this module
   # manages and has no meaning against an external Redis.
   redis_transit_encryption_mode = local.redis_managed_tls_active ? var.redis_transit_encryption_mode : null
-  redis_apply_immediately       = var.redis_apply_immediately ? true : null
+
+  # A plain passthrough, deliberately NOT the `? x : null` shape used above.
+  # Both ElastiCache resources declare apply_immediately Optional+Computed and
+  # never read it back from AWS, so a null config keeps whatever is in state.
+  # Verified live (PR #107): set the input true, apply, unset it, and the
+  # resource stayed at true with no plan diff, while the provider's update
+  # path sends `d.Get("apply_immediately")`, the stale true, on every later
+  # modification. An explicit false is the only way to turn it back off. The
+  # cost is a one-time state-only `+ apply_immediately = false` on deployments
+  # created before this line; the provider makes no API call for that
+  # attribute alone.
+  redis_apply_immediately = var.redis_apply_immediately
 
   # Whether the endpoint n8n is being pointed at actually speaks TLS. True on
   # either path now: the module-managed replication group with

@@ -1536,9 +1536,8 @@ run "db_snapshot_identifier_defaults_to_creating_an_empty_database" {
   # Asserted on the data source rather than on
   # aws_db_instance.n8n[0].snapshot_identifier == null: the argument is
   # Optional+Computed, so an unset value renders as "known after apply" and the
-  # comparison fails with "Unknown condition value" rather than passing. Same
-  # limitation as redis_apply_immediately, which locals.tf works around the same
-  # way. A concrete value IS assertable, which is what the next run does.
+  # comparison fails with "Unknown condition value" rather than passing. A
+  # concrete value IS assertable, which is what the next run does.
   assert {
     condition     = length(data.aws_db_snapshot.restore) == 0
     error_message = "No snapshot should be described, or restored from, when db_snapshot_identifier is null"
@@ -4509,7 +4508,14 @@ run "redis_transit_encryption_mode_without_transit_encryption_warns" {
   }
 }
 
-run "redis_apply_immediately_is_unset_by_default" {
+# An explicit false, NOT null. Both ElastiCache resources declare the attribute
+# Optional+Computed and never read it back, so a null config keeps whatever is
+# in state: after one `true` apply, unsetting the input would leave the
+# resource applying every later modification immediately with no plan diff.
+# Verified live on PR #107. Asserted on the resource attribute of each
+# topology, not only the shared local, so a future `? true : null` on either
+# consumer fails here rather than in production.
+run "redis_apply_immediately_is_false_by_default_on_the_replication_group" {
   command = plan
 
   variables {
@@ -4517,8 +4523,17 @@ run "redis_apply_immediately_is_unset_by_default" {
   }
 
   assert {
-    condition     = local.redis_apply_immediately == null
-    error_message = "apply_immediately must be null rather than false at its default. It is a request-time flag the API never reports back, so a group created before this input existed has it null in state and an explicit false would render as an in-place update that changes nothing."
+    condition     = aws_elasticache_replication_group.n8n[0].apply_immediately == false
+    error_message = "apply_immediately must be an explicit false at its default. A null keeps the prior state value on this Optional+Computed attribute, so a group once set to true could never be turned back off."
+  }
+}
+
+run "redis_apply_immediately_is_false_by_default_on_the_single_node_cluster" {
+  command = plan
+
+  assert {
+    condition     = aws_elasticache_cluster.n8n[0].apply_immediately == false
+    error_message = "apply_immediately must be an explicit false at its default. A null keeps the prior state value on this Optional+Computed attribute, so a cluster once set to true could never be turned back off."
   }
 }
 
@@ -4536,6 +4551,25 @@ run "redis_apply_immediately_reaches_the_replication_group" {
   }
 }
 
+# The single-node cluster is the DEFAULT topology, and it ignored this input
+# entirely until the resource gained the argument: a redis_node_type resize
+# reported "Apply complete" while AWS queued it for the maintenance window
+# (verified live in PR #107, both the deferral and the fix). The replication-group
+# assertion above passing is exactly why that went unnoticed, so this asserts
+# the other topology explicitly.
+run "redis_apply_immediately_reaches_the_single_node_cluster" {
+  command = plan
+
+  variables {
+    redis_apply_immediately = true
+  }
+
+  assert {
+    condition     = aws_elasticache_cluster.n8n[0].apply_immediately == true
+    error_message = "redis_apply_immediately must reach the default single-node aws_elasticache_cluster, not only the replication group, or a node_type resize on the default topology defers silently."
+  }
+}
+
 run "redis_apply_immediately_with_external_redis_warns" {
   command = plan
 
@@ -4546,6 +4580,55 @@ run "redis_apply_immediately_with_external_redis_warns" {
   }
 
   expect_failures = [check.redis_tuning_requires_module_managed_elasticache]
+}
+
+# ── RDS apply_immediately ─────────────────────────────────────────────────────
+# Same request-time-flag reasoning as the Redis runs above, on the database.
+# Without it a db_instance_class change reports "Apply complete" while AWS
+# queues the class change in PendingModifiedValues for a window days out.
+
+# Plain Optional on aws_db_instance, and the SDK stores an unset bool as false,
+# so an explicit false is what instances created before this input hold in
+# state (verified live on PR #107) and the default produces no diff.
+run "db_apply_immediately_is_false_by_default" {
+  command = plan
+
+  assert {
+    condition     = aws_db_instance.n8n[0].apply_immediately == false
+    error_message = "apply_immediately must be false at its default so deployments created before this input existed, which hold false in state, see no diff."
+  }
+}
+
+# Parity with redis_apply_immediately_with_external_redis_warns: the input is
+# module-managed-only, so setting it against a caller-supplied database plans
+# and applies clean while doing nothing at all. The check block warns rather
+# than fails, matching how every other ignored-input warning in this module
+# behaves.
+run "db_apply_immediately_with_external_database_warns" {
+  command = plan
+
+  variables {
+    create_database = false
+    db_host         = "db.internal.example.com"
+    db_password     = "external-db-password"
+
+    db_apply_immediately = true
+  }
+
+  expect_failures = [check.rds_tuning_requires_module_managed_database]
+}
+
+run "db_apply_immediately_reaches_the_instance" {
+  command = plan
+
+  variables {
+    db_apply_immediately = true
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].apply_immediately == true
+    error_message = "db_apply_immediately must reach aws_db_instance, or a resize defers to the maintenance window while Terraform reports it applied."
+  }
 }
 
 # ── AUTH token rotation rollout ──────────────────────────────────────────────
