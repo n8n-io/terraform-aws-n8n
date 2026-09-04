@@ -274,9 +274,12 @@ run "vpc_cni_addon_warm_ip_tuning" {
 # group shows disk_size = 100 and the cache cluster node_type =
 # "cache.r6g.2xlarge" (confirmed against real providers with no state on
 # 2026-09-04). The helm values are `(known after apply)` in a fresh-create
-# plan even with real providers, because the same yamlencode also carries the
-# Aurora endpoint and the random encryption key, so DB_POSTGRESDB_POOL_SIZE
-# = 20 and maxReplicaCount = 320 only render in a plan against an existing
+# plan even with real providers, because the same yamlencode also carries
+# attributes the module computes at apply time, such as the ElastiCache node
+# address behind local.redis_host (n8n.tf, the queue host and the KEDA
+# trigger address) and aws_iam_role.s3.arn for Pod Identity. One unknown
+# makes the whole string unknown, so DB_POSTGRESDB_POOL_SIZE = 20 and
+# maxReplicaCount = 320 only render in a plan against an existing
 # deployment's state, or after apply via
 # `kubectl get scaledobject -n n8n -o yaml` and
 # `kubectl get deploy n8n-main -n n8n -o yaml`. What plan-time does guarantee
