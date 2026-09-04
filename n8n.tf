@@ -792,9 +792,13 @@ resource "helm_release" "n8n" {
 
         # File-based credential overwrites from a caller-managed Secret. The
         # matching volume and read-only mount are assembled in locals.tf and
-        # rendered onto all three n8n pod types below. Keep this before the
-        # caller escape hatch; the input validation rejects both overwrite env
-        # names while this entry is active, so nothing appended later can win.
+        # rendered onto all three n8n pod types below. This is n8n's generic
+        # "<VAR>_FILE" convention (readEnv in @n8n/config), not a dedicated
+        # setting, and readEnv prefers CREDENTIALS_OVERWRITE_DATA over the
+        # _FILE variant wherever it appears in the env list, so Kubernetes'
+        # last-wins ordering is not the whole story here. The input validation
+        # rejects both names in n8n_extra_env while this entry is active for
+        # exactly that reason.
         local.n8n_credentials_overwrite_env,
 
         # Caller-supplied escape hatch, appended last. Kubernetes resolves

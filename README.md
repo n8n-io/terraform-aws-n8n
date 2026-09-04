@@ -1721,9 +1721,12 @@ module "n8n" {
 
 The module mounts only the selected key read-only at
 `/etc/n8n/credentials-overwrite/<key>` on main, worker, and webhook-processor
-pods, then sets `CREDENTIALS_OVERWRITE_DATA_FILE` to that file. Passing the
-Secret resource's name attribute also makes the Helm release depend on the
-Secret, so a single apply creates them in the required order.
+pods, then sets `CREDENTIALS_OVERWRITE_DATA_FILE` to that file. That variable
+is n8n's generic `_FILE` suffix, which reads any configuration value from a
+file path, rather than a dedicated setting, so it does not appear by name in
+n8n's environment variable reference. Passing the Secret resource's name
+attribute also makes the Helm release depend on the Secret, so a single apply
+creates them in the required order.
 
 The module accepts the Secret name and key, not the JSON. The payload therefore
 does not enter this module's Helm values or managed resources. If the caller

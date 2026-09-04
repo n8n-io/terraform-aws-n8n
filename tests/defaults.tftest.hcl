@@ -7229,6 +7229,28 @@ run "credentials_overwrite_secret_ref_wires_custom_key" {
   }
 }
 
+run "credentials_overwrite_secret_ref_appends_after_caller_volumes" {
+  command = plan
+
+  variables {
+    n8n_credentials_overwrite_secret_ref = { name = "n8n-credentials-overwrite" }
+    n8n_extra_volumes                    = [{ name = "custom-nodes", config_map = { name = "custom-nodes" } }]
+    n8n_extra_volume_mounts              = [{ name = "custom-nodes", mount_path = "/opt/n8n-nodes" }]
+  }
+
+  assert {
+    condition = (
+      length(local.n8n_extra_volumes) == 2 &&
+      local.n8n_extra_volumes[0].name == "custom-nodes" &&
+      local.n8n_extra_volumes[1].name == "credentials-overwrite" &&
+      length(local.n8n_extra_volume_mounts) == 2 &&
+      local.n8n_extra_volume_mounts[0].mountPath == "/opt/n8n-nodes" &&
+      local.n8n_extra_volume_mounts[1].mountPath == "/etc/n8n/credentials-overwrite"
+    )
+    error_message = "Caller-supplied volumes and mounts must be preserved in order, with the managed credential overwrite entries appended last."
+  }
+}
+
 run "credentials_overwrite_secret_ref_rejects_invalid_secret_name" {
   command = plan
 
