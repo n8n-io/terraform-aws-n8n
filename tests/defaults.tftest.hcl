@@ -6112,6 +6112,18 @@ run "extra_env_rejects_module_managed_name" {
   expect_failures = [var.n8n_extra_env]
 }
 
+run "extra_env_rejects_n8n_webhook_url_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_WEBHOOK_URL", value = "https://other.example.com" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
 # Regression guards: env vars the module started managing after this input was
 # first written (templates/personalization, OTEL, log streaming) must also be
 # rejected by the escape hatch: keep local.n8n_managed_env_names in sync.

@@ -237,6 +237,11 @@ this project adheres to the stability contract in
 
 ### Changed
 
+- The module now sets n8n's current `N8N_WEBHOOK_URL` environment variable
+  alongside the legacy `WEBHOOK_URL`, using the same `n8n_webhook_url` value
+  for both. Existing deployments keep the same webhook base URL while no
+  longer relying only on n8n's legacy compatibility path.
+
 - **The module now sets `N8N_EDITOR_BASE_URL`** to `https://<n8n_domain>`,
   emitted next to `WEBHOOK_URL` in the chart's `config.extraEnv`. The name was
   already reserved in `local.n8n_managed_env_names` but never assigned, so
