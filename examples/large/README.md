@@ -11,10 +11,10 @@ Route 53 (alias A-record)
     └─► ALB (AWS LBC) ──► EKS (10–50 × m7i.4xlarge)
                                ├─► n8n main pods (HPA, min=6 / max=60)
                                ├─► n8n webhook processors (HPA, min=30 / max=80)
-                               └─► n8n workers (KEDA, min=20 / max=160)
-                                        ├─► PgBouncer (2 replicas, transaction mode)
+                               └─► n8n workers (KEDA, min=20 / max=320)
+                                        ├─► PgBouncer (4 replicas, transaction mode)
                                         │        └─► Aurora PostgreSQL (writer + reader)
-                                        └─► ElastiCache Redis cache.r6g.large
+                                        └─► ElastiCache Redis cache.r6g.2xlarge
 ```
 
 ## Key sizing decisions
@@ -23,18 +23,20 @@ Route 53 (alias A-record)
 |---|---|---|
 | Node type | m7i.4xlarge (16 vCPU, 64 GB) | x86_64 required with AL2023_x86_64_STANDARD AMI; Graviton requires separate AMI type |
 | Node count | desired=10, min=10, max=50 | Warm floor of 10; 50 max covers 2,400 req/s peaks |
+| Node disk | 100 GiB root volume (`node_disk_size`) | The EKS default of 20 GiB filled fleet-wide under image plus execution-data churn on this deployment class and evicted every pod on the node group; that incident is what motivated the module input |
 | VPC private subnets | 2× /20 (4,094 IPs each) | /24s exhausted by default VPC CNI warm-IP pools at 20+ large nodes |
 | VPC CNI tuning | WARM_ENI_TARGET=0, WARM_IP_TARGET=2 | Reduces pre-warmed IPs from ~2,400 to 20 across 10 nodes |
 | Database | Aurora PostgreSQL I/O-Optimized | Removes IOPS ceiling; 14,000–15,000 TPS sustained vs ~600 req/s ceiling on RDS gp3 |
 | Aurora instances | 1 writer + 1 reader | Automatic failover; reader offloads reporting queries |
-| PgBouncer | 2 replicas, transaction mode | 1,500 client connections at the pod ceilings (80 webhook + 160 worker + 60 main, pool_size=5); `MAX_CLIENT_CONN=3000` per replica, so a single surviving replica absorbs all of them; transaction mode confirmed compatible with n8n TypeORM |
-| Redis | cache.r6g.large | 77% peak memory at 856 req/s with no evictions or rejected connections |
+| PgBouncer | 4 replicas, transaction mode | ~9,200 potential client connections at the pod ceilings (80 webhook + 320 worker + 60 main, pool_size=20) against a 12,000 budget (`MAX_CLIENT_CONN=3000` x 4). Two replicas (6,000) would be oversubscribed, and exceeding `max_client_conn` queues new clients, recreating the pool-acquisition backlog the pool sizing exists to prevent. Transaction mode confirmed compatible with n8n TypeORM |
+| DB pool per pod | `db_postgresdb_pool_size = 20` | Shipped as 5 and measured failing under burst: pool acquisition backlogged to 33-54 pending per pod (2-14 s acquires), n8n's DB health-check ping races the same pool and times out, and the pod misdiagnoses a healthy database as dead, silently 503ing every request (91 of 160 webhook pods, roughly two thirds of requests, Aurora and PgBouncer idle). Pool 20 plus `DB_PING_TIMEOUT_MS=20000` eliminated it |
+| Redis | cache.r6g.2xlarge | Measured hard ceiling: 869 req/s on cache.r6g.large, 897-906 req/s on 2xlarge with no other change. Every execution crosses the Bull queue, so at this tier's target the large node is the bottleneck |
 | Main pods | min=6, max=60 | Mains serve the editor and REST API only, not webhooks or manual executions, so the ceiling tracks concurrent users rather than executions/day; 10× the module default, the same factor this tier scales the webhook ceiling by. Floor of 6 keeps warm editor/API capacity, since n8n pods take tens of seconds to boot |
 | Webhook pods | min=30, max=80 | 10 pods saturated at ~960 req/s; 30 pod floor handles 500 concurrent VUs cleanly |
-| Worker pods | min=20, max=160 | 856 req/s ÷ concurrency=40 = 22 workers at steady state; 160 max for 2,400 req/s burst |
-| Worker concurrency | 40 | Doubles throughput per pod vs 20; pool_size=5 is sufficient with PgBouncer |
+| Worker pods | min=20, max=320 | The 587 req/s endurance headline on the representative real workflow ran at 320 workers; throughput at this tier scales in worker pod count, not per-pod CPU. The previous ceiling of 160 was never observed reaching the tier's target on a real workload |
+| Worker concurrency | 40 | Doubles the queue slots per pod vs 20, halving the pod count needed for a given throughput |
 | Execution concurrency limit | 2,000 | Default 100 throttles workers before any infrastructure bottleneck |
-| Pruning | 24h / 5M records | 14-day retention at this throughput rapidly accumulates hundreds of millions of rows; autovacuum cannot sustain concurrent writes at that size |
+| Pruning | 24h / 5M records | These values set what the pruner is allowed to reclaim, but they cannot bound table growth at this tier: n8n's hard deletion runs at a hardcoded ceiling of 100 executions/s (~8.6M/day, leader-only), and this tier sustains multiples of that. Plan for net `execution_entity` growth at any sustained completion rate above ~100/s |
 | Webhook memory | 4 Gi limit / 1 Gi request | 2 Gi caused memory-pressure 503s under 500 VU load; 4 Gi halved failure rate |
 
 ## Estimated cost (us-east-1, on-demand)
@@ -45,11 +47,11 @@ Route 53 (alias A-record)
 | EKS nodes (50 × m7i.4xlarge, at max) | ~$29,434 |
 | Aurora writer db.r6g.8xlarge | ~$5,606 |
 | Aurora reader db.r6g.8xlarge | ~$5,606 |
-| ElastiCache cache.r6g.large | ~$121 |
+| ElastiCache cache.r6g.2xlarge | ~$480 |
 | EKS control plane | ~$73 |
 | NAT Gateways (2× HA) | ~$70 |
-| **Total (10 nodes steady-state)** | **~$17,300** |
-| **Total (50 nodes peak)** | **~$41,000** |
+| **Total (10 nodes steady-state)** | **~$17,700** |
+| **Total (50 nodes peak)** | **~$41,300** |
 
 1-year Reserved Instances reduce compute ~35%. If load is concentrated in business hours, KEDA/HPA autoscaling (rather than fixed min=desired) reduces average node spend by 30–40%.
 

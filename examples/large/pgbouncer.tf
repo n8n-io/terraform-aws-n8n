@@ -30,7 +30,9 @@
 #     max_client_conn queues new client connections, recreating exactly
 #     the pool-acquisition backlog the pool sizing exists to prevent.
 #     Four replicas is also the topology the sustained-load validation
-#     actually ran.
+#     actually ran. On the upstream leg, 4 x DEFAULT_POOL_SIZE 150 is at
+#     most 600 server connections to Aurora, well under the ~5,000
+#     max_connections of a db.r6g.8xlarge.
 #   - With required anti-affinity, later replicas stay Pending until
 #     enough nodes are Ready (typically <60s); the deployment as a whole
 #     is never blocked.

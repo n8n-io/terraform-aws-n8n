@@ -237,6 +237,26 @@ this project adheres to the stability contract in
 
 ### Changed
 
+- **`examples/large` now carries the values load validation round 2 measured
+  on this deployment class**, replacing the reasoning that shipped with them.
+  `db_postgresdb_pool_size` 5 to 20: pool 5 was the exact value behind a
+  silent-503 storm in which pool acquisition backlogged, n8n's database
+  health-check ping (which shares the pool) timed out, and pods misdiagnosed a
+  healthy Aurora as dead. `redis_node_type` `cache.r6g.large` to `2xlarge`: a
+  throughput A/B measured a hard 869 req/s ceiling on `large` that lifted to
+  897-906 req/s with no other change. `n8n_worker_keda_max_replicas` 160 to
+  320: the endurance headline ran at 320 workers, and throughput at this tier
+  scales in pod count. `node_disk_size = 100`: the fleet-wide disk eviction
+  behind the new input happened on this deployment class. PgBouncer 2 to 4
+  replicas, so the client-connection budget (`MAX_CLIENT_CONN` 3,000 x 4)
+  stays above the ~9,200 connections the raised maxima can open. The 24-hour
+  pruning rationale is rewritten as a warning: hard deletion is hardcoded at
+  100 executions/s, so retention settings cannot bound table growth at this
+  tier. The example's README, `pgbouncer.tf` comments and test pin follow.
+  `examples/medium` gains the Redis upgrade trigger and the pruning caveat as
+  comments only; `examples/small` is untouched, since no evidence exists at
+  that scale. Examples only: no module input, output or resource changes.
+
 - **The module now sets `N8N_EDITOR_BASE_URL`** to `https://<n8n_domain>`,
   emitted next to `WEBHOOK_URL` in the chart's `config.extraEnv`. The name was
   already reserved in `local.n8n_managed_env_names` but never assigned, so

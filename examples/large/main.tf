@@ -178,11 +178,12 @@ module "n8n" {
   n8n_webhook_memory_limit     = "4Gi"
 
   # ── Workers ───────────────────────────────────────────────────────────────────
-  # concurrency=40: doubles throughput per pod vs 20, halves pod count needed.
-  # Floor of 20 keeps the queue draining during idle periods. Ceiling of 320:
-  # the round-2 endurance headline (587 req/s sustained on the representative
-  # real workflow) ran at 320 workers, and throughput at this tier scales in
-  # worker pod count, not per-pod CPU. The previous ceiling of 160 was never
+  # concurrency=40: doubles the queue slots per pod vs 20, halving the pod
+  # count needed for a given throughput. Floor of 20 keeps the queue draining
+  # during idle periods. Ceiling of 320: the round-2 endurance headline (587
+  # req/s sustained on the representative real workflow) ran at 320 workers.
+  # Past that concurrency setting, throughput at this tier scales in worker
+  # pod count, not in per-pod CPU, so raise the ceiling before the requests. The previous ceiling of 160 was never
   # observed reaching this tier's target on a real workload.
   n8n_worker_keda_min_replicas = 20
   n8n_worker_keda_max_replicas = 320
