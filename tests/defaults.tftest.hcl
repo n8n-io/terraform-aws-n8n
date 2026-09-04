@@ -4555,8 +4555,31 @@ run "redis_apply_immediately_reaches_the_single_node_cluster" {
   }
 }
 
+# There is deliberately no resource-level `apply_immediately == null` run for
+# either ElastiCache resource, unlike db_apply_immediately_is_unset_by_default
+# below. On aws_elasticache_cluster and aws_elasticache_replication_group the
+# attribute is Optional+Computed in the provider schema, so a null config value
+# plans as "known after apply" and the mock provider fills in an arbitrary
+# bool; the assertion fails with "is a bool" rather than proving anything. On
+# aws_db_instance it is plain Optional, which is why the RDS twin works. The
+# default-is-null guarantee for Redis is therefore asserted on the shared
+# local (redis_apply_immediately_is_unset_by_default), which both resources
+# consume verbatim (redis.tf).
+
+run "redis_apply_immediately_with_external_redis_warns" {
+  command = plan
+
+  variables {
+    create_elasticache      = false
+    redis_host              = "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
+    redis_apply_immediately = true
+  }
+
+  expect_failures = [check.redis_tuning_requires_module_managed_elasticache]
+}
+
 # ── RDS apply_immediately ─────────────────────────────────────────────────────
-# Same request-time-flag reasoning as the Redis pair above, on the database.
+# Same request-time-flag reasoning as the Redis runs above, on the database.
 # Without it a db_instance_class change reports "Apply complete" while AWS
 # queues the class change in PendingModifiedValues for a window days out.
 
@@ -4599,18 +4622,6 @@ run "db_apply_immediately_reaches_the_instance" {
     condition     = aws_db_instance.n8n[0].apply_immediately == true
     error_message = "db_apply_immediately must reach aws_db_instance, or a resize defers to the maintenance window while Terraform reports it applied."
   }
-}
-
-run "redis_apply_immediately_with_external_redis_warns" {
-  command = plan
-
-  variables {
-    create_elasticache      = false
-    redis_host              = "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
-    redis_apply_immediately = true
-  }
-
-  expect_failures = [check.redis_tuning_requires_module_managed_elasticache]
 }
 
 # ── AUTH token rotation rollout ──────────────────────────────────────────────
