@@ -314,9 +314,6 @@ resource "helm_release" "n8n" {
       }
     }
 
-    # Only the main Deployment consumes the chart's top-level strategy.
-    strategy = local.n8n_main_strategy
-
     queueMode = {
       enabled            = true
       workerReplicaCount = var.n8n_worker_keda_min_replicas
@@ -991,6 +988,14 @@ resource "helm_release" "n8n" {
     # `nameservers: null` into the chart's `{{- toYaml . }}`, which the API
     # server rejects as an invalid pod spec. The local strips unset keys.
     local.n8n_dns_config == null ? {} : { dnsConfig = local.n8n_dns_config },
+
+    # Main rollout strategy. Only the main Deployment consumes the chart's
+    # top-level `strategy`. Merged conditionally, not emitted as `strategy: {}`
+    # in multi-main mode: an empty map renders nothing (the template is
+    # `with .Values.strategy`), but it still changes the values string, and a
+    # live plan from origin/main at defaults showed that as the sole
+    # helm_release diff every existing release would see on upgrade.
+    local.n8n_multi_main_enabled ? {} : { strategy = local.n8n_main_strategy },
   ))]
 
   depends_on = [

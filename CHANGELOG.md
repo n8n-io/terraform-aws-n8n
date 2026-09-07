@@ -56,14 +56,18 @@ this project adheres to the stability contract in
   and a node drain evicted the single main (about 20 to 30 seconds of
   downtime each; see `docs/upgrading-n8n.md`).
 
-  **Upgrade note:** callers already using a main minimum of one now lose
-  multi-main mode and any higher HPA ceiling, even when explicitly configured.
-  Main upgrades and node maintenance require downtime for the editor, REST API,
-  and scheduled triggers. Keep a minimum of at least two with the required
-  entitlement if you need multi-main operation. `Recreate` controls upgrades,
-  not manual pod deletion or node failure; it is not a general at-most-one
-  guarantee. See `docs/upgrading-n8n.md`. This topology and scaling-contract
-  change belongs in a minor release under the module's stability contract.
+  **Upgrade note:** there are no existing minimum-one deployments to migrate.
+  Before this change `n8n_main_hpa_min_replicas = 1` was rejected by the
+  chart's values schema (`multiMain.replicas: minimum: got 1, want 2`), so it
+  never applied. Existing default (multi-main) deployments see `No changes` on
+  upgrade; verified with a live plan from the previous release. Moving from
+  multi-main to single-main is an in-place `helm_release` update: both mains
+  stop, then one starts. In single-main mode, main upgrades and node
+  maintenance require downtime for the editor, REST API, and scheduled
+  triggers. `Recreate` controls upgrades, not manual pod deletion or node
+  failure; it is not a general at-most-one guarantee. See
+  `docs/upgrading-n8n.md`, and `docs/troubleshooting.md` for the stuck
+  Deployment a failed switch to `>= 2` can leave behind.
 
 - Every shipped example now exposes `n8n_main_hpa_min_replicas` as a
   passthrough variable (`examples/small`, `medium`, `large`, `cloudflare`,

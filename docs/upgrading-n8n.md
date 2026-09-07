@@ -35,6 +35,21 @@ The main PodDisruptionBudget uses `minAvailable = 0` in this topology so node
 drains and managed node updates can evict the only main. Such maintenance also
 causes downtime. Worker and webhook rollout strategies are unchanged.
 
+Moving from single-main back to two or more mains is not overlap-free: the
+Deployment scales the existing single-main ReplicaSet up before the
+multi-main pods roll in, so for a short window two mains run without leader
+election (n8n logs `Detected 2 instances claiming leader role`). Do it in a
+maintenance window, and only with a license carrying
+`feat:multipleMainInstances`; see `docs/troubleshooting.md` for what a failed
+attempt leaves behind. The reverse direction, two or more down to one, stops
+every main before the single main starts and needs no special handling.
+
+Changing the license tier is not a key swap alone. n8n stores the activated
+certificate in the database and only reads `N8N_LICENSE_ACTIVATION_KEY` when
+no certificate is stored, so after changing `n8n_license_key` run
+`kubectl exec -n <namespace> <main-pod> -c n8n-main -- n8n license:clear`
+and restart the main; otherwise the old entitlements stay in effect.
+
 Use `kubectl rollout restart deployment/n8n-main -n <namespace>` for a planned
 main restart, rather than deleting the pod. `Recreate` controls Deployment
 upgrades, not manual pod deletion or node failure; it is not a general
