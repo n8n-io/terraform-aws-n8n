@@ -9,7 +9,9 @@ n8n_domain = "n8n.example.com"
 # both alias A-records here: single terraform apply, no manual DNS steps.
 route53_zone_id = "Z0123456789ABCDEFGHIJ"
 
-# n8n Enterprise license activation key. Get one at https://n8n.io/pricing.
+# n8n license activation key. Get one at https://n8n.io/pricing. Enterprise
+# (feat:multipleMainInstances) for the default multi-main topology; Business is
+# enough with n8n_main_hpa_min_replicas = 1 (see below).
 n8n_license_key = "your-enterprise-license-key-here"
 
 # Label prepended to n8n_domain for the PUBLIC webhook host. The default gives

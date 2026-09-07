@@ -45,6 +45,15 @@ Before production, verify the Deployment strategy, HPA bounds, and disruption
 budget on a staging cluster. Watch a main rollout to confirm the old pods stop
 before the replacement starts, and verify a node drain can evict the main.
 Rendering tests cannot establish controller behavior.
+`tests/scripts/smoke-test.sh` detects the single-main topology from the main
+HPA (`max = 1`) and asserts these three settings.
+
+For scale, on `examples/small` (n8n 2.37.10, `t3.xlarge` nodes) a
+`kubectl rollout restart` of the main produced about 30 seconds of ALB 503
+responses with no second main pod observed at any point, and a `kubectl drain`
+of the main's node completed in about 15 seconds with roughly 20 seconds of
+downtime. Image pulls, database migrations, and node capacity can make your
+numbers longer.
 
 ## Bumping
 

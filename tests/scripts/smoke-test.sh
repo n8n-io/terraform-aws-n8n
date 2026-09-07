@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # smoke-test.sh — post-deployment smoke test for terraform-aws-n8n.
 #
-# This module deploys the multi-main topology (multiple main + worker +
-# webhook-processor pods, PostgreSQL, Redis, KEDA). The script auto-detects
-# the topology by probing the namespace; for this module that is always the
-# multi-main path — main/worker/webhook-processor pod health, queue mode,
-# Redis connectivity, KEDA ScaledObject, HTTPS, API, and end-to-end execution.
+# This module deploys queue mode (main + worker + webhook-processor pods,
+# PostgreSQL, Redis, KEDA). The script auto-detects the deployment by probing
+# the namespace; for this module that is always the queue-mode path —
+# main/worker/webhook-processor pod health, queue mode, Redis connectivity,
+# KEDA ScaledObject, HTTPS, API, and end-to-end execution. Within it, the
+# main topology is detected from the main HPA: max=1 means single-main
+# (n8n_main_hpa_min_replicas = 1, Business-tier path) and the script then
+# expects Recreate, PDB minAvailable=0 and no leader election instead of the
+# multi-main checks.
 #
 # Usage:
 #   # Run from the example directory — outputs are read automatically:
@@ -79,6 +83,7 @@ NAMESPACE="${NAMESPACE:-${N8N_NAMESPACE:-n8n}}"
 N8N_URL="${N8N_URL:-}"
 N8N_API_KEY="${N8N_API_KEY:-}"
 DEPLOY_MODE="${DEPLOY_MODE:-}"        # set to 'single' or 'multi' to skip auto-detect
+MAIN_TOPOLOGY="multi-main"            # 'single-main' when the main HPA max is 1 (detected below)
 
 # Multi-mode optional load test settings
 LOAD_TEST="${LOAD_TEST:-false}"
@@ -88,7 +93,9 @@ LOAD_SEED_JOBS="${LOAD_SEED_JOBS:-20}"   # jobs queued in phase 1 to trigger the
 SCALE_WAIT_SECS="${SCALE_WAIT_SECS:-180}"
 LOAD_JOB_DURATION_SECS="${LOAD_JOB_DURATION_SECS:-10}"
 
-# Expected minimum replica counts for multi-main deployments
+# Expected minimum replica counts for queue-mode deployments. MAIN_MIN drops
+# to 1 when the module runs single-main (n8n_main_hpa_min_replicas = 1); see
+# the topology detection below.
 MAIN_MIN=2
 WORKER_MIN=1
 WEBHOOK_MIN=2
@@ -167,8 +174,21 @@ else
 fi
 
 if [[ "$DEPLOY_MODE" == "multi" ]]; then
-  pass "Multi-main deployment detected (n8n-worker present)"
-  info "Checks: queue mode, HPA/KEDA, Redis, leader election"
+  pass "Queue-mode deployment detected (n8n-worker present)"
+  # The module runs one main pod without leader election when
+  # n8n_main_hpa_min_replicas = 1 (Business-tier path). The HPA ceiling is
+  # clamped to 1 there, so the main HPA's maxReplicas is the topology signal.
+  main_hpa_max=$(kubectl get hpa n8n-main -n "$NAMESPACE" \
+    -o jsonpath='{.spec.maxReplicas}' 2>/dev/null || echo "")
+  if [[ "${main_hpa_max:-0}" == "1" ]]; then
+    MAIN_TOPOLOGY="single-main"
+    MAIN_MIN=1
+    info "Single-main topology (main HPA max=1): expecting Recreate, PDB minAvailable=0, no leader election"
+  else
+    MAIN_TOPOLOGY="multi-main"
+    info "Multi-main topology (main HPA max=${main_hpa_max:-?})"
+  fi
+  info "Checks: queue mode, HPA/KEDA, Redis, main topology"
 else
   pass "Single-instance deployment detected"
   info "Checks: SQLite PVC, task runner sidecar, Python runner"
@@ -407,18 +427,52 @@ else
   info "Set n8n_task_runners_enabled = true in terraform.tfvars and re-apply"
 fi
 
-# ── Multi-main leader election ────────────────────────────────────────────────
+# ── Main topology ─────────────────────────────────────────────────────────────
 
-header "Multi-Main Leader Election"
+header "Main Topology"
 
-# n8n uses Redis-based leader election. Verify the feature flag is enabled
-# on main pods and that at least one pod reports leadership activity.
 main_pod=$(kubectl get pods -n "$NAMESPACE" \
   -l "app.kubernetes.io/component=main" \
   --field-selector=status.phase=Running \
   -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 
-if [[ -n "$main_pod" ]]; then
+if [[ "$MAIN_TOPOLOGY" == "single-main" ]]; then
+  # One main without leader election: multi-main must be off, upgrades must
+  # use Recreate so two mains never overlap, and the PDB must let the only
+  # main be evicted during node maintenance.
+  if [[ -n "$main_pod" ]]; then
+    multi_main=$(kubectl exec "$main_pod" -n "$NAMESPACE" -c n8n-main \
+      -- printenv N8N_MULTI_MAIN_SETUP_ENABLED 2>/dev/null || echo "")
+    if [[ "$multi_main" == "true" ]]; then
+      fail "N8N_MULTI_MAIN_SETUP_ENABLED=true on a single main — multi-main should be disabled at 1 replica"
+    else
+      pass "Multi-main disabled on main pod (N8N_MULTI_MAIN_SETUP_ENABLED unset)"
+    fi
+  else
+    warn "No running main pod found to check the multi-main flag"
+  fi
+
+  main_strategy=$(kubectl get deployment n8n-main -n "$NAMESPACE" \
+    -o jsonpath='{.spec.strategy.type}' 2>/dev/null || echo "")
+  if [[ "$main_strategy" == "Recreate" ]]; then
+    pass "Main Deployment strategy is Recreate — no second main during rollouts"
+  else
+    fail "Main Deployment strategy is '${main_strategy:-<unset>}' — expected Recreate for single-main"
+  fi
+
+  pdb_min=$(kubectl get pdb n8n-main -n "$NAMESPACE" \
+    -o jsonpath='{.spec.minAvailable}' 2>/dev/null || echo "")
+  pdb_allowed=$(kubectl get pdb n8n-main -n "$NAMESPACE" \
+    -o jsonpath='{.status.disruptionsAllowed}' 2>/dev/null || echo "")
+  if [[ "$pdb_min" == "0" ]]; then
+    pass "Main PDB minAvailable=0 (disruptionsAllowed=${pdb_allowed:-?}) — node drains can evict the only main"
+  else
+    fail "Main PDB minAvailable is '${pdb_min:-<unset>}' — expected 0, otherwise node drains stall on the single main"
+  fi
+
+elif [[ -n "$main_pod" ]]; then
+  # n8n uses Redis-based leader election. Verify the feature flag is enabled
+  # on main pods and that at least one pod reports leadership activity.
   multi_main=$(kubectl exec "$main_pod" -n "$NAMESPACE" -c n8n-main \
     -- printenv N8N_MULTI_MAIN_SETUP_ENABLED 2>/dev/null || echo "")
   if [[ "$multi_main" == "true" ]]; then
@@ -462,7 +516,9 @@ check_hpa() {
 
   pass "$label HPA: min=$min max=$max current=$current CPU=$targets%"
 
-  if [[ "$current" -eq "$max" ]]; then
+  # A fixed-size HPA (min == max) is always "at max"; that is configuration,
+  # not load. The module pins the main HPA to 1/1 in single-main mode.
+  if [[ "$min" -ne "$max" && "$current" -eq "$max" ]]; then
     warn "$label is at max replicas ($max) — may indicate sustained high load"
   fi
 }

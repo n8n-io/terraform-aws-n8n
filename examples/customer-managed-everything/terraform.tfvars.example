@@ -8,7 +8,9 @@ n8n_domain = "n8n.example.com"
 # creates the alias A-record.
 route53_zone_id = "Z0123456789ABCDEFGHIJ"
 
-# n8n Enterprise license activation key. Get one at https://n8n.io/pricing.
+# n8n license activation key. Get one at https://n8n.io/pricing. Enterprise
+# (feat:multipleMainInstances) for the default multi-main topology; Business is
+# enough with n8n_main_hpa_min_replicas = 1 (see below).
 n8n_license_key = "your-enterprise-license-key-here"
 
 # Minimum (and default) replica count for n8n main pods. Leave commented to
