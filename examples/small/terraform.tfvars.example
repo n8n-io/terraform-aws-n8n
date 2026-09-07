@@ -8,8 +8,10 @@ n8n_domain = "n8n.example.com"
 # here — single terraform apply, no manual DNS steps.
 route53_zone_id = "Z0123456789ABCDEFGHIJ"
 
-# n8n Enterprise license activation key. Get one at https://n8n.io/pricing.
-n8n_license_key = "your-enterprise-license-key-here"
+# n8n license activation key. Get one at https://n8n.io/pricing. Enterprise
+# (feat:multipleMainInstances) for the default multi-main topology; Business is
+# enough with n8n_main_hpa_min_replicas = 1 (see below).
+n8n_license_key = "your-license-key-here"
 
 # AWS region. Change if you're deploying outside us-east-1.
 # aws_region = "eu-west-1"
@@ -42,3 +44,9 @@ n8n_license_key = "your-enterprise-license-key-here"
 # constraint.
 # n8n_execution_data_storage_mode = "s3"
 # n8n_image_tag                   = "2.27.4"
+
+# Minimum (and default) replica count for n8n main pods. Leave commented to
+# use the module's default of 2 (multi-main, needs an Enterprise/Startup
+# license carrying feat:multipleMainInstances). Set to 1 to run single-main
+# in plain queue mode instead, which only needs a Business-tier license.
+# n8n_main_hpa_min_replicas = 1

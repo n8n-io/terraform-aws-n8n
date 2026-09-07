@@ -331,6 +331,55 @@ is not overridden to `true` unless you deliberately run a single main
    kubectl exec -n <namespace> <main-pod> -c n8n-main -- n8n license:info
    ```
 
+## Single-main Deployment stuck with extra main pods after a failed switch to `n8n_main_hpa_min_replicas >= 2`
+
+### Symptom
+
+You raised `n8n_main_hpa_min_replicas` from 1 to 2 or more, the new main pods
+crash-looped (typically `Your license does not allow for
+feat:multipleMainInstances` on a Business-tier key), and after about ten
+minutes `terraform apply` failed with `Upgrade failed: release n8n failed, and
+has been rolled back due to atomic being set`. Helm reports the rollback as
+`deployed` and `terraform plan` shows no changes, but the namespace does not
+match: `kubectl get deployment n8n-main` shows `replicas: 1` and `Recreate`,
+while `kubectl get rs` shows two active ReplicaSets, one still running two
+old-template mains and one with the crash-looping pod. Nothing changes for as
+long as you wait, and the two running mains both act as leader
+(`Detected 2 instances claiming leader role`), so scheduled workflows can run
+twice.
+
+### Cause
+
+The atomic rollback changed the replica count and the strategy at the same
+moment two ReplicaSets were active. Kubernetes' Deployment controller then
+treats every sync as a scaling event because the ReplicaSets'
+`deployment.kubernetes.io/desired-replicas` annotations are stale, and its
+scaling path only knows how to reconcile more than one active ReplicaSet for
+`RollingUpdate` (proportional scaling). For `Recreate` it returns without
+doing anything, never refreshes the annotations, and never reaches the
+rollout path. This is the same mechanism as
+[kubernetes/kubernetes#135483](https://github.com/kubernetes/kubernetes/issues/135483),
+which upstream closed as not planned. Reproduced twice on EKS 1.35 while
+verifying #117.
+
+### Fix
+
+Scale the stale ReplicaSet to zero by hand. With a single active ReplicaSet
+left, the controller reconciles it to the Deployment's replica count and
+refreshes the annotations:
+
+```bash
+kubectl -n <namespace> get rs -l app.kubernetes.io/component=main \
+  -o custom-columns=NAME:.metadata.name,DESIRED:.spec.replicas,REV:.metadata.annotations.deployment\\.kubernetes\\.io/revision
+# Scale the ReplicaSet with the crash-looping pods (the highest revision) to 0:
+kubectl -n <namespace> scale rs <replicaset> --replicas=0
+```
+
+Within a few seconds the remaining ReplicaSet drops to one pod. Then fix the
+cause (keep `n8n_main_hpa_min_replicas = 1` on a Business-tier key, or
+activate a license carrying `feat:multipleMainInstances`, see
+`docs/upgrading-n8n.md` for the `license:clear` step) before applying again.
+
 ## Pods stay `Pending` with `Insufficient cpu` and the node group never grows
 
 ### Symptom

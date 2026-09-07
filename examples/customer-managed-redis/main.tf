@@ -163,6 +163,7 @@ module "n8n" {
   redis_port                       = 6379
   redis_auth_token                 = var.customer_managed_redis_auth_token
   redis_transit_encryption_enabled = true
+  n8n_main_hpa_min_replicas        = var.n8n_main_hpa_min_replicas
 
   tags = local.common_tags
 

@@ -26,7 +26,7 @@ variable "route53_zone_id" {
 }
 
 variable "n8n_license_key" {
-  description = "n8n Enterprise license activation key. Get one at https://n8n.io/pricing"
+  description = "n8n license activation key. Requires Enterprise with feat:multipleMainInstances by default; Business is supported with n8n_main_hpa_min_replicas = 1. Get one at https://n8n.io/pricing"
   type        = string
   sensitive   = true
 }
@@ -154,6 +154,12 @@ variable "n8n_additional_domains" {
   description = "Extra hostnames n8n should answer on, beyond n8n_domain. Each is added to the module-issued ACM certificate as a subject alternative name, given a Route 53 validation record and alias A-record, and routed by the module's Ingress. Leave empty for a single hostname."
   type        = list(string)
   default     = []
+}
+
+variable "n8n_main_hpa_min_replicas" {
+  description = "Minimum (and therefore default) replica count for n8n main pods, passed straight through to the module's own n8n_main_hpa_min_replicas. Leave null (the default) to use the module's default of 2 (multi-main, needs an Enterprise/Startup license carrying feat:multipleMainInstances). Set to 1 to run a single main pod in plain queue mode instead, which only needs a Business-tier license: n8n's multi-main leader-election gate never engages at 1 replica."
+  type        = number
+  default     = null
 }
 
 variable "n8n_execution_data_storage_mode" {

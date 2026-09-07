@@ -409,6 +409,39 @@ locals {
     var.s3_kms_encryption_enabled ? (var.create_s3_kms_key ? try(aws_kms_key.s3[0].arn, null) : var.s3_kms_key_arn) : null
   )
 
+  # ── n8n multi-main topology ────────────────────────────────────────────────
+  # n8n gates multiMain behind the feat:multipleMainInstances license
+  # entitlement (Business tier doesn't carry it; Startup/Enterprise do).
+  # Enabling it unconditionally makes this module unrunnable on a Business
+  # license even at 1 main replica. At or below 1 replica there is nothing to
+  # elect a leader among, so multi-main brings no benefit and needs no
+  # entitlement; above 1 it is required for correctness, which is also
+  # today's default (2). n8n.tf's multiMain.enabled reads this.
+  n8n_multi_main_enabled = var.n8n_main_hpa_min_replicas > 1
+
+  # multiMain.enabled being false does not, on its own, stop n8n.tf's main-pod
+  # HPA (hpa.main) from scaling main replicas past 1: that HPA reads
+  # var.n8n_main_hpa_max_replicas directly, independent of multi-main. Without
+  # this clamp, single-main mode (n8n_main_hpa_min_replicas = 1) would still
+  # let the HPA scale a second main pod under CPU load, and with
+  # multiMain.enabled false that second pod has no leader-election gate to
+  # coordinate with the first, so both would independently run every
+  # scheduled/cron trigger. n8n.tf's hpa.main.maxReplicas reads this instead
+  # of the variable directly, pinning the ceiling to the floor whenever
+  # multi-main is disabled, regardless of the variable's own value.
+  n8n_main_hpa_effective_max_replicas = local.n8n_multi_main_enabled ? var.n8n_main_hpa_max_replicas : var.n8n_main_hpa_min_replicas
+
+  # Recreate waits for old main pods to stop during upgrades before starting
+  # replacements. An HPA ceiling alone cannot prevent RollingUpdate surges.
+  # Leave the multi-main chart strategy untouched. Recreate does not prevent
+  # overlap following manual pod deletion or node failure.
+  # Explicit null clears any previous RollingUpdate settings during upgrade.
+  n8n_main_strategy = local.n8n_multi_main_enabled ? {} : { type = "Recreate", rollingUpdate = null }
+
+  # A single main must be evictable during node maintenance. Keeping one
+  # available with an HPA ceiling of one would block every voluntary eviction.
+  n8n_main_pdb_min_available = local.n8n_multi_main_enabled ? 1 : 0
+
   # ── n8n service account ────────────────────────────────────────────────────
   # The chart creating its own ServiceAccount is the arrangement we want, with
   # one exception: neither chart 1.10.0 nor 1.11.0 renders imagePullSecrets

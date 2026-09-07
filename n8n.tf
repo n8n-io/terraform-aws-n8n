@@ -307,7 +307,7 @@ resource "helm_release" "n8n" {
     # autoscaler owns the deployment.
 
     multiMain = {
-      enabled  = true
+      enabled  = local.n8n_multi_main_enabled
       replicas = var.n8n_main_hpa_min_replicas
       antiAffinity = {
         type = "preferred"
@@ -453,7 +453,7 @@ resource "helm_release" "n8n" {
       main = {
         enabled                        = true
         minReplicas                    = var.n8n_main_hpa_min_replicas
-        maxReplicas                    = var.n8n_main_hpa_max_replicas
+        maxReplicas                    = local.n8n_main_hpa_effective_max_replicas
         targetCPUUtilizationPercentage = var.n8n_main_hpa_cpu_threshold
       }
       webhookProcessor = {
@@ -909,10 +909,11 @@ resource "helm_release" "n8n" {
     )
 
     # ── Pod Disruption Budget ─────────────────────────────────────────────────
-    # Ensures at least one main pod stays running during node drains or rollouts.
+    # Protect one main during voluntary eviction in multi-main mode. A single
+    # main permits eviction with downtime. PDBs do not constrain rollouts.
     pdb = {
       enabled      = true
-      minAvailable = 1
+      minAvailable = local.n8n_main_pdb_min_available
     }
 
     # ── Extra volumes ─────────────────────────────────────────────────────────
@@ -987,6 +988,14 @@ resource "helm_release" "n8n" {
     # `nameservers: null` into the chart's `{{- toYaml . }}`, which the API
     # server rejects as an invalid pod spec. The local strips unset keys.
     local.n8n_dns_config == null ? {} : { dnsConfig = local.n8n_dns_config },
+
+    # Main rollout strategy. Only the main Deployment consumes the chart's
+    # top-level `strategy`. Merged conditionally, not emitted as `strategy: {}`
+    # in multi-main mode: an empty map renders nothing (the template is
+    # `with .Values.strategy`), but it still changes the values string, and a
+    # live plan from origin/main at defaults showed that as the sole
+    # helm_release diff every existing release would see on upgrade.
+    local.n8n_multi_main_enabled ? {} : { strategy = local.n8n_main_strategy },
   ))]
 
   depends_on = [

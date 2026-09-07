@@ -28,6 +28,57 @@ this project adheres to the stability contract in
   payload. Restart the `n8n-main`, `n8n-worker`, and
   `n8n-webhook-processor` deployments manually after rotation.
 
+- `multiMain.enabled` is now gated on `n8n_main_hpa_min_replicas > 1` instead
+  of hardcoded `true`. Setting `n8n_main_hpa_min_replicas = 1` deploys a
+  single main pod in plain queue mode with no `feat:multipleMainInstances`
+  license entitlement required, so a Business-tier `n8n_license_key` can run
+  this module in that topology. `n8n_main_hpa_min_replicas > 1` (the default,
+  2) is unchanged and still requires that entitlement. The main-pod HPA's
+  ceiling (`n8n_main_hpa_max_replicas`) is clamped to 1 whenever multi-main
+  is disabled, regardless of its own value, so the HPA cannot scale a second,
+  un-electable main pod into duplicate scheduled/cron executions. The
+  autoscaling-capacity advisory (`scaling.tf`) reads this same clamped
+  ceiling too, so a single-main plan with a high configured
+  `n8n_main_hpa_max_replicas` no longer reports a false "insufficient CPU"
+  warning against a ceiling the HPA can never actually reach. See #117.
+
+  Single-main upgrades now use `Recreate`, with `rollingUpdate: null` to
+  clear previous rollout settings. Old main pods stop before their replacement
+  starts, preventing upgrade overlap without leader election. The main
+  PodDisruptionBudget uses `minAvailable = 0` so node maintenance can evict the
+  only main. Multi-main keeps the chart's rollout strategy and a disruption
+  budget of one. Worker and webhook strategies are unchanged. Terraform tests
+  and a CI-gated chart-rendering check cover both topologies.
+  `tests/scripts/smoke-test.sh` detects single-main from the multi-main flag
+  on the main Deployment and asserts HPA `1/1`, `Recreate`, and
+  `minAvailable = 0` instead of warning about a missing second main. Verified live on
+  `examples/small` with a Business-tier key: no second main during a rollout,
+  and a node drain evicted the single main (about 20 to 30 seconds of
+  downtime each; see `docs/upgrading-n8n.md`).
+
+  **Upgrade note:** there are no existing minimum-one deployments to migrate.
+  Before this change `n8n_main_hpa_min_replicas = 1` was rejected by the
+  chart's values schema (`multiMain.replicas: minimum: got 1, want 2`), so it
+  never applied. Existing default (multi-main) deployments see `No changes` on
+  upgrade; verified with a live plan from the previous release. Moving from
+  multi-main to single-main is an in-place `helm_release` update: both mains
+  stop, then one starts. In single-main mode, main upgrades and node
+  maintenance require downtime for the editor, REST API, and scheduled
+  triggers. `Recreate` controls upgrades, not manual pod deletion or node
+  failure; it is not a general at-most-one guarantee. See
+  `docs/upgrading-n8n.md`, and `docs/troubleshooting.md` for the stuck
+  Deployment a failed switch to `>= 2` can leave behind.
+
+- Every shipped example now exposes `n8n_main_hpa_min_replicas` as a
+  passthrough variable (`examples/small`, `medium`, `large`, `cloudflare`,
+  `godaddy`, `split-ingress`, `customer-managed-redis`,
+  `customer-managed-s3`, `customer-managed-cluster`,
+  `customer-managed-everything`), so setting it is a plain `terraform.tfvars`
+  change, no hand-edited example files needed. `medium` and `large` already
+  hardcoded tier-specific defaults (3 and 6) for main-pod concurrency; those
+  are preserved as each example's own variable default rather than the
+  module's default of 2. See #117.
+
 - `node_disk_size`: root EBS volume size in GiB for the EKS worker nodes.
   Defaults to `null`, which keeps the EKS managed-node-group default of 20
   GiB, so this is additive and no existing deployment changes.

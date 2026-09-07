@@ -38,7 +38,7 @@ variable "certificate_arn" {
 }
 
 variable "n8n_license_key" {
-  description = "n8n Enterprise license activation key. Get one at https://n8n.io/pricing"
+  description = "n8n license activation key. Requires Enterprise with feat:multipleMainInstances by default; Business is supported with n8n_main_hpa_min_replicas = 1. Get one at https://n8n.io/pricing"
   type        = string
   sensitive   = true
 }
@@ -190,6 +190,13 @@ variable "n8n_execution_data_storage_mode" {
     condition     = contains(["database", "s3"], var.n8n_execution_data_storage_mode)
     error_message = "n8n_execution_data_storage_mode must be either \"database\" or \"s3\"."
   }
+}
+
+variable "n8n_main_hpa_min_replicas" {
+  description = "Minimum (and default) replica count for n8n main pods, passed straight through to the module's own n8n_main_hpa_min_replicas. Defaults to 6 here, not the module's own default of 2, to match this tier's editor/API concurrency floor (see the comment beside its use in main.tf): mains carry no webhooks or manual executions, so this ceiling tracks concurrent editor and REST API users rather than raw execution throughput. 6 replicas needs an Enterprise/Startup license carrying feat:multipleMainInstances. Set to 1 to run a single main pod in plain queue mode instead, which only needs a Business-tier license: n8n's multi-main leader-election gate never engages at 1 replica."
+  type        = number
+  default     = 6
+  nullable    = false
 }
 
 variable "tags" {
