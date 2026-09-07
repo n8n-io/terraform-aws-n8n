@@ -293,6 +293,26 @@ this project adheres to the stability contract in
   `examples/medium` gains the Redis upgrade trigger and the pruning caveat as
   comments only; `examples/small` is untouched, since no evidence exists at
   that scale. Examples only: no module input, output or resource changes.
+- `db_instance_class` and `n8n_execution_data_storage_mode` descriptions now
+  carry the evidence behind their guidance. Description-only: no default, type
+  or behaviour changes, and no plan output moves.
+
+  `db_instance_class` gains a sizing rule measured rather than guessed. Load
+  validation found a narrow band of **41 to 51 database transactions per
+  completed execution** across every clean workload type tested (no-op webhook,
+  a representative 34-node real workflow, HTTP-heavy and binary-heavy
+  variants), so required database TPS is roughly `target executions/s x 45`,
+  with a `db.r6g.8xlarge`-class Aurora writer sustaining 22,512 TPS as an upper
+  reference point. The band is per *execution*, so workflows triggering
+  sub-executions or heavy Code-node database access sit above it. The old
+  "db.t3.medium for higher load" hint is dropped in favour of the rule.
+
+  `n8n_execution_data_storage_mode` now says why `database` is the default:
+  in a matched A/B on the representative workflow, database execution storage
+  **outperformed s3 by 37.8% to 45.2%** in sustained throughput, because the
+  per-execution S3 write path costs more than the database write it replaces
+  long before the database itself becomes the bottleneck. `s3` is the lever
+  for a measured database constraint, not a default optimization.
 
 - **The module now sets `N8N_EDITOR_BASE_URL`** to `https://<n8n_domain>`,
   emitted next to `WEBHOOK_URL` in the chart's `config.extraEnv`. The name was
