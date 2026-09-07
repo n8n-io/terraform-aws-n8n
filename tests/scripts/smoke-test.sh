@@ -182,10 +182,16 @@ if [[ "$DEPLOY_MODE" == "multi" ]]; then
   # Ready. The HPA clamp, strategy, and PDB are then asserted, not used for
   # detection, so a regression in any of them fails instead of silently
   # selecting the other branch.
-  multi_main_flag=$(kubectl get deployment n8n-main -n "$NAMESPACE" \
-    -o jsonpath='{.spec.template.spec.containers[?(@.name=="n8n-main")].env[?(@.name=="N8N_MULTI_MAIN_SETUP_ENABLED")].value}' \
-    2>/dev/null || echo "")
-  if [[ "$multi_main_flag" == "true" ]]; then
+  # An unreadable Deployment must not be mistaken for "flag unset".
+  main_deploy_readable=true
+  if ! multi_main_flag=$(kubectl get deployment n8n-main -n "$NAMESPACE" \
+      -o jsonpath='{.spec.template.spec.containers[?(@.name=="n8n-main")].env[?(@.name=="N8N_MULTI_MAIN_SETUP_ENABLED")].value}' \
+      2>/dev/null); then
+    main_deploy_readable=false
+    multi_main_flag=""
+    fail "Cannot read Deployment n8n-main in namespace $NAMESPACE — topology unknown, falling back to multi-main checks"
+  fi
+  if [[ "$main_deploy_readable" == false || "$multi_main_flag" == "true" ]]; then
     MAIN_TOPOLOGY="multi-main"
     info "Multi-main topology (N8N_MULTI_MAIN_SETUP_ENABLED=true on main Deployment)"
   else
@@ -445,7 +451,19 @@ if [[ "$MAIN_TOPOLOGY" == "single-main" ]]; then
   # One main without leader election: the HPA must never allow a second main,
   # upgrades must use Recreate so two mains never overlap, and the PDB must
   # let the only main be evicted during node maintenance.
-  pass "Multi-main disabled (N8N_MULTI_MAIN_SETUP_ENABLED unset on main Deployment)"
+  # Runtime check in the pod, not the spec: this catches the flag from any
+  # source (chart switch, extra env, valueFrom), not only a literal value.
+  if [[ -n "$main_pod" ]]; then
+    multi_main=$(kubectl exec "$main_pod" -n "$NAMESPACE" -c n8n-main \
+      -- printenv N8N_MULTI_MAIN_SETUP_ENABLED 2>/dev/null || echo "")
+    if [[ "$multi_main" == "true" ]]; then
+      fail "N8N_MULTI_MAIN_SETUP_ENABLED=true in the running main pod — multi-main must be off at 1 replica (check n8n_extra_env)"
+    else
+      pass "Multi-main disabled in the running main pod (N8N_MULTI_MAIN_SETUP_ENABLED unset)"
+    fi
+  else
+    warn "No running main pod found to verify the multi-main flag at runtime"
+  fi
 
   main_hpa_min=$(kubectl get hpa n8n-main -n "$NAMESPACE" \
     -o jsonpath='{.spec.minReplicas}' 2>/dev/null || echo "")
