@@ -453,13 +453,22 @@ if [[ "$MAIN_TOPOLOGY" == "single-main" ]]; then
   # let the only main be evicted during node maintenance.
   # Runtime check in the pod, not the spec: this catches the flag from any
   # source (chart switch, extra env, valueFrom), not only a literal value.
+  # The command always exits 0 and prints a sentinel when the variable is
+  # unset, so a non-zero exit can only mean the exec itself failed (RBAC,
+  # pod not yet exec-able). `printenv` would exit 1 in both cases.
   if [[ -n "$main_pod" ]]; then
-    multi_main=$(kubectl exec "$main_pod" -n "$NAMESPACE" -c n8n-main \
-      -- printenv N8N_MULTI_MAIN_SETUP_ENABLED 2>/dev/null || echo "")
-    if [[ "$multi_main" == "true" ]]; then
-      fail "N8N_MULTI_MAIN_SETUP_ENABLED=true in the running main pod — multi-main must be off at 1 replica (check n8n_extra_env)"
+    if multi_main=$(kubectl exec "$main_pod" -n "$NAMESPACE" -c n8n-main \
+        -- sh -c 'printf "%s" "${N8N_MULTI_MAIN_SETUP_ENABLED-__unset__}"' 2>/dev/null); then
+      if [[ "$multi_main" == "true" ]]; then
+        fail "N8N_MULTI_MAIN_SETUP_ENABLED=true in the running main pod — multi-main must be off at 1 replica (check n8n_extra_env)"
+      elif [[ "$multi_main" == "__unset__" ]]; then
+        pass "Multi-main disabled in the running main pod (N8N_MULTI_MAIN_SETUP_ENABLED unset)"
+      else
+        pass "Multi-main disabled in the running main pod (N8N_MULTI_MAIN_SETUP_ENABLED='$multi_main')"
+      fi
     else
-      pass "Multi-main disabled in the running main pod (N8N_MULTI_MAIN_SETUP_ENABLED unset)"
+      warn "Could not exec into $main_pod to verify the multi-main flag at runtime (RBAC or pod not ready) — unverified, not unset"
+      info "Manually verify: kubectl exec -n $NAMESPACE $main_pod -c n8n-main -- printenv N8N_MULTI_MAIN_SETUP_ENABLED"
     fi
   else
     warn "No running main pod found to verify the multi-main flag at runtime"
