@@ -6,10 +6,10 @@
 # the namespace; for this module that is always the queue-mode path —
 # main/worker/webhook-processor pod health, queue mode, Redis connectivity,
 # KEDA ScaledObject, HTTPS, API, and end-to-end execution. Within it, the
-# main topology is detected from the main HPA: max=1 means single-main
-# (n8n_main_hpa_min_replicas = 1, Business-tier path) and the script then
-# expects Recreate, PDB minAvailable=0 and no leader election instead of the
-# multi-main checks.
+# main topology is detected from N8N_MULTI_MAIN_SETUP_ENABLED on the main
+# Deployment: unset means single-main (n8n_main_hpa_min_replicas = 1,
+# Business-tier path) and the script then asserts HPA min=max=1, Recreate and
+# PDB minAvailable=0 instead of the multi-main leader-election checks.
 #
 # Usage:
 #   # Run from the example directory — outputs are read automatically:
@@ -83,7 +83,7 @@ NAMESPACE="${NAMESPACE:-${N8N_NAMESPACE:-n8n}}"
 N8N_URL="${N8N_URL:-}"
 N8N_API_KEY="${N8N_API_KEY:-}"
 DEPLOY_MODE="${DEPLOY_MODE:-}"        # set to 'single' or 'multi' to skip auto-detect
-MAIN_TOPOLOGY="multi-main"            # 'single-main' when the main HPA max is 1 (detected below)
+MAIN_TOPOLOGY="multi-main"            # 'single-main' when N8N_MULTI_MAIN_SETUP_ENABLED is unset (detected below)
 
 # Multi-mode optional load test settings
 LOAD_TEST="${LOAD_TEST:-false}"
@@ -176,17 +176,22 @@ fi
 if [[ "$DEPLOY_MODE" == "multi" ]]; then
   pass "Queue-mode deployment detected (n8n-worker present)"
   # The module runs one main pod without leader election when
-  # n8n_main_hpa_min_replicas = 1 (Business-tier path). The HPA ceiling is
-  # clamped to 1 there, so the main HPA's maxReplicas is the topology signal.
-  main_hpa_max=$(kubectl get hpa n8n-main -n "$NAMESPACE" \
-    -o jsonpath='{.spec.maxReplicas}' 2>/dev/null || echo "")
-  if [[ "${main_hpa_max:-0}" == "1" ]]; then
+  # n8n_main_hpa_min_replicas = 1 (Business-tier path). The topology signal
+  # is the switch itself, N8N_MULTI_MAIN_SETUP_ENABLED on the main Deployment
+  # spec, read from the spec rather than a pod so it works before the pod is
+  # Ready. The HPA clamp, strategy, and PDB are then asserted, not used for
+  # detection, so a regression in any of them fails instead of silently
+  # selecting the other branch.
+  multi_main_flag=$(kubectl get deployment n8n-main -n "$NAMESPACE" \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="n8n-main")].env[?(@.name=="N8N_MULTI_MAIN_SETUP_ENABLED")].value}' \
+    2>/dev/null || echo "")
+  if [[ "$multi_main_flag" == "true" ]]; then
+    MAIN_TOPOLOGY="multi-main"
+    info "Multi-main topology (N8N_MULTI_MAIN_SETUP_ENABLED=true on main Deployment)"
+  else
     MAIN_TOPOLOGY="single-main"
     MAIN_MIN=1
-    info "Single-main topology (main HPA max=1): expecting Recreate, PDB minAvailable=0, no leader election"
-  else
-    MAIN_TOPOLOGY="multi-main"
-    info "Multi-main topology (main HPA max=${main_hpa_max:-?})"
+    info "Single-main topology (N8N_MULTI_MAIN_SETUP_ENABLED unset): expecting HPA 1/1, Recreate, PDB minAvailable=0"
   fi
   info "Checks: queue mode, HPA/KEDA, Redis, main topology"
 else
@@ -437,19 +442,19 @@ main_pod=$(kubectl get pods -n "$NAMESPACE" \
   -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 
 if [[ "$MAIN_TOPOLOGY" == "single-main" ]]; then
-  # One main without leader election: multi-main must be off, upgrades must
-  # use Recreate so two mains never overlap, and the PDB must let the only
-  # main be evicted during node maintenance.
-  if [[ -n "$main_pod" ]]; then
-    multi_main=$(kubectl exec "$main_pod" -n "$NAMESPACE" -c n8n-main \
-      -- printenv N8N_MULTI_MAIN_SETUP_ENABLED 2>/dev/null || echo "")
-    if [[ "$multi_main" == "true" ]]; then
-      fail "N8N_MULTI_MAIN_SETUP_ENABLED=true on a single main — multi-main should be disabled at 1 replica"
-    else
-      pass "Multi-main disabled on main pod (N8N_MULTI_MAIN_SETUP_ENABLED unset)"
-    fi
+  # One main without leader election: the HPA must never allow a second main,
+  # upgrades must use Recreate so two mains never overlap, and the PDB must
+  # let the only main be evicted during node maintenance.
+  pass "Multi-main disabled (N8N_MULTI_MAIN_SETUP_ENABLED unset on main Deployment)"
+
+  main_hpa_min=$(kubectl get hpa n8n-main -n "$NAMESPACE" \
+    -o jsonpath='{.spec.minReplicas}' 2>/dev/null || echo "")
+  main_hpa_max=$(kubectl get hpa n8n-main -n "$NAMESPACE" \
+    -o jsonpath='{.spec.maxReplicas}' 2>/dev/null || echo "")
+  if [[ "$main_hpa_min" == "1" && "$main_hpa_max" == "1" ]]; then
+    pass "Main HPA pinned to min=1 max=1 — no second main without leader election"
   else
-    warn "No running main pod found to check the multi-main flag"
+    fail "Main HPA is min=${main_hpa_min:-<unset>} max=${main_hpa_max:-<unset>} — expected 1/1; a second main without multi-main duplicates scheduled executions"
   fi
 
   main_strategy=$(kubectl get deployment n8n-main -n "$NAMESPACE" \

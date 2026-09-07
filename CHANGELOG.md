@@ -49,9 +49,9 @@ this project adheres to the stability contract in
   only main. Multi-main keeps the chart's rollout strategy and a disruption
   budget of one. Worker and webhook strategies are unchanged. Terraform tests
   and a CI-gated chart-rendering check cover both topologies.
-  `tests/scripts/smoke-test.sh` detects single-main from the main HPA
-  (`max = 1`) and asserts `Recreate`, `minAvailable = 0`, and no multi-main
-  flag instead of warning about a missing second main. Verified live on
+  `tests/scripts/smoke-test.sh` detects single-main from the multi-main flag
+  on the main Deployment and asserts HPA `1/1`, `Recreate`, and
+  `minAvailable = 0` instead of warning about a missing second main. Verified live on
   `examples/small` with a Business-tier key: no second main during a rollout,
   and a node drain evicted the single main (about 20 to 30 seconds of
   downtime each; see `docs/upgrading-n8n.md`).

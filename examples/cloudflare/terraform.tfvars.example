@@ -16,7 +16,7 @@ cloudflare_api_token = "your-cloudflare-api-token-here"
 # n8n license activation key. Get one at https://n8n.io/pricing. Enterprise
 # (feat:multipleMainInstances) for the default multi-main topology; Business is
 # enough with n8n_main_hpa_min_replicas = 1 (see below).
-n8n_license_key = "your-enterprise-license-key-here"
+n8n_license_key = "your-license-key-here"
 
 # AWS region. Change if you're deploying outside us-east-1.
 # aws_region = "eu-west-1"
