@@ -42,6 +42,23 @@ this project adheres to the stability contract in
   `n8n_main_hpa_max_replicas` no longer reports a false "insufficient CPU"
   warning against a ceiling the HPA can never actually reach. See #117.
 
+  Single-main upgrades now use `Recreate`, with `rollingUpdate: null` to
+  clear previous rollout settings. Old main pods stop before their replacement
+  starts, preventing upgrade overlap without leader election. The main
+  PodDisruptionBudget uses `minAvailable = 0` so node maintenance can evict the
+  only main. Multi-main keeps the chart's rollout strategy and a disruption
+  budget of one. Worker and webhook strategies are unchanged. Terraform tests
+  and a CI-gated chart-rendering check cover both topologies.
+
+  **Upgrade note:** callers already using a main minimum of one now lose
+  multi-main mode and any higher HPA ceiling, even when explicitly configured.
+  Main upgrades and node maintenance require downtime for the editor, REST API,
+  and scheduled triggers. Keep a minimum of at least two with the required
+  entitlement if you need multi-main operation. `Recreate` controls upgrades,
+  not manual pod deletion or node failure; it is not a general at-most-one
+  guarantee. See `docs/upgrading-n8n.md`. This topology and scaling-contract
+  change belongs in a minor release under the module's stability contract.
+
 - Every shipped example now exposes `n8n_main_hpa_min_replicas` as a
   passthrough variable (`examples/small`, `medium`, `large`, `cloudflare`,
   `godaddy`, `split-ingress`, `customer-managed-redis`,

@@ -17,13 +17,13 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `queueMode.enabled/workerReplicaCount/workerConcurrency` | Hardcoded `true` / `n8n_worker_keda_min_replicas` / `n8n_worker_concurrency` |
 | `queueMode.workerExtraEnv` | Not exposed (worker-only env); use `n8n_extra_env` for env vars applied to *all* pods instead |
 | `webhookProcessor.enabled/replicaCount/disableProductionWebhooksOnMainProcess` | Hardcoded `true` / `n8n_webhook_hpa_min_replicas` / hardcoded `true` |
-| `multiMain.enabled/replicas/antiAffinity.type` | Hardcoded `true` / `n8n_main_hpa_min_replicas` / hardcoded `"preferred"` |
+| `multiMain.enabled/replicas/antiAffinity.type` | `n8n_main_hpa_min_replicas > 1` / `n8n_main_hpa_min_replicas` / hardcoded `"preferred"` |
 | `multiMain.topologySpreadConstraints`, `multiMain.setup.keyTtl/checkInterval` | Not exposed; chart default used |
 | `taskRunners.enabled/nativePythonRunner/launcher.autoShutdownTimeout/resources` | `n8n_task_runners_enabled` / `n8n_task_runner_python_enabled` / `n8n_task_runner_auto_shutdown_timeout` / `n8n_task_runner_*_request`/`*_limit` |
 | `taskRunners.image.tag` | `n8n_task_runner_image_tag` (null = application image tag) |
 | `taskRunners.customConfig` | `n8n_task_runner_custom_config` (null = image's baked-in launcher config). The only route to the runner allow-lists, incl. `N8N_RUNNERS_STDLIB_ALLOW` for the native Python runner |
 | `taskRunners.image.repository/pullPolicy` | Not exposed; chart default used |
-| `strategy` | Not exposed |
+| `strategy` | Main Deployment only: `Recreate` with `rollingUpdate: null` for single-main; chart default for multi-main |
 | `service.type/port` | Hardcoded `ClusterIP` / `5678` |
 | `service.annotations`, `service.main.annotations`, `service.webhookProcessor.annotations`, `service.sessionAffinity` | Not exposed |
 | `ingress.*` | Never set by this module. The module manages its own `kubernetes_ingress_v1` (see `create_ingress`, `ingress_annotations`) outside the chart entirely, rather than through the chart's ingress block |
@@ -41,12 +41,12 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `networkPolicy.enabled` | Not exposed; chart default (`false`) used, module creates no NetworkPolicy |
 | `probes.*` (liveness/readiness/worker) | Not exposed; chart defaults used |
 | `lifecycle.{main,worker,webhookProcessor}.terminationGracePeriodSeconds/preStop` | `n8n_termination_grace_period` / `n8n_prestop_sleep` |
-| `hpa.main`, `hpa.webhookProcessor` | `n8n_{main,webhook}_hpa_{min,max}_replicas`, `n8n_{main,webhook}_hpa_cpu_threshold` |
+| `hpa.main`, `hpa.webhookProcessor` | `n8n_{main,webhook}_hpa_{min,max}_replicas`, `n8n_{main,webhook}_hpa_cpu_threshold`; main maximum clamped to `1` when its minimum is `1` |
 | `hpa.worker` | Not used; the module scales workers via `keda.worker` instead |
 | `keda.enabled/worker.{minReplicaCount,maxReplicaCount,triggers}` | Hardcoded `true` / `n8n_worker_keda_{min,max}_replicas` / two hardcoded Redis-queue-depth triggers sized by `n8n_worker_keda_jobs_per_replica` |
 | `keda.worker.pollingInterval/cooldownPeriod` | Hardcoded `15` / `60` |
 | `keda.webhookProcessor` | Not used; the module creates the webhook HPA externally in `scaling.tf` instead (the chart skips its own webhook HPA when `keda.enabled = true`) |
-| `pdb.enabled/minAvailable` | Hardcoded `true` / `1` |
+| `pdb.enabled/minAvailable` | Hardcoded `true` / `1` for multi-main, `0` for single-main to allow voluntary eviction with downtime |
 | `webhook.url` | Not set via this chart key; the module sets the equivalent `WEBHOOK_URL` environment variable directly (from `n8n_webhook_url`) |
 | `webhook.enabled/timeout/extraEnv` | Not exposed; chart defaults used |
 | `executions.timeout/timeoutMax/concurrency.productionLimit` | `n8n_execution_timeout` / `n8n_execution_timeout_max` / `n8n_execution_concurrency_limit` |

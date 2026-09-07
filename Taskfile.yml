@@ -57,6 +57,12 @@ tasks:
           as: EXAMPLE
         cmd: cd examples/{{.EXAMPLE}} && terraform test -verbose
 
+  chart:
+    desc: Render and check main topology with the pinned n8n chart (requires Helm and jq).
+    deps: [init]
+    cmds:
+      - ./tests/scripts/check-main-chart.sh
+
   lint:
     desc: tflint for the module root and every example.
     deps: [init]
@@ -111,7 +117,7 @@ tasks:
 
   ci:
     desc: >-
-      Run the full local loop (fmt, validate, test, lint, banners, docs, markdown).
+      Run the full local loop (fmt, validate, test, chart, lint, banners, docs, markdown).
       Mirrors every CI job except checkov, which is a hard-fail gate in CI but is
       left out here because it needs a pinned checkov install that the other tasks
       do not: run `task checkov` separately once you have it. Also runs banners and
@@ -120,6 +126,7 @@ tasks:
       - task: fmt
       - task: validate
       - task: test
+      - task: chart
       - task: lint
       - task: banners
       - task: docs

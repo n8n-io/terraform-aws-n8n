@@ -32,7 +32,7 @@ variable "route53_zone_id" {
 }
 
 variable "n8n_license_key" {
-  description = "n8n Enterprise license activation key. Get one at https://n8n.io/pricing"
+  description = "n8n license activation key. Requires Enterprise with feat:multipleMainInstances by default; Business is supported with n8n_main_hpa_min_replicas = 1. Get one at https://n8n.io/pricing"
   type        = string
   sensitive   = true
 }

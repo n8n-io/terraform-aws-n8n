@@ -21,6 +21,31 @@ Production deployments should pin `n8n_image_tag`. The chart uses `IfNotPresent`
 3. If you're on a multi-main deployment (`n8n_main_hpa_min_replicas > 1`, the module default), read [Multi-main crash-loops after a rolling restart](./troubleshooting.md#multi-main-crash-loops-after-a-rolling-restart-helm-stuck-in-pending-rollback) first. Any upgrade is a rolling restart of the main pods, so that failure mode is in scope even though it isn't specific to version bumps.
 4. Take and verify an RDS snapshot or equivalent external-database backup. Helm cannot roll back database migrations.
 
+## Single-main maintenance
+
+With `n8n_main_hpa_min_replicas = 1`, the module disables multi-main and
+clamps the main HPA maximum to one, even if a higher maximum is configured.
+The main Deployment uses `Recreate`: an upgrade stops old main pods before
+starting the replacement. This avoids upgrade overlap without leader election,
+but makes the editor, REST API, and scheduled triggers unavailable until the
+replacement starts. Plan a maintenance window; missed schedule times are not
+promised to replay.
+
+The main PodDisruptionBudget uses `minAvailable = 0` in this topology so node
+drains and managed node updates can evict the only main. Such maintenance also
+causes downtime. Worker and webhook rollout strategies are unchanged.
+
+Use `kubectl rollout restart deployment/n8n-main -n <namespace>` for a planned
+main restart, rather than deleting the pod. `Recreate` controls Deployment
+upgrades, not manual pod deletion or node failure; it is not a general
+at-most-one-process guarantee. Do not manually scale another main while
+multi-main is disabled.
+
+Before production, verify the Deployment strategy, HPA bounds, and disruption
+budget on a staging cluster. Watch a main rollout to confirm the old pods stop
+before the replacement starts, and verify a node drain can evict the main.
+Rendering tests cannot establish controller behavior.
+
 ## Bumping
 
 1. Set `n8n_image_tag`, any required `n8n_chart_version`, and—when using a custom application tag—the matching `n8n_task_runner_image_tag`.

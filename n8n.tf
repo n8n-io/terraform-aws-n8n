@@ -314,6 +314,9 @@ resource "helm_release" "n8n" {
       }
     }
 
+    # Only the main Deployment consumes the chart's top-level strategy.
+    strategy = local.n8n_main_strategy
+
     queueMode = {
       enabled            = true
       workerReplicaCount = var.n8n_worker_keda_min_replicas
@@ -909,10 +912,11 @@ resource "helm_release" "n8n" {
     )
 
     # ── Pod Disruption Budget ─────────────────────────────────────────────────
-    # Ensures at least one main pod stays running during node drains or rollouts.
+    # Protect one main during voluntary eviction in multi-main mode. A single
+    # main permits eviction with downtime. PDBs do not constrain rollouts.
     pdb = {
       enabled      = true
-      minAvailable = 1
+      minAvailable = local.n8n_main_pdb_min_available
     }
 
     # ── Extra volumes ─────────────────────────────────────────────────────────

@@ -431,6 +431,17 @@ locals {
   # multi-main is disabled, regardless of the variable's own value.
   n8n_main_hpa_effective_max_replicas = local.n8n_multi_main_enabled ? var.n8n_main_hpa_max_replicas : var.n8n_main_hpa_min_replicas
 
+  # Recreate waits for old main pods to stop during upgrades before starting
+  # replacements. An HPA ceiling alone cannot prevent RollingUpdate surges.
+  # Leave the multi-main chart strategy untouched. Recreate does not prevent
+  # overlap following manual pod deletion or node failure.
+  # Explicit null clears any previous RollingUpdate settings during upgrade.
+  n8n_main_strategy = local.n8n_multi_main_enabled ? {} : { type = "Recreate", rollingUpdate = null }
+
+  # A single main must be evictable during node maintenance. Keeping one
+  # available with an HPA ceiling of one would block every voluntary eviction.
+  n8n_main_pdb_min_available = local.n8n_multi_main_enabled ? 1 : 0
+
   # ── n8n service account ────────────────────────────────────────────────────
   # The chart creating its own ServiceAccount is the arrangement we want, with
   # one exception: neither chart 1.10.0 nor 1.11.0 renders imagePullSecrets

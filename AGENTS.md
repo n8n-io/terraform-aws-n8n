@@ -29,8 +29,13 @@ multi-main [n8n Enterprise](https://n8n.io) installation on AWS**. A single
   validated ARN to the module via `certificate_arn`). For any other DNS
   provider, BYO a pre-validated `certificate_arn`.
 
-An **n8n Enterprise license key** is required (`var.n8n_license_key`) — the
-module does not provision a community-edition deployment.
+The default multi-main topology requires an **n8n Enterprise license key**
+with `feat:multipleMainInstances`. A **Business license** works with
+`n8n_main_hpa_min_replicas = 1`: multi-main is disabled, the main HPA is
+clamped to one, upgrades use `Recreate`, and the main PodDisruptionBudget
+allows eviction with downtime. The module does not provision a
+community-edition deployment. Supply the license through `n8n_license_key`
+or `n8n_license_key_secret_ref`.
 
 The module **expects a pre-existing VPC**. Reference deployments that include
 the VPC are organized as **three sizing tiers** on Route 53:
@@ -169,6 +174,13 @@ Concretely, in this repo:
   `large`, `cloudflare`, `godaddy`, `split-ingress`) that exercises the example end-to-end with
   the same mocking strategy, catching wiring mistakes between the module and a
   realistic caller.
+- `tests/scripts/check-main-chart.sh` renders the pinned n8n chart with the
+  topology locals for one, two, and three mains. It checks the main rollout
+  strategy, HPA bounds, and disruption budget, and verifies that worker and
+  webhook strategies stay unchanged. Run with `task chart` (requires Helm and
+  jq); CI runs the same script. It does not run Kubernetes controllers or
+  prove the full Helm resource wiring, which still needs a real plan and
+  staging rollout/drain test.
 - `tests/scripts/smoke-test.sh` is the **integration / post-apply** check used
   against a real cluster — kept out of CI on purpose (it needs live AWS
   credentials and an applied stack).
@@ -433,6 +445,7 @@ terraform fmt -recursive                       # before committing
 terraform init -backend=false                  # at module root
 terraform validate
 terraform test -verbose                        # plan-time, no AWS creds needed
+tests/scripts/check-main-chart.sh              # chart rendering, Helm + jq needed
 tflint --init && tflint --format compact
 terraform-docs --output-check .                # README drift check
 
