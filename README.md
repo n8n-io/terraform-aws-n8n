@@ -978,12 +978,24 @@ queued job goes with it. Drain workers first.
 > `moved` block absorbs the `count` added to the cluster resource, and existing
 > deployments plan `No changes.`
 
-### `create_elasticache = false` is not compatible
+### `create_elasticache = false` makes this a declaration
 
-The module cannot put TLS or a token on a Redis it does not manage, so this
-combination is rejected at plan time rather than applied. Terminate TLS on your
-own endpoint and leave this variable at its default. See
-[Customer-managed Redis](#customer-managed-redis).
+The module provisions nothing to encrypt on that path, so this variable
+declares what your endpoint already requires rather than configuring it. Set it
+to `true` when your Redis is TLS-only: n8n and both KEDA queue-depth triggers
+are wired to speak TLS, and AUTH comes from `redis_auth_token` or
+`redis_auth_token_secret_ref`. The module neither terminates TLS nor verifies
+that your endpoint does. Leave both unset for an endpoint that accepts
+unauthenticated, plaintext connections.
+
+`redis_transit_encryption_mode` is the one TLS input that does not apply here:
+it is a property of the replication group the module manages, and a `check`
+says so when it is set alongside `create_elasticache = false`. Your endpoint's
+own TLS posture is yours to configure.
+
+See [Customer-managed Redis](#customer-managed-redis), and
+[`examples/customer-managed-redis`](./examples/customer-managed-redis/), which
+runs exactly this combination.
 
 ### Worker autoscaling
 
