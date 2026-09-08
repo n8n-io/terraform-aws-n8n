@@ -20,6 +20,11 @@ output "namespace" {
   value       = module.n8n.namespace
 }
 
+output "worker_pool_names" {
+  description = "Names of the worker pools this example declares, in declaration order. Read by tests/scripts/verify-worker-pools.sh, which counts the rendered pool Deployments and ScaledObjects against this list: the chart-predates-pools failure leaves this list non-empty and the cluster with nothing behind it, and only a live count can see that."
+  value       = [for p in local.worker_pools : p.name]
+}
+
 # ── Secrets ───────────────────────────────────────────────────────────────────
 # Retrieve with: terraform output -raw <name>
 
