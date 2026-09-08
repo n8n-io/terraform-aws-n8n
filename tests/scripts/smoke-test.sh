@@ -183,13 +183,30 @@ if [[ "$DEPLOY_MODE" == "multi" ]]; then
   # detection, so a regression in any of them fails instead of silently
   # selecting the other branch.
   # An unreadable Deployment must not be mistaken for "flag unset".
+  #
+  # Chart 1.11 and later render this variable as a configMapKeyRef rather than
+  # a literal value, so `.env[...].value` reads empty on a multi-main release
+  # and this branch silently selected single-main, then failed the HPA,
+  # strategy and PDB asserts on a healthy deployment. Read the literal value
+  # first (chart <= 1.10), and when it is empty resolve the ConfigMap key the
+  # Deployment points at, so both renderings are covered from the spec alone.
   main_deploy_readable=true
-  if ! multi_main_flag=$(kubectl get deployment n8n-main -n "$NAMESPACE" \
-      -o jsonpath='{.spec.template.spec.containers[?(@.name=="n8n-main")].env[?(@.name=="N8N_MULTI_MAIN_SETUP_ENABLED")].value}' \
+  if ! main_flag_env=$(kubectl get deployment n8n-main -n "$NAMESPACE" \
+      -o jsonpath='{.spec.template.spec.containers[?(@.name=="n8n-main")].env[?(@.name=="N8N_MULTI_MAIN_SETUP_ENABLED")]}' \
       2>/dev/null); then
     main_deploy_readable=false
     multi_main_flag=""
     fail "Cannot read Deployment n8n-main in namespace $NAMESPACE — topology unknown, falling back to multi-main checks"
+  else
+    multi_main_flag=$(printf '%s' "$main_flag_env" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
+    if [[ -z "$multi_main_flag" ]]; then
+      cm_name=$(printf '%s' "$main_flag_env" | sed -n 's/.*"configMapKeyRef":{[^}]*"name":"\([^"]*\)".*/\1/p')
+      cm_key=$(printf '%s' "$main_flag_env" | sed -n 's/.*"configMapKeyRef":{[^}]*"key":"\([^"]*\)".*/\1/p')
+      if [[ -n "$cm_name" && -n "$cm_key" ]]; then
+        multi_main_flag=$(kubectl get configmap "$cm_name" -n "$NAMESPACE" \
+          -o jsonpath="{.data.$cm_key}" 2>/dev/null || true)
+      fi
+    fi
   fi
   if [[ "$main_deploy_readable" == false || "$multi_main_flag" == "true" ]]; then
     MAIN_TOPOLOGY="multi-main"
