@@ -29,9 +29,13 @@ locals {
   # the itop entry below.
   worker_pools = [
     # Heavier executions, given more CPU and memory and a lower concurrency so
-    # each worker takes fewer jobs at once.
+    # each worker takes fewer jobs at once. Still CPU-only: this example runs
+    # the same t3.xlarge node group as small and sets no node placement, so
+    # "heavy" means bigger requests, not different hardware. A pool that needs
+    # GPU nodes would add a dedicated node group plus nodeSelector/tolerations,
+    # which the chart's worker groups accept but this module does not expose.
     {
-      name           = "gpu"
+      name           = "heavy"
       min_replicas   = 1
       max_replicas   = 4
       concurrency    = 5
@@ -143,7 +147,7 @@ module "n8n" {
   # Pools are additional autoscalers on the same node group, and each can reach
   # its own ceiling independently, so their pods have to fit alongside the main,
   # default-worker and webhook ceilings rather than instead of them. The three
-  # pools below add 9,000m of CPU requests at their maxima (4 x 1200m for gpu,
+  # pools below add 9,000m of CPU requests at their maxima (4 x 1200m for heavy,
   # 3 x 700m each for secteam and itop, every pool pod carrying a task runner
   # sidecar), which takes the peak from small's 16,600m to 25,600m. The default
   # node_max of 6 t3.xlarge only schedules about 21,720m, so it needs 8.
