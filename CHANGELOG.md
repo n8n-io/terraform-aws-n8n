@@ -26,11 +26,13 @@ this project adheres to the stability contract in
   chart version carries `queueMode.workerGroups` (the feature is
   n8n-io/n8n-hosting#189, open against a preview branch), and a chart that
   predates it accepts the key and silently renders nothing, so the release
-  applies clean with the flag on and no pool behind it. Two `check` blocks in
-  `worker-pools.tf` warn when the pinned `n8n_chart_version` predates the
-  feature (placeholder minimum `1.12.0`; a prerelease version is taken at the
-  caller's word) or when a pinned `n8n_image_tag` is below `2.39.0`, the first
-  n8n release that reads the pool variables. The `feat:workerPools` licence
+  applies clean with the flag on and no pool behind it. A precondition on the
+  Helm release fails the plan when the pinned `n8n_chart_version` is a release
+  that predates the feature (placeholder minimum `1.12.0`; a prerelease
+  version is taken at the caller's word, which is how a preview build is
+  installed), and a `check` in `worker-pools.tf` warns when a pinned
+  `n8n_image_tag` is below `2.39.0`, the first n8n release that reads the pool
+  variables. The `feat:workerPools` licence
   entitlement is required as well, and its absence is not silent: n8n 2.39.0
   exits 1 on a worker started with `N8N_WORKER_POOL_NAME` it is not licensed
   for, so the pool pods crash-loop and the Helm release is rolled back,
@@ -58,7 +60,7 @@ this project adheres to the stability contract in
   name check. Default `[]`, additive.
 
 - `examples/worker-pools/`: topology variant of `small` running three pools
-  (`gpu`, `secteam`, `itop`, the last parked at `min_replicas = 0`) with
+  (`heavy`, `secteam`, `itop`, the last parked at `min_replicas = 0`) with
   `node_max` raised from 6 to 8 to hold their ceilings. `n8n_chart_version` is a
   required input there, since the module default renders no pools, and its
   README documents packaging the preview chart to ECR and an end-to-end routing

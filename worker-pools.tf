@@ -104,7 +104,7 @@ locals {
   ]
 }
 
-# ── Guards ────────────────────────────────────────────────────────────────────
+# ── Guards ───────────────────────────────────────────────────────────────────
 # Both of these exist because the failure they catch is silent in every other
 # place it could be caught. A chart that predates queueMode.workerGroups has no
 # additionalProperties: false on queueMode, so Helm accepts the key, renders
@@ -114,24 +114,27 @@ locals {
 # cannot see any of that, and neither can a real plan; only counting the
 # rendered Deployments after apply can (tests/scripts/verify-worker-pools.sh).
 #
-# These are checks rather than validations because n8n_chart_repository can
-# point at a private mirror whose version strings this module cannot reason
-# about, and a caller running a preview build should be able to proceed past a
-# warning rather than fight a hard stop.
+# The chart pairing is a hard stop, enforced as a precondition on
+# helm_release.n8n (n8n.tf) because it is a property of that resource and
+# because letting the apply proceed past a warning is exactly the silent
+# outcome described above. A prerelease version is exempt, which is how a
+# preview build of the chart is installed while no release carries the feature
+# and how a private mirror serving one is used. The image pairing stays a
+# warning: n8n_image_tag is usually null (the chart's floating `stable`), which
+# the check cannot see, and pinning a too-old tag fails loudly at runtime
+# anyway (the pooled workers exit 1 on a licence they lack and simply ignore
+# the pool variables on a version they predate).
 
-check "worker_pools_require_a_chart_that_renders_them" {
-  assert {
-    condition = length(var.n8n_worker_pools) > 0 ? local.n8n_chart_renders_worker_pools : true
-    error_message = join("", [
-      "n8n_worker_pools declares ${length(var.n8n_worker_pools)} pool(s) but n8n_chart_version = \"${var.n8n_chart_version}\" ",
-      "predates queueMode.workerGroups (first released in ${local.n8n_worker_pools_min_chart_version}). ",
-      "That chart accepts the key and renders nothing for it, so the release would apply cleanly with ",
-      "N8N_WORKER_POOLS_ENABLED switched on and no pool Deployment or ScaledObject behind it, and every ",
-      "project pinned to a pool would run on the default queue. Pin n8n_chart_version to ",
-      "${local.n8n_worker_pools_min_chart_version} or later, or to a prerelease build that carries the ",
-      "feature (a version with a hyphen is taken at your word), or remove the pools.",
-    ])
-  }
+locals {
+  n8n_worker_pools_chart_error = join("", [
+    "n8n_worker_pools declares ${length(var.n8n_worker_pools)} pool(s) but n8n_chart_version = \"${var.n8n_chart_version}\" ",
+    "predates queueMode.workerGroups (first released in ${local.n8n_worker_pools_min_chart_version}). ",
+    "That chart accepts the key and renders nothing for it, so the release would apply cleanly with ",
+    "N8N_WORKER_POOLS_ENABLED switched on and no pool Deployment or ScaledObject behind it, and every ",
+    "project pinned to a pool would run on the default queue. Pin n8n_chart_version to ",
+    "${local.n8n_worker_pools_min_chart_version} or later, or to a prerelease build that carries the ",
+    "feature (a version with a hyphen is taken at your word), or remove the pools.",
+  ])
 }
 
 check "worker_pools_require_n8n_2_39" {

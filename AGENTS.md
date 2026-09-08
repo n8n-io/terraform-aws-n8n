@@ -58,8 +58,8 @@ WAF) and an internal ALB serving the editor UI and REST API.
 to hold their autoscaling ceilings. It is a **draft until upstream ships**: the
 chart side (`queueMode.workerGroups`, n8n-io/n8n-hosting#189) is unreleased,
 so the example requires an explicit `n8n_chart_version` and documents how to
-push a preview build to ECR; the module warns at plan when the pinned chart
-predates the feature, because an older chart accepts the key and silently
+push a preview build to ECR; the module fails the plan when the pinned chart
+is a release that predates the feature, because an older chart accepts the key and silently
 renders nothing.
 
 Four **customer-managed examples**, also at `small` sizing, cover the
