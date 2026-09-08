@@ -48,11 +48,19 @@ Two **DNS-variant examples** at `small` sizing,
 [`examples/godaddy/`](./examples/godaddy/), only swap the DNS provider for
 cert validation and the alias record.
 
-A **topology-variant example** at `small` sizing,
-[`examples/split-ingress/`](./examples/split-ingress/), sets
+Two **topology-variant examples** at `small` sizing.
+[`examples/split-ingress/`](./examples/split-ingress/) sets
 `create_ingress = false` and brings its own pair of Ingresses: an
 internet-facing ALB serving only the webhook path prefixes (optionally behind a
 WAF) and an internal ALB serving the editor UI and REST API.
+[`examples/worker-pools/`](./examples/worker-pools/) declares three
+`n8n_worker_pools` beside the default worker deployment and raises `node_max`
+to hold their autoscaling ceilings. It is a **draft until upstream ships**: the
+chart side (`queueMode.workerGroups`, n8n-io/n8n-hosting#189) is unreleased,
+so the example requires an explicit `n8n_chart_version` and documents how to
+push a preview build to ECR; the module warns at plan when the pinned chart
+predates the feature, because an older chart accepts the key and silently
+renders nothing.
 
 Four **customer-managed examples**, also at `small` sizing, cover the
 `create_<x> = false` paths described in
@@ -101,6 +109,7 @@ expected by the Terraform Registry:
 | `examples/cloudflare/`            | DNS-variant of `small` using Cloudflare DNS, including the VPC. |
 | `examples/godaddy/`               | DNS-variant of `small` using GoDaddy DNS, including the VPC.    |
 | `examples/split-ingress/`         | Topology-variant of `small`: `create_ingress = false` with a public webhook ALB and an internal admin ALB (Route 53, includes the VPC). |
+| `examples/worker-pools/`          | Topology-variant of `small`: three `n8n_worker_pools` beside the default workers, `node_max` raised to 8 (Route 53, includes the VPC). Requires a chart that renders `queueMode.workerGroups`, which no published version does yet; `n8n_chart_version` is a required input there. |
 | `examples/customer-managed-redis/` | Customer-managed variant of `small`: a plain-Terraform ElastiCache replication group (AUTH + TLS) stands in for infrastructure the customer already runs, consumed via `create_elasticache = false`. |
 | `examples/customer-managed-s3/`   | Customer-managed variant of `small`: a plain-Terraform bucket with its own security configuration, consumed via `create_s3_bucket = false`. |
 | `examples/customer-managed-cluster/` | Customer-managed variant of `small`: a plain-Terraform EKS cluster and node group, consumed via `create_eks = false` + `existing_eks_cluster_name`. |
@@ -108,6 +117,7 @@ expected by the Terraform Registry:
 | `tests/*.tftest.hcl`              | `terraform test` plan-time tests with mocked providers.     |
 | `tests/scripts/smoke-test.sh`     | Post-`apply` smoke test for live deployments.               |
 | `tests/scripts/verify-custom-image.sh` | Post-`apply` check for baked-in community nodes (`n8n_image_repository` + `n8n_custom_extensions_path`). |
+| `tests/scripts/verify-worker-pools.sh` | Post-`apply` check that `n8n_worker_pools` actually rendered: counts pool Deployments and ScaledObjects against the declared list, which is the only place a chart that ignored `queueMode.workerGroups` is visible. |
 | `docs/`                           | Long-form supplementary docs (troubleshooting, post-deploy, cleanup, upgrades, Pod Identity, Helm chart coverage). |
 | `.github/workflows/`              | CI: fmt, validate, test, tflint, checkov.                   |
 | `.github/CODEOWNERS`              | Default reviewers for PRs.                                  |
@@ -142,8 +152,8 @@ Concretely, in this repo:
 - **`terraform validate`** against the module root *and* every example
   (`examples/small/`, `examples/medium/`, `examples/large/`,
   `examples/cloudflare/`, `examples/godaddy/`, `examples/split-ingress/`,
-  `examples/customer-managed-redis/`, `examples/customer-managed-s3/`,
-  `examples/customer-managed-cluster/`,
+  `examples/worker-pools/`, `examples/customer-managed-redis/`,
+  `examples/customer-managed-s3/`, `examples/customer-managed-cluster/`,
   `examples/customer-managed-everything/`) via the CI matrix.
 - **`tflint`** against the module root and every example, with the AWS
   ruleset initialized via `tflint --init`.
@@ -171,7 +181,7 @@ Concretely, in this repo:
   widening the shared mock, which silently weakens every other run that reads
   the same attribute.
 - Each example has its own `tests/defaults.tftest.hcl` (`small`, `medium`,
-  `large`, `cloudflare`, `godaddy`, `split-ingress`) that exercises the example end-to-end with
+  `large`, `cloudflare`, `godaddy`, `split-ingress`, `worker-pools`) that exercises the example end-to-end with
   the same mocking strategy, catching wiring mistakes between the module and a
   realistic caller.
 - `tests/scripts/check-main-chart.sh` renders the pinned n8n chart with the
@@ -189,6 +199,15 @@ Concretely, in this repo:
   cannot reach what it checks: whether n8n *loaded* the baked nodes, and whether
   it loaded them on workers as well as mains. A deployment can pass every other
   check and still fail only when a production execution hits the node.
+- `tests/scripts/verify-worker-pools.sh` is the same tier again, for
+  deployments that declare `n8n_worker_pools`. It counts the rendered pool
+  Deployments and ScaledObjects against the declared list and checks their
+  labels, env, triggers and READY state. Plan-time tests structurally cannot
+  do this: the mocked helm provider accepts any values, and a real chart that
+  predates `queueMode.workerGroups` also accepts them and renders nothing, so
+  the release applies clean with the feature flag on and no pool behind it.
+  The module's `check` blocks in `worker-pools.tf` catch the version pairing
+  at plan; this script is what catches the outcome.
 
 When you add a feature, add an `assert` for it in the relevant `.tftest.hcl`
 file. Use `command = plan` unless you specifically need apply semantics.
@@ -278,7 +297,7 @@ instinct that was, for a long stretch of this repo's history, wrong.
 #### The floor is `>= 1.11`
 
 Declared as `required_version = ">= 1.11"` everywhere: root, `modules/controllers`,
-and all ten examples, though not all in a `versions.tf` — eight examples have
+and all eleven examples, though not all in a `versions.tf` — nine examples have
 one, but `cloudflare` and `godaddy` declare it inline in `providers.tf`
 instead. Matched by CI's single `TF_VERSION` pin either way. It moved up from
 `>= 1.9` because `override_resource`'s `override_during` attribute, which
@@ -291,7 +310,7 @@ about a version constraint. `-cluster` tried the same technique for an
 unrelated problem and it didn't work there; its floor is inherited from the
 module's, not from `override_during` (see its own `versions.tf`).
 
-Keep all twelve declarations and the CI pin in step when bumping. A floor the
+Keep all thirteen declarations and the CI pin in step when bumping. A floor the
 CI does not exercise is a claim nobody is checking.
 
 **Recommended pattern** when end-to-end wiring cannot be tested under mocks:
@@ -381,6 +400,7 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
   | `External Secrets` | External Secrets Operator integration |
   | `KEDA: worker pods` | Queue-depth autoscaling |
   | `Pod DNS` | Pod-level DNS settings (`n8n_dns_config`) to work around Kubernetes' `ndots:5` search-path amplification |
+  | `Worker pools` | `n8n_worker_extra_env` and `n8n_worker_pools`: worker-only env and the labelled pools mapped onto the chart's `queueMode.workerGroups` |
 
   `scripts/check-variable-banners.sh` hardcodes this same list, in this same
   order, and fails if `variables.tf` disagrees with it. Update the table and
@@ -454,7 +474,7 @@ terraform-docs --output-check .                # README drift check
 # var, so a green local run means CI will be green too. Keep all three in sync
 # when adding an example: one that no local wrapper visits is one nobody
 # validates before pushing.
-for ex in small medium large cloudflare godaddy split-ingress \
+for ex in small medium large cloudflare godaddy split-ingress worker-pools \
           customer-managed-redis customer-managed-s3 \
           customer-managed-cluster customer-managed-everything; do
   ( cd "examples/$ex" \
