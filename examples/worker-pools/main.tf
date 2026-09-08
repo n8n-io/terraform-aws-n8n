@@ -113,6 +113,8 @@ module "n8n" {
   vpc_cidr_block  = module.vpc.vpc_cidr_block
   route53_zone_id = var.route53_zone_id
 
+  n8n_main_hpa_min_replicas = var.n8n_main_hpa_min_replicas
+
   n8n_license_key            = var.n8n_license_key
   n8n_image_repository       = var.n8n_image_repository
   n8n_image_tag              = var.n8n_image_tag
@@ -122,7 +124,12 @@ module "n8n" {
 
   n8n_additional_domains = var.n8n_additional_domains
 
-  n8n_extra_env = var.n8n_extra_env
+  # ── Chart ───────────────────────────────────────────────────────────────────
+  # Required by this example and optional everywhere else: the module default
+  # chart predates queueMode.workerGroups and would render no pools. See the
+  # variable's comment and README.md, "Getting a chart that renders pools".
+  n8n_chart_version    = var.n8n_chart_version
+  n8n_chart_repository = var.n8n_chart_repository
 
   # ── Node capacity ───────────────────────────────────────────────────────────
   # The one place this example is not sizing-equivalent to examples/small.
