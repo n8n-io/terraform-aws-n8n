@@ -53,6 +53,7 @@ TERRAFORM_DIR="${TERRAFORM_DIR:-$(pwd)}"
 _explicit_pools="${WORKER_POOLS-__unset__}"
 _explicit_ns="${NAMESPACE-__unset__}"
 _explicit_release="${RELEASE_NAME-__unset__}"
+_explicit_tfdir="$TERRAFORM_DIR"
 
 for _env_candidate in "$SCRIPT_DIR/.env" "$TERRAFORM_DIR/.env" "$(pwd)/.env"; do
   if [[ -f "$_env_candidate" ]]; then
@@ -65,6 +66,10 @@ done
 [[ "$_explicit_pools" != "__unset__" ]] && WORKER_POOLS="$_explicit_pools"
 [[ "$_explicit_ns" != "__unset__" ]] && NAMESPACE="$_explicit_ns"
 [[ "$_explicit_release" != "__unset__" ]] && RELEASE_NAME="$_explicit_release"
+# Also the directory itself: a .env that sets TERRAFORM_DIR would otherwise
+# redirect state reads and the kubectl context switch to a different deployment
+# than the one the caller named.
+TERRAFORM_DIR="$_explicit_tfdir"
 
 # ── Read from Terraform outputs ───────────────────────────────────────────────
 
