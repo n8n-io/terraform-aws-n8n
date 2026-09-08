@@ -115,7 +115,7 @@ Run the scripted check first. It reads `worker_pool_names` and `namespace` from 
 
 It asserts, per pool: the `n8n-worker-<pool>` Deployment exists and carries the `n8n.io/worker-pool` label; the ScaledObject of the same name exists and targets that Deployment; the ScaledObject is `READY=True` and its triggers watch `bull:jobs-<pool>:wait` / `:active` with the same TLS and AUTH metadata the default worker's triggers carry; running pool pods have `N8N_WORKER_POOL_NAME` set; the main Deployment has `N8N_WORKER_POOLS_ENABLED=true`; and KEDA's external metric for the pool's queue resolves. It also fails if the cluster has pool Deployments the outputs do not list.
 
-By hand, the same thing:
+By hand, the same thing. Every command below names the `n8n` namespace explicitly, including the `namespaces/n8n/` segment of the raw metrics URLs: this example does not expose the module's `namespace` input, so that is the only namespace it deploys to. If you adapt these commands for a root module that does set it, replace both.
 
 ```bash
 eval "$(terraform output -raw kubectl_config_command)"
