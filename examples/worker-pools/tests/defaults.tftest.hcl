@@ -103,16 +103,24 @@ run "example_declares_the_three_documented_pools" {
   }
 
   # Every name has to satisfy the module's own rule, which is tighter than it
-  # looks: 1-53 characters, lowercase alphanumerics and hyphens, and both ends
-  # alphanumeric, because the chart uses this value for a group name capped at
-  # 53. Asserted here so the example cannot ship a name that plans clean at the
-  # example layer and fails helm schema validation at apply.
+  # looks: 1-43 characters, lowercase alphanumerics and hyphens, and both ends
+  # alphanumeric, because the chart names the pool's ScaledObject
+  # n8n-worker-<name> and KEDA caps that at 54. Asserted here so the example
+  # cannot ship a name that plans clean at the example layer and fails the
+  # chart's render at apply.
   assert {
     condition = alltrue([
       for p in local.worker_pools :
-      can(regex("^[a-z0-9]([a-z0-9-]{0,51}[a-z0-9])?$", p.name))
+      can(regex("^[a-z0-9]([a-z0-9-]{0,41}[a-z0-9])?$", p.name))
     ])
     error_message = "An example pool name does not satisfy the module's pool-name rule."
+  }
+
+  # verify-worker-pools.sh reads this output to know how many pools to expect
+  # on the cluster, so it has to mirror the declaration exactly.
+  assert {
+    condition     = output.worker_pool_names == [for p in local.worker_pools : p.name]
+    error_message = "output.worker_pool_names drifted from local.worker_pools; the live verification script would count against the wrong list."
   }
 
   assert {
