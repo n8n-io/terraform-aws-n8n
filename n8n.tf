@@ -1026,6 +1026,20 @@ resource "helm_release" "n8n" {
     local.n8n_multi_main_enabled ? {} : { strategy = local.n8n_main_strategy },
   ))]
 
+  lifecycle {
+    # A hard stop rather than a check: a chart that predates
+    # queueMode.workerGroups accepts the key and renders nothing, so with
+    # pools declared this release would apply clean, switch
+    # N8N_WORKER_POOLS_ENABLED on across every pod, and leave no pool
+    # Deployment or ScaledObject behind it. Prerelease versions are exempt
+    # (local.n8n_chart_renders_worker_pools takes them at the caller's word),
+    # so a preview build still installs. See worker-pools.tf.
+    precondition {
+      condition     = length(var.n8n_worker_pools) > 0 ? local.n8n_chart_renders_worker_pools : true
+      error_message = local.n8n_worker_pools_chart_error
+    }
+  }
+
   depends_on = [
     # See the comment on kubernetes_secret.n8n above: local.namespace_name
     # carries no dependency on the node group when create_namespace = false.

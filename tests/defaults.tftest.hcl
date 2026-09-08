@@ -10203,9 +10203,8 @@ run "n8n_dns_config_rejects_a_malformed_search_domain" {
 # directly.
 #
 # Every run that declares a pool also pins n8n_chart_version to a prerelease.
-# The module's default chart predates queueMode.workerGroups and
-# check.worker_pools_require_a_chart_that_renders_them warns on that pairing,
-# which `terraform test` treats as a failed run. A prerelease is the honest pin:
+# The module's default chart predates queueMode.workerGroups and the
+# precondition on helm_release.n8n fails the plan on that pairing. A prerelease is the honest pin:
 # at the time of writing the only chart that renders pools is a preview build
 # from n8n-io/n8n-hosting#189, and the check takes a prerelease at the caller's
 # word rather than comparing it against a release that does not exist yet. The
@@ -10423,7 +10422,7 @@ run "worker_pools_reject_an_underscore_in_a_name" {
   expect_failures = [var.n8n_worker_pools]
 }
 
-run "worker_pools_reject_a_name_over_sixty_three_characters" {
+run "worker_pools_reject_an_overlong_name" {
   command = plan
 
   variables {
@@ -10848,7 +10847,9 @@ run "worker_pools_accept_a_conventional_extra_env_name" {
 # the guard fires; whether pools actually rendered is what
 # tests/scripts/verify-worker-pools.sh counts after a live apply.
 
-run "worker_pools_warn_when_the_default_chart_predates_them" {
+# A hard stop, not a warning: the precondition lives on helm_release.n8n, so
+# that resource is what expect_failures names.
+run "worker_pools_fail_the_plan_when_the_default_chart_predates_them" {
   command = plan
 
   variables {
@@ -10857,10 +10858,10 @@ run "worker_pools_warn_when_the_default_chart_predates_them" {
     n8n_worker_pools = [{ name = "gpu" }]
   }
 
-  expect_failures = [check.worker_pools_require_a_chart_that_renders_them]
+  expect_failures = [helm_release.n8n]
 }
 
-run "worker_pools_warn_on_a_release_below_the_minimum_chart" {
+run "worker_pools_fail_the_plan_on_a_release_below_the_minimum_chart" {
   command = plan
 
   variables {
@@ -10868,7 +10869,7 @@ run "worker_pools_warn_on_a_release_below_the_minimum_chart" {
     n8n_worker_pools  = [{ name = "gpu" }]
   }
 
-  expect_failures = [check.worker_pools_require_a_chart_that_renders_them]
+  expect_failures = [helm_release.n8n]
 }
 
 run "worker_pools_accept_the_minimum_chart_release" {
@@ -10918,7 +10919,7 @@ run "worker_pools_accept_a_prerelease_chart_without_comparing_it" {
   }
 }
 
-run "worker_pools_do_not_warn_about_the_chart_when_no_pool_is_declared" {
+run "worker_pools_do_not_block_the_default_chart_when_no_pool_is_declared" {
   command = plan
 
   # Default chart, no pools: the check is inert, so an untouched deployment
