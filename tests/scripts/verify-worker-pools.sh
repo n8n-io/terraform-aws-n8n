@@ -294,7 +294,16 @@ for pool in $WORKER_POOLS; do
       pass "$ready/$replicas replicas ready"
     else
       fail "$ready/$replicas replicas ready"
-      info "kubectl -n $NAMESPACE describe deploy $name"
+      # The one failure specific to pools: n8n 2.39 exits 1 on a pooled worker
+      # the licence does not cover, while the default worker beside it is fine.
+      # Measured live; the previous container's log carries the sentence.
+      if kubectl logs -n "$NAMESPACE" -l "n8n.io/worker-pool=$pool" -c n8n-worker --previous --tail=50 2>/dev/null \
+          | grep -q 'worker pools are not licensed'; then
+        info "cause: the licence lacks feat:workerPools (\"worker pools are not licensed\" in the previous container log)"
+        info "if the entitlement was just added, delete settings.license.cert in the database and restart the n8n deployments; pods keep the cached certificate otherwise"
+      else
+        info "kubectl -n $NAMESPACE describe deploy $name"
+      fi
     fi
   else
     fail "Deployment $name missing"
