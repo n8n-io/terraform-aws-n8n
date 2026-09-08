@@ -10667,14 +10667,17 @@ run "worker_pools_carry_empty_trigger_metadata_without_tls" {
 
 # The module's pool-name rule has to be at least as strict as the chart schema
 # it feeds, or a name plans clean here and dies in helm's schema validation at
-# apply. The chart caps queueMode.workerGroups[].name at 53 characters and
-# requires both ends alphanumeric; worker-pools.tf assigns the same string to
-# both name and poolName.
+# apply. The chart's schema caps queueMode.workerGroups[].name at 53 and
+# requires both ends alphanumeric, but the binding limit is KEDA's: the chart
+# names a pool's ScaledObject n8n-worker-<name> (the module fixes the release
+# name to n8n) and fails the render past 54 characters, which leaves 43 for the
+# name. worker-pools.tf assigns the same string to both name and poolName.
 run "worker_pools_reject_a_trailing_hyphen_in_a_name" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "gpu-" }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu-" }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10684,9 +10687,11 @@ run "worker_pools_reject_a_name_longer_than_the_chart_allows" {
   command = plan
 
   variables {
-    # 54 characters: legal for poolName (63) but over the chart's 53-character
-    # cap on the worker group name, which is the tighter of the two.
-    n8n_worker_pools = [{ name = "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffff" }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    # 44 characters: legal for the chart's schema (53) and for poolName (63),
+    # but n8n-worker-<name> would be 55, one over KEDA's ScaledObject cap, so
+    # the chart would fail the render at apply.
+    n8n_worker_pools = [{ name = "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeee" }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10696,13 +10701,15 @@ run "worker_pools_accept_a_name_at_the_chart_ceiling" {
   command = plan
 
   variables {
-    # Exactly 53 characters, both ends alphanumeric.
-    n8n_worker_pools = [{ name = "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeefff" }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    # Exactly 43 characters, both ends alphanumeric: n8n-worker-<name> lands
+    # on KEDA's 54-character cap exactly.
+    n8n_worker_pools = [{ name = "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeee" }]
   }
 
   assert {
     condition     = length(local.n8n_worker_groups) == 1
-    error_message = "a 53-character pool name is legal in the chart and must be accepted here"
+    error_message = "a 43-character pool name renders a 54-character ScaledObject name, which KEDA accepts, so it must be accepted here"
   }
 }
 

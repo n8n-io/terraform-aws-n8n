@@ -3251,8 +3251,13 @@ variable "n8n_worker_pools" {
   nullable = false
 
   validation {
-    condition     = alltrue([for p in var.n8n_worker_pools : can(regex("^[a-z0-9]([a-z0-9-]{0,51}[a-z0-9])?$", p.name))])
-    error_message = "Each n8n_worker_pools name must be 1-53 characters of lowercase letters, digits and hyphens, starting and ending with a letter or digit. Uppercase and underscores are rejected by n8n's own schema (for example \"ITop\" or \"sec_team\" are invalid; use \"itop\" and \"sec-team\"). This is enforced here because n8n only logs a warning for a bad name and then starts the worker on the default queue anyway, so the pod reports healthy while serving the wrong jobs. The 53-character ceiling and the trailing-character rule come from the chart: the name is used for both queueMode.workerGroups[].name (max 53) and .poolName (max 63), and a value that passes here but not there fails at apply instead of at plan."
+    # 43, not the chart schema's 53: helm_release.n8n fixes the release name to
+    # "n8n", so the chart names the pool's ScaledObject n8n-worker-<name> and
+    # fails the render when that exceeds KEDA's 54-character cap. The schema's
+    # 53 only holds for a release name short enough to leave room, which this
+    # module's is not.
+    condition     = alltrue([for p in var.n8n_worker_pools : can(regex("^[a-z0-9]([a-z0-9-]{0,41}[a-z0-9])?$", p.name))])
+    error_message = "Each n8n_worker_pools name must be 1-43 characters of lowercase letters, digits and hyphens, starting and ending with a letter or digit. Uppercase and underscores are rejected by n8n's own schema (for example \"ITop\" or \"sec_team\" are invalid; use \"itop\" and \"sec-team\"). This is enforced here because n8n only logs a warning for a bad name and then starts the worker on the default queue anyway, so the pod reports healthy while serving the wrong jobs. The 43-character ceiling comes from KEDA: the chart names the pool's ScaledObject n8n-worker-<name>, KEDA caps that at 54 characters (it doubles as a label value and as part of the generated HPA's name), and the chart fails the render past it. A value that passes here but not there fails at apply instead of at plan."
   }
 
   validation {
