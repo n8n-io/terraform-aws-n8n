@@ -16,7 +16,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `commonLabels`, `commonAnnotations`, `podLabels` | Not exposed |
 | `queueMode.enabled/workerReplicaCount/workerConcurrency` | Hardcoded `true` / `n8n_worker_keda_min_replicas` / `n8n_worker_concurrency` |
 | `queueMode.workerExtraEnv` | `n8n_worker_extra_env` (worker-only env; `n8n_extra_env` is the equivalent for *all* pods) |
-| `queueMode.workerGroups` | `n8n_worker_pools`, one group per pool with `poolName` set to the pool's name. Per-pool sizing falls back to the module-wide `n8n_worker_*` values rather than the chart's, and pool names are validated at plan time |
+| `queueMode.workerGroups` | `n8n_worker_pools`, one group per pool with `poolName` set to the pool's name. Per-pool sizing falls back to the module-wide `n8n_worker_*` values rather than the chart's, and pool names are validated at plan time. **Not in any published chart yet**: the key is n8n-io/n8n-hosting#189 (unreleased); a chart that predates it accepts and ignores the key, so the module's `check "worker_pools_require_a_chart_that_renders_them"` warns when `n8n_chart_version` is a release below the placeholder minimum `1.12.0` |
 | `webhookProcessor.enabled/replicaCount/disableProductionWebhooksOnMainProcess` | Hardcoded `true` / `n8n_webhook_hpa_min_replicas` / hardcoded `true` |
 | `multiMain.enabled/replicas/antiAffinity.type` | `n8n_main_hpa_min_replicas > 1` / `n8n_main_hpa_min_replicas` / hardcoded `"preferred"` |
 | `multiMain.topologySpreadConstraints`, `multiMain.setup.keyTtl/checkInterval` | Not exposed; chart default used |

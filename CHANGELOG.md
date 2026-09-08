@@ -9,6 +9,52 @@ this project adheres to the stability contract in
 
 ### Added
 
+- `n8n_worker_pools`: labelled n8n worker pools (alpha), one per entry, each
+  rendered by the chart's `queueMode.workerGroups` as a worker Deployment
+  carrying `N8N_WORKER_POOL_NAME=<name>` plus a KEDA ScaledObject watching that
+  pool's own `jobs-<name>` queue. Per-pool replica bounds, concurrency,
+  resources and extra env, each falling back to the module-wide worker
+  setting when null. Declaring any pool also emits
+  `N8N_WORKER_POOLS_ENABLED=true` on every pod. Default `[]`, which renders
+  nothing and emits nothing, so this is additive. Pool names are validated at
+  plan to the pattern n8n itself only warns about, capped at 43 characters
+  because the ScaledObject name `n8n-worker-<name>` must fit KEDA's 54, and
+  `"default"` is refused since `jobs-default` is not the default queue. The
+  node-capacity check in `scaling.tf` now counts every pool at its ceiling.
+
+  **Upstream dependency, unreleased at the time of writing.** No published
+  chart version carries `queueMode.workerGroups` (the feature is
+  n8n-io/n8n-hosting#189, open against a preview branch), and a chart that
+  predates it accepts the key and silently renders nothing, so the release
+  applies clean with the flag on and no pool behind it. Two `check` blocks in
+  `worker-pools.tf` warn when the pinned `n8n_chart_version` predates the
+  feature (placeholder minimum `1.12.0`; a prerelease version is taken at the
+  caller's word) or when a pinned `n8n_image_tag` is below `2.39.0`, the first
+  n8n release that reads the pool variables. Routing also needs the
+  `feat:workerPools` licence entitlement. `tests/scripts/verify-worker-pools.sh`
+  counts the rendered pools after a live apply, which is the only place the
+  silent case is visible.
+
+- `n8n_worker_extra_env`: worker-only environment variables via the chart's
+  `queueMode.workerExtraEnv`, reaching the default worker deployment and every
+  pool alike. Same plan-time guards as `n8n_extra_env` plus a C_IDENTIFIER
+  name check. Default `[]`, additive.
+
+- `examples/worker-pools/`: topology variant of `small` running three pools
+  (`gpu`, `secteam`, `itop`, the last parked at `min_replicas = 0`) with
+  `node_max` raised from 6 to 8 to hold their ceilings. `n8n_chart_version` is a
+  required input there, since the module default renders no pools, and its
+  README documents packaging the preview chart to ECR and an end-to-end routing
+  test. Draft until the chart and n8n releases both ship.
+
+- `tests/scripts/verify-worker-pools.sh`: post-apply check for
+  `n8n_worker_pools`. Reads `worker_pool_names` and `namespace` from the
+  example's outputs (or `WORKER_POOLS` / `NAMESPACE` from the environment) and
+  asserts, per pool, the Deployment and ScaledObject exist and are labelled,
+  the ScaledObject is `READY=True`, its triggers watch `jobs-<pool>` with the
+  default worker's Redis TLS and AUTH metadata, pods carry
+  `N8N_WORKER_POOL_NAME`, and the mains carry `N8N_WORKER_POOLS_ENABLED`.
+
 - `n8n_credentials_overwrite_secret_ref`: mounts one key from a
   caller-managed Kubernetes Secret read-only on main, worker, and webhook
   processor pods and points `CREDENTIALS_OVERWRITE_DATA_FILE` at it. The module
@@ -321,6 +367,12 @@ this project adheres to the stability contract in
 
 ### Changed
 
+- `n8n_extra_env` and `n8n_worker_extra_env` now reject `N8N_WORKER_POOLS_ENABLED`
+  and `N8N_WORKER_POOL_NAME`, which `n8n_worker_pools` owns. A caller who was
+  setting either through the escape hatch fails at plan on upgrade rather than
+  silently: set through `n8n_extra_env` the pool name would put every main,
+  worker and webhook pod into one pool, and the flag alone would switch routing
+  on with no pool to route to. Declare the pool with `n8n_worker_pools` instead.
 - The module now sets n8n's current `N8N_WEBHOOK_URL` environment variable
   alongside the legacy `WEBHOOK_URL`, using the same `n8n_webhook_url` value
   for both. Existing deployments keep the same webhook base URL while no
