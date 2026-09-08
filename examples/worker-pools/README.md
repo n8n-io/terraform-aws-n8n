@@ -37,7 +37,7 @@ Defined in [`main.tf`](./main.tf) as a local rather than a variable, since the t
 | `secteam` | 1 to 3 | module default | module default | Isolation for one team's projects |
 | `itop` | 0 to 3 | module default | module default | Scales to zero when idle |
 
-A pool with no live workers is not an error. Projects pinned to it fall back to the default queue until KEDA scales it back up, so `itop` costs nothing while idle.
+A pool with no live workers is not an error. A job routed to it waits on the pool's queue and KEDA scales the pool up (0 to 1 in one polling interval, measured), so `itop` costs nothing while idle. The catch is assignment: a project can only be pinned to a pool that currently has a registered worker, so a pool that starts life at 0 has to be raised to 1 once for the assignment. See step 4 of the end-to-end test.
 
 Pool names are lowercase letters, digits and hyphens, 1 to 43 characters, starting and ending alphanumeric. The 43 comes from KEDA by way of the chart: the pool's ScaledObject is named `n8n-worker-<name>`, KEDA caps that at 54 characters because it doubles as a label value and as part of the generated HPA's name, and the chart fails the render past it. The chart's own schema allows 53, but that only holds for a shorter release name than the module's fixed `n8n`, so the module enforces the tighter figure and a name cannot pass plan and fail at apply. The module rejects anything else at plan time, because n8n itself only logs a warning for a bad name and then starts the worker on the default queue, which leaves a Ready pod quietly serving the wrong jobs. `default` is rejected too: it would mean a queue named `jobs-default`, which is not the real default queue.
 
@@ -153,14 +153,23 @@ The scripted check proves the topology exists; this proves routing. Nothing in t
    kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/n8n/s0-redis-bull-jobs-gpu-wait?labelSelector=scaledobject.keda.sh/name=n8n-worker-gpu"
    ```
 
-4. Scale-to-zero, which is the case most worth testing because two claims in this repo depend on it and neither has been verified against a running n8n. The comments in `main.tf` and the module say a project pinned to a pool with **no live workers** falls back to the default queue. If that is literally true, a pool parked at 0 never accumulates queue depth, KEDA never sees a reason to scale it up, and `min_replicas = 0` is a trap rather than a saving. Assign a second project to `itop`, run a workflow in it, and watch both at once:
+4. Scale-from-zero, using `itop`. Measured on this example: the job waits on `jobs-itop` (the default queue's counter does not move), KEDA scales `n8n-worker-itop` from 0 to 1 within one 15-second polling interval, the new pod runs the execution, and the pool returns to 0 once the queue is empty. There is no fallback to the default queue. Watch it with:
 
    ```bash
    kubectl -n n8n get deploy n8n-worker-itop -w &
    kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/n8n/s0-redis-bull-jobs-itop-wait?labelSelector=scaledobject.keda.sh/name=n8n-worker-itop"
    ```
 
-   Three outcomes are possible, and the README and module comments need correcting for whichever you see: (a) the job waits on `jobs-itop`, the metric goes to 1, KEDA scales the Deployment to 1 within a polling interval (15 s) and the job runs on the new pod, then the pool returns to 0 after the cooldown (60 s): scale-to-zero works as documented; (b) the job runs immediately on a default worker and the metric stays 0: the fallback is real and `min_replicas = 0` should be documented as "parked pools receive nothing", not as a saving; (c) the job sits in `jobs-itop` and nothing scales: a KEDA or trigger problem, look at `kubectl -n n8n describe scaledobject n8n-worker-itop`.
+   **Bootstrap caveat.** A project can only be assigned to a pool that currently has a registered worker: the Worker Pools dropdown is built from the live instance registry, so a pool parked at 0 is not offered. On a fresh deployment `itop` is therefore invisible until something scales it up, and nothing will, because nothing can be routed to it. To pin a project to `itop` the first time, raise the floor briefly and drop it again once the assignment is saved; the assignment is stored per project and survives the scale-down:
+
+   ```bash
+   kubectl -n n8n patch scaledobject n8n-worker-itop --type merge -p '{"spec":{"minReplicaCount":1}}'
+   # assign the project in the UI, then
+   kubectl -n n8n patch scaledobject n8n-worker-itop --type merge -p '{"spec":{"minReplicaCount":0}}'
+   ```
+
+   Or set `min_replicas = 1` in `main.tf` for the first apply and lower it afterwards. Terraform will reconcile the patched ScaledObject back to the declared value on the next apply either way.
+
 5. Negative control: unassign the project from `gpu`, run again, and confirm the execution now lands on a default worker.
 
 ### Checking a pool's autoscaler
