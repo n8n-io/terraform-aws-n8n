@@ -3281,7 +3281,7 @@ variable "n8n_worker_pools" {
       p.min_replicas == floor(p.min_replicas) && p.min_replicas >= 0 &&
       p.max_replicas == floor(p.max_replicas) && p.max_replicas >= 1
     ])
-    error_message = "Each n8n_worker_pools entry needs whole-number replica bounds, with min_replicas >= 0 and max_replicas >= 1. KEDA scales a pool to zero natively, so 0 is a valid floor; a pool parked at 0 has no live workers, and its projects fall back to the default queue until it scales up."
+    error_message = "Each n8n_worker_pools entry needs whole-number replica bounds, with min_replicas >= 0 and max_replicas >= 1. KEDA scales a pool to zero natively, so 0 is a valid floor. A job routed to a parked pool waits on that pool's queue and KEDA scales it up, measured at 0 to 1 within one 15-second polling interval; it does not fall back to the default queue. The one caveat is bootstrap: n8n only offers a pool for assignment while at least one of its workers is registered, so a brand-new pool declared at 0 cannot be assigned to any project and therefore never receives work. Start a new pool at min_replicas = 1, assign its projects, then lower it to 0; the assignment is stored and outlives the pods."
   }
 
   validation {

@@ -21,8 +21,12 @@ locals {
   # Declaring any pool switches N8N_WORKER_POOLS_ENABLED on across mains,
   # workers and webhook pods, which the feature needs in order to route at all.
   #
-  # A pool with no live workers is not an error: projects pinned to it fall
-  # back to the default queue until it scales up again.
+  # A pool with no live workers is not an error. A job routed to it waits on
+  # the pool's own queue and KEDA scales the pool up; measured live, 0 to 1
+  # within one polling interval, with the default queue untouched. What a
+  # parked pool cannot do is be assigned for the first time: n8n lists a pool
+  # in a project's settings only while one of its workers is registered. See
+  # the itop entry below.
   worker_pools = [
     # Heavier executions, given more CPU and memory and a lower concurrency so
     # each worker takes fewer jobs at once.
@@ -45,9 +49,12 @@ locals {
       max_replicas = 3
     },
 
-    # Scales to zero when idle. Cheap to leave declared: with no live workers
-    # its projects fall back to the default queue, and KEDA scales it up again
-    # as soon as work is routed to it.
+    # Scales to zero when idle and wakes when a pinned project runs something;
+    # the job waits on jobs-itop rather than falling back. Bootstrap caveat,
+    # measured live: while itop has no running worker it does not appear in any
+    # project's Worker Pools setting, so a project cannot be pinned to it. On a
+    # fresh deployment set min_replicas = 1 here, assign the projects, then put
+    # it back to 0; the stored assignment survives the scale-down.
     {
       name         = "itop"
       min_replicas = 0

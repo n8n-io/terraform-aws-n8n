@@ -41,6 +41,17 @@ this project adheres to the stability contract in
   counts the rendered pools after a live apply, which is the only place the
   silent case is visible.
 
+  Measured end to end on a live cluster: a project pinned to a pool has its
+  executions enqueued to `jobs-<pool>` and run only by that pool's workers,
+  with the default queue's counter unchanged; unassigning it reverts on the
+  next execution. `min_replicas = 0` works: a job routed to a parked pool
+  waits on the pool queue and KEDA scaled it 0 to 1 within one 15-second
+  polling interval, so there is no fallback to the default queue. The caveat
+  is bootstrap: n8n lists a pool in a project's Worker Pools setting only
+  while one of its workers is registered, so a pool that starts at 0 cannot
+  be assigned until it is raised to 1 once; the stored assignment then
+  survives the scale-down. Documented on the input and in the example.
+
 - `n8n_worker_extra_env`: worker-only environment variables via the chart's
   `queueMode.workerExtraEnv`, reaching the default worker deployment and every
   pool alike. Same plan-time guards as `n8n_extra_env` plus a C_IDENTIFIER
