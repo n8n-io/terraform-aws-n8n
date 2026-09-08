@@ -10436,6 +10436,16 @@ run "n8n_dns_config_rejects_a_malformed_search_domain" {
 # local.n8n_worker_groups, the list the chart's queueMode.workerGroups is built
 # from, the same way the rest of this file tests chart wiring it cannot reach
 # directly.
+#
+# Every run that declares a pool also pins n8n_chart_version to a prerelease.
+# The module's default chart predates queueMode.workerGroups and
+# check.worker_pools_require_a_chart_that_renders_them warns on that pairing,
+# which `terraform test` treats as a failed run. A prerelease is the honest pin:
+# at the time of writing the only chart that renders pools is a preview build
+# from n8n-io/n8n-hosting#189, and the check takes a prerelease at the caller's
+# word rather than comparing it against a release that does not exist yet. The
+# guard itself is tested under "Worker pools need a chart and an n8n that ship
+# them" further down.
 
 run "worker_pools_default_to_none" {
   command = plan
@@ -10450,6 +10460,7 @@ run "worker_pools_map_each_pool_to_its_own_queue" {
   command = plan
 
   variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, so
     # the capacity check warns when their ceilings outgrow it. These runs are
     # about the mapping, not the sizing, so give them room rather than let an
@@ -10486,6 +10497,7 @@ run "worker_pools_inherit_module_wide_worker_sizing" {
   command = plan
 
   variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, so
     # the capacity check warns when their ceilings outgrow it. These runs are
     # about the mapping, not the sizing, so give them room rather than let an
@@ -10511,6 +10523,7 @@ run "worker_pools_per_pool_sizing_overrides_the_module_default" {
   command = plan
 
   variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, so
     # the capacity check warns when their ceilings outgrow it. These runs are
     # about the mapping, not the sizing, so give them room rather than let an
@@ -10546,6 +10559,7 @@ run "worker_pools_carry_their_own_keda_bounds" {
   command = plan
 
   variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, so
     # the capacity check warns when their ceilings outgrow it. These runs are
     # about the mapping, not the sizing, so give them room rather than let an
@@ -10576,6 +10590,7 @@ run "worker_pools_min_replicas_accepts_zero" {
   command = plan
 
   variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, so
     # the capacity check warns when their ceilings outgrow it. These runs are
     # about the mapping, not the sizing, so give them room rather than let an
@@ -10595,6 +10610,7 @@ run "worker_pools_extra_env_reaches_only_that_pool" {
   command = plan
 
   variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, so
     # the capacity check warns when their ceilings outgrow it. These runs are
     # about the mapping, not the sizing, so give them room rather than let an
@@ -10624,7 +10640,8 @@ run "worker_pools_reject_an_uppercase_name" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "ITop" }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "ITop" }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10634,7 +10651,8 @@ run "worker_pools_reject_an_underscore_in_a_name" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "sec_team" }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "sec_team" }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10644,7 +10662,8 @@ run "worker_pools_reject_a_name_over_sixty_three_characters" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "p${join("", [for i in range(63) : "a"])}" }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "p${join("", [for i in range(63) : "a"])}" }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10657,7 +10676,8 @@ run "worker_pools_reject_the_name_default" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "default" }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "default" }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10667,7 +10687,8 @@ run "worker_pools_reject_duplicate_names" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "gpu" }, { name = "gpu" }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu" }, { name = "gpu" }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10677,7 +10698,8 @@ run "worker_pools_reject_min_replicas_above_max_replicas" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "gpu", min_replicas = 6, max_replicas = 2 }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", min_replicas = 6, max_replicas = 2 }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10687,7 +10709,8 @@ run "worker_pools_reject_a_fractional_replica_bound" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "gpu", min_replicas = 1.5 }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", min_replicas = 1.5 }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10697,7 +10720,8 @@ run "worker_pools_reject_max_replicas_of_zero" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "gpu", min_replicas = 0, max_replicas = 0 }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", min_replicas = 0, max_replicas = 0 }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10707,7 +10731,8 @@ run "worker_pools_reject_concurrency_below_one" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "gpu", concurrency = 0 }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", concurrency = 0 }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10719,6 +10744,7 @@ run "worker_pools_reject_extra_env_overriding_the_pool_name" {
   command = plan
 
   variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "N8N_WORKER_POOL_NAME", value = "somewhere-else" }]
@@ -10732,6 +10758,7 @@ run "worker_pools_reject_extra_env_overriding_a_module_managed_variable" {
   command = plan
 
   variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "N8N_ENCRYPTION_KEY", value = "nope" }]
@@ -10761,6 +10788,8 @@ run "capacity_model_counts_each_pool_at_its_ceiling" {
   command = plan
 
   variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+
     # Room for the pools, so this pins the arithmetic rather than tripping the
     # advisory the arithmetic feeds.
     node_max = 20
@@ -10799,7 +10828,8 @@ run "worker_pools_reject_a_cpu_quantity_the_capacity_model_cannot_read" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "gpu", cpu_request = "1Ki" }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", cpu_request = "1Ki" }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10809,7 +10839,8 @@ run "worker_pools_reject_a_memory_quantity_the_capacity_model_cannot_read" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "gpu", memory_request = "2GB" }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", memory_request = "2GB" }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10833,6 +10864,7 @@ run "module_wide_cpu_request_rejects_an_unparseable_quantity_a_pool_would_inheri
   command = plan
 
   variables {
+    n8n_chart_version      = "1.11.0-preview.workerpools.1"
     n8n_worker_cpu_request = "not-a-quantity"
     n8n_worker_pools       = [{ name = "gpu" }]
   }
@@ -10852,6 +10884,7 @@ run "worker_pools_carry_the_redis_tls_metadata_on_their_scalers" {
   command = plan
 
   variables {
+    n8n_chart_version                = "1.11.0-preview.workerpools.1"
     redis_transit_encryption_enabled = true
 
     n8n_worker_pools = [
@@ -10891,7 +10924,8 @@ run "worker_pools_carry_empty_trigger_metadata_without_tls" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "gpu", min_replicas = 1, max_replicas = 4 }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", min_replicas = 1, max_replicas = 4 }]
   }
 
   assert {
@@ -10954,7 +10988,8 @@ run "worker_pools_reject_a_blank_extra_env_name" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "gpu", extra_env = [{ name = "  ", value = "x" }] }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", extra_env = [{ name = "  ", value = "x" }] }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -10968,6 +11003,7 @@ run "worker_pools_reject_a_whitespace_padded_extra_env_name" {
   command = plan
 
   variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = " N8N_ENCRYPTION_KEY ", value = "x" }]
@@ -10981,6 +11017,7 @@ run "worker_pools_reject_duplicate_extra_env_names_within_a_pool" {
   command = plan
 
   variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name = "gpu"
       # Deliberately not a module-managed name: with one of those this run
@@ -11013,7 +11050,8 @@ run "worker_pools_reject_a_non_identifier_extra_env_name" {
   command = plan
 
   variables {
-    n8n_worker_pools = [{ name = "gpu", extra_env = [{ name = "2FA_MODE", value = "x" }] }]
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", extra_env = [{ name = "2FA_MODE", value = "x" }] }]
   }
 
   expect_failures = [var.n8n_worker_pools]
@@ -11023,6 +11061,7 @@ run "worker_pools_accept_a_conventional_extra_env_name" {
   command = plan
 
   variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "GPU_DEVICE_ORDER", value = "0" }]
