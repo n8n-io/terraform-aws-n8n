@@ -156,6 +156,12 @@ variable "n8n_additional_domains" {
   default     = []
 }
 
+variable "n8n_main_hpa_min_replicas" {
+  description = "Minimum (and therefore default) replica count for n8n main pods, passed straight through to the module's own n8n_main_hpa_min_replicas. Leave null (the default) to use the module's default of 2 (multi-main, needs an Enterprise/Startup license carrying feat:multipleMainInstances). Set to 1 to run a single main pod in plain queue mode instead, which only needs a Business-tier license: n8n's multi-main leader-election gate never engages at 1 replica. Worker pools need feat:workerPools on top of either."
+  type        = number
+  default     = null
+}
+
 variable "n8n_execution_data_storage_mode" {
   description = "Where n8n stores the data of each new execution. Passed to the module's n8n_execution_data_storage_mode. \"database\" keeps execution data in PostgreSQL; \"s3\" offloads it to the S3 bucket the module already creates for binary data. This example runs the module's default database (db.t3.small on 50 GB of gp2, a 150 IOPS baseline), which has the least room of any sizing this module ships to absorb execution-data growth, so reaching for this is often cheaper than resizing the database. Requires n8n >= 2.27 (pin n8n_image_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is not the same one binary data offload uses. There is no backfill: existing executions stay readable where they were written. Read the execution data section of the root README before enabling it, in particular the durability trade-off and the S3 lifecycle constraint."
   type        = string
@@ -174,22 +180,14 @@ variable "tags" {
   default     = {}
 }
 
-# ── Worker pools alpha test ───────────────────────────────────────────────────
-# Added for the worker-pools branch build. n8n_extra_env carries
-# N8N_WORKER_POOLS_ENABLED to every pod type: mains and workers both need it,
-# and webhook pods ignore it. The KEDA bounds give the default, unlabelled
-# worker deployment enough replicas to act as a control group beside the cloned
-# pool deployments.
-
-variable "n8n_extra_env" {
-  description = "Additional environment variables injected into all n8n pods via the chart's config.extraEnv list."
-  type = list(object({
-    name  = string
-    value = string
-  }))
-  default  = []
-  nullable = false
-}
+# ── Worker pools ──────────────────────────────────────────────────────────────
+# The KEDA bounds size the default, unlabelled worker deployment, which keeps
+# serving the `jobs` queue for every project that is not pinned to a pool and
+# doubles as a control group beside the pools.
+#
+# n8n_worker_pools is deliberately not a variable here. The pool topology is
+# the point of this example, so it is written inline in main.tf where it can be
+# read and commented, rather than hidden behind a default.
 
 variable "n8n_worker_keda_min_replicas" {
   description = "Minimum worker replicas KEDA keeps running for the default (unlabelled) worker deployment."
@@ -205,6 +203,30 @@ variable "n8n_worker_keda_max_replicas" {
   nullable    = false
 }
 
-# n8n_worker_pools is deliberately not a variable here. The pool topology is
-# the point of this example, so it is written inline in main.tf where it can be
-# read and commented, rather than hidden behind a default.
+# ── Chart ─────────────────────────────────────────────────────────────────────
+# Required here, unlike every other example, because the module's default chart
+# does not render pools. queueMode.workerGroups is n8n-io/n8n-hosting#189 and,
+# at the time of writing, no published chart version carries it; a chart that
+# predates it accepts the key and silently renders nothing, so N8N_WORKER_POOLS_
+# ENABLED would land on every pod with no pool behind it. Making the version a
+# required input means this example cannot be applied without choosing a chart
+# on purpose. Until the release exists, that is a preview build pushed to a
+# registry you control; see README.md, "Getting a chart that renders pools".
+
+variable "n8n_chart_version" {
+  description = "n8n Helm chart version to deploy, passed to the module's n8n_chart_version. Required by this example because the module default predates queueMode.workerGroups and would render no pools. Pin the first release that carries the feature once it exists, or a preview build (e.g. 1.11.0-preview.workerpools.1) pushed to the registry named by n8n_chart_repository."
+  type        = string
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.n8n_chart_version))
+    error_message = "n8n_chart_version must be an exact semver version, optionally with a prerelease suffix (e.g. \"1.12.0\" or \"1.11.0-preview.workerpools.1\"). The Helm provider resolves it literally, so a constraint such as \"~> 1.12\" fails at apply."
+  }
+}
+
+variable "n8n_chart_repository" {
+  description = "Helm chart repository the module pulls the n8n chart from, passed to the module's n8n_chart_repository. The default is the module's own default, the public upstream registry, which is right once a released chart renders pools. Until then, point it at a registry you pushed a preview build to, e.g. oci://123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-helm-chart. The node group's IAM role can pull from ECR in the same account without extra configuration; the Helm provider on your workstation needs `aws ecr get-login-password | helm registry login` first."
+  type        = string
+  default     = "oci://ghcr.io/n8n-io/n8n-helm-chart"
+  nullable    = false
+}
