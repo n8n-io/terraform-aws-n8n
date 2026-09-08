@@ -21,6 +21,15 @@ variables {
   n8n_domain      = "n8n.test.example.com"
   n8n_license_key = "test-license-key-not-real"
   route53_zone_id = "Z00000000000000000000"
+
+  # Required by this example (see variables.tf). A prerelease, because at the
+  # time of writing the only chart that renders queueMode.workerGroups is a
+  # preview build of n8n-io/n8n-hosting#189, and the module's
+  # check.worker_pools_require_a_chart_that_renders_them takes a prerelease at
+  # the caller's word rather than comparing it against a release that does not
+  # exist yet. `terraform test` treats a failed check as a failed run, so the
+  # module default here would fail every run below for the right reason.
+  n8n_chart_version = "1.11.0-preview.workerpools.1"
 }
 
 # NOTE on test coverage:
@@ -164,5 +173,31 @@ run "example_pool_ceilings_match_the_node_max_arithmetic" {
   assert {
     condition     = sum([for p in local.worker_pools : p.max_replicas]) == 10
     error_message = "The example's pool maxima changed (now ${sum([for p in local.worker_pools : p.max_replicas])} pods). Re-check node_max against the arithmetic in main.tf before updating this assertion."
+  }
+}
+
+# The example cannot be applied against the module's default chart, because that
+# chart renders no pools. The variable is required rather than defaulted so a
+# caller has to choose; this pins that it stays required and stays strict.
+run "chart_version_is_required_and_must_be_exact" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "~> 1.12"
+  }
+
+  expect_failures = [var.n8n_chart_version]
+}
+
+run "chart_version_accepts_a_prerelease_build" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.3"
+  }
+
+  assert {
+    condition     = var.n8n_chart_version == "1.11.0-preview.workerpools.3"
+    error_message = "a preview build is the only chart that renders pools today and must be accepted"
   }
 }
