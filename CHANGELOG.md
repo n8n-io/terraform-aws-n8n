@@ -30,8 +30,14 @@ this project adheres to the stability contract in
   `worker-pools.tf` warn when the pinned `n8n_chart_version` predates the
   feature (placeholder minimum `1.12.0`; a prerelease version is taken at the
   caller's word) or when a pinned `n8n_image_tag` is below `2.39.0`, the first
-  n8n release that reads the pool variables. Routing also needs the
-  `feat:workerPools` licence entitlement. `tests/scripts/verify-worker-pools.sh`
+  n8n release that reads the pool variables. The `feat:workerPools` licence
+  entitlement is required as well, and its absence is not silent: n8n 2.39.0
+  exits 1 on a worker started with `N8N_WORKER_POOL_NAME` it is not licensed
+  for, so the pool pods crash-loop and the Helm release is rolled back,
+  failing the apply. Terraform cannot see entitlements at plan. The example
+  README documents the log line and the cached-certificate gotcha when an
+  entitlement is added to an already-activated key.
+  `tests/scripts/verify-worker-pools.sh`
   counts the rendered pools after a live apply, which is the only place the
   silent case is visible.
 
