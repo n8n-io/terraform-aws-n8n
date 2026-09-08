@@ -24,11 +24,10 @@ variables {
 
   # Required by this example (see variables.tf). A prerelease, because at the
   # time of writing the only chart that renders queueMode.workerGroups is a
-  # preview build of n8n-io/n8n-hosting#189, and the module's
-  # check.worker_pools_require_a_chart_that_renders_them takes a prerelease at
-  # the caller's word rather than comparing it against a release that does not
-  # exist yet. `terraform test` treats a failed check as a failed run, so the
-  # module default here would fail every run below for the right reason.
+  # preview build of n8n-io/n8n-hosting#189, and the module's precondition on
+  # helm_release.n8n takes a prerelease at the caller's word rather than
+  # comparing it against a release that does not exist yet. The module default
+  # here would fail every run below for the right reason.
   n8n_chart_version = "1.11.0-preview.workerpools.1"
 }
 
@@ -107,7 +106,7 @@ run "example_declares_the_three_documented_pools" {
   command = plan
 
   assert {
-    condition     = [for p in local.worker_pools : p.name] == ["gpu", "secteam", "itop"]
+    condition     = [for p in local.worker_pools : p.name] == ["heavy", "secteam", "itop"]
     error_message = "The example's pools drifted from the three the README documents: got ${join(", ", [for p in local.worker_pools : p.name])}."
   }
 
@@ -126,10 +125,12 @@ run "example_declares_the_three_documented_pools" {
   }
 
   # verify-worker-pools.sh reads this output to know how many pools to expect
-  # on the cluster, so it has to mirror the declaration exactly.
+  # on the cluster. Pinned to the literal list rather than to local.worker_pools,
+  # which is what outputs.tf already derives it from and would make the compare
+  # tautological.
   assert {
-    condition     = output.worker_pool_names == [for p in local.worker_pools : p.name]
-    error_message = "output.worker_pool_names drifted from local.worker_pools; the live verification script would count against the wrong list."
+    condition     = output.worker_pool_names == ["heavy", "secteam", "itop"]
+    error_message = "output.worker_pool_names is ${jsonencode(output.worker_pool_names)}; the live verification script counts against this list, so update it together with the README."
   }
 
   assert {
@@ -148,17 +149,17 @@ run "example_keeps_a_scale_to_zero_pool_and_a_resized_pool" {
     error_message = "The itop pool is the example's scale-to-zero case and must keep min_replicas = 0."
   }
 
-  # gpu is the one pool that overrides sizing; the other two exist to show the
+  # heavy is the one pool that overrides sizing; the other two exist to show the
   # fallback to the module-wide worker defaults. Asserted on the values the
   # README's topology table quotes, so the two cannot drift apart silently.
   assert {
-    condition     = one([for p in local.worker_pools : p.concurrency if p.name == "gpu"]) == 5
-    error_message = "The gpu pool is the example's lower-concurrency case and must keep concurrency = 5, which is the value the README table quotes."
+    condition     = one([for p in local.worker_pools : p.concurrency if p.name == "heavy"]) == 5
+    error_message = "The heavy pool is the example's lower-concurrency case and must keep concurrency = 5, which is the value the README table quotes."
   }
 
   assert {
-    condition     = one([for p in local.worker_pools : p.cpu_request if p.name == "gpu"]) == "1"
-    error_message = "The gpu pool is the example's resized case and must keep cpu_request = \"1\"; the node_max arithmetic in main.tf is derived from it."
+    condition     = one([for p in local.worker_pools : p.cpu_request if p.name == "heavy"]) == "1"
+    error_message = "The heavy pool is the example's resized case and must keep cpu_request = \"1\"; the node_max arithmetic in main.tf is derived from it."
   }
 }
 
@@ -189,15 +190,13 @@ run "chart_version_is_required_and_must_be_exact" {
   expect_failures = [var.n8n_chart_version]
 }
 
+# No assert on purpose: the coverage is that the plan succeeds. A prerelease
+# has to pass both this example's format validation and the module's
+# precondition on helm_release.n8n, and a run whose plan errors fails the run.
 run "chart_version_accepts_a_prerelease_build" {
   command = plan
 
   variables {
     n8n_chart_version = "1.11.0-preview.workerpools.3"
-  }
-
-  assert {
-    condition     = var.n8n_chart_version == "1.11.0-preview.workerpools.3"
-    error_message = "a preview build is the only chart that renders pools today and must be accepted"
   }
 }

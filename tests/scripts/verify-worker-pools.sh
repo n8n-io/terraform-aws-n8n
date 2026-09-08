@@ -26,9 +26,10 @@
 #   TERRAFORM_DIR=examples/worker-pools ./tests/scripts/verify-worker-pools.sh
 #
 #   # Or name the pools yourself, for a root module without that output:
-#   WORKER_POOLS="gpu secteam itop" NAMESPACE=n8n ./tests/scripts/verify-worker-pools.sh
+#   WORKER_POOLS="heavy secteam itop" NAMESPACE=n8n ./tests/scripts/verify-worker-pools.sh
 #
-# Settings (env, or .env next to this script or in TERRAFORM_DIR):
+# Settings (env, or .env next to this script, in TERRAFORM_DIR, or in the
+# current directory; an explicit env value wins over the file):
 #   WORKER_POOLS   space-separated pool names to expect (default: the
 #                  worker_pool_names output)
 #   NAMESPACE      Kubernetes namespace (default: the namespace output, then n8n)
@@ -40,10 +41,20 @@
 set -euo pipefail
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
+# Candidates: next to this script, in TERRAFORM_DIR, in the current directory.
+# TERRAFORM_DIR is resolved first so a .env kept beside the Terraform files is
+# found when the script is run from elsewhere. Values already in the
+# environment win over the file, matching the documented priority: the file
+# is a convenience for defaults, not an override of an explicit choice.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TERRAFORM_DIR="${TERRAFORM_DIR:-$(pwd)}"
 
-for _env_candidate in "$SCRIPT_DIR/.env" "$(pwd)/.env"; do
+_explicit_pools="${WORKER_POOLS-__unset__}"
+_explicit_ns="${NAMESPACE-__unset__}"
+_explicit_release="${RELEASE_NAME-__unset__}"
+
+for _env_candidate in "$SCRIPT_DIR/.env" "$TERRAFORM_DIR/.env" "$(pwd)/.env"; do
   if [[ -f "$_env_candidate" ]]; then
     # shellcheck disable=SC1090
     set -a; source "$_env_candidate"; set +a
@@ -51,9 +62,11 @@ for _env_candidate in "$SCRIPT_DIR/.env" "$(pwd)/.env"; do
   fi
 done
 
-# ── Read from Terraform outputs ───────────────────────────────────────────────
+[[ "$_explicit_pools" != "__unset__" ]] && WORKER_POOLS="$_explicit_pools"
+[[ "$_explicit_ns" != "__unset__" ]] && NAMESPACE="$_explicit_ns"
+[[ "$_explicit_release" != "__unset__" ]] && RELEASE_NAME="$_explicit_release"
 
-TERRAFORM_DIR="${TERRAFORM_DIR:-$(pwd)}"
+# ── Read from Terraform outputs ───────────────────────────────────────────────
 
 if command -v terraform &>/dev/null && [[ -f "$TERRAFORM_DIR/terraform.tfstate" ]]; then
   echo -e "\033[0;36m↳\033[0m  Reading values from Terraform state in: $TERRAFORM_DIR"
@@ -72,9 +85,16 @@ if command -v terraform &>/dev/null && [[ -f "$TERRAFORM_DIR/terraform.tfstate" 
   echo -e "\033[0;36m↳\033[0m  namespace    = ${NAMESPACE:-<not found>}"
   echo -e "\033[0;36m↳\033[0m  worker pools = ${WORKER_POOLS:-<not found>}"
 
+  # Point kubectl at this deployment's cluster. A failure here is fatal: the
+  # alternative is verifying whatever cluster the previous context pointed at
+  # and reporting it as this one, which is worse than no result.
   if [[ -n "$tf_kubectl_cmd" ]]; then
     echo -e "\033[0;36m↳\033[0m  Switching kubectl context: $tf_kubectl_cmd"
-    eval "$tf_kubectl_cmd" &>/dev/null || true
+    if ! eval "$tf_kubectl_cmd" &>/dev/null; then
+      echo -e "\033[0;31mERROR: could not switch kubectl context with: $tf_kubectl_cmd\033[0m" >&2
+      echo "Refusing to verify against whichever cluster the current context points at." >&2
+      exit 1
+    fi
   fi
 
   echo ""
@@ -174,7 +194,7 @@ header "Preflight"
 
 if [[ -z "$WORKER_POOLS" ]]; then
   echo -e "${RED}ERROR: no pools to verify.${RESET}" >&2
-  echo "Set WORKER_POOLS=\"gpu secteam itop\" or run from a Terraform directory whose outputs include worker_pool_names." >&2
+  echo "Set WORKER_POOLS=\"heavy secteam itop\" or run from a Terraform directory whose outputs include worker_pool_names." >&2
   exit 1
 fi
 

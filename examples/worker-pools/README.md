@@ -13,17 +13,15 @@ Use this example when some executions need different hardware or isolation: heav
 > **Worker pools are an alpha n8n feature, and the chart side is not released yet.** This example is kept as a draft until both ship. What it needs today:
 >
 > - **n8n 2.39.0 or later** on the image. That is the first release that reads `N8N_WORKER_POOLS_ENABLED` and `N8N_WORKER_POOL_NAME`; an older image accepts both and ignores them. At the time of writing 2.39.0 is on the `next` tag and `stable` is still 2.38.x, so pin `n8n_image_tag` rather than trusting the chart's floating default.
-> - **A licence carrying `feat:workerPools`.** Without it a worker started with `N8N_WORKER_POOL_NAME` exits 1 with `worker pools are not licensed`, every pool pod crash-loops, and the Helm release fails its wait and is rolled back by `atomic`, so the apply fails. Measured on n8n 2.39.0 against a key that lacked it: the default worker, mains and webhook pods were all healthy and only the pool pods died. Terraform cannot see entitlements at plan, so the log line is the diagnosis: `kubectl -n n8n logs -l n8n.io/worker-pool=<pool> -c n8n-worker --previous | grep licensed`.
->
-> If the entitlement is **added to a key that has already activated**, the pods keep loading the old certificate cached in the database (`settings` table, key `license.cert`) and keep failing. Delete that row and restart the n8n deployments so each process re-activates; a `terraform apply` alone does not clear it.
-> - **A Helm chart that renders `queueMode.workerGroups`.** No published chart version does (the newest, 1.11.0, does not); the feature is [n8n-io/n8n-hosting#189](https://github.com/n8n-io/n8n-hosting/pull/189), open against a `preview/worker-pools` branch. Until it is released you package a preview build yourself and push it to a registry you control, which is why `n8n_chart_version` is a required input of this example and the module warns at plan when the pinned chart predates the feature. See "Getting a chart that renders pools" below.
+> - **A licence carrying `feat:workerPools`.** Without it a worker started with `N8N_WORKER_POOL_NAME` exits 1 with `worker pools are not licensed`, every pool pod crash-loops, and the Helm release fails its wait and is rolled back by `atomic`, so the apply fails. Measured on n8n 2.39.0 against a key that lacked it: the default worker, mains and webhook pods were all healthy and only the pool pods died. Terraform cannot see entitlements at plan, so the log line is the diagnosis: `kubectl -n n8n logs -l n8n.io/worker-pool=<pool> -c n8n-worker --previous | grep licensed`. If the entitlement is **added to a key that has already activated**, the pods keep loading the old certificate cached in the database (`settings` table, key `license.cert`) and keep failing. Delete that row and restart the n8n deployments so each process re-activates; a `terraform apply` alone does not clear it.
+> - **A Helm chart that renders `queueMode.workerGroups`.** No published chart version does (the newest, 1.11.0, does not); the feature is [n8n-io/n8n-hosting#189](https://github.com/n8n-io/n8n-hosting/pull/189), open against a `preview/worker-pools` branch. Until it is released you package a preview build yourself and push it to a registry you control, which is why `n8n_chart_version` is a required input of this example and the module fails the plan when the pinned chart is a release that predates the feature (prerelease builds are exempt). See "Getting a chart that renders pools" below.
 >
 > Treat this example as non-production until all three are released.
 
 ## What it creates
 
 - Everything [`small`](../small/) creates: VPC, ACM certificate with Route53 validation, EKS, RDS PostgreSQL, ElastiCache Redis, S3, the controllers, and the n8n Helm release
-- Three additional worker Deployments (`n8n-worker-gpu`, `n8n-worker-secteam`, `n8n-worker-itop`), each with its own KEDA `ScaledObject` of the same name watching that pool's own `jobs-<name>` queue. **Only with a chart that renders `queueMode.workerGroups`**; an older chart accepts the key and renders none of this, which is the failure [`verify-worker-pools.sh`](../../tests/scripts/verify-worker-pools.sh) exists to catch.
+- Three additional worker Deployments (`n8n-worker-heavy`, `n8n-worker-secteam`, `n8n-worker-itop`), each with its own KEDA `ScaledObject` of the same name watching that pool's own `jobs-<name>` queue. **Only with a chart that renders `queueMode.workerGroups`**; an older chart accepts the key and renders none of this, which is the failure [`verify-worker-pools.sh`](../../tests/scripts/verify-worker-pools.sh) exists to catch.
 - `N8N_WORKER_POOLS_ENABLED` across mains, workers and webhook pods, emitted automatically because pools are declared
 
 ## The pool topology
@@ -33,7 +31,7 @@ Defined in [`main.tf`](./main.tf) as a local rather than a variable, since the t
 | Pool | Replicas | Concurrency | Sizing | Why |
 |---|---|---|---|---|
 | *(unlabelled)* | 1 to 10 | module default | module default | Serves the default `jobs` queue for every unpinned project |
-| `gpu` | 1 to 4 | 5 | 1-2 vCPU, 2-4 GiB | Heavier executions, fewer jobs per worker |
+| `heavy` | 1 to 4 | 5 | 1-2 vCPU, 2-4 GiB | Heavier executions, fewer jobs per worker. Same t3.xlarge nodes as everything else; bigger requests, not different hardware |
 | `secteam` | 1 to 3 | module default | module default | Isolation for one team's projects |
 | `itop` | 0 to 3 | module default | module default | Scales to zero when idle |
 
@@ -103,7 +101,7 @@ cp terraform.tfvars.example terraform.tfvars
 # n8n_chart_version, n8n_chart_repository and n8n_image_tag.
 
 terraform init
-terraform plan    # expect no "worker_pools_require_*" warnings; if one appears, fix the pin before applying
+terraform plan    # fails on a chart release that predates pools; a "worker_pools_require_n8n_2_39" warning means the image pin is too old
 terraform apply
 ```
 
@@ -115,7 +113,7 @@ Run the scripted check first. It reads `worker_pool_names` and `namespace` from 
 ../../tests/scripts/verify-worker-pools.sh
 ```
 
-It asserts, per pool: the `n8n-worker-<pool>` Deployment and ScaledObject exist and carry the `n8n.io/worker-pool` label; the ScaledObject is `READY=True` and its triggers watch `bull:jobs-<pool>:wait` / `:active` with the same TLS and AUTH metadata the default worker's triggers carry; running pool pods have `N8N_WORKER_POOL_NAME` set; the main Deployment has `N8N_WORKER_POOLS_ENABLED=true`; and KEDA's external metric for the pool's queue resolves. It also fails if the cluster has pool Deployments the outputs do not list.
+It asserts, per pool: the `n8n-worker-<pool>` Deployment exists and carries the `n8n.io/worker-pool` label; the ScaledObject of the same name exists and targets that Deployment; the ScaledObject is `READY=True` and its triggers watch `bull:jobs-<pool>:wait` / `:active` with the same TLS and AUTH metadata the default worker's triggers carry; running pool pods have `N8N_WORKER_POOL_NAME` set; the main Deployment has `N8N_WORKER_POOLS_ENABLED=true`; and KEDA's external metric for the pool's queue resolves. It also fails if the cluster has pool Deployments the outputs do not list.
 
 By hand, the same thing:
 
@@ -128,7 +126,7 @@ eval "$(terraform output -raw kubectl_config_command)"
 kubectl -n n8n get deploy,scaledobject -l app.kubernetes.io/component=worker-group
 
 # The pool name reached the pods.
-kubectl -n n8n get pods -l n8n.io/worker-pool=gpu \
+kubectl -n n8n get pods -l n8n.io/worker-pool=heavy \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[?(@.name=="n8n-worker")].env[?(@.name=="N8N_WORKER_POOL_NAME")].value}{"\n"}{end}'
 ```
 
@@ -138,19 +136,19 @@ The pools also appear in the n8n UI under **Settings, Workers**, which shows eac
 
 The scripted check proves the topology exists; this proves routing. Nothing in the module can do it for you because assigning a project to a pool is a UI (or internal API) action, not a Terraform one.
 
-1. In n8n, open a project, then **Settings, Worker Pools**, and assign it to `gpu`.
+1. In n8n, open a project, then **Settings, Worker Pools**, and assign it to `heavy`.
 2. Create a trivial workflow in that project (Manual Trigger, then a Wait node of ~20 seconds so it stays visible) and run it.
-3. While it runs, the execution should be on a `gpu` pod and nowhere else:
+3. While it runs, the execution should be on a `heavy` pod and nowhere else:
 
    ```bash
-   # The gpu pool picked it up: one of these pods logs the execution id.
-   kubectl -n n8n logs -l n8n.io/worker-pool=gpu -c n8n-worker --since=2m | grep -i 'execution'
+   # The heavy pool picked it up: one of these pods logs the execution id.
+   kubectl -n n8n logs -l n8n.io/worker-pool=heavy -c n8n-worker --since=2m | grep -i 'execution'
 
    # The default workers did not.
    kubectl -n n8n logs -l app.kubernetes.io/component=worker -c n8n-worker --since=2m | grep -i 'execution' || echo "default workers idle, as expected"
 
-   # The queue depth KEDA scales gpu on (0 once the worker has taken the job).
-   kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/n8n/s0-redis-bull-jobs-gpu-wait?labelSelector=scaledobject.keda.sh/name=n8n-worker-gpu"
+   # The queue depth KEDA scales heavy on (0 once the worker has taken the job).
+   kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/n8n/s0-redis-bull-jobs-heavy-wait?labelSelector=scaledobject.keda.sh/name=n8n-worker-heavy"
    ```
 
 4. Scale-from-zero, using `itop`. Measured on this example: the job waits on `jobs-itop` (the default queue's counter does not move), KEDA scales `n8n-worker-itop` from 0 to 1 within one 15-second polling interval, the new pod runs the execution, and the pool returns to 0 once the queue is empty. There is no fallback to the default queue. Watch it with:
@@ -170,7 +168,7 @@ The scripted check proves the topology exists; this proves routing. Nothing in t
 
    Or set `min_replicas = 1` in `main.tf` for the first apply and lower it afterwards. Terraform will reconcile the patched ScaledObject back to the declared value on the next apply either way.
 
-5. Negative control: unassign the project from `gpu`, run again, and confirm the execution now lands on a default worker.
+5. Negative control: unassign the project from `heavy`, run again, and confirm the execution now lands on a default worker.
 
 ### Checking a pool's autoscaler
 
@@ -182,7 +180,7 @@ kubectl -n n8n get scaledobject
 
 # Queue depth as KEDA sees it, per pool.
 kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/n8n/\
-s0-redis-bull-jobs-gpu-wait?labelSelector=scaledobject.keda.sh/name=n8n-worker-gpu"
+s0-redis-bull-jobs-heavy-wait?labelSelector=scaledobject.keda.sh/name=n8n-worker-heavy"
 ```
 
 Do not read `kubectl get hpa` for this. Its TARGETS column shows `<unknown>` for a KEDA-backed worker HPA whether the scaler is healthy or broken, so it gives a false alarm either way. When something is genuinely wrong, `kubectl -n keda logs -l app=keda-operator` says so in as many words, usually `connection to redis failed: i/o timeout`.
