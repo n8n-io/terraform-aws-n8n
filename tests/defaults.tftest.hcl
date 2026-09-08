@@ -10838,3 +10838,179 @@ run "worker_pools_accept_a_conventional_extra_env_name" {
     error_message = "a conventional env name must survive the new grammar check and reach the worker group"
   }
 }
+
+# ── Worker pools need a chart and an n8n that ship them ──────────────────────
+# The failure both checks catch is silent everywhere else. A chart without
+# queueMode.workerGroups has no additionalProperties: false on queueMode, so
+# Helm accepts the key, renders nothing for it, and the release applies clean
+# with N8N_WORKER_POOLS_ENABLED on and no pool behind it. The mocked helm
+# provider accepts any values at all, so the plan-time suite can only test that
+# the guard fires; whether pools actually rendered is what
+# tests/scripts/verify-worker-pools.sh counts after a live apply.
+
+run "worker_pools_warn_when_the_default_chart_predates_them" {
+  command = plan
+
+  variables {
+    # No n8n_chart_version: the module default, which at the time of writing
+    # is 1.10.0 and has no workerGroups.
+    n8n_worker_pools = [{ name = "gpu" }]
+  }
+
+  expect_failures = [check.worker_pools_require_a_chart_that_renders_them]
+}
+
+run "worker_pools_warn_on_a_release_below_the_minimum_chart" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  expect_failures = [check.worker_pools_require_a_chart_that_renders_them]
+}
+
+run "worker_pools_accept_the_minimum_chart_release" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.12.0"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition     = local.n8n_chart_renders_worker_pools
+    error_message = "the minimum chart release itself must pass the guard; only versions below it warn"
+  }
+}
+
+# The compare is per component, not on a weighted sum. 2.0.0 is above 1.12.0
+# even though its minor is smaller, and a patch bump above the minimum counts.
+run "worker_pools_accept_a_later_chart_with_a_smaller_minor" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "2.0.0"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition     = local.n8n_chart_renders_worker_pools
+    error_message = "2.0.0 must compare above 1.12.0 component-wise"
+  }
+}
+
+# A prerelease is taken at the caller's word: Helm never resolves one unless it
+# is named exactly, so naming one is deliberate, and it is how a preview build
+# of the chart is tested before the release exists to compare against.
+run "worker_pools_accept_a_prerelease_chart_without_comparing_it" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition     = local.n8n_chart_version_core == null && local.n8n_chart_renders_worker_pools
+    error_message = "a prerelease chart version must bypass the numeric compare and pass the guard"
+  }
+}
+
+run "worker_pools_do_not_warn_about_the_chart_when_no_pool_is_declared" {
+  command = plan
+
+  # Default chart, no pools: the check is inert, so an untouched deployment
+  # sees no new warning from this feature. The assert keeps the run honest: it
+  # only proves anything while the default chart still predates pools. Once the
+  # default moves past the minimum, this run is vacuous and the placeholder in
+  # worker-pools.tf is due for retirement.
+  assert {
+    condition     = length(var.n8n_worker_pools) == 0 && !local.n8n_chart_renders_worker_pools
+    error_message = "this run relies on the default chart predating pools; the default now passes the guard, so retire the placeholder minimum in worker-pools.tf and rework this run"
+  }
+}
+
+run "worker_pools_warn_when_the_pinned_n8n_image_predates_them" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_image_tag     = "2.38.1"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  expect_failures = [check.worker_pools_require_n8n_2_39]
+}
+
+run "worker_pools_accept_the_first_n8n_release_that_ships_them" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_image_tag     = "2.39.0"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition     = length(local.n8n_worker_groups) == 1
+    error_message = "2.39.0 is the first n8n release with the pool env vars and must not trip the image check"
+  }
+}
+
+# ── n8n_worker_extra_env contract ────────────────────────────────────────────
+# The same five validations the pool extra_env carries, asserted on the
+# worker-wide input so the two cannot drift.
+
+run "worker_extra_env_defaults_to_empty" {
+  command = plan
+
+  assert {
+    condition     = length(var.n8n_worker_extra_env) == 0
+    error_message = "n8n_worker_extra_env must default to an empty list so an untouched deployment sees no diff in queueMode.workerExtraEnv"
+  }
+}
+
+run "worker_extra_env_rejects_the_pool_name_variable" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [{ name = "N8N_WORKER_POOL_NAME", value = "gpu" }]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
+
+run "worker_extra_env_rejects_a_module_managed_prefix" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [{ name = "DB_POSTGRESDB_HOST", value = "elsewhere" }]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
+
+run "worker_extra_env_rejects_duplicate_names" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [
+      { name = "N8N_LOG_LEVEL", value = "info" },
+      { name = "N8N_LOG_LEVEL", value = "debug" },
+    ]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
+
+run "worker_extra_env_rejects_a_whitespace_padded_name" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [{ name = " N8N_LOG_LEVEL", value = "info" }]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
