@@ -365,31 +365,38 @@ line) either needs no caller action or carries its own note under **Changed**.
 
 ### Added
 
-- `n8n_worker_pools`: labelled n8n worker pools (alpha), one per entry, each
-  rendered by the chart's `queueMode.workerGroups` as a worker Deployment
-  carrying `N8N_WORKER_POOL_NAME=<name>` plus a KEDA ScaledObject watching that
-  pool's own `jobs-<name>` queue. Per-pool replica bounds, concurrency,
-  resources and extra env, each falling back to the module-wide worker
-  setting when null. Declaring any pool also emits
-  `N8N_WORKER_POOLS_ENABLED=true` on every pod. Default `[]`, which renders
-  nothing and emits nothing, so this is additive. Pool names are validated at
-  plan to the pattern n8n itself only warns about, capped at 43 characters
-  because the ScaledObject name `n8n-worker-<name>` must fit KEDA's 54, and
-  `"default"` is refused since `jobs-default` is not the default queue. The
-  node-capacity check in `scaling.tf` now counts every pool at its ceiling.
+- `n8n_worker_pools` (**Early Alpha, subject to change without notice**): labelled
+  n8n worker pools, one per entry, each rendered by the chart's
+  `queueMode.workerGroups` as a worker Deployment carrying
+  `N8N_WORKER_POOL_NAME=<name>` plus a KEDA ScaledObject watching that pool's
+  own `jobs-<name>` queue. Per-pool replica bounds, concurrency, resources and
+  extra env, each falling back to the module-wide worker setting when null.
+  Declaring any pool also emits `N8N_WORKER_POOLS_ENABLED=true` on every pod.
+  Default `[]`, which renders nothing and emits nothing, so this is additive.
+  Pool names are validated at plan to the pattern n8n itself only warns
+  about, capped at 43 characters because the ScaledObject name
+  `n8n-worker-<name>` must fit KEDA's 54, and `"default"` is refused since
+  `jobs-default` is not the default queue. The node-capacity check in
+  `scaling.tf` now counts every pool at its ceiling.
 
-  **Upstream dependency, unreleased at the time of writing.** No published
-  chart version carries `queueMode.workerGroups` (the feature is
-  n8n-io/n8n-hosting#189, open against a preview branch), and a chart that
-  predates it accepts the key and silently renders nothing, so the release
-  applies clean with the flag on and no pool behind it. A precondition on the
-  Helm release fails the plan when the pinned `n8n_chart_version` is a release
+  **Upstream dependency, alpha on both sides.** n8n's own worker pools feature
+  is alpha, and the chart support for it (`queueMode.workerGroups`,
+  n8n-io/n8n-hosting#189) is merged to the chart's `preview/worker-pools`
+  branch but not released to a numbered chart version; a chart that predates
+  it accepts the key and silently renders nothing, so the release applies
+  clean with the flag on and no pool behind it. A precondition on the Helm
+  release fails the plan when the pinned `n8n_chart_version` is a release
   that predates the feature (placeholder minimum `1.12.0`; a prerelease
   version is taken at the caller's word, which is how a preview build is
   installed), and a `check` in `worker-pools.tf` warns when a pinned
   `n8n_image_tag` is below `2.39.0`, the first n8n release that reads the pool
-  variables. The `feat:workerPools` licence
-  entitlement is required as well, and its absence is not silent: n8n 2.39.0
+  variables. n8n-io/n8n-hosting#191 registered a `Preview chart` GitHub Action
+  that can publish an official prerelease build from `preview/worker-pools`
+  to `oci://ghcr.io/n8n-io/n8n-helm-chart` (this module's default
+  `n8n_chart_repository`), e.g. `1.11.0-preview.workerpools.1`; a private
+  mirror remains a fallback for anyone without write access to that repo.
+  The `feat:workerPools` licence entitlement is required as well, and its
+  absence is not silent: n8n 2.39.0
   exits 1 on a worker started with `N8N_WORKER_POOL_NAME` it is not licensed
   for, so the pool pods crash-loop and the Helm release is rolled back,
   failing the apply. Terraform cannot see entitlements at plan. The example
@@ -415,12 +422,14 @@ line) either needs no caller action or carries its own note under **Changed**.
   pool alike. Same plan-time guards as `n8n_extra_env` plus a C_IDENTIFIER
   name check. Default `[]`, additive.
 
-- `examples/worker-pools/`: topology variant of `small` running three pools
-  (`heavy`, `secteam`, `itop`, the last parked at `min_replicas = 0`) with
-  `node_max` raised from 6 to 8 to hold their ceilings. `n8n_chart_version` is a
-  required input there, since the module default renders no pools, and its
-  README documents packaging the preview chart to ECR and an end-to-end routing
-  test. Draft until the chart and n8n releases both ship.
+- `examples/worker-pools/` (**Early Alpha, subject to change without notice**):
+  topology variant of `small` running three pools (`heavy`, `secteam`,
+  `itop`, the last parked at `min_replicas = 0`) with `node_max` raised from
+  6 to 8 to hold their ceilings. `n8n_chart_version` is a required input
+  there, since the module default renders no pools, and its README documents
+  both the official GHCR preview-build path and packaging one to a private
+  mirror, plus an end-to-end routing test. Draft until the chart and n8n
+  releases both ship.
 
 - `tests/scripts/verify-worker-pools.sh`: post-apply check for
   `n8n_worker_pools`. Reads `worker_pool_names` and `namespace` from the
