@@ -183,13 +183,36 @@ if [[ "$DEPLOY_MODE" == "multi" ]]; then
   # detection, so a regression in any of them fails instead of silently
   # selecting the other branch.
   # An unreadable Deployment must not be mistaken for "flag unset".
+  #
+  # Chart 1.11 and later render this variable as a configMapKeyRef rather than
+  # a literal value, so `.env[...].value` reads empty on a multi-main release
+  # and this branch silently selected single-main, then failed the HPA,
+  # strategy and PDB asserts on a healthy deployment. Read the literal value
+  # first (chart <= 1.10), and when it is empty resolve the ConfigMap key the
+  # Deployment points at. Each read is its own jsonpath so a failure is a
+  # non-zero exit rather than an unparsed string, and an unreadable ConfigMap
+  # is treated exactly like an unreadable Deployment: topology unknown, fall
+  # back to the multi-main asserts, never to "flag unset".
   main_deploy_readable=true
+  env_path='{.spec.template.spec.containers[?(@.name=="n8n-main")].env[?(@.name=="N8N_MULTI_MAIN_SETUP_ENABLED")]'
   if ! multi_main_flag=$(kubectl get deployment n8n-main -n "$NAMESPACE" \
-      -o jsonpath='{.spec.template.spec.containers[?(@.name=="n8n-main")].env[?(@.name=="N8N_MULTI_MAIN_SETUP_ENABLED")].value}' \
-      2>/dev/null); then
+      -o jsonpath="${env_path}.value}" 2>/dev/null); then
     main_deploy_readable=false
     multi_main_flag=""
     fail "Cannot read Deployment n8n-main in namespace $NAMESPACE — topology unknown, falling back to multi-main checks"
+  elif [[ -z "$multi_main_flag" ]]; then
+    cm_name=$(kubectl get deployment n8n-main -n "$NAMESPACE" \
+      -o jsonpath="${env_path}.valueFrom.configMapKeyRef.name}" 2>/dev/null || true)
+    cm_key=$(kubectl get deployment n8n-main -n "$NAMESPACE" \
+      -o jsonpath="${env_path}.valueFrom.configMapKeyRef.key}" 2>/dev/null || true)
+    if [[ -n "$cm_name" && -n "$cm_key" ]]; then
+      if ! multi_main_flag=$(kubectl get configmap "$cm_name" -n "$NAMESPACE" \
+          -o jsonpath="{.data.${cm_key}}" 2>/dev/null); then
+        main_deploy_readable=false
+        multi_main_flag=""
+        fail "Cannot read ConfigMap $cm_name (referenced by Deployment n8n-main for N8N_MULTI_MAIN_SETUP_ENABLED) — topology unknown, falling back to multi-main checks"
+      fi
+    fi
   fi
   if [[ "$main_deploy_readable" == false || "$multi_main_flag" == "true" ]]; then
     MAIN_TOPOLOGY="multi-main"

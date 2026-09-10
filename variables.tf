@@ -1960,8 +1960,10 @@ variable "db_postgresdb_connection_timeout_ms" {
     run, so any fixed value is crossed eventually and only the timing moves.
     Size db_postgresdb_pool_size from measured concurrent database operations
     and pool-wait time, and verify that the aggregate maximum across all main,
-    worker, and webhook replicas fits the PgBouncer and database connection
-    budgets. Exposed here because the knob governing the failure should be
+    worker, and webhook replicas, plus every n8n_worker_pools max_replicas,
+    fits the PgBouncer and database connection budgets. Each pool is one more
+    autoscaler that can reach its own ceiling independently, and its pods
+    open the same pool_size connections as the default workers. Exposed here because the knob governing the failure should be
     settable, including downward for fail-fast behaviour.
   EOT
   type        = number
@@ -2210,7 +2212,7 @@ variable "redis_auth_token_secret_ref" {
 }
 
 variable "redis_username" {
-  description = "ACL username for an external Redis supplied via redis_host (create_elasticache = false). Leave null (the default) and both n8n and KEDA authenticate as Redis's default user, which is what an ElastiCache AUTH token and most self-hosted setups use. Set it when the endpoint authenticates against a named Redis 6+ ACL user, in which case redis_auth_token carries that user's password. Reaches n8n as QUEUE_BULL_REDIS_USERNAME (n8n's own config marks it \"Redis 6.0 or higher required\") and reaches the KEDA worker triggers as the redis scaler's username metadata field, so queue-depth autoscaling authenticates as the same user n8n does. Ignored when create_elasticache = true, and not merely warned about: ElastiCache AUTH has no username concept, its token authenticates as the default user, and sending a username on that path would break a connection that otherwise works. A username is not treated as a secret the way redis_auth_token is: it is a plain value in the Helm release and in the ScaledObject manifest, which is also what lets KEDA read it without resolving anything. The ACL user must be able to run the commands BullMQ uses against the bull:* keyspace, and must be able to run LLEN on bull:jobs:wait and bull:jobs:active for autoscaling to work; an ACL that authenticates but cannot read those keys leaves the HPA reporting <unknown> and the worker count frozen."
+  description = "ACL username for an external Redis supplied via redis_host (create_elasticache = false). Leave null (the default) and both n8n and KEDA authenticate as Redis's default user, which is what an ElastiCache AUTH token and most self-hosted setups use. Set it when the endpoint authenticates against a named Redis 6+ ACL user, in which case redis_auth_token carries that user's password. Reaches n8n as QUEUE_BULL_REDIS_USERNAME (n8n's own config marks it \"Redis 6.0 or higher required\") and reaches the KEDA worker triggers as the redis scaler's username metadata field, so queue-depth autoscaling authenticates as the same user n8n does. Ignored when create_elasticache = true, and not merely warned about: ElastiCache AUTH has no username concept, its token authenticates as the default user, and sending a username on that path would break a connection that otherwise works. A username is not treated as a secret the way redis_auth_token is: it is a plain value in the Helm release and in the ScaledObject manifest, which is also what lets KEDA read it without resolving anything. The ACL user must be able to run the commands BullMQ uses against the bull:* keyspace, and must be able to run LLEN on bull:jobs:wait and bull:jobs:active for autoscaling to work; an ACL that authenticates but cannot read those keys leaves the worker count frozen. Diagnose that from the ScaledObject's READY condition and the KEDA operator log rather than from the HPA's TARGETS column, which reads <unknown> for a KEDA-backed worker HPA whether or not the scaler is healthy."
   type        = string
   default     = null
 
@@ -3169,5 +3171,197 @@ variable "n8n_dns_config" {
       o.name != "ndots" || (o.value != null && can(regex("^[0-9]+$", o.value)) && tonumber(o.value) <= 15)
     ])
     error_message = "n8n_dns_config: the ndots option must carry a whole number between 0 and 15, written as a string (\"1\", not \"1.5\"). glibc parses ndots with strtol and silently ignores a fractional, non-numeric or out-of-range value, falling back to its default of 1, which looks like the setting worked while leaving resolution behaviour unchanged."
+  }
+}
+
+# ── Worker pools ──────────────────────────────────────────────────────────────
+# n8n's worker pools (alpha) pin a project's executions to a labelled set of
+# workers. A worker started with N8N_WORKER_POOL_NAME=<name> stops listening to
+# the default `jobs` Bull queue and listens to `jobs-<name>` instead; a project
+# assigned to that pool has its executions enqueued there. Mains and webhook
+# pods ignore the pool name, so only workers need it.
+#
+# The upstream Helm chart renders exactly one worker Deployment and exposes
+# worker-only env solely through queueMode.workerExtraEnv, so it can express at
+# most a single pool. Anything beyond that has to be built outside the chart,
+# which is what n8n_worker_pools does: one Deployment and one KEDA ScaledObject
+# per entry, alongside the chart's own unlabelled worker deployment.
+
+variable "n8n_worker_extra_env" {
+  description = "Additional environment variables injected into worker pods only, via queueMode.workerExtraEnv. Use this for worker-only tuning that must not reach main or webhook-processor pods; n8n_extra_env is the equivalent for all three. This reaches every worker, the chart's own unlabelled deployment and each n8n_worker_pools pool alike, because they render from one shared pod template; a pool's own extra_env is applied after this and wins on a repeated name. Set it here for tuning that should apply pool-wide, and on the pool for tuning that should not. N8N_WORKER_POOL_NAME is rejected here along with the other module-managed names: pool membership is owned by n8n_worker_pools, which also builds the queue and the KEDA scaler that go with it, and pinning the chart's own worker deployment to a pool through this input would leave those workers consuming a pool queue that nothing scales. Rejected at plan time for the same module-managed names as n8n_extra_env."
+  type = list(object({
+    name  = string
+    value = string
+  }))
+  default  = []
+  nullable = false
+
+  validation {
+    condition     = alltrue([for e in var.n8n_worker_extra_env : e.name != "" && e.name == trimspace(e.name)])
+    error_message = "Each n8n_worker_extra_env entry must have a non-empty name with no leading or trailing whitespace."
+  }
+
+  validation {
+    condition     = length(distinct([for e in var.n8n_worker_extra_env : e.name])) == length(var.n8n_worker_extra_env)
+    error_message = "n8n_worker_extra_env contains duplicate names; each environment variable may be set only once."
+  }
+
+  validation {
+    # C_IDENTIFIER, which is what Kubernetes requires of an env var name. Without
+    # this a name like "my-var" or "2FA" plans clean and is rejected only when
+    # the API server admits the pod template, which surfaces as a failed Helm
+    # release rather than as a bad input. Applied to this input and to the pool
+    # extra_env because both are new here; n8n_extra_env is deliberately left
+    # alone, since tightening an input callers already use would turn a working
+    # configuration into a plan-time failure on upgrade.
+    condition     = alltrue([for e in var.n8n_worker_extra_env : can(regex("^[A-Za-z_][A-Za-z0-9_]*$", e.name))])
+    error_message = "Each n8n_worker_extra_env name must be a valid Kubernetes environment variable name: letters, digits and underscores only, not starting with a digit (for example N8N_LOG_LEVEL). Hyphens, dots and leading digits are rejected by the API server when the pod template is admitted."
+  }
+
+  validation {
+    condition = alltrue([
+      for e in var.n8n_worker_extra_env : !(
+        contains(local.n8n_managed_env_names, e.name) ||
+        anytrue([for p in local.n8n_managed_env_prefixes : startswith(e.name, p)])
+      )
+    ])
+    error_message = "n8n_worker_extra_env must not set module-managed variables. Reserved: any name starting with one of ${join(", ", local.n8n_managed_env_prefixes)}, plus the exact names ${join(", ", local.n8n_managed_env_names)}. Use the dedicated module inputs instead."
+  }
+}
+
+variable "n8n_worker_pools" {
+  description = "Labelled worker pools to run beside the chart's own unlabelled worker deployment. Each entry becomes one queueMode.workerGroups entry in the Helm release, which renders one Deployment (identical to the chart's worker pods but carrying N8N_WORKER_POOL_NAME) and one KEDA ScaledObject watching that pool's own `jobs-<name>` queue, so a pool autoscales on its own backlog rather than the default queue's. Requires an n8n_chart_version whose chart supports queueMode.workerGroups: at the time of writing that is no published version (the feature is n8n-io/n8n-hosting#189, unreleased), and an older chart accepts the key and renders nothing for it, so a precondition on the Helm release fails the plan when the pinned chart is a release that predates it (a prerelease version is exempt, which is how a preview build is installed). Also needs n8n >= 2.39 on the image and a licence carrying feat:workerPools: without that entitlement a worker started with N8N_WORKER_POOL_NAME exits 1 (\"worker pools are not licensed\"), every pool pod crash-loops, and the Helm release fails its wait and is rolled back, so the apply fails rather than degrading. The module cannot see licence entitlements at plan. Measured on n8n 2.39.0. Declaring any pool also switches N8N_WORKER_POOLS_ENABLED on across mains, workers and webhook pods, which the feature needs in order to route at all. Leave empty (the default) and nothing is created and no env var is emitted. Pool names are lowercase alphanumerics and hyphens, 1-43 chars, starting and ending alphanumeric: n8n validates the same pattern at worker startup but only logs a warning and silently falls back to the default queue, so this input rejects a bad name at plan time instead. The 43-character ceiling comes from KEDA via the chart: the ScaledObject is named n8n-worker-<name> (this module fixes the release name to n8n), KEDA caps that at 54 because it reuses it as a label value and in the generated HPA's name, and the chart fails the render when it is longer. 54 less the 11-character prefix leaves 43."
+  type = list(object({
+    name         = string
+    min_replicas = optional(number, 1)
+    max_replicas = optional(number, 5)
+
+    # Null inherits the module-wide worker setting of the same name.
+    concurrency    = optional(number, null)
+    cpu_request    = optional(string, null)
+    cpu_limit      = optional(string, null)
+    memory_request = optional(string, null)
+    memory_limit   = optional(string, null)
+
+    # Extra env for this pool's workers only, on top of what every worker gets.
+    extra_env = optional(list(object({
+      name  = string
+      value = string
+    })), [])
+  }))
+  default  = []
+  nullable = false
+
+  validation {
+    # 43, not the chart schema's 53: helm_release.n8n fixes the release name to
+    # "n8n", so the chart names the pool's ScaledObject n8n-worker-<name> and
+    # fails the render when that exceeds KEDA's 54-character cap. The schema's
+    # 53 only holds for a release name short enough to leave room, which this
+    # module's is not.
+    condition     = alltrue([for p in var.n8n_worker_pools : can(regex("^[a-z0-9]([a-z0-9-]{0,41}[a-z0-9])?$", p.name))])
+    error_message = "Each n8n_worker_pools name must be 1-43 characters of lowercase letters, digits and hyphens, starting and ending with a letter or digit. Uppercase and underscores are rejected by n8n's own schema (for example \"ITop\" or \"sec_team\" are invalid; use \"itop\" and \"sec-team\"). This is enforced here because n8n only logs a warning for a bad name and then starts the worker on the default queue anyway, so the pod reports healthy while serving the wrong jobs. The 43-character ceiling comes from KEDA: the chart names the pool's ScaledObject n8n-worker-<name>, KEDA caps that at 54 characters (it doubles as a label value and as part of the generated HPA's name), and the chart fails the render past it. A value that passes here but not there fails at apply instead of at plan."
+  }
+
+  validation {
+    condition     = alltrue([for p in var.n8n_worker_pools : p.name != "default"])
+    error_message = "\"default\" is not a usable n8n_worker_pools name. A pool called \"default\" would listen to a queue literally named `jobs-default`, which is a separate queue from the unlabelled default `jobs` queue and would not receive the work you expect. The chart's own worker deployment already serves the default queue; size it with n8n_worker_keda_min_replicas and n8n_worker_keda_max_replicas instead."
+  }
+
+  validation {
+    condition     = length(distinct([for p in var.n8n_worker_pools : p.name])) == length(var.n8n_worker_pools)
+    error_message = "n8n_worker_pools contains duplicate pool names. Each pool maps to one Deployment and one queue, so a repeated name would collide on both."
+  }
+
+  validation {
+    condition     = alltrue([for p in var.n8n_worker_pools : p.min_replicas <= p.max_replicas])
+    error_message = "Each n8n_worker_pools entry must have min_replicas <= max_replicas; KEDA rejects a ScaledObject whose minReplicaCount is above its maxReplicaCount."
+  }
+
+  validation {
+    condition = alltrue([
+      for p in var.n8n_worker_pools :
+      p.min_replicas == floor(p.min_replicas) && p.min_replicas >= 0 &&
+      p.max_replicas == floor(p.max_replicas) && p.max_replicas >= 1
+    ])
+    error_message = "Each n8n_worker_pools entry needs whole-number replica bounds, with min_replicas >= 0 and max_replicas >= 1. KEDA scales a pool to zero natively, so 0 is a valid floor. A job routed to a parked pool waits on that pool's queue and KEDA scales it up, measured at 0 to 1 within one 15-second polling interval; it does not fall back to the default queue. The one caveat is bootstrap: n8n only offers a pool for assignment while at least one of its workers is registered, so a brand-new pool declared at 0 cannot be assigned to any project and therefore never receives work. Start a new pool at min_replicas = 1, assign its projects, then lower it to 0; the assignment is stored and outlives the pods."
+  }
+
+  validation {
+    condition     = alltrue([for p in var.n8n_worker_pools : p.concurrency == null ? true : (p.concurrency == floor(p.concurrency) && p.concurrency >= 1)])
+    error_message = "n8n_worker_pools concurrency must be a whole number of concurrent jobs, 1 or greater, or null to inherit n8n_worker_concurrency."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for p in var.n8n_worker_pools : [
+        for e in p.extra_env : !(
+          contains(local.n8n_managed_env_names, e.name) ||
+          anytrue([for pre in local.n8n_managed_env_prefixes : startswith(e.name, pre)]) ||
+          e.name == "N8N_WORKER_POOL_NAME"
+        )
+      ]
+    ]))
+    error_message = "n8n_worker_pools extra_env must not set module-managed variables, and must not set N8N_WORKER_POOL_NAME: that name is owned by the pool's own `name` attribute, and overriding it would put the pool's workers on a different queue than the one this module creates a scaler for."
+  }
+
+  validation {
+    # Same grammar the module-wide n8n_worker_cpu_* inputs enforce, for the same
+    # reason and then one more. A pool quantity scaling.tf cannot read makes
+    # local.n8n_cpu_requests_readable false, and that local gates the whole peak
+    # figure, so one unparseable pool silences
+    # check.autoscaling_maxima_fit_node_group_capacity for main, worker and
+    # webhook too, not only for the pool that carries it.
+    condition = alltrue(flatten([
+      for p in var.n8n_worker_pools : [
+        for q in [p.cpu_request, p.cpu_limit] :
+        q == null ? true : can(regex("^[0-9]+(\\.[0-9]+)?m?$", q))
+      ]
+    ]))
+    error_message = "Each n8n_worker_pools cpu_request and cpu_limit must be a CPU quantity: a plain number of cores (\"1\", \"0.5\") or millicores with an m suffix (\"1000m\"), or null to inherit n8n_worker_cpu_request / n8n_worker_cpu_limit. Memory suffixes (Mi, Gi), units (\"1 core\"), and whitespace are not accepted, because the node-capacity model in scaling.tf reads these and a quantity it cannot parse silences the capacity check for the whole release."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for p in var.n8n_worker_pools : [
+        for q in [p.memory_request, p.memory_limit] :
+        q == null ? true : can(regex("^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$", q))
+      ]
+    ]))
+    error_message = "Each n8n_worker_pools memory_request and memory_limit must be a memory quantity: a number with an optional Kubernetes suffix (\"512Mi\", \"2Gi\", \"1G\", or plain bytes), or null to inherit n8n_worker_memory_request / n8n_worker_memory_limit. \"GB\"/\"MB\", whitespace, and CPU-style m suffixes are not accepted. Prefer the binary suffixes (Mi, Gi): 2G is 2,000,000,000 bytes while 2Gi is 2,147,483,648."
+  }
+
+  validation {
+    # The same check n8n_extra_env and n8n_worker_extra_env make on their own
+    # lists, applied per pool so the three inputs behave alike. The padded case
+    # matters as much as the empty one: a name like " N8N_ENCRYPTION_KEY " is not
+    # an exact match for anything in local.n8n_managed_env_names, so it slips
+    # past the reserved-name guard below and past the duplicate check, then
+    # renders as a distinct env var Kubernetes rejects at apply.
+    condition = alltrue(flatten([
+      for p in var.n8n_worker_pools : [
+        for e in p.extra_env : e.name != "" && e.name == trimspace(e.name)
+      ]
+    ]))
+    error_message = "n8n_worker_pools extra_env entries must each have a non-empty name with no leading or trailing whitespace. A padded name would bypass the duplicate and module-managed guards while rendering as a distinct, ignored env var."
+  }
+
+  validation {
+    condition = alltrue([
+      for p in var.n8n_worker_pools :
+      length(distinct([for e in p.extra_env : e.name])) == length(p.extra_env)
+    ])
+    error_message = "An n8n_worker_pools entry has duplicate extra_env names. Within one pool each variable may be set once; a repeat is silently dropped by the last-wins merge rather than reported."
+  }
+
+  validation {
+    # Same C_IDENTIFIER rule n8n_worker_extra_env enforces, for the same reason:
+    # an invalid name is caught by the API server when the pod template is
+    # admitted, which surfaces as a failed Helm release rather than a bad input.
+    condition = alltrue(flatten([
+      for p in var.n8n_worker_pools : [
+        for e in p.extra_env : can(regex("^[A-Za-z_][A-Za-z0-9_]*$", e.name))
+      ]
+    ]))
+    error_message = "Each n8n_worker_pools extra_env name must be a valid Kubernetes environment variable name: letters, digits and underscores only, not starting with a digit (for example N8N_LOG_LEVEL). Hyphens, dots and leading digits are rejected by the API server when the pod template is admitted."
   }
 }

@@ -4710,7 +4710,7 @@ run "keda_triggers_carry_tls_and_auth_when_enabled" {
 
   assert {
     condition     = local.keda_redis_auth_metadata["enableTLS"] == "true"
-    error_message = "KEDA's Redis trigger must enable TLS when the backend is TLS-only, otherwise the metric read hangs until it times out and the HPA reports <unknown>."
+    error_message = "KEDA's Redis trigger must enable TLS when the backend is TLS-only, otherwise the metric read hangs until it times out and the ScaledObject goes READY=False while the workers freeze at their current replica count."
   }
 
   # passwordFromEnv names an environment variable; KEDA resolves it against the
@@ -10194,4 +10194,824 @@ run "n8n_dns_config_rejects_a_malformed_search_domain" {
   }
 
   expect_failures = [var.n8n_dns_config]
+}
+
+# ── Worker pools (n8n_worker_pools) ──────────────────────────────────────────
+# helm_release.n8n.values is unknown at plan time, so these assert against
+# local.n8n_worker_groups, the list the chart's queueMode.workerGroups is built
+# from, the same way the rest of this file tests chart wiring it cannot reach
+# directly.
+#
+# Every run that declares a pool also pins n8n_chart_version to a prerelease.
+# The module's default chart predates queueMode.workerGroups and the
+# precondition on helm_release.n8n fails the plan on that pairing. A prerelease is the honest pin:
+# at the time of writing the only chart that renders pools is a preview build
+# from n8n-io/n8n-hosting#189, and the check takes a prerelease at the caller's
+# word rather than comparing it against a release that does not exist yet. The
+# guard itself is tested under "Worker pools need a chart and an n8n that ship
+# them" further down.
+
+run "worker_pools_default_to_none" {
+  command = plan
+
+  assert {
+    condition     = length(local.n8n_worker_groups) == 0
+    error_message = "n8n_worker_pools must default to empty so an untouched deployment renders no workerGroups and sees no diff"
+  }
+}
+
+run "worker_pools_map_each_pool_to_its_own_queue" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    # Pools count against the node group budget like any other autoscaler, so
+    # the capacity check warns when their ceilings outgrow it. These runs are
+    # about the mapping, not the sizing, so give them room rather than let an
+    # unrelated advisory fail them.
+    node_max = 20
+
+    n8n_worker_pools = [
+      { name = "gpu" },
+      { name = "sec-team" },
+    ]
+  }
+
+  # poolName is what becomes N8N_WORKER_POOL_NAME, which moves the pod off the
+  # default `jobs` queue and onto `jobs-<poolName>`. name is the Deployment
+  # suffix. They are deliberately the same value, so a pool cannot end up with
+  # a Deployment named after one queue and pods consuming another.
+  assert {
+    condition = (
+      length(local.n8n_worker_groups) == 2 &&
+      local.n8n_worker_groups[0].name == "gpu" &&
+      local.n8n_worker_groups[0].poolName == "gpu" &&
+      local.n8n_worker_groups[1].name == "sec-team" &&
+      local.n8n_worker_groups[1].poolName == "sec-team"
+    )
+    error_message = "each n8n_worker_pools entry must render one worker group whose poolName matches its name"
+  }
+}
+
+# Every per-pool sizing attribute is optional and falls back to the module-wide
+# worker setting. A pool that overrides nothing must be sized exactly like the
+# chart's own workers, or the pools quietly get different resources than the
+# deployment they sit beside.
+run "worker_pools_inherit_module_wide_worker_sizing" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    # Pools count against the node group budget like any other autoscaler, so
+    # the capacity check warns when their ceilings outgrow it. These runs are
+    # about the mapping, not the sizing, so give them room rather than let an
+    # unrelated advisory fail them.
+    node_max = 20
+
+    n8n_worker_pools = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition = (
+      local.n8n_worker_groups[0].concurrency == var.n8n_worker_concurrency &&
+      local.n8n_worker_groups[0].resources.requests.cpu == var.n8n_worker_cpu_request &&
+      local.n8n_worker_groups[0].resources.requests.memory == var.n8n_worker_memory_request &&
+      local.n8n_worker_groups[0].resources.limits.cpu == var.n8n_worker_cpu_limit &&
+      local.n8n_worker_groups[0].resources.limits.memory == var.n8n_worker_memory_limit
+    )
+    error_message = "a pool that overrides no sizing must inherit the module-wide n8n_worker_* concurrency and resources"
+  }
+}
+
+run "worker_pools_per_pool_sizing_overrides_the_module_default" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    # Pools count against the node group budget like any other autoscaler, so
+    # the capacity check warns when their ceilings outgrow it. These runs are
+    # about the mapping, not the sizing, so give them room rather than let an
+    # unrelated advisory fail them.
+    node_max = 20
+
+    n8n_worker_pools = [{
+      name           = "gpu"
+      concurrency    = 3
+      cpu_request    = "2"
+      cpu_limit      = "4"
+      memory_request = "8Gi"
+      memory_limit   = "16Gi"
+    }]
+  }
+
+  assert {
+    condition = (
+      local.n8n_worker_groups[0].concurrency == 3 &&
+      local.n8n_worker_groups[0].resources.requests.cpu == "2" &&
+      local.n8n_worker_groups[0].resources.requests.memory == "8Gi" &&
+      local.n8n_worker_groups[0].resources.limits.cpu == "4" &&
+      local.n8n_worker_groups[0].resources.limits.memory == "16Gi"
+    )
+    error_message = "per-pool sizing must win over the module-wide n8n_worker_* defaults"
+  }
+}
+
+# Each pool gets a scaler on its own backlog. The chart's default worker
+# ScaledObject only watches `<prefix>:jobs:*` and cannot see a pool's queue, so
+# without these bounds a pool would sit at a fixed replica count.
+run "worker_pools_carry_their_own_keda_bounds" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    # Pools count against the node group budget like any other autoscaler, so
+    # the capacity check warns when their ceilings outgrow it. These runs are
+    # about the mapping, not the sizing, so give them room rather than let an
+    # unrelated advisory fail them.
+    node_max = 20
+
+    n8n_worker_pools = [
+      { name = "gpu", min_replicas = 2, max_replicas = 8 },
+      { name = "itop" },
+    ]
+  }
+
+  assert {
+    condition = (
+      local.n8n_worker_groups[0].keda.minReplicaCount == 2 &&
+      local.n8n_worker_groups[0].keda.maxReplicaCount == 8 &&
+      local.n8n_worker_groups[1].keda.minReplicaCount == 1 &&
+      local.n8n_worker_groups[1].keda.maxReplicaCount == 5 &&
+      local.n8n_worker_groups[1].keda.jobsPerReplica == var.n8n_worker_keda_jobs_per_replica
+    )
+    error_message = "each pool must carry its own KEDA bounds, defaulting to 1/5 and inheriting n8n_worker_keda_jobs_per_replica"
+  }
+}
+
+# KEDA scales a ScaledObject to zero natively, so a floor of 0 is legitimate
+# here for the same reason it is on n8n_worker_keda_min_replicas.
+run "worker_pools_min_replicas_accepts_zero" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    # Pools count against the node group budget like any other autoscaler, so
+    # the capacity check warns when their ceilings outgrow it. These runs are
+    # about the mapping, not the sizing, so give them room rather than let an
+    # unrelated advisory fail them.
+    node_max = 20
+
+    n8n_worker_pools = [{ name = "itop", min_replicas = 0, max_replicas = 3 }]
+  }
+
+  assert {
+    condition     = local.n8n_worker_groups[0].keda.minReplicaCount == 0
+    error_message = "n8n_worker_pools must accept min_replicas = 0: a pool parked at zero is the documented scale-to-zero shape"
+  }
+}
+
+run "worker_pools_extra_env_reaches_only_that_pool" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    # Pools count against the node group budget like any other autoscaler, so
+    # the capacity check warns when their ceilings outgrow it. These runs are
+    # about the mapping, not the sizing, so give them room rather than let an
+    # unrelated advisory fail them.
+    node_max = 20
+
+    n8n_worker_pools = [
+      { name = "gpu", extra_env = [{ name = "CUDA_VISIBLE_DEVICES", value = "0" }] },
+      { name = "itop" },
+    ]
+  }
+
+  assert {
+    condition = (
+      length(local.n8n_worker_groups[0].extraEnv) == 1 &&
+      local.n8n_worker_groups[0].extraEnv[0].name == "CUDA_VISIBLE_DEVICES" &&
+      length(local.n8n_worker_groups[1].extraEnv) == 0
+    )
+    error_message = "per-pool extra_env must land on that pool's workers only"
+  }
+}
+
+# n8n validates the same pattern at worker startup, but only logs a warning and
+# then starts the worker on the default queue, so a rejected name here is the
+# difference between a plan error and a Ready pod serving the wrong jobs.
+run "worker_pools_reject_an_uppercase_name" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "ITop" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_an_underscore_in_a_name" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "sec_team" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_an_overlong_name" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "p${join("", [for i in range(63) : "a"])}" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+# A pool named "default" would listen on a queue literally called
+# `jobs-default`, which is not the unlabelled default `jobs` queue the chart's
+# own worker deployment serves.
+run "worker_pools_reject_the_name_default" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "default" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_duplicate_names" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu" }, { name = "gpu" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_min_replicas_above_max_replicas" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", min_replicas = 6, max_replicas = 2 }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_a_fractional_replica_bound" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", min_replicas = 1.5 }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_max_replicas_of_zero" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", min_replicas = 0, max_replicas = 0 }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_concurrency_below_one" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", concurrency = 0 }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+# N8N_WORKER_POOL_NAME is set from the pool's own name. Letting extra_env
+# override it would put the pod on a queue this module never built a scaler for.
+run "worker_pools_reject_extra_env_overriding_the_pool_name" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools = [{
+      name      = "gpu"
+      extra_env = [{ name = "N8N_WORKER_POOL_NAME", value = "somewhere-else" }]
+    }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_extra_env_overriding_a_module_managed_variable" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools = [{
+      name      = "gpu"
+      extra_env = [{ name = "N8N_ENCRYPTION_KEY", value = "nope" }]
+    }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+# ── Worker pools in the node-capacity model ──────────────────────────────────
+# Every pool is a fourth claim on the same nodes, independent of the default
+# worker deployment's own KEDA ceiling. The model missed them at first, which
+# left check "autoscaling_maxima_fit_node_group_capacity" reporting that a
+# config fit while the pools pushed it well past the node group. These pin the
+# arithmetic so the check cannot go quiet again as pools are added.
+
+run "capacity_model_ignores_pools_when_none_are_declared" {
+  command = plan
+
+  assert {
+    condition     = local.n8n_pool_peak_cpu_request_millis == 0
+    error_message = "with no pools declared the pool term must be 0, leaving the model exactly as it was"
+  }
+}
+
+run "capacity_model_counts_each_pool_at_its_ceiling" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+
+    # Room for the pools, so this pins the arithmetic rather than tripping the
+    # advisory the arithmetic feeds.
+    node_max = 20
+
+    n8n_worker_pools = [
+      # 4 x (1000m explicit + 200m task runner sidecar) = 4800m
+      { name = "gpu", min_replicas = 1, max_replicas = 4, cpu_request = "1" },
+      # 3 x (500m inherited + 200m) = 2100m
+      { name = "secteam", min_replicas = 1, max_replicas = 3 },
+      # 3 x (500m inherited + 200m) = 2100m. min_replicas 0 is irrelevant here:
+      # the model is about ceilings, and a parked pool can still reach its max.
+      { name = "itop", min_replicas = 0, max_replicas = 3 },
+    ]
+  }
+
+  assert {
+    condition     = local.n8n_pool_peak_cpu_request_millis == 9000
+    error_message = "pool peak is ${local.n8n_pool_peak_cpu_request_millis}m, expected 4800 + 2100 + 2100 = 9000m"
+  }
+
+  # Pool pods render from the chart's shared worker pod template, so each one
+  # carries the task runner sidecar the default worker pods carry.
+  assert {
+    condition     = local.n8n_peak_cpu_request_millis == 16600 + 9000
+    error_message = "total peak is ${local.n8n_peak_cpu_request_millis}m, expected the no-pools 16600m plus 9000m of pools"
+  }
+}
+
+# A pool quantity the capacity model cannot read is now rejected outright, so it
+# never reaches the model. That is the stronger outcome: an unreadable quantity
+# drops n8n_cpu_requests_readable, which collapses the peak figure to zero and
+# lets check.autoscaling_maxima_fit_node_group_capacity pass vacuously for main,
+# worker and webhook as well, not only for the pool carrying it. Failing at plan
+# with a message beats silently disabling the check for the whole release.
+run "worker_pools_reject_a_cpu_quantity_the_capacity_model_cannot_read" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", cpu_request = "1Ki" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_a_memory_quantity_the_capacity_model_cannot_read" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", memory_request = "2GB" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+# The module-wide quantity a pool inherits when it overrides nothing is rejected
+# by its own validation, before the capacity model is reached. Worth stating
+# plainly what this does and does not show: variable validation runs ahead of
+# locals, so the plan halts here and local.n8n_cpu_requests_readable is never
+# evaluated. It does not exercise the can() guard in scaling.tf.
+#
+# That guard is now unreachable through any input path. All four contributors to
+# local.n8n_cpu_requests carry this same regex, as do the pool overrides since
+# the validations above, and every string matching it survives the model's
+# tonumber(trimsuffix(q, "m")). It was reachable before the pool overrides were
+# validated. Keeping it is deliberate defence in depth against a future
+# contributor arriving unvalidated, because the failure it prevents is a
+# capacity check that passes vacuously for every pod family rather than only for
+# the input at fault.
+run "module_wide_cpu_request_rejects_an_unparseable_quantity_a_pool_would_inherit" {
+  command = plan
+
+  variables {
+    n8n_chart_version      = "1.11.0-preview.workerpools.1"
+    n8n_worker_cpu_request = "not-a-quantity"
+    n8n_worker_pools       = [{ name = "gpu" }]
+  }
+
+  expect_failures = [var.n8n_worker_cpu_request]
+}
+
+# Every pool's scaler has to carry the same Redis TLS and AUTH metadata the
+# default worker's two triggers carry. The chart builds a pool's triggers from
+# the queue name itself, so keda.triggerMetadata is the only route in, and
+# without it a pool's ScaledObject opens a plaintext connection to a TLS-only
+# endpoint: KEDA hangs on `connection to redis failed: i/o timeout`, the
+# ScaledObject goes READY=False, and the pool sits at min_replicas with nothing
+# crashing to announce it. That failure is invisible to a plan and to a non-TLS
+# example, which is why it is asserted here.
+run "worker_pools_carry_the_redis_tls_metadata_on_their_scalers" {
+  command = plan
+
+  variables {
+    n8n_chart_version                = "1.11.0-preview.workerpools.1"
+    redis_transit_encryption_enabled = true
+
+    n8n_worker_pools = [
+      { name = "gpu", min_replicas = 1, max_replicas = 4 },
+      { name = "itop", min_replicas = 0, max_replicas = 3 },
+    ]
+  }
+
+  assert {
+    condition     = local.keda_redis_auth_metadata["enableTLS"] == "true"
+    error_message = "precondition: transit encryption must put enableTLS into the shared KEDA metadata"
+  }
+
+  # Asserted key by key rather than by comparing the two maps: both are
+  # sensitive (the metadata can carry a Redis username), and a comparison of
+  # sensitive values yields a sensitive bool that is awkward to read back.
+  assert {
+    condition = alltrue([
+      for g in local.n8n_worker_groups :
+      nonsensitive(g.keda.triggerMetadata["enableTLS"]) == "true"
+    ])
+    error_message = "every pool's keda.triggerMetadata must set enableTLS, or its scaler talks plaintext to a TLS-only endpoint and the pool freezes at min_replicas"
+  }
+
+  assert {
+    condition = alltrue([
+      for g in local.n8n_worker_groups :
+      nonsensitive(length(g.keda.triggerMetadata)) == nonsensitive(length(local.keda_redis_auth_metadata))
+    ])
+    error_message = "every pool's keda.triggerMetadata must carry the same key set as the default worker's triggers"
+  }
+}
+
+# The no-TLS path: the metadata map is empty rather than absent, and the chart
+# guards the block with `with`, so nothing is rendered into the trigger.
+run "worker_pools_carry_empty_trigger_metadata_without_tls" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", min_replicas = 1, max_replicas = 4 }]
+  }
+
+  assert {
+    condition     = nonsensitive(length(local.n8n_worker_groups[0].keda.triggerMetadata)) == 0
+    error_message = "without transit encryption a pool's triggerMetadata must be empty, not null or a partial one"
+  }
+}
+
+# The module's pool-name rule has to be at least as strict as the chart schema
+# it feeds, or a name plans clean here and dies in helm's schema validation at
+# apply. The chart's schema caps queueMode.workerGroups[].name at 53 and
+# requires both ends alphanumeric, but the binding limit is KEDA's: the chart
+# names a pool's ScaledObject n8n-worker-<name> (the module fixes the release
+# name to n8n) and fails the render past 54 characters, which leaves 43 for the
+# name. worker-pools.tf assigns the same string to both name and poolName.
+run "worker_pools_reject_a_trailing_hyphen_in_a_name" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu-" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_a_name_longer_than_the_chart_allows" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    # 44 characters: legal for the chart's schema (53) and for poolName (63),
+    # but n8n-worker-<name> would be 55, one over KEDA's ScaledObject cap, so
+    # the chart would fail the render at apply.
+    n8n_worker_pools = [{ name = "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeee" }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_accept_a_name_at_the_chart_ceiling" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    # Exactly 43 characters, both ends alphanumeric: n8n-worker-<name> lands
+    # on KEDA's 54-character cap exactly.
+    n8n_worker_pools = [{ name = "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeee" }]
+  }
+
+  assert {
+    condition     = length(local.n8n_worker_groups) == 1
+    error_message = "a 43-character pool name renders a 54-character ScaledObject name, which KEDA accepts, so it must be accepted here"
+  }
+}
+
+# extra_env consistency: the pool list gets the same two checks n8n_extra_env
+# and n8n_worker_extra_env already make on theirs.
+run "worker_pools_reject_a_blank_extra_env_name" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", extra_env = [{ name = "  ", value = "x" }] }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+# The padded case, which is the one that actually gets past the other guards: a
+# padded reserved name is not an exact match for anything in
+# local.n8n_managed_env_names, so without this it would clear the module-managed
+# check and the duplicate check and only fail at apply.
+run "worker_pools_reject_a_whitespace_padded_extra_env_name" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools = [{
+      name      = "gpu"
+      extra_env = [{ name = " N8N_ENCRYPTION_KEY ", value = "x" }]
+    }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_reject_duplicate_extra_env_names_within_a_pool" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools = [{
+      name = "gpu"
+      # Deliberately not a module-managed name: with one of those this run
+      # would fail on the reserved-name rule and never reach the duplicate
+      # check it exists to prove.
+      extra_env = [
+        { name = "GPU_DEVICE_ORDER", value = "0" },
+        { name = "GPU_DEVICE_ORDER", value = "1" },
+      ]
+    }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+# Kubernetes requires C_IDENTIFIER for env var names. Without these two the name
+# is only rejected when the API server admits the pod template, which surfaces
+# as a failed Helm release rather than as a bad input.
+run "worker_extra_env_rejects_a_non_identifier_name" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [{ name = "my-var", value = "x" }]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
+
+run "worker_pools_reject_a_non_identifier_extra_env_name" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", extra_env = [{ name = "2FA_MODE", value = "x" }] }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "worker_pools_accept_a_conventional_extra_env_name" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools = [{
+      name      = "gpu"
+      extra_env = [{ name = "GPU_DEVICE_ORDER", value = "0" }]
+    }]
+  }
+
+  assert {
+    condition     = local.n8n_worker_groups[0].extraEnv[0].name == "GPU_DEVICE_ORDER"
+    error_message = "a conventional env name must survive the new grammar check and reach the worker group"
+  }
+}
+
+# ── Worker pools need a chart and an n8n that ship them ──────────────────────
+# The failure both checks catch is silent everywhere else. A chart without
+# queueMode.workerGroups has no additionalProperties: false on queueMode, so
+# Helm accepts the key, renders nothing for it, and the release applies clean
+# with N8N_WORKER_POOLS_ENABLED on and no pool behind it. The mocked helm
+# provider accepts any values at all, so the plan-time suite can only test that
+# the guard fires; whether pools actually rendered is what
+# tests/scripts/verify-worker-pools.sh counts after a live apply.
+
+# A hard stop, not a warning: the precondition lives on helm_release.n8n, so
+# that resource is what expect_failures names.
+run "worker_pools_fail_the_plan_when_the_default_chart_predates_them" {
+  command = plan
+
+  variables {
+    # No n8n_chart_version: the module default, which at the time of writing
+    # is 1.10.0 and has no workerGroups.
+    n8n_worker_pools = [{ name = "gpu" }]
+  }
+
+  expect_failures = [helm_release.n8n]
+}
+
+run "worker_pools_fail_the_plan_on_a_release_below_the_minimum_chart" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  expect_failures = [helm_release.n8n]
+}
+
+run "worker_pools_accept_the_minimum_chart_release" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.12.0"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition     = local.n8n_chart_renders_worker_pools
+    error_message = "the minimum chart release itself must pass the guard; only versions below it warn"
+  }
+}
+
+# The compare is per component, not on a weighted sum. 2.0.0 is above 1.12.0
+# even though its minor is smaller, and a patch bump above the minimum counts.
+run "worker_pools_accept_a_later_chart_with_a_smaller_minor" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "2.0.0"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition     = local.n8n_chart_renders_worker_pools
+    error_message = "2.0.0 must compare above 1.12.0 component-wise"
+  }
+}
+
+# A prerelease is taken at the caller's word: Helm never resolves one unless it
+# is named exactly, so naming one is deliberate, and it is how a preview build
+# of the chart is tested before the release exists to compare against.
+run "worker_pools_accept_a_prerelease_chart_without_comparing_it" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition     = local.n8n_chart_version_core == null && local.n8n_chart_renders_worker_pools
+    error_message = "a prerelease chart version must bypass the numeric compare and pass the guard"
+  }
+}
+
+run "worker_pools_do_not_block_the_default_chart_when_no_pool_is_declared" {
+  command = plan
+
+  # Default chart, no pools: the check is inert, so an untouched deployment
+  # sees no new warning from this feature. The assert keeps the run honest: it
+  # only proves anything while the default chart still predates pools. Once the
+  # default moves past the minimum, this run is vacuous and the placeholder in
+  # worker-pools.tf is due for retirement.
+  assert {
+    condition     = length(var.n8n_worker_pools) == 0 && !local.n8n_chart_renders_worker_pools
+    error_message = "this run relies on the default chart predating pools; the default now passes the guard, so retire the placeholder minimum in worker-pools.tf and rework this run"
+  }
+}
+
+run "worker_pools_warn_when_the_pinned_n8n_image_predates_them" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_image_tag     = "2.38.1"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  expect_failures = [check.worker_pools_require_n8n_2_39]
+}
+
+run "worker_pools_accept_the_first_n8n_release_that_ships_them" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_image_tag     = "2.39.0"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition     = length(local.n8n_worker_groups) == 1
+    error_message = "2.39.0 is the first n8n release with the pool env vars and must not trip the image check"
+  }
+}
+
+# ── n8n_worker_extra_env contract ────────────────────────────────────────────
+# The same five validations the pool extra_env carries, asserted on the
+# worker-wide input so the two cannot drift.
+
+run "worker_extra_env_defaults_to_empty" {
+  command = plan
+
+  assert {
+    condition     = length(var.n8n_worker_extra_env) == 0
+    error_message = "n8n_worker_extra_env must default to an empty list so an untouched deployment sees no diff in queueMode.workerExtraEnv"
+  }
+}
+
+run "worker_extra_env_rejects_the_pool_name_variable" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [{ name = "N8N_WORKER_POOL_NAME", value = "gpu" }]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
+
+run "worker_extra_env_rejects_a_module_managed_prefix" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [{ name = "DB_POSTGRESDB_HOST", value = "elsewhere" }]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
+
+run "worker_extra_env_rejects_duplicate_names" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [
+      { name = "N8N_LOG_LEVEL", value = "info" },
+      { name = "N8N_LOG_LEVEL", value = "debug" },
+    ]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
+
+run "worker_extra_env_rejects_a_whitespace_padded_name" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [{ name = " N8N_LOG_LEVEL", value = "info" }]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
 }
