@@ -989,9 +989,10 @@ that your endpoint does. Leave both unset for an endpoint that accepts
 unauthenticated, plaintext connections.
 
 `redis_transit_encryption_mode` is the one TLS input that does not apply here:
-it is a property of the replication group the module manages, and a `check`
-says so when it is set alongside `create_elasticache = false`. Your endpoint's
-own TLS posture is yours to configure.
+it is a property of the replication group the module manages. Leave it at its
+`required` default. Changing it to `preferred` alongside
+`create_elasticache = false` raises a `check` warning. Your endpoint's own TLS
+posture is yours to configure.
 
 See [Customer-managed Redis](#customer-managed-redis), and
 [`examples/customer-managed-redis`](./examples/customer-managed-redis/), which
@@ -1000,8 +1001,9 @@ runs exactly this combination.
 ### Worker autoscaling
 
 Queue-depth autoscaling keeps working with the flag on. Both worker triggers
-gain `enableTLS` and a reference to the AUTH token, so KEDA reads queue depth
-over the same encrypted, authenticated connection the workers use.
+gain `enableTLS`, so KEDA reads queue depth over the same encrypted connection
+the workers use. When AUTH is active, each trigger also gains a reference to
+the AUTH token and uses the same authenticated connection as the workers.
 
 TLS is the half that has to land. Without it KEDA opens a plaintext connection
 to a TLS-only endpoint and hangs on `connection to redis failed: i/o timeout`
