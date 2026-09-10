@@ -1,4 +1,11 @@
 # ── Worker pools ──────────────────────────────────────────────────────────────
+# EARLY ALPHA, SUBJECT TO CHANGE WITHOUT NOTICE. This tracks two upstream
+# features that are themselves alpha: n8n's own worker pools, and the chart
+# support for them (queueMode.workerGroups, n8n-io/n8n-hosting#189), merged to
+# the chart's preview/worker-pools branch but not released to a numbered chart
+# version. This file's shape, defaults and guards may change to match either
+# upstream, without the usual deprecation path.
+#
 # Maps var.n8n_worker_pools onto the chart's queueMode.workerGroups, which
 # renders one worker Deployment per pool plus a KEDA ScaledObject watching that
 # pool's own `jobs-<name>` queue.
@@ -9,17 +16,25 @@
 # the chart's, and a pool here is always a pool, whereas a chart worker group
 # without a poolName is just an extra unlabelled worker deployment.
 #
-# Requires a chart version whose queueMode.workerGroups exists. See
-# n8n_chart_version and the two checks at the bottom of this file.
+# Requires a chart version whose queueMode.workerGroups exists.
+# n8n-io/n8n-hosting#191 registered a `Preview chart` GitHub Action on that
+# repo's main branch that packages preview/worker-pools and publishes an
+# official prerelease build to oci://ghcr.io/n8n-io/n8n-helm-chart (this
+# module's default n8n_chart_repository) once someone with write access to
+# that repo dispatches it against preview/worker-pools. See n8n_chart_version
+# and the two checks at the bottom of this file, and
+# examples/worker-pools/README.md for the exact command and a private-mirror
+# fallback.
 
 locals {
-  # First released chart that renders queueMode.workerGroups. PLACEHOLDER: at
-  # the time of writing the feature is an open PR (n8n-io/n8n-hosting#189)
-  # against the chart's preview/worker-pools branch, no published version
-  # carries it (1.11.0 is the newest, and does not), and release-please cuts a
-  # minor for a feat, so 1.12.0 is the earliest plausible number. Replace with
-  # the real version when the chart ships, and drop the prerelease clause in
-  # the check below if the preview line is retired with it.
+  # First released chart that renders queueMode.workerGroups. PLACEHOLDER: the
+  # feature (n8n-io/n8n-hosting#189) is merged to the chart's
+  # preview/worker-pools branch but not merged to main and not released, so no
+  # published version carries it (1.11.0 is the newest, and does not), and
+  # release-please cuts a minor for a feat, so 1.12.0 is the earliest
+  # plausible number. Replace with the real version when the chart ships, and
+  # drop the prerelease clause in the check below if the preview line is
+  # retired with it.
   n8n_worker_pools_min_chart_version = "1.12.0"
 
   # First n8n release that reads N8N_WORKER_POOLS_ENABLED and
@@ -117,13 +132,14 @@ locals {
 # The chart pairing is a hard stop, enforced as a precondition on
 # helm_release.n8n (n8n.tf) because it is a property of that resource and
 # because letting the apply proceed past a warning is exactly the silent
-# outcome described above. A prerelease version is exempt, which is how a
-# preview build of the chart is installed while no release carries the feature
-# and how a private mirror serving one is used. The image pairing stays a
-# warning: n8n_image_tag is usually null (the chart's floating `stable`), which
-# the check cannot see, and pinning a too-old tag fails loudly at runtime
-# anyway (the pooled workers exit 1 on a licence they lack and simply ignore
-# the pool variables on a version they predate).
+# outcome described above. A prerelease version is exempt, which is how the
+# official preview build (see the top of this file and
+# examples/worker-pools/README.md) or a private mirror is installed while no
+# release carries the feature. The image pairing stays a warning:
+# n8n_image_tag is usually null (the chart's floating `stable`), which the
+# check cannot see, and pinning a too-old tag fails loudly at runtime anyway
+# (the pooled workers exit 1 on a licence they lack and simply ignore the
+# pool variables on a version they predate).
 
 locals {
   n8n_worker_pools_chart_error = join("", [
@@ -133,7 +149,9 @@ locals {
     "N8N_WORKER_POOLS_ENABLED switched on and no pool Deployment or ScaledObject behind it, and every ",
     "project pinned to a pool would run on the default queue. Pin n8n_chart_version to ",
     "${local.n8n_worker_pools_min_chart_version} or later, or to a prerelease build that carries the ",
-    "feature (a version with a hyphen is taken at your word), or remove the pools.",
+    "feature (a version with a hyphen is taken at your word, e.g. an official preview build such as ",
+    "1.11.0-preview.workerpools.1 published to oci://ghcr.io/n8n-io/n8n-helm-chart via n8n-io/n8n-hosting's ",
+    "Preview chart GitHub Action; see examples/worker-pools/README.md), or remove the pools.",
   ])
 }
 
