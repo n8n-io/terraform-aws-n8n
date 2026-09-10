@@ -10,11 +10,11 @@ n8n's worker pools pin a project's executions to a named set of workers. A worke
 
 Use this example when some executions need different hardware or isolation: heavier jobs on bigger workers, or one team's projects kept off the shared pool.
 
-> **Worker pools are an alpha n8n feature, and the chart side is not released yet.** This example is kept as a draft until both ship. What it needs today:
+> **Early Alpha, subject to change without notice.** Worker pools are an alpha n8n feature, and the chart side that renders them (`queueMode.workerGroups`) is merged to a preview branch, not released. This example, the module's `n8n_worker_pools` input, and the guidance below may all change to track either upstream feature. What it needs today:
 >
 > - **n8n 2.39.0 or later** on the image. That is the first release that reads `N8N_WORKER_POOLS_ENABLED` and `N8N_WORKER_POOL_NAME`; an older image accepts both and ignores them. At the time of writing 2.39.0 is on the `next` tag and `stable` is still 2.38.x, so pin `n8n_image_tag` rather than trusting the chart's floating default.
 > - **A licence carrying `feat:workerPools`.** Without it a worker started with `N8N_WORKER_POOL_NAME` exits 1 with `worker pools are not licensed`, every pool pod crash-loops, and the Helm release fails its wait and is rolled back by `atomic`, so the apply fails. Measured on n8n 2.39.0 against a key that lacked it: the default worker, mains and webhook pods were all healthy and only the pool pods died. Terraform cannot see entitlements at plan, so the log line is the diagnosis: `kubectl -n n8n logs -l n8n.io/worker-pool=<pool> -c n8n-worker --previous | grep licensed`. If the entitlement is **added to a key that has already activated**, the pods keep loading the old certificate cached in the database (`settings` table, key `license.cert`) and keep failing. Delete that row and restart the n8n deployments so each process re-activates; a `terraform apply` alone does not clear it.
-> - **A Helm chart that renders `queueMode.workerGroups`.** No published chart version does (the newest, 1.11.0, does not); the feature is [n8n-io/n8n-hosting#189](https://github.com/n8n-io/n8n-hosting/pull/189), open against a `preview/worker-pools` branch. Until it is released you package a preview build yourself and push it to a registry you control, which is why `n8n_chart_version` is a required input of this example and the module fails the plan when the pinned chart is a release that predates the feature (prerelease builds are exempt). See "Getting a chart that renders pools" below.
+> - **A Helm chart that renders `queueMode.workerGroups`.** No published chart *release* carries it (the newest, 1.11.0, does not); the feature is [n8n-io/n8n-hosting#189](https://github.com/n8n-io/n8n-hosting/pull/189), merged to the chart's `preview/worker-pools` branch. An official prerelease build can be published from that branch to the module's default chart registry via [n8n-io/n8n-hosting#191](https://github.com/n8n-io/n8n-hosting/pull/191)'s `Preview chart` GitHub Action, which is why `n8n_chart_version` is a required input of this example and the module fails the plan when the pinned chart is a release that predates the feature (prerelease builds are exempt). See "Getting a chart that renders pools" below.
 >
 > Treat this example as non-production until all three are released.
 
@@ -43,25 +43,45 @@ Pool names are lowercase letters, digits and hyphens, 1 to 43 characters, starti
 
 - A Route53 hosted zone for the parent domain (e.g. `example.com` if `n8n_domain = n8n.example.com`). Note its zone ID.
 - An n8n Enterprise licence carrying `feat:workerPools`. For a multi-main deployment (the default) it also needs `feat:multipleMainInstances`; set `n8n_main_hpa_min_replicas = 1` to run single-main on a Business-tier licence, as `small` allows.
-- A chart that renders `queueMode.workerGroups`, pushed to a registry the cluster and your workstation can both reach. See the next section.
-- `helm` 3.8+ and the AWS CLI on your workstation, for packaging and pushing that chart.
+- A chart that renders `queueMode.workerGroups`, reachable from both your workstation and the cluster: the module's default `oci://ghcr.io/n8n-io/n8n-helm-chart` once someone publishes an official preview build there (see the next section), or a registry you control otherwise.
+- `helm` 3.8+ on your workstation, to confirm the pinned chart resolves before applying (and, on the private-mirror fallback, to package and push it yourself; add the AWS CLI for that path).
 
 ## Getting a chart that renders pools
 
 Skip this section once a released chart carries `queueMode.workerGroups`: pin that version in `n8n_chart_version`, leave `n8n_chart_repository` at its default, and apply.
 
-Until then, package the chart from the feature PR and push it to an ECR repository in the account you deploy to. The node group's IAM role pulls from same-account ECR without any extra configuration, and the Helm provider on your workstation authenticates with the usual `helm registry login`.
+Until then, the fastest path is the chart repo's own **official preview build**. [n8n-io/n8n-hosting#191](https://github.com/n8n-io/n8n-hosting/pull/191) registered a `Preview chart` GitHub Action on `main` that packages the `preview/worker-pools` branch (carrying [#189](https://github.com/n8n-io/n8n-hosting/pull/189)) and pushes a prerelease build to `oci://ghcr.io/n8n-io/n8n-helm-chart`, this module's own default `n8n_chart_repository`. Anyone with write access to n8n-io/n8n-hosting can dispatch it:
+
+```bash
+# From the GitHub UI: Actions -> Preview chart -> Run workflow, ref preview/worker-pools.
+# Equivalent via the CLI:
+gh workflow run preview-chart.yml --repo n8n-io/n8n-hosting --ref preview/worker-pools \
+  -f build=1 -f repository=oci://ghcr.io/n8n-io/n8n-helm-chart
+```
+
+That publishes `n8n-1.11.0-preview.workerpools.1` (bump `build` for a later attempt; the workflow rejects re-pushing an existing version). Confirm it landed, then pin it:
+
+```bash
+helm show chart oci://ghcr.io/n8n-io/n8n-helm-chart/n8n --version 1.11.0-preview.workerpools.1 | head -5
+```
+
+```hcl
+n8n_chart_version = "1.11.0-preview.workerpools.1"   # n8n_chart_repository stays at its default
+n8n_image_tag      = "2.39.0"
+```
+
+**No write access to n8n-io/n8n-hosting?** Package the chart yourself from the feature branch and push it to a registry you control instead. The node group's IAM role pulls from same-account ECR without any extra configuration, and the Helm provider on your workstation authenticates with the usual `helm registry login`.
 
 ```bash
 AWS_REGION=us-east-1
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
-CHART_VERSION="1.11.0-preview.workerpools.1"   # base version of the PR's Chart.yaml, plus a prerelease suffix
+CHART_VERSION="1.11.0-preview.workerpools.1"   # base version of the branch's Chart.yaml, plus a prerelease suffix
 
-# 1. Check out the PR. gh resolves the fork; plain git needs the fork's URL.
+# 1. Check out the branch (#189 is merged into it, not a standalone PR head anymore).
 git clone https://github.com/n8n-io/n8n-hosting.git /tmp/n8n-hosting
 cd /tmp/n8n-hosting
-gh pr checkout 189
+git checkout preview/worker-pools
 
 # 2. Lint and render once locally, with this example's values shape, before pushing.
 helm lint charts/n8n -f charts/n8n/ci/workerGroups-values.yaml
@@ -98,7 +118,8 @@ The `helm registry login` is per workstation session; if a later `terraform appl
 ```bash
 cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars and set n8n_domain, route53_zone_id, n8n_license_key,
-# n8n_chart_version, n8n_chart_repository and n8n_image_tag.
+# n8n_chart_version and n8n_image_tag (n8n_chart_repository too, only if you're
+# not using the module's default oci://ghcr.io/n8n-io/n8n-helm-chart).
 
 terraform init
 terraform plan    # fails on a chart release that predates pools; a "worker_pools_require_n8n_2_39" warning means the image pin is too old
@@ -246,8 +267,8 @@ These settings live in the module's `database.tf` and `s3.tf` and are not curren
 | <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1). | `string` | `"us-east-1"` | no |
 | <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | Name for the EKS cluster. Keep to 14 characters or fewer, because the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. | `string` | `"n8n-cluster"` | no |
 | <a name="input_n8n_additional_domains"></a> [n8n\_additional\_domains](#input\_n8n\_additional\_domains) | Extra hostnames n8n should answer on, beyond n8n\_domain. Each is added to the module-issued ACM certificate as a subject alternative name, given a Route 53 validation record and alias A-record, and routed by the module's Ingress. Leave empty for a single hostname. | `list(string)` | `[]` | no |
-| <a name="input_n8n_chart_repository"></a> [n8n\_chart\_repository](#input\_n8n\_chart\_repository) | Helm chart repository the module pulls the n8n chart from, passed to the module's n8n\_chart\_repository. The default is the module's own default, the public upstream registry, which is right once a released chart renders pools. Until then, point it at a registry you pushed a preview build to, e.g. oci://123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-helm-chart. The node group's IAM role can pull from ECR in the same account without extra configuration; the Helm provider on your workstation needs `aws ecr get-login-password | helm registry login` first. | `string` | `"oci://ghcr.io/n8n-io/n8n-helm-chart"` | no |
-| <a name="input_n8n_chart_version"></a> [n8n\_chart\_version](#input\_n8n\_chart\_version) | n8n Helm chart version to deploy, passed to the module's n8n\_chart\_version. Required by this example because the module default predates queueMode.workerGroups and would render no pools. Pin the first release that carries the feature once it exists, or a preview build (e.g. 1.11.0-preview.workerpools.1) pushed to the registry named by n8n\_chart\_repository. | `string` | n/a | yes |
+| <a name="input_n8n_chart_repository"></a> [n8n\_chart\_repository](#input\_n8n\_chart\_repository) | Helm chart repository the module pulls the n8n chart from, passed to the module's n8n\_chart\_repository. The default is the module's own default, the public upstream registry, which is right both once a released chart renders pools and while using an official prerelease build published there via n8n-io/n8n-hosting's Preview chart GitHub Action. Only override this to point at a registry you control, e.g. oci://123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-helm-chart, if you packaged and pushed a preview build yourself. The node group's IAM role can pull from ECR in the same account without extra configuration; the Helm provider on your workstation needs `aws ecr get-login-password | helm registry login` first. | `string` | `"oci://ghcr.io/n8n-io/n8n-helm-chart"` | no |
+| <a name="input_n8n_chart_version"></a> [n8n\_chart\_version](#input\_n8n\_chart\_version) | n8n Helm chart version to deploy, passed to the module's n8n\_chart\_version. Required by this example because the module default predates queueMode.workerGroups and would render no pools. Pin the first release that carries the feature once it exists, or a prerelease build (e.g. 1.11.0-preview.workerpools.1, published to n8n\_chart\_repository's default via n8n-io/n8n-hosting's Preview chart GitHub Action, or to a registry you control) in the meantime. | `string` | n/a | yes |
 | <a name="input_n8n_custom_extensions_path"></a> [n8n\_custom\_extensions\_path](#input\_n8n\_custom\_extensions\_path) | Absolute path inside the n8n container that n8n scans for custom nodes at startup (e.g. "/opt/n8n-nodes"). Maps to N8N\_CUSTOM\_EXTENSIONS, and is set on main, worker and webhook processor pods alike. Set this alongside n8n\_image\_repository when the custom image bakes community packages in: since n8n 1.0 the loader no longer reads the image's global node\_modules, so a plain npm install into the image is never scanned and the packages ship but never load. Nodes found here register under the package name CUSTOM, so a node installed from npm as n8n-nodes-example.myNode becomes CUSTOM.myNode and existing workflows referencing the npm-qualified type will not resolve. Leave null (the default) to omit the env var. | `string` | `null` | no |
 | <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). The parent zone must be hosted in Route53 (pass its ID via route53\_zone\_id). | `string` | n/a | yes |
 | <a name="input_n8n_execution_data_storage_mode"></a> [n8n\_execution\_data\_storage\_mode](#input\_n8n\_execution\_data\_storage\_mode) | Where n8n stores the data of each new execution. Passed to the module's n8n\_execution\_data\_storage\_mode. "database" keeps execution data in PostgreSQL; "s3" offloads it to the S3 bucket the module already creates for binary data. This example runs the module's default database (db.t3.small on 50 GB of gp2, a 150 IOPS baseline), which has the least room of any sizing this module ships to absorb execution-data growth, so reaching for this is often cheaper than resizing the database. Requires n8n >= 2.27 (pin n8n\_image\_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is not the same one binary data offload uses. There is no backfill: existing executions stay readable where they were written. Read the execution data section of the root README before enabling it, in particular the durability trade-off and the S3 lifecycle constraint. | `string` | `"database"` | no |

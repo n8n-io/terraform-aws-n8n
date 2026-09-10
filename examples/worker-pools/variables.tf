@@ -204,17 +204,21 @@ variable "n8n_worker_keda_max_replicas" {
 }
 
 # ── Chart ─────────────────────────────────────────────────────────────────────
-# Required here, unlike every other example, because the module's default chart
-# does not render pools. queueMode.workerGroups is n8n-io/n8n-hosting#189 and,
-# at the time of writing, no published chart version carries it; a chart that
-# predates it accepts the key and silently renders nothing, so N8N_WORKER_POOLS_
-# ENABLED would land on every pod with no pool behind it. Making the version a
-# required input means this example cannot be applied without choosing a chart
-# on purpose. Until the release exists, that is a preview build pushed to a
-# registry you control; see README.md, "Getting a chart that renders pools".
+# EARLY ALPHA, SUBJECT TO CHANGE WITHOUT NOTICE. Required here, unlike every
+# other example, because the module's default chart does not render pools.
+# queueMode.workerGroups (n8n-io/n8n-hosting#189) is merged to the chart's
+# preview/worker-pools branch but not released; a chart that predates it
+# accepts the key and silently renders nothing, so N8N_WORKER_POOLS_ENABLED
+# would land on every pod with no pool behind it. Making the version a
+# required input means this example cannot be applied without choosing a
+# chart on purpose. Until the release exists, that is an official prerelease
+# build published from the branch via n8n-io/n8n-hosting#191's "Preview
+# chart" GitHub Action to n8n_chart_repository's default, or a preview build
+# pushed to a registry you control; see README.md, "Getting a chart that
+# renders pools".
 
 variable "n8n_chart_version" {
-  description = "n8n Helm chart version to deploy, passed to the module's n8n_chart_version. Required by this example because the module default predates queueMode.workerGroups and would render no pools. Pin the first release that carries the feature once it exists, or a preview build (e.g. 1.11.0-preview.workerpools.1) pushed to the registry named by n8n_chart_repository."
+  description = "n8n Helm chart version to deploy, passed to the module's n8n_chart_version. Required by this example because the module default predates queueMode.workerGroups and would render no pools. Pin the first release that carries the feature once it exists, or a prerelease build (e.g. 1.11.0-preview.workerpools.1, published to n8n_chart_repository's default via n8n-io/n8n-hosting's Preview chart GitHub Action, or to a registry you control) in the meantime."
   type        = string
   nullable    = false
 
@@ -225,7 +229,7 @@ variable "n8n_chart_version" {
 }
 
 variable "n8n_chart_repository" {
-  description = "Helm chart repository the module pulls the n8n chart from, passed to the module's n8n_chart_repository. The default is the module's own default, the public upstream registry, which is right once a released chart renders pools. Until then, point it at a registry you pushed a preview build to, e.g. oci://123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-helm-chart. The node group's IAM role can pull from ECR in the same account without extra configuration; the Helm provider on your workstation needs `aws ecr get-login-password | helm registry login` first."
+  description = "Helm chart repository the module pulls the n8n chart from, passed to the module's n8n_chart_repository. The default is the module's own default, the public upstream registry, which is right both once a released chart renders pools and while using an official prerelease build published there via n8n-io/n8n-hosting's Preview chart GitHub Action. Only override this to point at a registry you control, e.g. oci://123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-helm-chart, if you packaged and pushed a preview build yourself. The node group's IAM role can pull from ECR in the same account without extra configuration; the Helm provider on your workstation needs `aws ecr get-login-password | helm registry login` first."
   type        = string
   default     = "oci://ghcr.io/n8n-io/n8n-helm-chart"
   nullable    = false
