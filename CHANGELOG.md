@@ -488,6 +488,25 @@ this project adheres to the stability contract in
   call for this attribute on its own, and nothing about the running cache
   changes.
 
+### Fixed
+
+- **Docs:** the README's Redis in-transit encryption chapter claimed
+  `create_elasticache = false` was "not compatible" with
+  `redis_transit_encryption_enabled` and that the combination was "rejected at
+  plan time". Neither is true, and it has not been true on any released
+  version. `local.redis_tls_active` reads the input directly on both paths, and
+  `check "redis_tuning_requires_module_managed_elasticache"` (`redis.tf`)
+  deliberately omits it from the inputs it rejects on the customer-managed
+  path, saying in its own message that TLS and AUTH posture there are
+  controlled by `redis_transit_encryption_enabled`, `redis_auth_token` and
+  `redis_username`. `examples/customer-managed-redis` sets exactly this
+  combination, and its test asserts the TLS path is what the example exists to
+  exercise. The section now describes the input's actual meaning on that path:
+  a declaration that the caller's endpoint is TLS-only, which wires n8n and the
+  KEDA triggers to speak TLS without the module terminating or verifying
+  anything. `redis_transit_encryption_mode`, which genuinely does not apply
+  there, is called out separately. No behavior change.
+
 ## [0.3.0] - 2026-08-13
 
 Minor release per the [stability contract](./README.md#stability--versioning):

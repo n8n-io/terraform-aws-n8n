@@ -978,18 +978,32 @@ queued job goes with it. Drain workers first.
 > `moved` block absorbs the `count` added to the cluster resource, and existing
 > deployments plan `No changes.`
 
-### `create_elasticache = false` is not compatible
+### `create_elasticache = false` makes this a declaration
 
-The module cannot put TLS or a token on a Redis it does not manage, so this
-combination is rejected at plan time rather than applied. Terminate TLS on your
-own endpoint and leave this variable at its default. See
-[Customer-managed Redis](#customer-managed-redis).
+The module provisions nothing to encrypt on that path, so this variable
+declares what your endpoint already requires rather than configuring it. Set it
+to `true` when your Redis is TLS-only: n8n and both KEDA queue-depth triggers
+are wired to speak TLS, and AUTH comes from `redis_auth_token` or
+`redis_auth_token_secret_ref`. The module neither terminates TLS nor verifies
+that your endpoint does. Leave both unset for an endpoint that accepts
+unauthenticated, plaintext connections.
+
+`redis_transit_encryption_mode` is the one TLS input that does not apply here:
+it is a property of the replication group the module manages. Leave it at its
+`required` default. Changing it to `preferred` alongside
+`create_elasticache = false` raises a `check` warning. Your endpoint's own TLS
+posture is yours to configure.
+
+See [Customer-managed Redis](#customer-managed-redis), and
+[`examples/customer-managed-redis`](./examples/customer-managed-redis/), which
+runs exactly this combination.
 
 ### Worker autoscaling
 
 Queue-depth autoscaling keeps working with the flag on. Both worker triggers
-gain `enableTLS` and a reference to the AUTH token, so KEDA reads queue depth
-over the same encrypted, authenticated connection the workers use.
+gain `enableTLS`, so KEDA reads queue depth over the same encrypted connection
+the workers use. When AUTH is active, each trigger also gains a reference to
+the AUTH token and uses the same authenticated connection as the workers.
 
 TLS is the half that has to land. Without it KEDA opens a plaintext connection
 to a TLS-only endpoint and hangs on `connection to redis failed: i/o timeout`
