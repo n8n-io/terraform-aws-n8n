@@ -10861,7 +10861,7 @@ run "worker_pools_fail_the_plan_when_the_default_chart_predates_them" {
   expect_failures = [helm_release.n8n]
 }
 
-run "worker_pools_fail_the_plan_on_a_release_below_the_minimum_chart" {
+run "worker_pools_fail_the_plan_on_any_numbered_release" {
   command = plan
 
   variables {
@@ -10872,7 +10872,14 @@ run "worker_pools_fail_the_plan_on_a_release_below_the_minimum_chart" {
   expect_failures = [helm_release.n8n]
 }
 
-run "worker_pools_accept_the_minimum_chart_release" {
+# n8n-hosting's own release-please cuts numbered releases from `main`
+# independently of the `preview/worker-pools` branch that actually carries
+# queueMode.workerGroups, so a numbered release can never be trusted as a
+# floor: 1.12.0 was this guard's own placeholder "earliest plausible" minimum
+# before it was tightened to reject every numbered release, and then shipped
+# for real (n8n-io/n8n-hosting#182) without the feature, proving the guess
+# would have silently passed a chart that predates it.
+run "worker_pools_reject_the_old_placeholder_minimum_now_that_it_shipped" {
   command = plan
 
   variables {
@@ -10880,15 +10887,10 @@ run "worker_pools_accept_the_minimum_chart_release" {
     n8n_worker_pools  = [{ name = "gpu" }]
   }
 
-  assert {
-    condition     = local.n8n_chart_renders_worker_pools
-    error_message = "the minimum chart release itself must pass the guard; only versions below it warn"
-  }
+  expect_failures = [helm_release.n8n]
 }
 
-# The compare is per component, not on a weighted sum. 2.0.0 is above 1.12.0
-# even though its minor is smaller, and a patch bump above the minimum counts.
-run "worker_pools_accept_a_later_chart_with_a_smaller_minor" {
+run "worker_pools_reject_any_numbered_release_no_matter_how_high" {
   command = plan
 
   variables {
@@ -10896,15 +10898,12 @@ run "worker_pools_accept_a_later_chart_with_a_smaller_minor" {
     n8n_worker_pools  = [{ name = "gpu" }]
   }
 
-  assert {
-    condition     = local.n8n_chart_renders_worker_pools
-    error_message = "2.0.0 must compare above 1.12.0 component-wise"
-  }
+  expect_failures = [helm_release.n8n]
 }
 
 # A prerelease is taken at the caller's word: Helm never resolves one unless it
 # is named exactly, so naming one is deliberate, and it is how a preview build
-# of the chart is tested before the release exists to compare against.
+# of the chart is tested before a numbered release carries the feature.
 run "worker_pools_accept_a_prerelease_chart_without_comparing_it" {
   command = plan
 
@@ -10915,7 +10914,7 @@ run "worker_pools_accept_a_prerelease_chart_without_comparing_it" {
 
   assert {
     condition     = local.n8n_chart_version_core == null && local.n8n_chart_renders_worker_pools
-    error_message = "a prerelease chart version must bypass the numeric compare and pass the guard"
+    error_message = "a prerelease chart version must be the only thing that passes the guard"
   }
 }
 
@@ -10923,13 +10922,14 @@ run "worker_pools_do_not_block_the_default_chart_when_no_pool_is_declared" {
   command = plan
 
   # Default chart, no pools: the check is inert, so an untouched deployment
-  # sees no new warning from this feature. The assert keeps the run honest: it
-  # only proves anything while the default chart still predates pools. Once the
-  # default moves past the minimum, this run is vacuous and the placeholder in
-  # worker-pools.tf is due for retirement.
+  # sees no new warning from this feature. The assert keeps the run honest: a
+  # numbered release never passes the guard, by construction, so this always
+  # holds -- until n8n-io/n8n-hosting#189 merges to main and this guard is
+  # rewritten to accept a real floor version instead of requiring a
+  # prerelease unconditionally.
   assert {
     condition     = length(var.n8n_worker_pools) == 0 && !local.n8n_chart_renders_worker_pools
-    error_message = "this run relies on the default chart predating pools; the default now passes the guard, so retire the placeholder minimum in worker-pools.tf and rework this run"
+    error_message = "a numbered release must never pass the guard while queueMode.workerGroups is unmerged upstream"
   }
 }
 

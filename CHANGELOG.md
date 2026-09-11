@@ -31,8 +31,8 @@ this project adheres to the stability contract in
   branch but not released to a numbered chart version; a chart that predates
   it accepts the key and silently renders nothing, so the release applies
   clean with the flag on and no pool behind it. A precondition on the Helm
-  release fails the plan when the pinned `n8n_chart_version` is a release
-  that predates the feature (placeholder minimum `1.12.0`; a prerelease
+  release fails the plan when the pinned `n8n_chart_version` is a numbered
+  release, since no numbered release carries the feature yet (a prerelease
   version is taken at the caller's word, which is how a preview build is
   installed), and a `check` in `worker-pools.tf` warns when a pinned
   `n8n_image_tag` is below `2.39.0`, the first n8n release that reads the pool
