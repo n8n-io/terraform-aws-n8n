@@ -93,6 +93,14 @@ variable "n8n_image_pull_secrets" {
   }
 
   validation {
+    condition = alltrue([
+      for name in var.n8n_image_pull_secrets :
+      alltrue([for label in split(".", name) : length(label) <= 63])
+    ])
+    error_message = "Every n8n_image_pull_secrets entry must have each dot-separated label 63 characters or fewer, the Kubernetes limit on a single DNS label."
+  }
+
+  validation {
     condition     = length(distinct(var.n8n_image_pull_secrets)) == length(var.n8n_image_pull_secrets)
     error_message = "n8n_image_pull_secrets must not repeat a secret name. Listing one twice adds nothing, since the kubelet tries each entry once."
   }

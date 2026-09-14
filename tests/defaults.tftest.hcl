@@ -7295,6 +7295,18 @@ run "image_pull_secrets_reject_an_overlong_name" {
   expect_failures = [var.n8n_image_pull_secrets]
 }
 
+run "image_pull_secrets_reject_an_overlong_label" {
+  command = plan
+
+  variables {
+    # 64 characters, one past the Kubernetes per-label limit, but well under
+    # the 253-character total limit checked by the sibling test above.
+    n8n_image_pull_secrets = ["a${join("", [for i in range(63) : "a"])}"]
+  }
+
+  expect_failures = [var.n8n_image_pull_secrets]
+}
+
 run "image_pull_secrets_reject_a_repeated_name" {
   command = plan
 

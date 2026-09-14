@@ -51,6 +51,17 @@ run "webhook_subdomain_validation_rejects_non_dns_label" {
   expect_failures = [var.webhook_subdomain]
 }
 
+run "webhook_subdomain_validation_rejects_an_overlong_label" {
+  command = plan
+
+  variables {
+    # 64 characters, one past the Kubernetes single-label limit.
+    webhook_subdomain = "a${join("", [for i in range(63) : "a"])}"
+  }
+
+  expect_failures = [var.webhook_subdomain]
+}
+
 run "admin_cidr_validation_rejects_non_cidr" {
   command = plan
 
@@ -201,6 +212,18 @@ run "n8n_image_pull_secrets_rejects_a_non_dns_name" {
 
   variables {
     n8n_image_pull_secrets = ["Not_A_Secret_Name"]
+  }
+
+  expect_failures = [var.n8n_image_pull_secrets]
+}
+
+run "n8n_image_pull_secrets_rejects_an_overlong_label" {
+  command = plan
+
+  variables {
+    # 64 characters, one past the Kubernetes per-label limit, though well
+    # under the 253-character total-length limit.
+    n8n_image_pull_secrets = ["a${join("", [for i in range(63) : "a"])}"]
   }
 
   expect_failures = [var.n8n_image_pull_secrets]

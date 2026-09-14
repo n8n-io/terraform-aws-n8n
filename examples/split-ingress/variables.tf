@@ -26,8 +26,8 @@ variable "webhook_subdomain" {
   default     = "hooks"
 
   validation {
-    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", var.webhook_subdomain))
-    error_message = "webhook_subdomain must be a single lowercase DNS label: letters, digits and hyphens, not starting or ending with a hyphen."
+    condition     = length(var.webhook_subdomain) <= 63 && can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", var.webhook_subdomain))
+    error_message = "webhook_subdomain must be a single lowercase DNS label of 63 characters or fewer: letters, digits and hyphens, not starting or ending with a hyphen."
   }
 }
 
@@ -95,6 +95,14 @@ variable "n8n_image_pull_secrets" {
       for name in var.n8n_image_pull_secrets : length(name) <= 253
     ])
     error_message = "Every n8n_image_pull_secrets entry must be 253 characters or fewer, the Kubernetes limit on a secret name."
+  }
+
+  validation {
+    condition = alltrue([
+      for name in var.n8n_image_pull_secrets :
+      alltrue([for label in split(".", name) : length(label) <= 63])
+    ])
+    error_message = "Every n8n_image_pull_secrets entry must have each dot-separated label 63 characters or fewer, the Kubernetes limit on a single DNS label."
   }
 
   validation {

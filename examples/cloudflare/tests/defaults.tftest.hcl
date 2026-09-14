@@ -200,6 +200,18 @@ run "n8n_image_pull_secrets_rejects_a_non_dns_name" {
   expect_failures = [var.n8n_image_pull_secrets]
 }
 
+run "n8n_image_pull_secrets_rejects_an_overlong_label" {
+  command = plan
+
+  variables {
+    # 64 characters, one past the Kubernetes per-label limit, though well
+    # under the 253-character total-length limit.
+    n8n_image_pull_secrets = ["a${join("", [for i in range(63) : "a"])}"]
+  }
+
+  expect_failures = [var.n8n_image_pull_secrets]
+}
+
 run "execution_data_storage_mode_defaults_to_database" {
   command = plan
 
