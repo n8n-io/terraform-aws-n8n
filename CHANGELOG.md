@@ -9,13 +9,14 @@ this project adheres to the stability contract in
 
 ### Fixed
 
-- `n8n_image_pull_secrets` (root module and all 11 examples) now bounds each
-  dot-separated label of a secret name to 63 characters, matching Kubernetes'
-  actual DNS-1123 subdomain rule, not just the 253-character total-length
-  check that existed already. `webhook_subdomain`
-  (`examples/split-ingress/`) gets the same 63-character bound folded into
-  its existing single-label validation. Values that were always going to be
-  rejected by Kubernetes now fail at `terraform plan` instead. See #126.
+- `n8n_image_pull_secrets` (root module and all 10 shipped examples) now
+  bounds each dot-separated label of a secret name to 63 characters,
+  matching Kubernetes' actual DNS-1123 subdomain rule, not just the
+  253-character total-length check that existed already.
+  `webhook_subdomain` (`examples/split-ingress/`) gets the same
+  63-character bound folded into its existing single-label validation.
+  Values that were always going to be rejected by Kubernetes now fail at
+  `terraform plan` instead. See #126.
 
 ## [0.4.0] - 2026-09-14
 

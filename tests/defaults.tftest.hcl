@@ -7288,11 +7288,32 @@ run "image_pull_secrets_reject_an_overlong_name" {
   command = plan
 
   variables {
-    # 254 characters, one past the Kubernetes limit.
-    n8n_image_pull_secrets = ["a-${join("", [for i in range(84) : "abc"])}"]
+    # Four 63-char labels joined by dots = 255 characters: every label is at
+    # the per-label limit (passes the label check added by #126), but the
+    # total exceeds the 253-character limit, so only the total-length check
+    # can reject this.
+    n8n_image_pull_secrets = [join(".", [for i in range(4) : join("", [for j in range(63) : "a"])])]
   }
 
   expect_failures = [var.n8n_image_pull_secrets]
+}
+
+run "image_pull_secrets_accept_a_boundary_label" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "myregistry.example.com/n8n"
+    n8n_image_tag             = "2.27.4-mypackages"
+    n8n_task_runner_image_tag = "2.27.4"
+    # Exactly 63 characters: the Kubernetes per-label limit itself, which
+    # must still be accepted (only 64+ is rejected).
+    n8n_image_pull_secrets = ["a${join("", [for i in range(62) : "a"])}"]
+  }
+
+  assert {
+    condition     = length(kubernetes_service_account_v1.n8n) == 1
+    error_message = "A 63-character label is exactly at the Kubernetes per-label limit and must be accepted."
+  }
 }
 
 run "image_pull_secrets_reject_an_overlong_label" {
