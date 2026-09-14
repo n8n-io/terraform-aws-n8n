@@ -134,9 +134,9 @@ guidelines](https://developer.hashicorp.com/terraform/docs/partnerships).
 
 Concretely, in this repo:
 
-### 1. Static analysis (TFLint + Checkov)
+### 1. Static analysis (TFLint + Checkov + markdownlint)
 
-`.github/workflows/terraform-tests.yml` runs both on every PR and push to `main`:
+`.github/workflows/terraform-tests.yml` runs all three on every PR and push to `main`:
 
 - **`terraform fmt -check -recursive`** — canonical formatting.
 - **`terraform validate`** against the module root *and* every example
@@ -156,6 +156,14 @@ Concretely, in this repo:
   repo-wide. **When you add new resources, do not regress curated findings;
   prefer fixing them over adding suppressions, and when a suppression is
   genuinely right, say why at the resource.**
+- **`markdownlint`** against `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, and
+  `docs/*.md` (never `CHANGELOG.md`; see `Taskfile.yml`'s `markdown` task and
+  `.markdownlint.jsonc`), at the version pinned in `MARKDOWNLINT_VERSION`. The
+  generated `<!-- BEGIN_TF_DOCS -->` block in `README.md` is wrapped in
+  `<!-- markdownlint-disable -->` / `<!-- markdownlint-restore -->` comments
+  placed outside the block, because terraform-docs output (placeholder tokens
+  like `<region>`, bare chart-repo URLs) trips false positives that
+  `.markdownlint.jsonc` can't fix without fighting the generator.
 
 ### 2. Unit + integration tests via `terraform test`
 
@@ -448,6 +456,7 @@ terraform test -verbose                        # plan-time, no AWS creds needed
 tests/scripts/check-main-chart.sh              # chart rendering, Helm + jq needed
 tflint --init && tflint --format compact
 terraform-docs --output-check .                # README drift check
+markdownlint README.md CONTRIBUTING.md AGENTS.md docs/*.md
 
 # Repeat under each example. This list mirrors the CI matrix (the `target:`
 # lists in .github/workflows/terraform-tests.yml) and Taskfile.yml's EXAMPLES

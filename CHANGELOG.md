@@ -7,6 +7,16 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+### Added
+
+- CI now runs `markdownlint` (pinned via `MARKDOWNLINT_VERSION`) against
+  `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, and `docs/*.md`. The generated
+  `<!-- BEGIN_TF_DOCS -->` block in `README.md` is wrapped in
+  `<!-- markdownlint-disable -->` / `<!-- markdownlint-restore -->` comments
+  placed outside the block to suppress false positives from terraform-docs
+  output (placeholder tokens, bare URLs) without hand-editing the generated
+  content itself.
+
 ### Fixed
 
 - `n8n_image_pull_secrets` (root module and all 10 shipped examples) now

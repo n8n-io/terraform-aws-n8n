@@ -27,6 +27,12 @@ env:
   # short-circuit && / || before Terraform 1.10; see AGENTS.md).
   TF_VERSION: "1.15.8"
   TFLINT_VERSION: "v0.53.0"
+  # Tracks the version `brew install markdownlint-cli` installs, so
+  # contributors don't need a special install path — the same trap
+  # TERRAFORM_DOCS_VERSION and CHECKOV_VERSION call out above: a CI pin that
+  # drifts from what contributors actually run produces spurious diffs
+  # between "clean locally" and "clean in CI".
+  MARKDOWNLINT_VERSION: "0.49.1"
   # checkov results are version-dependent, so this gate pins one version rather
   # than tracking latest. tests/scripts/check-checkov.sh reads this value and
   # refuses to run against a different local version, which makes this line the
@@ -292,3 +298,29 @@ jobs:
       # checkov exits non-zero on any new finding, which fails the job.
       - name: checkov
         run: tests/scripts/check-checkov.sh
+
+  markdownlint:
+    name: markdownlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 20 LTS reached end-of-life April 2026; 24 is the current Active
+      # LTS. This job only runs `npm install -g markdownlint-cli`, so bump
+      # freely whenever the active LTS moves on — no compatibility contract
+      # to preserve here.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: install markdownlint-cli
+        run: npm install --global "markdownlint-cli@${{ env.MARKDOWNLINT_VERSION }}"
+
+      # Same file set and config as `task markdown` (see Taskfile.yml):
+      # README.md, CONTRIBUTING.md, AGENTS.md, docs/*.md. Never CHANGELOG.md —
+      # every Keep a Changelog release heading and `.tf`-derived content in
+      # this repo trips false positives that aren't worth curating (see
+      # AGENTS.md's "markdownlint noise" note in the vendored contribution
+      # skill). Rules live in .markdownlint.jsonc.
+      - name: markdownlint
+        run: markdownlint README.md CONTRIBUTING.md AGENTS.md docs/*.md

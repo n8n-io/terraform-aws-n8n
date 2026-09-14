@@ -111,7 +111,7 @@ tasks:
         cmd: cd examples/{{.EXAMPLE}} && terraform-docs .
 
   markdown:
-    desc: markdownlint against README.md, docs/*.md, CONTRIBUTING.md, and AGENTS.md (not CHANGELOG.md/ROADMAP.md/SECURITY.md; not CI-gated; see .markdownlint.jsonc).
+    desc: markdownlint against README.md, docs/*.md, CONTRIBUTING.md, and AGENTS.md (not CHANGELOG.md/ROADMAP.md/SECURITY.md; CI-gated via the markdownlint job; see .markdownlint.jsonc).
     cmds:
       - markdownlint README.md CONTRIBUTING.md AGENTS.md docs/*.md
 
@@ -120,8 +120,8 @@ tasks:
       Run the full local loop (fmt, validate, test, chart, lint, banners, docs, markdown).
       Mirrors every CI job except checkov, which is a hard-fail gate in CI but is
       left out here because it needs a pinned checkov install that the other tasks
-      do not: run `task checkov` separately once you have it. Also runs banners and
-      markdown, which CI does not gate on at all.
+      do not: run `task checkov` separately once you have it. Also runs banners,
+      which CI does not gate on at all.
     cmds:
       - task: fmt
       - task: validate
