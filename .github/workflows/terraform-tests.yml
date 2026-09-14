@@ -319,8 +319,9 @@ jobs:
       # Same file set and config as `task markdown` (see Taskfile.yml):
       # README.md, CONTRIBUTING.md, AGENTS.md, docs/*.md. Never CHANGELOG.md —
       # every Keep a Changelog release heading and `.tf`-derived content in
-      # this repo trips false positives that aren't worth curating (see
-      # AGENTS.md's "markdownlint noise" note in the vendored contribution
-      # skill). Rules live in .markdownlint.jsonc.
+      # this repo trips false positives that aren't worth curating.
+      # AGENTS.md's "Static analysis" section documents the one exception
+      # that is worth curating: the terraform-docs generated README block,
+      # wrapped in markdownlint-disable/restore. Rules live in .markdownlint.jsonc.
       - name: markdownlint
         run: markdownlint README.md CONTRIBUTING.md AGENTS.md docs/*.md
