@@ -122,7 +122,7 @@ cp terraform.tfvars.example terraform.tfvars
 # not using the module's default oci://ghcr.io/n8n-io/n8n-helm-chart).
 
 terraform init
-terraform plan    # fails on a chart release that predates pools; a "worker_pools_require_n8n_2_39" warning means the image pin is too old
+terraform plan    # fails unless n8n_chart_version is a prerelease build; a "worker_pools_require_n8n_2_39" warning means the image pin is too old
 terraform apply
 ```
 
