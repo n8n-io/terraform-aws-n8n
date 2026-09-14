@@ -214,12 +214,12 @@ variable "metrics_server_chart_repository" {
 variable "metrics_server_chart_version" {
   description = "metrics-server Helm chart version. Ignored when install_metrics_server = false."
   type        = string
-  default     = "3.13.1"
+  default     = "3.14.0"
   nullable    = false
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.metrics_server_chart_version))
-    error_message = "metrics_server_chart_version must be an exact SemVer 2 version such as \"3.13.1\"."
+    error_message = "metrics_server_chart_version must be an exact SemVer 2 version such as \"3.14.0\"."
   }
 }
 

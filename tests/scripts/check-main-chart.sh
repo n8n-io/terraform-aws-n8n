@@ -13,6 +13,13 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 console() {
+  # tail -1: the kubernetes provider (>= 3.0) emits a "Deprecated value used"
+  # warning to stdout for kubernetes_namespace.n8n (unversioned; see AGENTS.md
+  # on why this module still uses it), ahead of the actual result. terraform
+  # console has no flag to suppress or redirect warnings away from stdout, and
+  # every expression evaluated here is a single-line jsonencode(...) result, so
+  # the last non-blank line is always the real value regardless of how many
+  # warning blocks precede it.
   terraform console -no-color -state="$tmp/terraform.tfstate" \
     -var='aws_region=us-east-1' \
     -var='n8n_domain=n8n.test.example.com' \
@@ -22,7 +29,7 @@ console() {
     -var='vpc_cidr_block=10.0.0.0/16' \
     -var='certificate_arn=arn:aws:acm:us-east-1:123456789012:certificate/test-cert' \
     -var='n8n_license_key=test-license-key-not-real' \
-    "$@" | jq -er .
+    "$@" | tail -1 | jq -er .
 }
 
 chart_version=$(console <<< 'var.n8n_chart_version')
@@ -34,7 +41,7 @@ helm pull "$chart_repository/n8n" --version "$chart_version" --untar --untardir 
 for replicas in 1 2 3; do
   console -var="n8n_main_hpa_min_replicas=$replicas" \
     -var='n8n_main_hpa_max_replicas=6' <<'HCL' > "$tmp/values.json"
-jsonencode({strategy=local.n8n_main_strategy,pdb={enabled=true,minAvailable=local.n8n_main_pdb_min_available},multiMain={enabled=local.n8n_multi_main_enabled,replicas=var.n8n_main_hpa_min_replicas},hpa={main={enabled=true,minReplicas=var.n8n_main_hpa_min_replicas,maxReplicas=local.n8n_main_hpa_effective_max_replicas}}})
+jsonencode({strategy=local.n8n_main_strategy,pdb={enabled=true,minAvailable=local.n8n_main_pdb_min_available},multiMain={enabled=local.n8n_multi_main_enabled,replicas=var.n8n_main_hpa_min_replicas},replicaCount=var.n8n_main_hpa_min_replicas,hpa={main={enabled=true,minReplicas=var.n8n_main_hpa_min_replicas,maxReplicas=local.n8n_main_hpa_effective_max_replicas}}})
 HCL
 
   for template in deployment-main deployment-worker deployment-webhook-processor hpa-main pdb; do

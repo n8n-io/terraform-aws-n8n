@@ -63,6 +63,16 @@ tasks:
     cmds:
       - ./tests/scripts/check-main-chart.sh
 
+  chart-coverage:
+    desc: Check docs/helm-chart-coverage.md against the pinned n8n chart's values.yaml (requires Helm).
+    cmds:
+      - ./tests/scripts/check-helm-chart-coverage.sh
+
+  version-drift:
+    desc: Report every version pin that has fallen behind upstream (see docs/versioning.md). Never fails; requires curl and jq.
+    cmds:
+      - ./tests/scripts/check-version-drift.sh
+
   lint:
     desc: tflint for the module root and every example.
     deps: [init]
@@ -117,16 +127,17 @@ tasks:
 
   ci:
     desc: >-
-      Run the full local loop (fmt, validate, test, chart, lint, banners, docs, markdown).
-      Mirrors every CI job except checkov, which is a hard-fail gate in CI but is
-      left out here because it needs a pinned checkov install that the other tasks
-      do not: run `task checkov` separately once you have it. Also runs banners,
-      which CI does not gate on at all.
+      Run the full local loop (fmt, validate, test, chart, chart-coverage, lint,
+      banners, docs, markdown). Mirrors every CI job except checkov, which is a
+      hard-fail gate in CI but is left out here because it needs a pinned checkov
+      install that the other tasks do not: run `task checkov` separately once you
+      have it. Also runs banners, which CI does not gate on at all.
     cmds:
       - task: fmt
       - task: validate
       - task: test
       - task: chart
+      - task: chart-coverage
       - task: lint
       - task: banners
       - task: docs

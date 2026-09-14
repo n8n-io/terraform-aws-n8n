@@ -179,25 +179,31 @@ if [[ "$DEPLOY_MODE" == "multi" ]]; then
   # n8n_main_hpa_min_replicas = 1 (Business-tier path). The topology signal
   # is the switch itself, N8N_MULTI_MAIN_SETUP_ENABLED on the main Deployment
   # spec, read from the spec rather than a pod so it works before the pod is
-  # Ready. The HPA clamp, strategy, and PDB are then asserted, not used for
-  # detection, so a regression in any of them fails instead of silently
-  # selecting the other branch.
+  # Ready. The chart only adds this env entry at all when
+  # multiMain.enabled && license.enabled (n8n-helm-chart
+  # templates/_configmap-env.tpl), and always via valueFrom.configMapKeyRef,
+  # never a literal value, so detection checks the entry's presence (.name),
+  # not a `.value` the chart never populates; querying `.value` here returned
+  # empty for every topology and silently misdetected multi-main (the
+  # module's own default) as single-main. The HPA clamp, strategy, and PDB
+  # are then asserted, not used for detection, so a regression in any of them
+  # fails instead of silently selecting the other branch.
   # An unreadable Deployment must not be mistaken for "flag unset".
   main_deploy_readable=true
   if ! multi_main_flag=$(kubectl get deployment n8n-main -n "$NAMESPACE" \
-      -o jsonpath='{.spec.template.spec.containers[?(@.name=="n8n-main")].env[?(@.name=="N8N_MULTI_MAIN_SETUP_ENABLED")].value}' \
+      -o jsonpath='{.spec.template.spec.containers[?(@.name=="n8n-main")].env[?(@.name=="N8N_MULTI_MAIN_SETUP_ENABLED")].name}' \
       2>/dev/null); then
     main_deploy_readable=false
     multi_main_flag=""
     fail "Cannot read Deployment n8n-main in namespace $NAMESPACE — topology unknown, falling back to multi-main checks"
   fi
-  if [[ "$main_deploy_readable" == false || "$multi_main_flag" == "true" ]]; then
+  if [[ "$main_deploy_readable" == false || -n "$multi_main_flag" ]]; then
     MAIN_TOPOLOGY="multi-main"
-    info "Multi-main topology (N8N_MULTI_MAIN_SETUP_ENABLED=true on main Deployment)"
+    info "Multi-main topology (N8N_MULTI_MAIN_SETUP_ENABLED present on main Deployment)"
   else
     MAIN_TOPOLOGY="single-main"
     MAIN_MIN=1
-    info "Single-main topology (N8N_MULTI_MAIN_SETUP_ENABLED unset): expecting HPA 1/1, Recreate, PDB minAvailable=0"
+    info "Single-main topology (N8N_MULTI_MAIN_SETUP_ENABLED absent): expecting HPA 1/1, Recreate, PDB minAvailable=0"
   fi
   info "Checks: queue mode, HPA/KEDA, Redis, main topology"
 else

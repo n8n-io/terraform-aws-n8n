@@ -7,6 +7,38 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+Minor release per the [stability contract](./README.md#stability--versioning):
+the Kubernetes provider floor bump below is breaking for callers pinned to
+the previous major. Pin this module to `~> 0.4.0` to stay on Kubernetes
+provider 2.x, or read the upgrade note under **Changed** below and in
+`README.md`'s Compatibility section.
+
+**What moves on apply** for a caller who changes nothing but the module
+source pin. Every item below is a default-value bump, so a deployment that
+does not set the variable itself picks up the new default on its next
+`terraform apply`:
+
+- `n8n_chart_version` `1.10.0` → `1.11.0`: `helm_release.n8n` plans an
+  in-place `version` change and the apply runs `helm upgrade`, which rolls
+  every n8n main, worker, and webhook-processor pod. Chart `1.11.0`'s two
+  changes do not reach this module: the KEDA trigger `listName` default moved
+  from `bull:default:wait` to `bull:jobs:wait`, but this module sets
+  `listName` itself (already `<prefix>:jobs:wait`); and the chart's own
+  webhook Ingress gained a `/mcp/` rule, but this module disables the chart
+  Ingress and manages its own, which already routes `/mcp/`.
+- `metrics_server_chart_version` `3.13.1` → `3.14.0`: the metrics-server
+  release plans the same in-place `version` change and rolls metrics-server
+  in `kube-system`.
+- `db_engine_version` `18.4` → `18.6`: **no plan diff** on an existing
+  instance. `aws_db_instance.n8n` ignores changes to `engine_version`
+  (`lifecycle.ignore_changes`) because `auto_minor_version_upgrade = true`
+  lets AWS own the running minor. Only a new database reads the new default,
+  plus the opt-in `db_query_logging_enabled` parameter group, whose `family`
+  is derived from the major and is unchanged at `postgres18`.
+
+Everything else below (provider majors, CI toolchain, the new `replicaCount`
+line) either needs no caller action or carries its own note under **Changed**.
+
 ### Added
 
 - CI now runs `markdownlint` (pinned via `MARKDOWNLINT_VERSION`) against
@@ -16,6 +48,85 @@ this project adheres to the stability contract in
   placed outside the block to suppress false positives from terraform-docs
   output (placeholder tokens, bare URLs) without hand-editing the generated
   content itself.
+- `docs/versioning.md`: the full inventory of every version this module pins
+  (providers, the Terraform CLI floor, the n8n and controller charts,
+  `kubernetes_version`, the database engines, and the CI toolchain), which
+  file it lives in, and which of three bump tiers it falls into (patch-safe,
+  minor-required, verification-required). Referenced from `CONTRIBUTING.md`.
+- `tests/scripts/check-version-drift.sh` and a weekly
+  `.github/workflows/version-drift.yml` job: reports every pin reachable
+  from a public API (Terraform providers, the CI toolchain, the five Helm
+  charts this module installs, and `kubernetes_version` against EKS's
+  supported-version list via `endoflife.date`) that has fallen behind
+  upstream, and syncs the report to a single tracking issue. Reports only,
+  never auto-bumps or fails the build; see `docs/versioning.md` for the pins
+  (RDS/ElastiCache and Aurora engine versions) that still need a
+  credentialed, account-scoped `describe-*` call instead.
+- `tests/scripts/check-helm-chart-coverage.sh`, CI-gated as a new
+  `chart-coverage` job: fails the build when `docs/helm-chart-coverage.md`'s
+  declared chart version disagrees with `n8n_chart_version`'s default, or when
+  the pinned chart's `values.yaml` has a top-level key the doc never mentions.
+  Caught a real pre-existing gap on its first run: `nameOverride`,
+  `fullnameOverride`, and top-level `replicaCount` were never in the coverage
+  table at all.
+
+### Changed
+
+- **Kubernetes provider requirement bumped to `~> 3.0`** (was `~> 2.0`), across
+  all 12 `versions.tf`/`providers.tf` files in the repo (root,
+  `modules/controllers`, every `examples/*`). Provider 3.0 deprecates every
+  unversioned Kubernetes resource type in favor of its `_v1` twin. This
+  module still uses `kubernetes_namespace` and three `kubernetes_secret`
+  resources unversioned, and `examples/large/pgbouncer.tf` uses an unversioned
+  `kubernetes_namespace`, `kubernetes_secret`, `kubernetes_deployment`, and
+  `kubernetes_service`; all of them now plan with a cosmetic "Deprecated
+  Resource" warning. Not renamed in this release: the provider does not
+  support a `moved` block across that rename (`hashicorp/terraform-provider-kubernetes`
+  issue #2812, "Move Resource State Not Supported", still open), so renaming
+  in source with no working automatic migration would force every existing
+  deployment to destroy and recreate its namespace, taking everything inside
+  it down too. See `docs/versioning.md`'s verification-required tier.
+
+  **The in-place 2.x → 3.x upgrade of an existing deployment's state was not
+  exercised for this release.** Verification was `terraform validate`,
+  `terraform test`, and a fresh `terraform apply` of `examples/small` on 3.x,
+  not an `init -upgrade` and `plan` against a workspace created under 0.4.0.
+  The provider's own v3 upgrade guide warns that some resources may show
+  updated defaults and that a `terraform refresh` may be needed. Before
+  applying this release to an existing deployment, run `terraform init
+  -upgrade` and `terraform plan`, and read the plan for anything beyond the
+  Helm `version` changes listed above; report any unexpected diff as an issue.
+- **`time` provider requirement bumped to `~> 0.14`** (was `~> 0.12`). Purely
+  additive upstream (new resource-agnostic functions, no breaking changes
+  between 0.12 and 0.14 per its own CHANGELOG); no plan diff.
+- **Default `n8n_chart_version` bumped to `1.11.0`** (was `1.10.0`). See
+  "What moves on apply" above for what the chart changed and why it is inert
+  here. `docs/helm-chart-coverage.md` re-verified against the new version and
+  `tests/scripts/check-main-chart.sh` passes against it.
+- **Default `metrics_server_chart_version` bumped to `3.14.0`** (was
+  `3.13.1`). `modules/controllers/variables.tf` declares its own copy of this
+  variable and moved with it; `examples/customer-managed-everything` is the
+  only root module that invokes `module.controllers` directly and would
+  otherwise have deployed the stale default.
+- **Default `db_engine_version` bumped to `18.6`** (was `18.4`), tracking
+  AWS's currently supported RDS PostgreSQL 18 minor.
+  `examples/customer-managed-everything`'s `customer_managed_db_engine_version`
+  default moved with it, matching its own description's promise to track the
+  module's default.
+- CI toolchain currency: `TF_VERSION` `1.16.2` (was `1.15.8`),
+  `TFLINT_VERSION` `v0.64.0` (was `v0.53.0`), `CHECKOV_VERSION` `3.3.17` (was
+  `3.3.9`), and the `chart` job's `azure/setup-helm` pin `v4.3.0` (was
+  `v4.2.4`). `TERRAFORM_DOCS_VERSION` is already latest (`v0.24.0`); no
+  change.
+- The main Deployment's Helm values now set the chart's top-level
+  `replicaCount` explicitly (`n8n.tf`), in addition to `multiMain.replicas`.
+  `deployment-main.yaml` reads `multiMain.replicas` only while
+  `multiMain.enabled`; single-main mode (`n8n_main_hpa_min_replicas == 1`)
+  reads the chart's own `replicaCount` instead, which this module previously
+  left to the chart's default. Both resolve to `1` today, so no plan diff for
+  any existing deployment; this closes a latent gap where a future chart
+  release changing that default would have silently changed the single-main
+  replica count with no line in this module to catch it.
 
 ### Fixed
 
@@ -27,6 +138,47 @@ this project adheres to the stability contract in
   63-character bound folded into its existing single-label validation.
   Values that were always going to be rejected by Kubernetes now fail at
   `terraform plan` instead. See #126.
+- `tests/scripts/smoke-test.sh` misdetected every multi-main deployment
+  (this module's own default topology) as single-main. Auto-detection read
+  `N8N_MULTI_MAIN_SETUP_ENABLED`'s `.value` field on the main Deployment
+  spec, but the n8n Helm chart only ever sets that variable via
+  `valueFrom.configMapKeyRef` (unchanged across chart `1.10.0` and `1.11.0`),
+  so the field is always empty and the script always fell through to
+  "single-main", then failed the four checks that only apply there (HPA
+  pinned to 1/1, `Recreate` strategy, PDB `minAvailable=0`) against a
+  correctly running multi-main deployment. Detection now checks the env
+  entry's presence (`.name`) instead. Found via a live `terraform apply` of
+  `examples/small` against this release.
+
+### Compatibility
+
+- **Kubernetes provider:** `~> 3.0` (see upgrade note under **Changed**).
+- **`time` provider:** `~> 0.14`.
+- **n8n Helm chart:** default `1.11.0`.
+- **PostgreSQL:** default `18.6`.
+- **Kubernetes:** `kubernetes_version` default stays `1.35`. EKS made `1.36`
+  generally available June 2, 2026, but it is kept off deliberately: `checkov`
+  3.3.17 hardcodes `CKV_AWS_339`'s allow-list at `1.35` with no `1.36` entry,
+  and `1.35` remains in AWS's 14-month standard-support window, so there is
+  no currency gap to close by moving to a version this repo's own security
+  gate cannot yet vouch for. See `docs/versioning.md`.
+- **Live-verified** on a fresh `terraform apply` of `examples/small` (EKS
+  `1.35`, RDS `18.6`, ElastiCache Redis `7.1`, n8n chart `1.11.0`): all pods
+  `Running`, Redis-backed leader election active, KEDA/HPA scaling configured,
+  ALB routing every webhook/form/MCP prefix, Enterprise license active.
+- **`n8n_image_tag`:** guidance unchanged. n8n's latest release remains
+  inside the 2.x major the variable's description warns about crossing.
+
+### Known limitations
+
+- `examples/large`'s `aurora_engine_version` stays at `18.4`: AWS's August
+  2026 announcement lists it as the newest Aurora PostgreSQL 18 minor, so the
+  pin is current. See `docs/versioning.md` for why the next bump needs a live
+  `aws rds describe-db-engine-versions` call.
+- ElastiCache Redis engine version is unchanged: `7.1` is the ceiling for
+  Redis OSS on ElastiCache. AWS now recommends Valkey for new deployments,
+  but that is a distinct `engine` value with its own migration path, not a
+  version bump, and out of scope here. See `docs/versioning.md`.
 
 ## [0.4.0] - 2026-09-14
 

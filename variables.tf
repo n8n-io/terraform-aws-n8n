@@ -718,11 +718,11 @@ variable "keda_chart_repository" {
 variable "n8n_chart_version" {
   description = "n8n Helm chart version to deploy. Must be an exact version, not a constraint: the Helm provider resolves this literally."
   type        = string
-  default     = "1.10.0"
+  default     = "1.11.0"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version))
-    error_message = "n8n_chart_version must be an exact SemVer 2 version such as \"1.10.0\" or \"1.11.0-rc.1\". Helm resolves chart versions literally here, so a range (\">= 1.10\", \"~1.10.0\"), a leading \"v\", or a floating tag is not accepted."
+    error_message = "n8n_chart_version must be an exact SemVer 2 version such as \"1.11.0\" or \"1.11.0-rc.1\". Helm resolves chart versions literally here, so a range (\">= 1.10\", \"~1.10.0\"), a leading \"v\", or a floating tag is not accepted."
   }
 }
 
@@ -749,13 +749,13 @@ variable "cluster_autoscaler_chart_version" {
 }
 
 variable "metrics_server_chart_version" {
-  description = "metrics-server Helm chart version. Defaults to 3.13.1. Ignored when install_metrics_server = false."
+  description = "metrics-server Helm chart version. Defaults to 3.14.0. Ignored when install_metrics_server = false."
   type        = string
-  default     = "3.13.1"
+  default     = "3.14.0"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.metrics_server_chart_version))
-    error_message = "metrics_server_chart_version must be an exact SemVer 2 version such as \"3.13.1\". Helm resolves chart versions literally here, so a range (\">= 3.13\", \"~3.13.0\"), a leading \"v\", or a floating tag is not accepted."
+    error_message = "metrics_server_chart_version must be an exact SemVer 2 version such as \"3.14.0\". Helm resolves chart versions literally here, so a range (\">= 3.13\", \"~3.13.0\"), a leading \"v\", or a floating tag is not accepted."
   }
 }
 
@@ -1607,7 +1607,7 @@ variable "db_instance_class" {
 variable "db_engine_version" {
   description = "PostgreSQL engine version for the RDS instance. Must be a version available from `aws rds describe-db-engine-versions --engine postgres` in the target region — RDS deprecates and removes minor versions over time, and supported versions vary by region. Bump as needed without forking."
   type        = string
-  default     = "18.4"
+  default     = "18.6"
   nullable    = false
 
   validation {
