@@ -7,8 +7,6 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-09-14
-
 ### Added
 
 - `n8n_worker_pools` (**Early Alpha, subject to change without notice**): labelled
@@ -84,6 +82,19 @@ this project adheres to the stability contract in
   the ScaledObject is `READY=True`, its triggers watch `jobs-<pool>` with the
   default worker's Redis TLS and AUTH metadata, pods carry
   `N8N_WORKER_POOL_NAME`, and the mains carry `N8N_WORKER_POOLS_ENABLED`.
+
+### Changed
+
+- `n8n_extra_env` and `n8n_worker_extra_env` now reject `N8N_WORKER_POOLS_ENABLED`
+  and `N8N_WORKER_POOL_NAME`, which `n8n_worker_pools` owns. A caller who was
+  setting either through the escape hatch fails at plan on upgrade rather than
+  silently: set through `n8n_extra_env` the pool name would put every main,
+  worker and webhook pod into one pool, and the flag alone would switch routing
+  on with no pool to route to. Declare the pool with `n8n_worker_pools` instead.
+
+## [0.4.0] - 2026-09-14
+
+### Added
 
 - `n8n_credentials_overwrite_secret_ref`: mounts one key from a
   caller-managed Kubernetes Secret read-only on main, worker, and webhook
@@ -397,12 +408,6 @@ this project adheres to the stability contract in
 
 ### Changed
 
-- `n8n_extra_env` and `n8n_worker_extra_env` now reject `N8N_WORKER_POOLS_ENABLED`
-  and `N8N_WORKER_POOL_NAME`, which `n8n_worker_pools` owns. A caller who was
-  setting either through the escape hatch fails at plan on upgrade rather than
-  silently: set through `n8n_extra_env` the pool name would put every main,
-  worker and webhook pod into one pool, and the flag alone would switch routing
-  on with no pool to route to. Declare the pool with `n8n_worker_pools` instead.
 - The module now sets n8n's current `N8N_WEBHOOK_URL` environment variable
   alongside the legacy `WEBHOOK_URL`, using the same `n8n_webhook_url` value
   for both. Existing deployments keep the same webhook base URL while no
