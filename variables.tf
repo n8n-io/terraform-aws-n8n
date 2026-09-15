@@ -55,7 +55,7 @@ variable "aws_region" {
 }
 
 variable "n8n_domain" {
-  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate_arn."
+  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate_arn. Standard DNS limits apply: 253 characters in total, 63 per dot-separated label. When the module issues the certificate (route53_zone_id set) it must also be 64 characters or fewer, the RFC 5280 limit on a certificate's Common Name; put longer names in n8n_additional_domains instead."
   type        = string
 
   # One or more labels, each starting and ending alphanumeric with hyphens only
@@ -82,7 +82,7 @@ variable "n8n_domain" {
 }
 
 variable "n8n_additional_domains" {
-  description = "Extra fully-qualified hostnames n8n should answer on, beyond n8n_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53_zone_id set); with a caller-supplied certificate_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n_domain stays canonical: it is what n8n advertises as WEBHOOK_URL and N8N_HOST. Every name must live in the hosted zone given by route53_zone_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns. Names are normalized to lowercase before use: ACM and Kubernetes both store them that way, and DNS is case-insensitive."
+  description = "Extra fully-qualified hostnames n8n should answer on, beyond n8n_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53_zone_id set); with a caller-supplied certificate_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n_domain stays canonical: it is what n8n advertises as WEBHOOK_URL and N8N_HOST. Every name must live in the hosted zone given by route53_zone_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns. Names are normalized to lowercase before use: ACM and Kubernetes both store them that way, and DNS is case-insensitive. Standard DNS limits apply to every entry: 253 characters in total, 63 per dot-separated label."
   type        = list(string)
   default     = []
 

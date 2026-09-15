@@ -76,6 +76,41 @@ run "cluster_name_length_validation_rejects_long_names" {
   expect_failures = [var.cluster_name]
 }
 
+# This example issues the ACM certificate itself, so the module's Common Name
+# precondition never evaluates here; the example's own validation has to catch it.
+run "n8n_domain_over_64_characters_is_rejected_as_the_acm_common_name" {
+  command = plan
+
+  variables {
+    # 53-character label + ".example.com" = 65 characters: within every DNS
+    # limit the module enforces, so only the example's CN validation rejects it.
+    n8n_domain = "${join("", [for i in range(53) : "a"])}.example.com"
+  }
+
+  expect_failures = [var.n8n_domain]
+}
+
+# The validation is inclusive: 64 characters is the longest Common Name ACM
+# accepts and must plan.
+run "n8n_domain_at_64_characters_is_accepted_as_the_acm_common_name" {
+  command = plan
+
+  variables {
+    # 52-character label + ".example.com" = 64 characters.
+    n8n_domain = "${join("", [for i in range(52) : "a"])}.example.com"
+  }
+
+  assert {
+    condition     = length(var.n8n_domain) == 64
+    error_message = "test fixture must actually hit the 64-character Common Name boundary"
+  }
+
+  assert {
+    condition     = aws_acm_certificate.n8n.domain_name == var.n8n_domain
+    error_message = "the example-issued certificate must carry the 64-character n8n_domain as its Common Name"
+  }
+}
+
 run "n8n_image_tag_defaults_to_null" {
   command = plan
 

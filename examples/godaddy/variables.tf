@@ -16,12 +16,20 @@ variable "cluster_name" {
 }
 
 variable "n8n_domain" {
-  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). Must be a single label below godaddy_domain (e.g. 'n8n' below 'example.com'). Deeper nesting like 'n8n.prod.example.com' under 'example.com' is not supported by this example's name-stripping logic — host such records under godaddy_domain = 'prod.example.com' instead."
+  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). Must be a single label below godaddy_domain (e.g. 'n8n' below 'example.com'). Deeper nesting like 'n8n.prod.example.com' under 'example.com' is not supported by this example's name-stripping logic — host such records under godaddy_domain = 'prod.example.com' instead. Must be 64 characters or fewer: this example uses it as the Common Name of the ACM certificate it issues, which RFC 5280 caps at 64 octets."
   type        = string
 
   validation {
     condition     = endswith(var.n8n_domain, ".${var.godaddy_domain}") && length(split(".", trimsuffix(var.n8n_domain, ".${var.godaddy_domain}"))) == 1
     error_message = "n8n_domain must be a single label directly below godaddy_domain (e.g. n8n.example.com when godaddy_domain = example.com)."
+  }
+
+  # The module's own precondition for this limit sits on the certificate the
+  # module issues (dns.tf), which has no instances on this path: the example
+  # issues the certificate itself, so it has to enforce the limit itself too.
+  validation {
+    condition     = length(var.n8n_domain) <= 64
+    error_message = "n8n_domain must be 64 characters or fewer: this example uses it as the ACM certificate's Common Name, which RFC 5280 caps at 64 octets. ACM rejects longer names at apply time, after the rest of the stack has started creating."
   }
 }
 

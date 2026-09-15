@@ -84,6 +84,42 @@ run "n8n_domain_must_be_single_label_below_godaddy_domain" {
   expect_failures = [var.n8n_domain]
 }
 
+# This example issues the ACM certificate itself, so the module's Common Name
+# precondition never evaluates here; the example's own validation has to catch it.
+run "n8n_domain_over_64_characters_is_rejected_as_the_acm_common_name" {
+  command = plan
+
+  variables {
+    # 48-character label + ".test.example.com" = 65 characters. Still a single
+    # label below godaddy_domain and within every DNS limit the module enforces,
+    # so only the example's CN validation rejects it.
+    n8n_domain = "${join("", [for i in range(48) : "a"])}.test.example.com"
+  }
+
+  expect_failures = [var.n8n_domain]
+}
+
+# The validation is inclusive: 64 characters is the longest Common Name ACM
+# accepts and must plan.
+run "n8n_domain_at_64_characters_is_accepted_as_the_acm_common_name" {
+  command = plan
+
+  variables {
+    # 47-character label + ".test.example.com" = 64 characters.
+    n8n_domain = "${join("", [for i in range(47) : "a"])}.test.example.com"
+  }
+
+  assert {
+    condition     = length(var.n8n_domain) == 64
+    error_message = "test fixture must actually hit the 64-character Common Name boundary"
+  }
+
+  assert {
+    condition     = aws_acm_certificate.n8n.domain_name == var.n8n_domain
+    error_message = "the example-issued certificate must carry the 64-character n8n_domain as its Common Name"
+  }
+}
+
 run "n8n_image_tag_defaults_to_null" {
   command = plan
 

@@ -415,7 +415,9 @@ run "additional_domains_reject_a_label_starting_with_a_hyphen" {
   command = plan
 
   variables {
-    n8n_additional_domains = ["-hooks.example.com"]
+    # Inner label: the old regex already anchored the first character to an
+    # alphanumeric, so a leading hyphen on the first label proves nothing new.
+    n8n_additional_domains = ["hooks.-prod.example.com"]
   }
 
   expect_failures = [var.n8n_additional_domains]

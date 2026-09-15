@@ -200,7 +200,10 @@ run "n8n_domain_validation_rejects_a_label_starting_with_a_hyphen" {
   command = plan
 
   variables {
-    n8n_domain = "-n8n.example.com"
+    # The hyphen leads a later label on purpose: the old regex already anchored
+    # the first character to an alphanumeric, so only an inner label shows the
+    # per-label grammar rejecting what the old one accepted.
+    n8n_domain = "n8n.-prod.example.com"
   }
 
   expect_failures = [var.n8n_domain]
@@ -221,7 +224,7 @@ run "n8n_domain_validation_accepts_the_dns_boundary" {
 
   variables {
     # Three 63-character labels plus one 61-character label: 253 characters
-    # overall with the longest label at exactly 63 — both limits at their
+    # overall with the longest label at exactly 63: both limits at their
     # boundary, both must still pass.
     n8n_domain = join(".", [
       join("", [for i in range(63) : "a"]),
@@ -252,6 +255,29 @@ run "n8n_domain_over_64_characters_fails_the_acm_common_name_precondition" {
   }
 
   expect_failures = [aws_acm_certificate.n8n]
+}
+
+# The same path one character shorter: the precondition is inclusive, so a
+# 64-character name is the longest Common Name ACM accepts and must plan.
+run "n8n_domain_at_64_characters_passes_the_acm_common_name_precondition" {
+  command = plan
+
+  variables {
+    certificate_arn = null
+    route53_zone_id = "Z0TEST123456789"
+    # 52-character label + ".example.com" = 64 characters.
+    n8n_domain = "${join("", [for i in range(52) : "a"])}.example.com"
+  }
+
+  assert {
+    condition     = length(var.n8n_domain) == 64
+    error_message = "test fixture must actually hit the 64-character Common Name boundary"
+  }
+
+  assert {
+    condition     = aws_acm_certificate.n8n[0].domain_name == var.n8n_domain
+    error_message = "the module-issued certificate must carry the 64-character n8n_domain as its Common Name"
+  }
 }
 
 run "defaults_produce_valid_plan" {
