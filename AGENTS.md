@@ -110,7 +110,7 @@ expected by the Terraform Registry:
 | `tests/scripts/verify-custom-image.sh` | Post-`apply` check for baked-in community nodes (`n8n_image_repository` + `n8n_custom_extensions_path`). |
 | `tests/scripts/check-main-chart.sh` | Renders the pinned n8n chart for one, two, and three mains and checks the topology locals against it (CI `chart` job). |
 | `tests/scripts/check-helm-chart-coverage.sh` | Fails when `docs/helm-chart-coverage.md`'s version line or top-level key set is stale against the pinned chart (CI `chart-coverage` job). |
-| `tests/scripts/check-checkov.sh`  | Runs checkov at exactly `CHECKOV_VERSION`; refuses any other local version (CI `checkov` job). |
+| `tests/scripts/check-checkov.sh`  | Runs checkov at exactly `CHECKOV_VERSION`; refuses any other local version (CI `checkov` job). Two passes: defaults, then `tests/checkov/opt-in.tfvars` so count-gated opt-in resources are evaluated too. |
 | `tests/scripts/check-version-drift.sh` | Report-only: every pin reachable from a public API versus upstream latest. Weekly via `version-drift.yml`; never gates. |
 | `docs/`                           | Long-form supplementary docs (troubleshooting, post-deploy, cleanup, upgrades, Pod Identity, Helm chart coverage, version currency policy). |
 | `.github/workflows/`              | `terraform-tests.yml`: fmt, validate, test, chart, chart-coverage, tflint, checkov, docs, markdownlint. `version-drift.yml`: weekly report-only pin drift, synced to a tracking issue. |
@@ -168,6 +168,38 @@ Concretely, in this repo:
   placed outside the block, because terraform-docs output (placeholder tokens
   like `<region>`, bare chart-repo URLs) trips false positives that
   `.markdownlint.jsonc` can't fix without fighting the generator.
+
+**Known gap: checkov never evaluates a resource whose `count` resolves to
+0.** checkov evaluates `count` from variable defaults, and from every root
+module it finds (the examples call this module with `source = "../.."`),
+then answers every check on a count-0 resource with `UNKNOWN` and omits it
+from the report. An opt-in resource whose toggle is `false` in the module
+defaults and in every example is therefore never checked, and **a green
+default scan asserts nothing about it.** Measured on the CI-pinned checkov
+3.3.17: `kubernetes_deployment_v1.redis_exporter` draws 0 results with
+defaults and 27 checks with `redis_exporter_enabled = true` (the same 27 that
+`examples/large/pgbouncer.tf`'s always-on `kubernetes_deployment` draws). The
+`_v1`/`_v2` resource names are *not* the cause, despite what
+[#120](https://github.com/n8n-io/terraform-aws-n8n/issues/120) first assumed:
+checkov registers `kubernetes_deployment_v1`, `kubernetes_service_v1` and the
+other versioned names alongside the unsuffixed ones.
+
+`tests/scripts/check-checkov.sh` therefore runs **two passes**: the
+configuration as written, then the same scan with `--var-file
+tests/checkov/opt-in.tfvars`, which turns every opt-in toggle on. The second
+pass also fails if it did not reach each address in the script's
+`OPT_IN_RESOURCES`, so a rename or a toggle that stops resolving cannot
+shrink coverage back to zero unnoticed. **When you add an opt-in
+`kubernetes_*` resource, add its toggle to the tfvars and its address to
+that list**, then curate what the pass reports exactly as for always-on
+code: fixed, or annotated at the resource.
+
+The scan is still not the whole story. checkov has no Terraform check at all
+for several fields the exporter hardens (`run_as_non_root`, the pinned UID,
+the probe target), so any hand-written pod spec MUST also get its own
+`terraform test` assertions for the security context, resource limits, image
+pin, and probes, the way `tests/defaults.tftest.hcl`'s
+`redis_exporter_pod_spec_is_hardened_by_hand` does.
 
 ### 2. Unit + integration tests via `terraform test`
 
