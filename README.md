@@ -353,7 +353,10 @@ The DNS-variant examples (`cloudflare`, `godaddy`) are sizing-equivalent to `sma
 
 > A complete, runnable version of everything in this section, including the
 > certificate, both alias records and a WAF hook, is at
-> [`examples/split-ingress/`](./examples/split-ingress/).
+> [`examples/split-ingress/`](./examples/split-ingress/). Running Istio
+> instead of an ALB Ingress Controller? See
+> [`docs/istio-ingress.md`](docs/istio-ingress.md) for the same split
+> expressed as `Gateway`/`VirtualService`.
 
 By default the module creates a single internet-facing ALB Ingress that routes
 `/webhook` to the webhook processors and `/` to the mains. Some deployments need
