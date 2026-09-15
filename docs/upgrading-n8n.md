@@ -1,6 +1,6 @@
 # Upgrading n8n
 
-This covers bumping the deployed n8n version on an existing deployment. It does not cover upgrading this module or its providers; see [Stability & versioning](../README.md#stability--versioning) and [Compatibility](../README.md#compatibility).
+This covers bumping the deployed n8n version on an existing deployment. It does not cover upgrading this module or its providers; see [Stability & versioning](../README.md#stability--versioning) and [Compatibility](../README.md#compatibility) for those, and [docs/versioning.md](./versioning.md) for the full inventory of every version this module pins (providers, engines, controller charts, CI toolchain) and how each is bumped.
 
 ## Version inputs
 
