@@ -16,6 +16,12 @@ permissions:
   contents: read
   issues: write
 
+# One run at a time: an overlapping workflow_dispatch and scheduled run would
+# both miss the other's not-yet-created tracking issue and open a duplicate.
+concurrency:
+  group: version-drift
+  cancel-in-progress: false
+
 jobs:
   drift:
     name: check for outdated pins
@@ -24,7 +30,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `shell: bash` adds `-o pipefail`, which the default shell lacks. The
+      # script itself exits 0 by design, so this only matters if it crashes;
+      # without pipefail `tee` would hide that and the step below would sync a
+      # truncated report to the tracking issue as if it were complete.
       - name: run tests/scripts/check-version-drift.sh
+        shell: bash
         run: tests/scripts/check-version-drift.sh | tee -a report.md "$GITHUB_STEP_SUMMARY"
 
       # The script itself never fails the build (see its own header): every

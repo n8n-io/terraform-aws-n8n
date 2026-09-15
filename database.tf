@@ -392,7 +392,7 @@ resource "aws_cloudwatch_log_group" "rds_postgresql" {
 #
 # Opt-in because engine_version is intentionally ignored on the instance. An
 # existing database can therefore still run PostgreSQL 16 while
-# var.db_engine_version is 18.4; attaching a postgres18 group to it fails at the
+# var.db_engine_version is 18.6; attaching a postgres18 group to it fails at the
 # RDS API. Callers enable this only when the live major matches the configured
 # major. Switching from the default group takes effect after a reboot.
 #
@@ -435,7 +435,7 @@ resource "aws_db_parameter_group" "n8n" {
 # in that case.
 
 resource "aws_db_instance" "n8n" {
-  # checkov:skip=CKV2_AWS_30:Query logging is an explicit opt-in through db_query_logging_enabled. Enabling it creates aws_db_parameter_group.n8n with log_statement and log_min_duration_statement and attaches it below. It cannot safely default on because engine_version is ignored: an upgraded module can configure 18.4 while the live instance remains on 16, and RDS rejects a postgres18 group on that instance. Checkov also builds no graph edge between the two count-expanded resources, so it cannot see the attachment even on the enabled path. Tests assert both the safe default and the opt-in group's exact contents.
+  # checkov:skip=CKV2_AWS_30:Query logging is an explicit opt-in through db_query_logging_enabled. Enabling it creates aws_db_parameter_group.n8n with log_statement and log_min_duration_statement and attaches it below. It cannot safely default on because engine_version is ignored: an upgraded module can configure 18.6 while the live instance remains on 16, and RDS rejects a postgres18 group on that instance. Checkov also builds no graph edge between the two count-expanded resources, so it cannot see the attachment even on the enabled path. Tests assert both the safe default and the opt-in group's exact contents.
   # checkov:skip=CKV_AWS_293:Deletion protection is intentionally left at the provider default (false) so `terraform destroy` works cleanly during evaluation and example teardown. Flip to `true` for production. See examples/*/README.md → "Production considerations" for the full set of teardown-friendly defaults to review before promoting any example to production.
   count = var.create_database ? 1 : 0
 

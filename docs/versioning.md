@@ -27,6 +27,7 @@ waiting for a user to report a version nobody re-checked.
 | Redis engine version (`redis.tf`, hardcoded `"7.1"`) | `redis.tf` | Verification-required (`7.1` is the ceiling for Redis OSS on ElastiCache; anything newer is Valkey-only, a different engine family, out of scope for a version-currency pass) |
 | EKS add-on versions (Pod Identity Agent, EBS CSI) | `eks.tf`, `modules/controllers/storage.tf` | Not pinned at all: `aws_eks_addon` omits `addon_version`, so AWS resolves the current default on every apply. This is a deliberate design choice, not an oversight, and there is nothing to bump |
 | `TF_VERSION`, `TFLINT_VERSION`, `CHECKOV_VERSION` | `.github/workflows/terraform-tests.yml` | Verification-required (`CHECKOV_VERSION` doubles as the pin `tests/scripts/check-checkov.sh` enforces locally) |
+| `MARKDOWNLINT_VERSION` (markdownlint job) | `.github/workflows/terraform-tests.yml` | Patch-safe, but keep in step with the `brew install markdownlint-cli` default contributors use locally, for the same reason as `TERRAFORM_DOCS_VERSION` |
 | `TERRAFORM_DOCS_VERSION` (docs job) | `.github/workflows/terraform-tests.yml` | Patch-safe, but keep in step with the `brew install terraform-docs` default contributors use locally (see `AGENTS.md`) |
 | `azure/setup-helm` version (chart job) | `.github/workflows/terraform-tests.yml` | Patch-safe |
 | `docs/helm-chart-coverage.md`'s declared chart version | `docs/helm-chart-coverage.md` | Must equal `n8n_chart_version`'s default; CI-gated by `tests/scripts/check-helm-chart-coverage.sh` |
@@ -42,9 +43,13 @@ beyond the normal `terraform test`/`tflint`/`checkov` loop.
 deploys. A caller that never set the corresponding variable in their own
 `module` block is not shielded by that omission: Terraform resolves the
 variable to the module's new default on that caller's very next apply, with
-no config change of their own, and that can move an existing Helm release's
-chart version or an existing database's engine version. Only a caller that
-explicitly pins the variable in their own configuration is unaffected. This
+no config change of their own. For a chart version that means an in-place
+`helm upgrade` that rolls the release's pods. For `db_engine_version` it
+does not move the running instance: `aws_db_instance.n8n` ignores changes to
+`engine_version` (`auto_minor_version_upgrade` owns the live minor), so only
+a fresh database and the opt-in parameter group's `family` read it. Only a
+caller that explicitly pins the variable in their own configuration is
+unaffected either way. This
 module is still pre-1.0 either way, and the [stability
 contract](../README.md#stability--versioning) treats a changed default as a
 minor-version-boundary change regardless. Needs: a CHANGELOG entry under
@@ -121,7 +126,7 @@ support.
 `.github/workflows/version-drift.yml`, and on demand via `task
 version-drift`) checks every pin reachable from a public API without AWS
 credentials: the five Terraform providers (registry.terraform.io), the CI
-toolchain (GitHub releases), the four controller charts this module installs
+toolchain (GitHub releases, including `markdownlint-cli`), the four controller charts this module installs
 (their own chart repositories' `index.yaml`), the n8n chart (`n8n-io/n8n-hosting`'s
 latest Git tag, not its `oci://ghcr.io` registry, which has no equivalent
 public index; the chart's own `Chart.yaml` is release-please-automated to

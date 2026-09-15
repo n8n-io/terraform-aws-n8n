@@ -153,14 +153,20 @@ This module ships against specific provider majors. Notably:
   unversioned resource type in favor of its `_v1` twin (e.g.
   `kubernetes_secret` → `kubernetes_secret_v1`); this module still uses a
   handful of unversioned resources (`kubernetes_namespace`, `kubernetes_secret`
-  for the core n8n/DB/Redis Secrets), which now plan with a "Deprecated
+  for the core n8n/DB/Redis Secrets; `examples/large`'s PgBouncer adds an
+  unversioned Deployment and Service), which now plan with a "Deprecated
   Resource" warning. The provider does not support a `moved` block across
   that rename (cross-type `MoveResourceState` is unimplemented for it as of
   3.2.1), so this module does not rename them in place: doing so with no
   working automatic state migration would force every existing deployment to
   destroy and recreate its namespace and Secrets. The warning is cosmetic;
-  nothing stops working. Callers who must stay on Kubernetes provider 2.x
-  should pin this module to a release before this bump (see `CHANGELOG.md`).
+  nothing stops working. The in-place 2.x → 3.x upgrade of an existing
+  deployment's state has not been exercised by this project (verification was
+  a fresh apply on 3.x), so run `terraform init -upgrade` and `terraform plan`
+  first and read the plan before applying; the provider's own upgrade guide
+  notes that some resources may show updated defaults. Callers who must stay
+  on Kubernetes provider 2.x should pin this module to `~> 0.4.0` (see
+  `CHANGELOG.md`).
 - **Terraform CLI:** `>= 1.11`.
 - **n8n Helm chart:** default `1.11.0`. Other chart versions can be
   selected via `n8n_chart_version`.

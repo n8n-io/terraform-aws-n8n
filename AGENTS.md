@@ -108,8 +108,12 @@ expected by the Terraform Registry:
 | `tests/*.tftest.hcl`              | `terraform test` plan-time tests with mocked providers.     |
 | `tests/scripts/smoke-test.sh`     | Post-`apply` smoke test for live deployments.               |
 | `tests/scripts/verify-custom-image.sh` | Post-`apply` check for baked-in community nodes (`n8n_image_repository` + `n8n_custom_extensions_path`). |
-| `docs/`                           | Long-form supplementary docs (troubleshooting, post-deploy, cleanup, upgrades, Pod Identity, Helm chart coverage). |
-| `.github/workflows/`              | CI: fmt, validate, test, tflint, checkov.                   |
+| `tests/scripts/check-main-chart.sh` | Renders the pinned n8n chart for one, two, and three mains and checks the topology locals against it (CI `chart` job). |
+| `tests/scripts/check-helm-chart-coverage.sh` | Fails when `docs/helm-chart-coverage.md`'s version line or top-level key set is stale against the pinned chart (CI `chart-coverage` job). |
+| `tests/scripts/check-checkov.sh`  | Runs checkov at exactly `CHECKOV_VERSION`; refuses any other local version (CI `checkov` job). |
+| `tests/scripts/check-version-drift.sh` | Report-only: every pin reachable from a public API versus upstream latest. Weekly via `version-drift.yml`; never gates. |
+| `docs/`                           | Long-form supplementary docs (troubleshooting, post-deploy, cleanup, upgrades, Pod Identity, Helm chart coverage, version currency policy). |
+| `.github/workflows/`              | `terraform-tests.yml`: fmt, validate, test, chart, chart-coverage, tflint, checkov, docs, markdownlint. `version-drift.yml`: weekly report-only pin drift, synced to a tracking issue. |
 | `.github/CODEOWNERS`              | Default reviewers for PRs.                                  |
 | `Taskfile.yml`                    | Optional convenience wrapper (`task ci`) around the local dev loop below; CI does not depend on it. |
 
@@ -189,6 +193,16 @@ Concretely, in this repo:
   jq); CI runs the same script. It does not run Kubernetes controllers or
   prove the full Helm resource wiring, which still needs a real plan and
   staging rollout/drain test.
+- `tests/scripts/check-helm-chart-coverage.sh` pulls the pinned n8n chart's
+  `values.yaml` and fails if `docs/helm-chart-coverage.md`'s "Verified against
+  chart version" line disagrees with `n8n_chart_version`'s default, or if the
+  chart has a top-level key the doc's coverage table never mentions. Run with
+  `task chart-coverage` (requires Helm); CI runs the same script. It checks
+  that the doc is not stale, not that a row's content is still accurate.
+- `tests/scripts/check-version-drift.sh` is report-only and never gates:
+  `.github/workflows/version-drift.yml` runs it weekly and syncs the output
+  to one tracking issue. See `docs/versioning.md` for the bump tiers and for
+  the pins it cannot see without AWS credentials.
 - `tests/scripts/smoke-test.sh` is the **integration / post-apply** check used
   against a real cluster — kept out of CI on purpose (it needs live AWS
   credentials and an applied stack).
@@ -356,7 +370,9 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
 - `docs/troubleshooting.md`, `docs/post-deployment.md`,
   `docs/destroy-cleanup.md`, `docs/upgrading-n8n.md`, `docs/pod-identity.md`,
   and `docs/helm-chart-coverage.md` cover operator-facing concerns that don't
-  belong inline in `README.md`.
+  belong inline in `README.md`. `docs/versioning.md` is the contributor-facing
+  inventory of every pinned version and the bump tier each falls into; read
+  it before bumping any provider, chart, engine, or CI tool version.
 - Inline comments in `.tf` files use the `# ── Section ──` banner style. Every
   `variable`/`output` block lives under one of these banners.
   `scripts/check-variable-banners.sh` (`task banners`, local-only for now —
@@ -454,6 +470,7 @@ terraform init -backend=false                  # at module root
 terraform validate
 terraform test -verbose                        # plan-time, no AWS creds needed
 tests/scripts/check-main-chart.sh              # chart rendering, Helm + jq needed
+tests/scripts/check-helm-chart-coverage.sh     # helm-chart-coverage.md drift, Helm needed
 tflint --init && tflint --format compact
 terraform-docs --output-check .                # README drift check
 markdownlint README.md CONTRIBUTING.md AGENTS.md docs/*.md

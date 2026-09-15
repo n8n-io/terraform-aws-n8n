@@ -77,28 +77,27 @@ done
 echo
 
 # ── CLI tools this repo's CI pins ─────────────────────────────────────────────
-# terraform/tflint/checkov are each pinned via a top-level env var this
-# repo's other tooling also reads (see terraform-tests.yml); helm and
+# terraform/tflint/checkov/markdownlint are each pinned via a top-level env
+# var this repo's other tooling also reads (see terraform-tests.yml); helm and
 # terraform-docs are pinned differently (a step's `version:` input and a
 # job-level env var respectively) and are extracted separately below rather
-# than forced through this map.
-declare -A gh_repos=(
-  [terraform]="hashicorp/terraform"
-  [tflint]="terraform-linters/tflint"
-  [checkov]="bridgecrewio/checkov"
-)
-declare -A pinned_env=(
-  [terraform]="TF_VERSION"
-  [tflint]="TFLINT_VERSION"
-  [checkov]="CHECKOV_VERSION"
-)
+# than forced through this list.
+#
+# A `tool|repo|env` list read line by line, not `declare -A`: associative
+# arrays are bash >= 4 only, and stock macOS ships bash 3.2, where `declare
+# -A` fails and the later lookups die under `set -u`. Same portability rule
+# check-helm-chart-coverage.sh follows for `mapfile`.
 WORKFLOW=".github/workflows/terraform-tests.yml"
-for tool in terraform tflint checkov; do
-  env_name="${pinned_env[$tool]}"
+while IFS='|' read -r tool repo env_name; do
   pinned="$(sed -n "s/^[[:space:]]*${env_name}:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$WORKFLOW" | head -1)"
-  latest="$(curl -sf --max-time 15 "https://api.github.com/repos/${gh_repos[$tool]}/releases/latest" | jq -r '.tag_name // "unknown"')" || latest="unknown"
+  latest="$(curl -sf --max-time 15 "https://api.github.com/repos/${repo}/releases/latest" | jq -r '.tag_name // "unknown"')" || latest="unknown"
   echo "cli/$tool: pinned $pinned, latest $latest"
-done
+done <<'EOF'
+terraform|hashicorp/terraform|TF_VERSION
+tflint|terraform-linters/tflint|TFLINT_VERSION
+checkov|bridgecrewio/checkov|CHECKOV_VERSION
+markdownlint|igorshubovych/markdownlint-cli|MARKDOWNLINT_VERSION
+EOF
 
 # Scoped to the line(s) right after a `uses: azure/setup-helm@` step rather
 # than the first "version:" anywhere in the file: a generic whole-file match
@@ -127,25 +126,17 @@ n8n_chart_version="$(read_default n8n_chart_version variables.tf)"
 n8n_latest="$(curl -sf --max-time 15 "https://api.github.com/repos/n8n-io/n8n-hosting/tags?per_page=1" | jq -r '.[0].name // "unknown"' | sed 's/^v//')" || n8n_latest="unknown"
 echo "chart/n8n: pinned $n8n_chart_version, latest tag $n8n_latest"
 
-declare -A chart_index_urls=(
-  [lbc]="https://aws.github.io/eks-charts/index.yaml|aws-load-balancer-controller"
-  [cluster-autoscaler]="https://kubernetes.github.io/autoscaler/index.yaml|cluster-autoscaler"
-  [metrics-server]="https://kubernetes-sigs.github.io/metrics-server/index.yaml|metrics-server"
-  [keda]="https://kedacore.github.io/charts/index.yaml|keda"
-)
-declare -A chart_var_names=(
-  [lbc]="lbc_chart_version"
-  [cluster-autoscaler]="cluster_autoscaler_chart_version"
-  [metrics-server]="metrics_server_chart_version"
-  [keda]="keda_chart_version"
-)
-for key in lbc cluster-autoscaler metrics-server keda; do
-  url="${chart_index_urls[$key]%%|*}"
-  entry_name="${chart_index_urls[$key]##*|}"
-  pinned="$(read_default "${chart_var_names[$key]}" variables.tf)"
+# `key|variable|index url|entry name`, read line by line for the same bash
+# 3.2 reason as the CLI list above.
+while IFS='|' read -r key var_name url entry_name; do
+  pinned="$(read_default "$var_name" variables.tf)"
+  # Fetch first, parse second: awk exits on the first match, and under
+  # pipefail a `curl | awk` pipeline would then report curl's SIGPIPE as a
+  # failure and mask a perfectly good answer as "unknown".
+  index="$(curl -sf --max-time 15 "$url")" || index=""
   # First "version:" line under this chart's entries block: the repository
   # index lists newest first, so it is the latest published version.
-  latest="$(curl -sf --max-time 15 "$url" | awk -v name="$entry_name" '
+  latest="$(printf '%s\n' "$index" | awk -v name="$entry_name" '
     $0 ~ "^  " name ":" { in_block = 1; next }
     in_block && /^  [A-Za-z]/ { exit }
     in_block && /version:/ {
@@ -154,8 +145,13 @@ for key in lbc cluster-autoscaler metrics-server keda; do
       exit
     }
   ')"
-  echo "chart/$key: pinned $pinned, latest $latest"
-done
+  echo "chart/$key: pinned $pinned, latest ${latest:-unknown}"
+done <<'EOF'
+lbc|lbc_chart_version|https://aws.github.io/eks-charts/index.yaml|aws-load-balancer-controller
+cluster-autoscaler|cluster_autoscaler_chart_version|https://kubernetes.github.io/autoscaler/index.yaml|cluster-autoscaler
+metrics-server|metrics_server_chart_version|https://kubernetes-sigs.github.io/metrics-server/index.yaml|metrics-server
+keda|keda_chart_version|https://kedacore.github.io/charts/index.yaml|keda
+EOF
 
 echo
 
