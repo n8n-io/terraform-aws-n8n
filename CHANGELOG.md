@@ -79,6 +79,16 @@ line) either needs no caller action or carries its own note under **Changed**.
   Caught a real pre-existing gap on its first run: `nameOverride`,
   `fullnameOverride`, and top-level `replicaCount` were never in the coverage
   table at all.
+- `tests/scripts/chart-values-diff.sh` and a `task chart-diff CANDIDATE=<version>`
+  target: diffs the pinned n8n chart's `values.yaml` against a candidate
+  version via `helm show values`, so the manual diff step in the
+  version-currency pickup workflow is one command instead of two remembered
+  `helm show values` invocations. Informational only, always exits 0.
+- `docs/versioning.md` is now linked from `README.md`'s `Compatibility`
+  section (previously only from `CONTRIBUTING.md`/`AGENTS.md`, both
+  contributor-facing), and `docs/upgrading-n8n.md`'s opening paragraph now
+  points to it alongside `Stability & versioning`/`Compatibility`, so "how do
+  I upgrade anything" has one on-ramp regardless of which layer moved.
 - **`docs/istio-ingress.md`**: routing knowledge for callers running Istio
   instead of an ALB Ingress Controller, replacing an earlier draft that
   shipped as a full runnable `examples/istio-split-ingress` (own Istio
