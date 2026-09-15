@@ -1,0 +1,59 @@
+name: Version drift report
+
+# Reports, never bumps. See docs/versioning.md for the bump policy and
+# tests/scripts/check-version-drift.sh for exactly what this checks (and, in
+# its header comment, what it deliberately cannot see without AWS
+# credentials this repo's CI does not hold).
+on:
+  schedule:
+    # Every Monday 09:00 UTC. Weekly is frequent enough to catch drift before
+    # it compounds across several upstream releases, and infrequent enough
+    # that nobody needs to triage it more than once a week.
+    - cron: "0 9 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+# One run at a time: an overlapping workflow_dispatch and scheduled run would
+# both miss the other's not-yet-created tracking issue and open a duplicate.
+concurrency:
+  group: version-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: check for outdated pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # `shell: bash` adds `-o pipefail`, which the default shell lacks. The
+      # script itself exits 0 by design, so this only matters if it crashes;
+      # without pipefail `tee` would hide that and the step below would sync a
+      # truncated report to the tracking issue as if it were complete.
+      - name: run tests/scripts/check-version-drift.sh
+        shell: bash
+        run: tests/scripts/check-version-drift.sh | tee -a report.md "$GITHUB_STEP_SUMMARY"
+
+      # The script itself never fails the build (see its own header): every
+      # pin it flags is release-sized work per docs/versioning.md, not
+      # something CI should auto-bump or gate on. But a report that only ever
+      # posts to a scheduled run's job summary is invisible unless someone
+      # remembers to open the Actions tab, which defeats the point of
+      # automating this at all. Sync it to a single tracking issue instead, so
+      # a stale pin shows up in the same place every other piece of repo work
+      # does, and a successful scheduled run still surfaces its own drift.
+      - name: sync tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Version drift report (automated)"
+          existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            gh issue edit "$existing" --body-file report.md
+          else
+            gh issue create --title "$title" --body-file report.md
+          fi

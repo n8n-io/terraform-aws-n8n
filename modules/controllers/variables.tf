@@ -212,14 +212,14 @@ variable "metrics_server_chart_repository" {
 }
 
 variable "metrics_server_chart_version" {
-  description = "metrics-server Helm chart version. Ignored when install_metrics_server = false."
+  description = "metrics-server Helm chart version. The 3.14.0 default ships metrics-server 0.9.x, which requires Kubernetes 1.34 or newer; pin \"3.13.1\" (0.8.x, supports 1.31+) on an older cluster. Ignored when install_metrics_server = false."
   type        = string
-  default     = "3.13.1"
+  default     = "3.14.0"
   nullable    = false
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.metrics_server_chart_version))
-    error_message = "metrics_server_chart_version must be an exact SemVer 2 version such as \"3.13.1\"."
+    error_message = "metrics_server_chart_version must be an exact SemVer 2 version such as \"3.14.0\"."
   }
 }
 

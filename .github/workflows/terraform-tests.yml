@@ -25,8 +25,8 @@ env:
   # nobody is checking, and this repo has already been bitten by the specific
   # version-skew hazard that hides behind one (`check` blocks did not
   # short-circuit && / || before Terraform 1.10; see AGENTS.md).
-  TF_VERSION: "1.15.8"
-  TFLINT_VERSION: "v0.53.0"
+  TF_VERSION: "1.16.2"
+  TFLINT_VERSION: "v0.64.0"
   # Tracks the version `brew install markdownlint-cli` installs, so
   # contributors don't need a special install path — the same trap
   # TERRAFORM_DOCS_VERSION and CHECKOV_VERSION call out above: a CI pin that
@@ -38,7 +38,7 @@ env:
   # refuses to run against a different local version, which makes this line the
   # single source of truth for both. Bumping it is a deliberate change: expect a
   # new release to report findings that need triaging in the same commit.
-  CHECKOV_VERSION: "3.3.9"
+  CHECKOV_VERSION: "3.3.17"
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
   # Shared provider plugin cache across the validate/test/tflint matrices.
@@ -213,7 +213,7 @@ jobs:
 
       - uses: azure/setup-helm@v4
         with:
-          version: v4.2.4
+          version: v4.3.0
 
       - name: cache terraform providers
         uses: actions/cache@v4
@@ -227,6 +227,19 @@ jobs:
 
       - name: render and check main topology
         run: tests/scripts/check-main-chart.sh
+
+  chart-coverage:
+    name: helm-chart-coverage.md is not stale
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.3.0
+
+      - name: check docs/helm-chart-coverage.md against the pinned chart
+        run: tests/scripts/check-helm-chart-coverage.sh
 
   tflint:
     name: tflint (${{ matrix.target }})
@@ -274,7 +287,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # 3.11 is the interpreter the pinned checkov was verified against, and the
-      # one bridgecrewio's own checkov:3.3.9 image ships.
+      # one bridgecrewio's own checkov image ships.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -282,7 +295,7 @@ jobs:
       # Installed at a pinned version instead of via bridgecrewio/checkov-action,
       # which bakes the checkov version into its own image: the @v12 tag moves to
       # newer checkov releases on its own schedule. That is not a theoretical
-      # problem. 3.3.9 evaluates whole check families (all the aws_s3_bucket
+      # problem. 3.3.9 (a past pin here) evaluated whole check families (all the
       # checks, several CKV2_* graph checks) against resources reached through a
       # local module source that 3.3.0 skipped silently, which turned a clean
       # local run into ten CI failures on findings nobody had triaged. With this

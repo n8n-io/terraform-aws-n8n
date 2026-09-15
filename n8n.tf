@@ -284,12 +284,14 @@ resource "helm_release" "n8n" {
     }
 
     # ── Deployment replica counts ─────────────────────────────────────────────
-    # Each of the three below is wired to its autoscaler's floor rather than left
-    # at a constant, because the chart renders spec.replicas unconditionally:
-    # deployment-main.yaml uses multiMain.replicas, deployment-worker.yaml uses
-    # queueMode.workerReplicaCount, and deployment-webhook-processor.yaml uses
-    # webhookProcessor.replicaCount, with no regard for whether an HPA or a KEDA
-    # ScaledObject also owns the field.
+    # Each of these is wired to its autoscaler's floor rather than left at a
+    # constant, because the chart renders spec.replicas unconditionally:
+    # deployment-main.yaml is `ternary .Values.multiMain.replicas .Values.replicaCount
+    # .Values.multiMain.enabled`, so multi-main reads multiMain.replicas but
+    # single-main reads the chart's own top-level replicaCount instead, not
+    # multiMain.replicas. deployment-worker.yaml uses queueMode.workerReplicaCount,
+    # and deployment-webhook-processor.yaml uses webhookProcessor.replicaCount, with
+    # no regard for whether an HPA or a KEDA ScaledObject also owns the field.
     #
     # A constant here fights the autoscaler on every helm upgrade. Helm writes
     # spec.replicas back to the constant, the deployment scales down to it, and
@@ -305,6 +307,13 @@ resource "helm_release" "n8n" {
     # back into the plan would make every plan depend on current cluster state.
     # Fixing it properly means the chart guarding spec.replicas on whether an
     # autoscaler owns the deployment.
+    #
+    # replicaCount only takes effect while multiMain.enabled = false
+    # (n8n_main_hpa_min_replicas == 1, the only value that disables multi-main),
+    # so it is always 1 in practice today and happens to match the chart's own
+    # default. Set explicitly anyway rather than left to that coincidence: a
+    # future chart release changing its default would otherwise silently change
+    # the single-main replica count with no line in this module to fail on.
 
     multiMain = {
       enabled  = local.n8n_multi_main_enabled
@@ -313,6 +322,8 @@ resource "helm_release" "n8n" {
         type = "preferred"
       }
     }
+
+    replicaCount = var.n8n_main_hpa_min_replicas
 
     queueMode = {
       enabled            = true

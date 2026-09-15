@@ -81,14 +81,14 @@ Same structural limitation as [`examples/customer-managed-cluster`](../customer-
 | <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.11 |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.0 |
 | <a name="requirement_helm"></a> [helm](#requirement\_helm) | ~> 3.0 |
-| <a name="requirement_kubernetes"></a> [kubernetes](#requirement\_kubernetes) | ~> 2.0 |
+| <a name="requirement_kubernetes"></a> [kubernetes](#requirement\_kubernetes) | ~> 3.0 |
 
 ## Providers
 
 | Name | Version |
 | ---- | ------- |
 | <a name="provider_aws"></a> [aws](#provider\_aws) | ~> 6.0 |
-| <a name="provider_kubernetes"></a> [kubernetes](#provider\_kubernetes) | ~> 2.0 |
+| <a name="provider_kubernetes"></a> [kubernetes](#provider\_kubernetes) | ~> 3.0 |
 
 ## Modules
 
@@ -133,7 +133,7 @@ Same structural limitation as [`examples/customer-managed-cluster`](../customer-
 | ---- | ----------- | ---- | ------- | :------: |
 | <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1). | `string` | `"us-east-1"` | no |
 | <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | Name for the EKS cluster. Keep to 14 characters or fewer: the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. | `string` | `"n8n-cluster"` | no |
-| <a name="input_customer_managed_db_engine_version"></a> [customer\_managed\_db\_engine\_version](#input\_customer\_managed\_db\_engine\_version) | PostgreSQL engine version for the stand-in database this example creates. Matches the module's own db\_engine\_version default. | `string` | `"18.4"` | no |
+| <a name="input_customer_managed_db_engine_version"></a> [customer\_managed\_db\_engine\_version](#input\_customer\_managed\_db\_engine\_version) | PostgreSQL engine version for the stand-in database this example creates. Matches the module's own db\_engine\_version default. | `string` | `"18.6"` | no |
 | <a name="input_customer_managed_db_instance_class"></a> [customer\_managed\_db\_instance\_class](#input\_customer\_managed\_db\_instance\_class) | RDS instance class for the stand-in database this example creates. Matches the module's own db\_instance\_class default (db.t3.small); a real customer-managed database would be sized for its own workload. | `string` | `"db.t3.small"` | no |
 | <a name="input_customer_managed_db_password"></a> [customer\_managed\_db\_password](#input\_customer\_managed\_db\_password) | Master password for the stand-in database this example creates. Deliberately a plain variable, not a generated random\_password: this value is wired both into the stand-in's own password argument and into the module's db\_password, and a fresh random\_password.result is unknown until apply, which this example's Redis stand-in already ran into once (see customer\_managed\_redis\_auth\_token below and examples/customer-managed-redis's README for the full explanation of why that breaks a plan). A real customer-managed database's password is already a known secret the caller holds, not something Terraform generates in the same apply. The default below is fine for a disposable demo stack; generate and manage your own for anything that outlives one terraform destroy. | `string` | `"customer-managed-demo-db-password-change-me-1234"` | no |
 | <a name="input_customer_managed_node_desired"></a> [customer\_managed\_node\_desired](#input\_customer\_managed\_node\_desired) | Initial number of worker nodes in the stand-in node group. Matches examples/small's implicit sizing (the module's own node\_desired default). Only applies at creation: the node group's desired\_size ignores changes afterward so the Cluster Autoscaler this example installs directly (via module.controllers) can own it without fighting plans/applies. | `number` | `3` | no |

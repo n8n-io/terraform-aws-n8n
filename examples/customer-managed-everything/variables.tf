@@ -262,7 +262,7 @@ variable "customer_managed_db_instance_class" {
 variable "customer_managed_db_engine_version" {
   description = "PostgreSQL engine version for the stand-in database this example creates. Matches the module's own db_engine_version default."
   type        = string
-  default     = "18.4"
+  default     = "18.6"
   nullable    = false
 }
 

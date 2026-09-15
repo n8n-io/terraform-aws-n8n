@@ -86,4 +86,7 @@ See [`AGENTS.md`](./AGENTS.md) for details on adding inputs, adding
 resources, and what *not* to change. See
 [`docs/customer-managed-infrastructure.md`](./docs/customer-managed-infrastructure.md)
 specifically before adding a new `create_<x>`/`install_<x>` toggle for a
-customer-managed layer.
+customer-managed layer, and [`docs/versioning.md`](./docs/versioning.md)
+before bumping any pinned version (a provider, a chart, `kubernetes_version`,
+a database engine, or the CI toolchain): it has the full inventory and the
+bump tier each one falls into.
