@@ -166,6 +166,36 @@ line) either needs no caller action or carries its own note under **Changed**.
   correctly running multi-main deployment. Detection now checks the env
   entry's presence (`.name`) instead. Found via a live `terraform apply` of
   `examples/small` against this release.
+- The CI checkov job never evaluated `kubernetes_deployment_v1.redis_exporter`,
+  and #120's diagnosis of why was wrong. checkov does register the
+  `_v1`/`_v2` Kubernetes resource types; what hid the resource is that it
+  answers every check on a count-0 resource with `UNKNOWN` and drops it from
+  the report, and `redis_exporter_enabled` is `false` in the module defaults
+  and in every example. Scanned with the toggle on, the resource drew the
+  same 27 `CKV_K8S_*` checks as an always-on Deployment, three of which had
+  been failing untriaged. `tests/scripts/check-checkov.sh` now runs a second
+  pass with `tests/checkov/opt-in.tfvars` and fails if that pass does not
+  reach each listed opt-in resource, so this class of gap cannot reopen
+  silently. `terraform test` gained assertions pinning the exporter's
+  security context, capabilities, memory limit, digest pin, and probes for
+  the fields checkov has no Terraform check for. The corrected diagnosis is
+  recorded in `AGENTS.md` ("Static analysis"). See #120.
+
+### Security
+
+- `redis_exporter_image`'s default is now pinned by digest as well as tag
+  (`oliver006/redis_exporter:v1.90.0@sha256:a129504e...`, the multi-arch
+  index, so it resolves on x86_64 and Graviton nodes alike). The tag alone
+  was mutable, so the `IfNotPresent` pull policy a tagged image gets by
+  default could keep running a superseded image; the digest makes the
+  reference immutable and the default pull policy safe. Callers who set
+  `redis_exporter_image` themselves are unaffected. Deployments on the
+  default with `redis_exporter_enabled = true` roll the exporter pod once on
+  the next apply; nothing changes for the default `false`. Fixes checkov
+  `CKV_K8S_15` and `CKV_K8S_43` on merit. The one remaining finding,
+  `CKV_K8S_11` (no CPU limit), is a deliberate trade annotated at the
+  resource: a CFS-throttled exporter reports late during exactly the
+  incident it exists for.
 
 ### Compatibility
 

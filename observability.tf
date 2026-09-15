@@ -17,22 +17,24 @@
 # picks it up from the pod annotations below, and a Prometheus Operator setup
 # points a ServiceMonitor at the Service.
 #
-# NOTE ON THE CHECKOV GATE: checkov registers its CKV_K8S_* Terraform checks
-# against the UNSUFFIXED resource names (kubernetes_deployment,
-# kubernetes_service) and has none for the _v1 variants used here, so a clean
-# checkov run says nothing at all about this file: measured on the pinned
-# 3.3.9, examples/large/pgbouncer.tf's kubernetes_deployment draws 27 checks
-# while this Deployment draws zero. The _v1 names are kept anyway, because the
-# module root uses versioned names throughout (kubernetes_ingress_v1,
-# kubernetes_service_account_v1, kubernetes_horizontal_pod_autoscaler_v2), and
-# picking an older name to be seen by a scanner is the wrong trade. The pod
-# hardening below is therefore written to satisfy those checks by hand rather
-# than because the gate demanded it: dropped capabilities, no privilege
-# escalation, a read-only root filesystem, an explicit non-root UID, a memory
-# limit, and both probes. Keep it that way when editing this file, since
-# nothing in CI will tell you if it regresses.
+# NOTE ON THE CHECKOV GATE: the default checkov scan never evaluates this
+# Deployment. Not because of the _v1 name (checkov registers
+# kubernetes_deployment_v1 for every CKV_K8S_* check it has for
+# kubernetes_deployment), but because the resource is opt-in:
+# redis_exporter_enabled defaults to false and no example turns it on, and
+# checkov answers every check on a count-0 resource with UNKNOWN, which it
+# then omits from the report. Measured on the pinned 3.3.17: zero results
+# with defaults, the full 27 checks with the toggle on. Two things cover the
+# gap. tests/scripts/check-checkov.sh runs a second scan with
+# tests/checkov/opt-in.tfvars, which is where the one checkov:skip below was
+# curated and where a new finding here fails CI. And
+# tests/defaults.tftest.hcl ("redis_exporter_pod_spec_is_hardened_by_hand")
+# pins the hardening itself, so a dropped field fails even if the scan
+# ever stops reaching this resource. See AGENTS.md, "Known gap" under Static
+# analysis.
 
 resource "kubernetes_deployment_v1" "redis_exporter" {
+  # checkov:skip=CKV_K8S_11:No CPU limit by design, so CPU stays uncapped on this one container. A CFS-throttled exporter reports late during exactly the incident it exists for; the accepted trade is that a misbehaving exporter competes for node CPU like any other burstable pod rather than being quota-capped. See the resources block below.
   count = var.redis_exporter_enabled ? 1 : 0
 
   metadata {
@@ -86,7 +88,13 @@ resource "kubernetes_deployment_v1" "redis_exporter" {
 
       spec {
         container {
-          name  = "redis-exporter"
+          name = "redis-exporter"
+          # Tag plus digest by default (see the variable). The digest is what
+          # makes the reference immutable, so the IfNotPresent pull policy a
+          # tagged image gets by default is safe here: a cached layer set can
+          # only ever be the one the digest names. That is also why there is
+          # no image_pull_policy = "Always": it would turn a registry outage
+          # into ImagePullBackOff on every node restart, for no gain.
           image = var.redis_exporter_image
 
           # rediss:// when the endpoint speaks TLS. local.redis_tls_active is

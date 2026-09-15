@@ -1038,6 +1038,77 @@ run "redis_exporter_targets_the_module_managed_redis" {
   }
 }
 
+# The default checkov scan never evaluates this Deployment: checkov answers
+# every check on a count-0 resource with UNKNOWN and drops it from the
+# report, and redis_exporter_enabled is false by default and in every example
+# (see AGENTS.md, "Known gap" under Static analysis, and issue #120).
+# tests/scripts/check-checkov.sh closes most of that with a second,
+# toggle-on pass, but checkov has no Terraform check at all for some of the
+# fields below (run_as_non_root, the probe target, the pinned UID), so these
+# assertions are the standing gate for the hardening in observability.tf: a
+# future edit that quietly drops one fails here instead of nowhere.
+run "redis_exporter_pod_spec_is_hardened_by_hand" {
+  command = plan
+
+  variables {
+    redis_exporter_enabled = true
+  }
+
+  # Every assert below reads container[0]; this is what makes that the whole
+  # pod rather than the first of several.
+  assert {
+    condition     = length(kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container) == 1
+    error_message = "The exporter pod must stay a single container, or the hardening assertions below stop covering the whole pod."
+  }
+
+  assert {
+    condition = (
+      kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].security_context[0].allow_privilege_escalation == false &&
+      kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].security_context[0].privileged != true &&
+      kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].security_context[0].read_only_root_filesystem == true &&
+      kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].security_context[0].run_as_non_root == true &&
+      # The provider schema types run_as_user as a string, so the comparison
+      # is against "59000", not 59000.
+      kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].security_context[0].run_as_user == "59000"
+    )
+    error_message = "The exporter container's security_context must keep privilege escalation off, privileged unset, the root filesystem read-only, a non-root UID, and the pinned 59000 user."
+  }
+
+  assert {
+    condition = (
+      contains(kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].security_context[0].capabilities[0].drop, "ALL") &&
+      try(length(kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].security_context[0].capabilities[0].add), 0) == 0
+    )
+    error_message = "The exporter container must drop ALL Linux capabilities and add none back."
+  }
+
+  # A limit must exist; its value is a sizing choice and is free to move.
+  assert {
+    condition     = contains(keys(kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].resources[0].limits), "memory")
+    error_message = "The exporter container must keep a memory limit, or an unbounded exporter can OOM its node during an incident."
+  }
+
+  # The digest is the immutable contract that makes the default IfNotPresent
+  # pull policy safe (and what satisfies checkov's CKV_K8S_15 and CKV_K8S_43).
+  # A caller may override the image, but the module default must keep it.
+  assert {
+    condition     = can(regex("@sha256:[0-9a-f]{64}$", kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].image))
+    error_message = "The exporter's default image must stay pinned by digest (tag@sha256:...), not by tag alone."
+  }
+
+  assert {
+    condition = (
+      length(kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].liveness_probe) == 1 &&
+      length(kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].readiness_probe) == 1 &&
+      kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].liveness_probe[0].http_get[0].path == "/metrics" &&
+      kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].liveness_probe[0].http_get[0].port == "9121" &&
+      kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].readiness_probe[0].http_get[0].path == "/metrics" &&
+      kubernetes_deployment_v1.redis_exporter[0].spec[0].template[0].spec[0].container[0].readiness_probe[0].http_get[0].port == "9121"
+    )
+    error_message = "The exporter container must keep both a liveness and a readiness probe hitting /metrics on 9121, the port the Service and the scrape annotations name."
+  }
+}
+
 # The exporter's whole purpose. Bull queue depth is NOT in the default metric
 # set: those are built from Redis INFO, which has no per-key lengths, so
 # without check-single-keys the exporter would ship everything except the
