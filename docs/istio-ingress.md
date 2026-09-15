@@ -78,6 +78,14 @@ spec:
   selector:
     istio: ingressgateway-public # your public ingress gateway's workload selector
   servers:
+    # If an upstream load balancer already terminates TLS and hands Envoy
+    # plain HTTP, use this server instead of the HTTPS one below.
+    # - hosts:
+    #     - hooks.example.com
+    #   port:
+    #     number: 8080
+    #     name: http
+    #     protocol: HTTP
     - hosts:
         - hooks.example.com
       port:
@@ -85,7 +93,7 @@ spec:
         name: https
         protocol: HTTPS
       tls:
-        mode: SIMPLE # or PASSTHROUGH if an upstream LB already terminates TLS
+        mode: SIMPLE
         credentialName: n8n-gateway-tls-public
 ---
 apiVersion: networking.istio.io/v1
@@ -229,10 +237,12 @@ configuration.
 
 ## What this module does not solve
 
-- **WAF**: AWS WAFv2 web ACLs attach to Application and Network Load
-  Balancers, not to a Kubernetes Service. Whether your Istio ingress
-  gateway's fronting load balancer can carry one depends on your own
-  platform's LB type and is outside this module's or this page's scope.
+- **WAF**: AWS WAFv2 web ACLs attach to Application Load Balancers (and
+  CloudFront, API Gateway, and a few other L7 services), not to Network
+  Load Balancers or a Kubernetes Service directly. Whether your Istio
+  ingress gateway's fronting load balancer can carry one depends on
+  whether that load balancer is an ALB, which depends on your own
+  platform's setup and is outside this module's or this page's scope.
 - **Chart/version pins, Service annotations, and gateway install**: entirely
   your platform team's existing conventions. Nothing here assumes a
   particular Istio chart, version, or cloud-provider LB annotation set.
