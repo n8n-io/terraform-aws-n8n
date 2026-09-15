@@ -57,7 +57,11 @@ minor-version-boundary change regardless. Needs: a CHANGELOG entry under
 callers move too, a `docs/helm-chart-coverage.md` re-verification when it's
 the n8n chart (see that doc's own instructions), and a passing
 `tests/scripts/check-main-chart.sh` when it's a chart this module templates
-against.
+against. For a controller chart, also compare the new `appVersion`'s
+supported Kubernetes range against every `kubernetes_version` this module
+accepts, not only the default: metrics-server chart `3.14.0` moved the
+floor from `1.31` to `1.34` in a chart minor, which the CHANGELOG has to
+say and the variable description has to carry.
 
 **Verification-required.** A provider major, the Terraform CLI floor, or
 `kubernetes_version`. These carry real breaking-change risk (see the Kubernetes

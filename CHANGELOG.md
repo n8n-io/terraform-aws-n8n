@@ -28,7 +28,17 @@ does not set the variable itself picks up the new default on its next
   Ingress and manages its own, which already routes `/mcp/`.
 - `metrics_server_chart_version` `3.13.1` → `3.14.0`: the metrics-server
   release plans the same in-place `version` change and rolls metrics-server
-  in `kube-system`.
+  in `kube-system`. **This raises metrics-server's Kubernetes floor**: chart
+  `3.14.0` ships metrics-server `0.9.x`, which supports Kubernetes `1.34+`;
+  `3.13.1` shipped `0.8.x`, supporting `1.31+`. The module default
+  (`kubernetes_version = "1.35"`) is fine. A caller on `1.31` through `1.33`,
+  including one bringing an older cluster via `create_eks = false`, must pin
+  `metrics_server_chart_version = "3.13.1"` or set
+  `install_metrics_server = false` before applying.
+- The new top-level `replicaCount` Helm value (see **Changed**) is a one-time
+  change to `helm_release.n8n`'s `values` input, so that release is updated
+  in-place even for a caller who pins `n8n_chart_version` at `1.10.0`. The
+  rendered replica count does not change.
 - `db_engine_version` `18.4` → `18.6`: **no plan diff** on an existing
   instance. `aws_db_instance.n8n` ignores changes to `engine_version`
   (`lifecycle.ignore_changes`) because `auto_minor_version_upgrade = true`
@@ -87,15 +97,21 @@ line) either needs no caller action or carries its own note under **Changed**.
   deployment to destroy and recreate its namespace, taking everything inside
   it down too. See `docs/versioning.md`'s verification-required tier.
 
-  **The in-place 2.x → 3.x upgrade of an existing deployment's state was not
-  exercised for this release.** Verification was `terraform validate`,
-  `terraform test`, and a fresh `terraform apply` of `examples/small` on 3.x,
-  not an `init -upgrade` and `plan` against a workspace created under 0.4.0.
-  The provider's own v3 upgrade guide warns that some resources may show
-  updated defaults and that a `terraform refresh` may be needed. Before
-  applying this release to an existing deployment, run `terraform init
-  -upgrade` and `terraform plan`, and read the plan for anything beyond the
-  Helm `version` changes listed above; report any unexpected diff as an issue.
+  **The in-place 2.x → 3.x upgrade of existing state was verified live**:
+  `examples/small` applied on 0.4.0 (provider 2.38.0), then `terraform init
+  -upgrade` and `plan` on this release. Result: 0 to add, 2 to change, 0 to
+  destroy, where the two changes are the in-place Helm release updates
+  described under "What moves on apply". No action, refresh or otherwise, on
+  `kubernetes_namespace`, either `kubernetes_secret`, `kubernetes_ingress_v1`,
+  `kubernetes_horizontal_pod_autoscaler_v2`, or `kubernetes_storage_class_v1`;
+  RDS stayed untouched. The apply completed in about two minutes, the
+  rollout completed, and `tests/scripts/smoke-test.sh` passed 31/31
+  afterwards. Still run `terraform init -upgrade` and `terraform plan` on
+  your own deployment and read the plan before applying, since the
+  provider's own v3 upgrade guide warns that some resources may show updated
+  defaults; report any action beyond the two Helm release updates as an
+  issue. If your root module declares its own `kubernetes` provider
+  constraint at `~> 2.0`, widen it first or `init` cannot satisfy both.
 - **`time` provider requirement bumped to `~> 0.14`** (was `~> 0.12`). Purely
   additive upstream (new resource-agnostic functions, no breaking changes
   between 0.12 and 0.14 per its own CHANGELOG); no plan diff.
@@ -104,7 +120,8 @@ line) either needs no caller action or carries its own note under **Changed**.
   here. `docs/helm-chart-coverage.md` re-verified against the new version and
   `tests/scripts/check-main-chart.sh` passes against it.
 - **Default `metrics_server_chart_version` bumped to `3.14.0`** (was
-  `3.13.1`). `modules/controllers/variables.tf` declares its own copy of this
+  `3.13.1`). Requires Kubernetes `1.34+`; see "What moves on apply" above for
+  the pin older clusters need. `modules/controllers/variables.tf` declares its own copy of this
   variable and moved with it; `examples/customer-managed-everything` is the
   only root module that invokes `module.controllers` directly and would
   otherwise have deployed the stale default.

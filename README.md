@@ -160,18 +160,25 @@ This module ships against specific provider majors. Notably:
   3.2.1), so this module does not rename them in place: doing so with no
   working automatic state migration would force every existing deployment to
   destroy and recreate its namespace and Secrets. The warning is cosmetic;
-  nothing stops working. The in-place 2.x → 3.x upgrade of an existing
-  deployment's state has not been exercised by this project (verification was
-  a fresh apply on 3.x), so run `terraform init -upgrade` and `terraform plan`
-  first and read the plan before applying; the provider's own upgrade guide
-  notes that some resources may show updated defaults. Callers who must stay
-  on Kubernetes provider 2.x should pin this module to `~> 0.4.0` (see
+  nothing stops working. The in-place 2.x → 3.x upgrade was verified against
+  an `examples/small` deployment created on the previous release: after
+  `terraform init -upgrade`, the plan contained two in-place Helm release
+  updates and no action on any Kubernetes resource or on RDS. Still run
+  `terraform init -upgrade` and `terraform plan` and read the plan before
+  applying; the provider's own upgrade guide notes that some resources may
+  show updated defaults. If your root module declares its own
+  `kubernetes = { version = "~> 2.0" }` constraint, widen it first or `init`
+  fails to find a version satisfying both. Callers who must stay on
+  Kubernetes provider 2.x should pin this module to `~> 0.4.0` (see
   `CHANGELOG.md`).
 - **Terraform CLI:** `>= 1.11`.
 - **n8n Helm chart:** default `1.11.0`. Other chart versions can be
   selected via `n8n_chart_version`.
 - **n8n application image:** defaults to the chart's `docker.n8n.io/n8nio/n8n` repository on the floating `stable` tag; production deployments should pin a  specific version via `n8n_image_tag` (e.g. `"1.2.3"`) to avoid crossing major-version boundaries on an unplanned pod reschedule. `n8n_image_repository` points the release at a custom image (see [Custom n8n images](#custom-n8n-images)).
-- **EKS:** validated on Kubernetes `1.35`.
+- **EKS:** validated on Kubernetes `1.35`. The default
+  `metrics_server_chart_version` (`3.14.0`, metrics-server 0.9.x) requires
+  Kubernetes `1.34` or newer; on a `1.31` to `1.33` cluster pin it to
+  `3.13.1` (0.8.x) or set `install_metrics_server = false`.
 - **PostgreSQL:** validated on RDS `18.6`.
 
 See [docs/upgrading-n8n.md](docs/upgrading-n8n.md) for the procedure to safely bump `n8n_chart_version`/`n8n_image_tag` on an existing deployment, and [docs/helm-chart-coverage.md](docs/helm-chart-coverage.md) for which n8n Helm chart values this module exposes versus leaves untouched.
@@ -2106,7 +2113,7 @@ doing at this node count, but neither removes the fivefold waste at source.
 | <a name="input_lbc_chart_repository"></a> [lbc\_chart\_repository](#input\_lbc\_chart\_repository) | Helm chart repository for the AWS Load Balancer Controller chart. Defaults to the public upstream (https://aws.github.io/eks-charts). Point this at a private mirror for a cluster with no egress to that repository. Ignored when install\_lbc = false. | `string` | `"https://aws.github.io/eks-charts"` | no |
 | <a name="input_lbc_chart_version"></a> [lbc\_chart\_version](#input\_lbc\_chart\_version) | AWS Load Balancer Controller Helm chart version. Defaults to 3.5.0, the version the module's documented ALB behaviour (source restrictions, IngressClassParams precedence, the failurePolicy override) was verified against on a live cluster. Ignored when install\_lbc = false. | `string` | `"3.5.0"` | no |
 | <a name="input_metrics_server_chart_repository"></a> [metrics\_server\_chart\_repository](#input\_metrics\_server\_chart\_repository) | Helm chart repository for the metrics-server chart. Defaults to the public upstream (https://kubernetes-sigs.github.io/metrics-server/). Point this at a private mirror for a cluster with no egress to that repository. Ignored when install\_metrics\_server = false. | `string` | `"https://kubernetes-sigs.github.io/metrics-server/"` | no |
-| <a name="input_metrics_server_chart_version"></a> [metrics\_server\_chart\_version](#input\_metrics\_server\_chart\_version) | metrics-server Helm chart version. Defaults to 3.14.0. Ignored when install\_metrics\_server = false. | `string` | `"3.14.0"` | no |
+| <a name="input_metrics_server_chart_version"></a> [metrics\_server\_chart\_version](#input\_metrics\_server\_chart\_version) | metrics-server Helm chart version. Defaults to 3.14.0, which ships metrics-server 0.9.x and requires Kubernetes 1.34 or newer per the project's compatibility matrix. On a cluster running 1.31 through 1.33 pin "3.13.1" (metrics-server 0.8.x, supports 1.31+) or set install\_metrics\_server = false and manage it yourself. Ignored when install\_metrics\_server = false. | `string` | `"3.14.0"` | no |
 | <a name="input_n8n_additional_domains"></a> [n8n\_additional\_domains](#input\_n8n\_additional\_domains) | Extra fully-qualified hostnames n8n should answer on, beyond n8n\_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53\_zone\_id set); with a caller-supplied certificate\_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create\_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create\_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate\_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n\_domain stays canonical: it is what n8n advertises as WEBHOOK\_URL and N8N\_HOST. Every name must live in the hosted zone given by route53\_zone\_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns. Names are normalized to lowercase before use: ACM and Kubernetes both store them that way, and DNS is case-insensitive. | `list(string)` | `[]` | no |
 | <a name="input_n8n_chart_repository"></a> [n8n\_chart\_repository](#input\_n8n\_chart\_repository) | Helm chart repository for the n8n chart. Defaults to the public upstream (oci://ghcr.io/n8n-io/n8n-helm-chart). Point this at a private mirror, e.g. an ECR OCI repository in this account, for a cluster with no egress to ghcr.io. The mirror must serve the exact chart version named by n8n\_chart\_version; this module does not verify that a mirrored repository actually carries it. | `string` | `"oci://ghcr.io/n8n-io/n8n-helm-chart"` | no |
 | <a name="input_n8n_chart_version"></a> [n8n\_chart\_version](#input\_n8n\_chart\_version) | n8n Helm chart version to deploy. Must be an exact version, not a constraint: the Helm provider resolves this literally. | `string` | `"1.11.0"` | no |

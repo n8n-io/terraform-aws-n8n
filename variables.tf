@@ -749,7 +749,7 @@ variable "cluster_autoscaler_chart_version" {
 }
 
 variable "metrics_server_chart_version" {
-  description = "metrics-server Helm chart version. Defaults to 3.14.0. Ignored when install_metrics_server = false."
+  description = "metrics-server Helm chart version. Defaults to 3.14.0, which ships metrics-server 0.9.x and requires Kubernetes 1.34 or newer per the project's compatibility matrix. On a cluster running 1.31 through 1.33 pin \"3.13.1\" (metrics-server 0.8.x, supports 1.31+) or set install_metrics_server = false and manage it yourself. Ignored when install_metrics_server = false."
   type        = string
   default     = "3.14.0"
 

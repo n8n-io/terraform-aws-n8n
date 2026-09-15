@@ -212,7 +212,7 @@ variable "metrics_server_chart_repository" {
 }
 
 variable "metrics_server_chart_version" {
-  description = "metrics-server Helm chart version. Ignored when install_metrics_server = false."
+  description = "metrics-server Helm chart version. The 3.14.0 default ships metrics-server 0.9.x, which requires Kubernetes 1.34 or newer; pin \"3.13.1\" (0.8.x, supports 1.31+) on an older cluster. Ignored when install_metrics_server = false."
   type        = string
   default     = "3.14.0"
   nullable    = false
