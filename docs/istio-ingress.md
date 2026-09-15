@@ -53,7 +53,7 @@ module "n8n" {
 | `n8n_webhook_path_prefixes` | see below | The prefixes that must reach the processors |
 | `n8n_service_port` | `5678` | Both |
 | `namespace` | Kubernetes namespace n8n runs in | Needed to address the Services above |
-| `certificate_arn` | ACM certificate ARN, if `route53_zone_id` is set | For an NLB terminating TLS itself; irrelevant if Envoy terminates it |
+| `certificate_arn` | Validated module-issued ACM ARN when `route53_zone_id` is set; otherwise the caller-supplied `certificate_arn` | For an AWS load balancer terminating TLS; does not supply Envoy's TLS Secret |
 
 ## The route rules
 
@@ -66,6 +66,17 @@ does. Route every prefix `n8n_webhook_path_prefixes` returns, not just
 families on the main pods, not one (`/webhook`, `/webhook-waiting`, `/form`,
 `/form-waiting`, `/mcp`). Iterate over the output rather than hardcoding the
 list, so routing stays in step as n8n adds endpoints.
+
+Replace `<namespace>` in the backend Service addresses with
+`module.n8n.namespace`. Keep each Gateway and its VirtualService in the same
+namespace so the unqualified `gateways` reference resolves correctly.
+
+For the HTTPS servers below, create each `credentialName` Secret in the
+namespace of the **selected ingress-gateway workload**: the public gateway's
+namespace for `n8n-gateway-tls-public`, and the internal gateway's namespace
+for `n8n-gateway-tls-internal`. These may differ from both the Gateway
+resource's namespace and the n8n namespace. See
+[Istio's credential namespace requirement](https://istio.io/latest/docs/reference/config/analysis/ist0161/).
 
 **Public gateway (webhook prefixes only, no catch-all):**
 
@@ -226,14 +237,25 @@ VPN and fails with no obvious cause.
 
 ## TLS termination is your call
 
-Whether an upstream load balancer terminates TLS and hands Envoy plain HTTP,
-or Envoy terminates it itself (`tls.mode: SIMPLE`, as shown above) is a
-platform decision independent of this module: the module's only involvement
-is issuing the certificate through `route53_zone_id` if you want Terraform to
-manage it, exposed as `certificate_arn`. Either way, if a private key is
-encrypted, decrypt it before loading it into whatever Secret your gateway
-mode's `credentialName` references: Envoy has no password input in this
-configuration.
+Choose the termination point to match your platform:
+
+- **AWS load balancer terminates TLS:** attach `module.n8n.certificate_arn`
+  to its TLS listener. The output contains the module-issued certificate
+  when `route53_zone_id` is set, or the caller-supplied ARN otherwise.
+  Configure both Gateways to accept the plaintext HTTP forwarded by the
+  load balancer, using ports that match your gateway Services. No Envoy TLS
+  Secret is needed for this path.
+- **Envoy terminates TLS:** use `tls.mode: SIMPLE` as shown above. Provision
+  the certificate chain and matching unencrypted private key separately in
+  Kubernetes TLS Secrets, in the gateway workload namespaces described
+  above. This module does not create those Secrets or export private keys;
+  an ACM ARN alone cannot configure Envoy TLS. Decrypt an encrypted key
+  before loading it into the Secret, because this configuration supplies no
+  decryption password to Envoy.
+
+The module still requires exactly one of `route53_zone_id` or
+`certificate_arn`, even when Envoy terminates TLS and does not use the ACM
+certificate.
 
 ## What this module does not solve
 
