@@ -191,6 +191,24 @@ line) either needs no caller action or carries its own note under **Changed**.
   security context, capabilities, memory limit, digest pin, and probes for
   the fields checkov has no Terraform check for. The corrected diagnosis is
   recorded in `AGENTS.md` ("Static analysis"). See #120.
+- `n8n_domain` and `n8n_additional_domains` now enforce the DNS name rules
+  that ACM's `RequestCertificate` pattern, the ALB Ingress `host`, and n8n's
+  own `N8N_HOST`/`WEBHOOK_URL` handling all apply downstream: every
+  dot-separated label is 63 characters or fewer, the whole name 253 or fewer,
+  and no label is empty or starts or ends with a hyphen. The previous regex
+  bounded no length and accepted `n8n..example.com` and `n8n.-prod.example.com`,
+  which always failed at apply rather than at plan. `n8n_domain` additionally
+  gets a `precondition` on `aws_acm_certificate.n8n` rejecting anything over
+  64 characters when the module issues the certificate (`route53_zone_id`
+  set): RFC 5280 caps a certificate's Common Name at 64 octets, tighter than
+  the 253-octet SAN limit `n8n_additional_domains` gets, and ACM previously
+  only rejected it mid-apply, after Terraform had already started creating
+  the EKS cluster, RDS and ElastiCache. `examples/split-ingress`'s composed
+  `webhook_domain` needed no separate check: it already flows straight into
+  `n8n_additional_domains`, so the same validation covers it end to end.
+  `examples/cloudflare` and `examples/godaddy` issue the certificate
+  themselves, so the module's precondition never reaches them; each gets
+  the same 64-character `validation` on its own `n8n_domain`. See #131.
 
 ### Security
 

@@ -55,23 +55,51 @@ variable "aws_region" {
 }
 
 variable "n8n_domain" {
-  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate_arn."
+  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate_arn. Standard DNS limits apply: 253 characters in total, 63 per dot-separated label. When the module issues the certificate (route53_zone_id set) it must also be 64 characters or fewer, the RFC 5280 limit on a certificate's Common Name; put longer names in n8n_additional_domains instead."
   type        = string
 
+  # One or more labels, each starting and ending alphanumeric with hyphens only
+  # inside (so no leading/trailing hyphen and no empty label), then an alphabetic
+  # TLD. Same label grammar as ACM's RequestCertificate pattern, written without
+  # the lookahead RE2 lacks. Length limits are the next block's job.
   validation {
-    condition     = can(regex("^[a-zA-Z0-9][a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$", var.n8n_domain))
-    error_message = "Value must be a valid fully qualified domain name (e.g. n8n.example.com)."
+    condition     = can(regex("^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}$", var.n8n_domain))
+    error_message = "Value must be a valid fully qualified domain name (e.g. n8n.example.com): dot-separated labels of letters, digits and hyphens, no label starting or ending with a hyphen, ending in an alphabetic TLD."
+  }
+
+  # DNS limits, not Kubernetes ones: ACM's RequestCertificate pattern enforces
+  # both on DomainName and every SAN, and the ALB Ingress host and n8n's own
+  # N8N_HOST / WEBHOOK_URL carry the same limits, so this holds on the
+  # BYO-certificate path too. Characters equal octets here because the regex
+  # above restricts the value to ASCII.
+  validation {
+    condition = (
+      length(var.n8n_domain) <= 253 &&
+      alltrue([for label in split(".", var.n8n_domain) : length(label) <= 63])
+    )
+    error_message = "n8n_domain must be 253 characters or fewer with every dot-separated label 63 characters or fewer, the DNS limits that ACM, the ALB and n8n's own hostname handling all enforce."
   }
 }
 
 variable "n8n_additional_domains" {
-  description = "Extra fully-qualified hostnames n8n should answer on, beyond n8n_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53_zone_id set); with a caller-supplied certificate_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n_domain stays canonical: it is what n8n advertises as WEBHOOK_URL and N8N_HOST. Every name must live in the hosted zone given by route53_zone_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns. Names are normalized to lowercase before use: ACM and Kubernetes both store them that way, and DNS is case-insensitive."
+  description = "Extra fully-qualified hostnames n8n should answer on, beyond n8n_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53_zone_id set); with a caller-supplied certificate_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n_domain stays canonical: it is what n8n advertises as WEBHOOK_URL and N8N_HOST. Every name must live in the hosted zone given by route53_zone_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns. Names are normalized to lowercase before use: ACM and Kubernetes both store them that way, and DNS is case-insensitive. Standard DNS limits apply to every entry: 253 characters in total, 63 per dot-separated label."
   type        = list(string)
   default     = []
 
+  # Same label grammar as n8n_domain above.
   validation {
-    condition     = alltrue([for d in var.n8n_additional_domains : can(regex("^[a-zA-Z0-9][a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$", d))])
-    error_message = "Every entry must be a valid fully qualified domain name (e.g. hooks.example.com)."
+    condition     = alltrue([for d in var.n8n_additional_domains : can(regex("^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}$", d))])
+    error_message = "Every entry must be a valid fully qualified domain name (e.g. hooks.example.com): dot-separated labels of letters, digits and hyphens, no label starting or ending with a hyphen, ending in an alphabetic TLD."
+  }
+
+  # Same DNS length limits as n8n_domain above; every entry here becomes a
+  # certificate SAN and is subject to the identical ACM/ALB constraints.
+  validation {
+    condition = alltrue([
+      for d in var.n8n_additional_domains :
+      length(d) <= 253 && alltrue([for label in split(".", d) : length(label) <= 63])
+    ])
+    error_message = "Every entry must be 253 characters or fewer with every dot-separated label 63 characters or fewer, the DNS limits that ACM, the ALB and n8n's own hostname handling all enforce."
   }
 
   validation {

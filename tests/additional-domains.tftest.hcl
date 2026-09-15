@@ -373,3 +373,91 @@ run "additional_domains_reject_more_than_the_acm_quota" {
   expect_failures = [var.n8n_additional_domains]
 }
 
+# ── n8n_additional_domains DNS label grammar and length limits ───────────────
+# Same label grammar and DNS limits as n8n_domain (variables.tf), per SAN entry.
+
+run "additional_domains_reject_an_overlong_label" {
+  command = plan
+
+  variables {
+    n8n_additional_domains = ["${join("", [for i in range(64) : "a"])}.example.com"]
+  }
+
+  expect_failures = [var.n8n_additional_domains]
+}
+
+run "additional_domains_reject_an_overlong_total" {
+  command = plan
+
+  variables {
+    n8n_additional_domains = [join(".", [
+      join("", [for i in range(63) : "a"]),
+      join("", [for i in range(63) : "a"]),
+      join("", [for i in range(63) : "a"]),
+      join("", [for i in range(62) : "b"]),
+    ])]
+  }
+
+  expect_failures = [var.n8n_additional_domains]
+}
+
+run "additional_domains_reject_an_empty_label" {
+  command = plan
+
+  variables {
+    n8n_additional_domains = ["hooks..example.com"]
+  }
+
+  expect_failures = [var.n8n_additional_domains]
+}
+
+run "additional_domains_reject_a_label_starting_with_a_hyphen" {
+  command = plan
+
+  variables {
+    # Inner label: the old regex already anchored the first character to an
+    # alphanumeric, so a leading hyphen on the first label proves nothing new.
+    n8n_additional_domains = ["hooks.-prod.example.com"]
+  }
+
+  expect_failures = [var.n8n_additional_domains]
+}
+
+run "additional_domains_reject_a_label_ending_with_a_hyphen" {
+  command = plan
+
+  variables {
+    n8n_additional_domains = ["hooks-.example.com"]
+  }
+
+  expect_failures = [var.n8n_additional_domains]
+}
+
+# The bound is a second copy of n8n_domain's, so an off-by-one here would not
+# be caught by that variable's boundary run. Taken on the caller-supplied
+# certificate path so the single-name mock is never consulted; the only failure
+# that path is allowed to produce is the coverage warning, and an unexpected
+# variable rejection would fail the run.
+run "additional_domains_accept_the_dns_boundary" {
+  command = plan
+
+  variables {
+    certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/test-cert"
+    route53_zone_id = null
+    # 253 characters with the longest label at exactly 63.
+    n8n_additional_domains = [join(".", [
+      join("", [for i in range(63) : "a"]),
+      join("", [for i in range(63) : "a"]),
+      join("", [for i in range(63) : "a"]),
+      join("", [for i in range(61) : "b"]),
+    ])]
+  }
+
+  expect_failures = [check.additional_domains_need_a_certificate_that_covers_them]
+
+  assert {
+    condition     = length(var.n8n_additional_domains[0]) == 253
+    error_message = "test fixture must actually hit the 253-character boundary"
+  }
+}
+

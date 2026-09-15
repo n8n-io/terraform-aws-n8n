@@ -16,8 +16,16 @@ variable "cluster_name" {
 }
 
 variable "n8n_domain" {
-  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). Must be a subdomain of the zone identified by cloudflare_zone_id."
+  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). Must be a subdomain of the zone identified by cloudflare_zone_id, and 64 characters or fewer: this example uses it as the Common Name of the ACM certificate it issues, which RFC 5280 caps at 64 octets."
   type        = string
+
+  # The module's own precondition for this limit sits on the certificate the
+  # module issues (dns.tf), which has no instances on this path: the example
+  # issues the certificate itself, so it has to enforce the limit itself too.
+  validation {
+    condition     = length(var.n8n_domain) <= 64
+    error_message = "n8n_domain must be 64 characters or fewer: this example uses it as the ACM certificate's Common Name, which RFC 5280 caps at 64 octets. ACM rejects longer names at apply time, after the rest of the stack has started creating."
+  }
 }
 
 variable "cloudflare_zone_id" {
