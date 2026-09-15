@@ -79,6 +79,17 @@ line) either needs no caller action or carries its own note under **Changed**.
   Caught a real pre-existing gap on its first run: `nameOverride`,
   `fullnameOverride`, and top-level `replicaCount` were never in the coverage
   table at all.
+- **`docs/istio-ingress.md`**: routing knowledge for callers running Istio
+  instead of an ALB Ingress Controller, replacing an earlier draft that
+  shipped as a full runnable `examples/istio-split-ingress` (own Istio
+  install, hand-authored routing chart, version pins, CI wiring). Covers the
+  `create_ingress = false` contract this module exposes either way, the same
+  no-catch-all-on-public / prefixes-before-catch-all-on-internal route rules
+  `examples/split-ingress` documents for the ALB case, expressed as
+  `Gateway`/`VirtualService` instead of `kubernetes_ingress_v1`, and the
+  "200 with an HTML body" webhook-misroute trap both share. Purely additive:
+  no new example, no CI matrix entry, no new module input or output. See
+  [#87](https://github.com/n8n-io/terraform-aws-n8n/issues/87).
 
 ### Changed
 

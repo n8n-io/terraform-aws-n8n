@@ -112,7 +112,7 @@ expected by the Terraform Registry:
 | `tests/scripts/check-helm-chart-coverage.sh` | Fails when `docs/helm-chart-coverage.md`'s version line or top-level key set is stale against the pinned chart (CI `chart-coverage` job). |
 | `tests/scripts/check-checkov.sh`  | Runs checkov at exactly `CHECKOV_VERSION`; refuses any other local version (CI `checkov` job). Two passes: defaults, then `tests/checkov/opt-in.tfvars` so count-gated opt-in resources are evaluated too. |
 | `tests/scripts/check-version-drift.sh` | Report-only: every pin reachable from a public API versus upstream latest. Weekly via `version-drift.yml`; never gates. |
-| `docs/`                           | Long-form supplementary docs (troubleshooting, post-deploy, cleanup, upgrades, Pod Identity, Helm chart coverage, version currency policy). |
+| `docs/`                           | Long-form supplementary docs (troubleshooting, post-deploy, cleanup, upgrades, Pod Identity, Helm chart coverage, Istio ingress routing, version currency policy). |
 | `.github/workflows/`              | `terraform-tests.yml`: fmt, validate, test, chart, chart-coverage, tflint, checkov, docs, markdownlint. `version-drift.yml`: weekly report-only pin drift, synced to a tracking issue. |
 | `.github/CODEOWNERS`              | Default reviewers for PRs.                                  |
 | `Taskfile.yml`                    | Optional convenience wrapper (`task ci`) around the local dev loop below; CI does not depend on it. |
@@ -401,8 +401,9 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
 - Each example has its own `README.md` documenting the runnable example.
 - `docs/troubleshooting.md`, `docs/post-deployment.md`,
   `docs/destroy-cleanup.md`, `docs/upgrading-n8n.md`, `docs/pod-identity.md`,
-  and `docs/helm-chart-coverage.md` cover operator-facing concerns that don't
-  belong inline in `README.md`. `docs/versioning.md` is the contributor-facing
+  `docs/helm-chart-coverage.md`, and `docs/istio-ingress.md` cover
+  operator-facing concerns that don't belong inline in `README.md`.
+  `docs/versioning.md` is the contributor-facing
   inventory of every pinned version and the bump tier each falls into; read
   it before bumping any provider, chart, engine, or CI tool version.
 - Inline comments in `.tf` files use the `# ── Section ──` banner style. Every
