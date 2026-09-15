@@ -36,6 +36,19 @@ resource "aws_acm_certificate" "n8n" {
 
   lifecycle {
     create_before_destroy = true
+
+    # RFC 5280 caps a certificate's Common Name at 64 octets including
+    # periods; ACM's own docs point this out and direct longer names to a SAN
+    # (253-octet limit) instead. This only bites on the Route 53 path, where
+    # domain_name above becomes the CN — a caller-supplied certificate_arn
+    # already passed this check when that certificate was issued. Caught here
+    # rather than as a variable validation because it depends on
+    # local.dns_automated, a cross-variable condition variable validation
+    # blocks cannot express.
+    precondition {
+      condition     = length(var.n8n_domain) <= 64
+      error_message = "n8n_domain is ${length(var.n8n_domain)} characters, over the 64-octet limit RFC 5280 places on a certificate's Common Name. Move it into n8n_additional_domains instead (253-octet SAN limit) and pick a shorter n8n_domain, or supply your own certificate_arn."
+    }
   }
 }
 

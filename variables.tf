@@ -58,9 +58,26 @@ variable "n8n_domain" {
   description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). Must match the CN / SAN on the certificate provided via certificate_arn."
   type        = string
 
+  # One or more labels, each starting and ending alphanumeric with hyphens only
+  # inside (so no leading/trailing hyphen and no empty label), then an alphabetic
+  # TLD. Same label grammar as ACM's RequestCertificate pattern, written without
+  # the lookahead RE2 lacks. Length limits are the next block's job.
   validation {
-    condition     = can(regex("^[a-zA-Z0-9][a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$", var.n8n_domain))
-    error_message = "Value must be a valid fully qualified domain name (e.g. n8n.example.com)."
+    condition     = can(regex("^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}$", var.n8n_domain))
+    error_message = "Value must be a valid fully qualified domain name (e.g. n8n.example.com): dot-separated labels of letters, digits and hyphens, no label starting or ending with a hyphen, ending in an alphabetic TLD."
+  }
+
+  # DNS limits, not Kubernetes ones: ACM's RequestCertificate pattern enforces
+  # both on DomainName and every SAN, and the ALB Ingress host and n8n's own
+  # N8N_HOST / WEBHOOK_URL carry the same limits, so this holds on the
+  # BYO-certificate path too. Characters equal octets here because the regex
+  # above restricts the value to ASCII.
+  validation {
+    condition = (
+      length(var.n8n_domain) <= 253 &&
+      alltrue([for label in split(".", var.n8n_domain) : length(label) <= 63])
+    )
+    error_message = "n8n_domain must be 253 characters or fewer with every dot-separated label 63 characters or fewer, the DNS limits that ACM, the ALB and n8n's own hostname handling all enforce."
   }
 }
 
@@ -69,9 +86,20 @@ variable "n8n_additional_domains" {
   type        = list(string)
   default     = []
 
+  # Same label grammar as n8n_domain above.
   validation {
-    condition     = alltrue([for d in var.n8n_additional_domains : can(regex("^[a-zA-Z0-9][a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$", d))])
-    error_message = "Every entry must be a valid fully qualified domain name (e.g. hooks.example.com)."
+    condition     = alltrue([for d in var.n8n_additional_domains : can(regex("^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}$", d))])
+    error_message = "Every entry must be a valid fully qualified domain name (e.g. hooks.example.com): dot-separated labels of letters, digits and hyphens, no label starting or ending with a hyphen, ending in an alphabetic TLD."
+  }
+
+  # Same DNS length limits as n8n_domain above; every entry here becomes a
+  # certificate SAN and is subject to the identical ACM/ALB constraints.
+  validation {
+    condition = alltrue([
+      for d in var.n8n_additional_domains :
+      length(d) <= 253 && alltrue([for label in split(".", d) : length(label) <= 63])
+    ])
+    error_message = "Every entry must be 253 characters or fewer with every dot-separated label 63 characters or fewer, the DNS limits that ACM, the ALB and n8n's own hostname handling all enforce."
   }
 
   validation {
