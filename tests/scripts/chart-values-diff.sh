@@ -5,9 +5,13 @@
 # Makes V1's own manual pickup step ("Diff the new chart's values.yaml
 # against the currently pinned one" — see the version-currency plan) one
 # command instead of a remembered `helm show values` invocation typed twice.
-# Informational only: always exits 0, changes nothing, and does not read or
-# write any pin. Deciding whether a delta is worth exposing (or requires a
-# module change) is still a human call — see docs/versioning.md.
+# Never writes or bumps a pin: it only reads variables.tf and calls `helm
+# show values`. Exits 0 once both `helm show values` calls succeed,
+# regardless of whether a diff was found; exits 1 on bad usage, a missing
+# tool, or a failed `helm show values` call (network/registry issue, bad
+# candidate version).
+# Deciding whether a diff is worth exposing (or requires a module change) is
+# still a human call — see docs/versioning.md.
 #
 # Usage: tests/scripts/chart-values-diff.sh <candidate-version>
 #   e.g. tests/scripts/chart-values-diff.sh 1.12.0
@@ -27,19 +31,8 @@ fi
 
 command -v helm >/dev/null 2>&1 || { echo "Required tool missing: helm" >&2; exit 1; }
 
-read_default() {
-  # $1: variable name, $2: file. Prints its string default's contents.
-  awk -v name="$1" '
-    $0 ~ "variable \"" name "\"" { in_block = 1 }
-    in_block && /default[ \t]*=/ {
-      if (match($0, /"[^"]*"/)) {
-        print substr($0, RSTART + 1, RLENGTH - 2)
-        exit
-      }
-    }
-    in_block && /^}/ { exit }
-  ' "$2"
-}
+# shellcheck disable=SC1091 # path is $SCRIPT_DIR-relative, resolved at runtime, not statically
+source "$SCRIPT_DIR/lib/tf-defaults.sh"
 
 PINNED="$(read_default n8n_chart_version variables.tf)"
 if [ -z "$PINNED" ]; then
@@ -52,7 +45,12 @@ if [ "$PINNED" = "$CANDIDATE" ]; then
   exit 0
 fi
 
-CHART_REF="oci://ghcr.io/n8n-io/n8n-helm-chart/n8n"
+CHART_REPO="$(read_default n8n_chart_repository variables.tf)"
+if [ -z "$CHART_REPO" ]; then
+  echo "Could not read n8n_chart_repository's default from variables.tf" >&2
+  exit 1
+fi
+CHART_REF="${CHART_REPO}/n8n"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
