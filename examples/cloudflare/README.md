@@ -29,6 +29,22 @@ Terraform provisions the VPC, issues the ACM certificate (validating it automati
 
 The CNAME record is created with `proxied = false` by default so that ACM certificate renewal and ALB health checks work without Cloudflare-specific configuration. To route traffic through Cloudflare's proxy (for DDoS protection and CDN), set `proxied = true` on `cloudflare_record.n8n_cname` in `dns.tf` **and** set your Cloudflare SSL/TLS mode to **Full (strict)**.
 
+## Multiple hostnames
+
+This example issues its own single-Common-Name ACM certificate in `dns.tf`
+and does not pass through the module's `n8n_additional_domains` input. That
+input only reaches the certificate on the module's own Route 53 issuance
+path (`route53_zone_id` set): with this example's caller-supplied
+`certificate_arn`, the module cannot add subject alternative names to a
+certificate it did not issue, and its `dns.tf` warns if you try. If n8n
+needs to answer on more than one hostname, use `examples/small` (Route 53),
+or extend this example: request a certificate in `dns.tf` whose subject
+alternative names cover every hostname (with a validation record each),
+add a CNAME per hostname, and pass the extra names through to the module's
+`n8n_additional_domains`, which adds the Ingress rules. The module's
+plan-time warning still fires in that setup because it cannot inspect the
+certificate you supplied; it is safe to ignore once the names match.
+
 ## Post-deployment
 
 See [../../docs/post-deployment.md](../../docs/post-deployment.md) for activating your n8n Enterprise license.

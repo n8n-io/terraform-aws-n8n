@@ -109,6 +109,15 @@ tasks:
     cmds:
       - ./scripts/check-variable-banners.sh
 
+  example-parity:
+    desc: >-
+      Diff every example's variables.tf against examples/small for undeclared
+      drift, and require a "Production considerations" README section wherever
+      the module still creates RDS or S3 (see #136). Local-only for now, not yet
+      a CI-gated check.
+    cmds:
+      - ./scripts/check-example-parity.sh
+
   docs:
     desc: Check README.md is not stale relative to variables.tf/outputs.tf (module root and every example).
     cmds:
@@ -135,10 +144,11 @@ tasks:
   ci:
     desc: >-
       Run the full local loop (fmt, validate, test, chart, chart-coverage, lint,
-      banners, docs, markdown). Mirrors every CI job except checkov, which is a
-      hard-fail gate in CI but is left out here because it needs a pinned checkov
-      install that the other tasks do not: run `task checkov` separately once you
-      have it. Also runs banners, which CI does not gate on at all.
+      banners, example-parity, docs, markdown). Mirrors every CI job except
+      checkov, which is a hard-fail gate in CI but is left out here because it
+      needs a pinned checkov install that the other tasks do not: run
+      `task checkov` separately once you have it. Also runs banners and
+      example-parity, which CI does not gate on at all.
     cmds:
       - task: fmt
       - task: validate
@@ -147,5 +157,6 @@ tasks:
       - task: chart-coverage
       - task: lint
       - task: banners
+      - task: example-parity
       - task: docs
       - task: markdown

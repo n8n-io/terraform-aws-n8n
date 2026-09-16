@@ -62,6 +62,19 @@ terraform apply
 
 After apply, see the root [`docs/post-deployment.md`](../../docs/post-deployment.md) for DNS propagation and license activation.
 
+## Production considerations
+
+This example is a reference deployment optimized for clean `apply` / `destroy` cycles during evaluation. Only the EKS cluster is customer-managed here; the module still creates RDS and S3 with the same teardown-friendly defaults documented in [`examples/small`](../small/README.md#production-considerations), and you should review those before promoting this example to production:
+
+| Where (in the module) | Setting | Current | Production |
+|---|---|---|---|
+| `database.tf` | `aws_db_instance.n8n.deletion_protection` | `false` (provider default; not set) | `true` |
+| `database.tf` | `aws_db_instance.n8n.skip_final_snapshot` | `true` | `false`, plus set `final_snapshot_identifier` |
+| `database.tf` | `aws_db_instance.n8n.delete_automated_backups` | `true` | `false` |
+| `s3.tf` | `aws_s3_bucket.n8n.force_destroy` | `true` | `false` |
+
+These settings live in the module's `database.tf` and `s3.tf` and are not currently exposed as variables. To override them you would wrap or fork the module.
+
 ## A note on test coverage
 
 Unlike [`customer-managed-redis`](../customer-managed-redis/) and [`customer-managed-s3`](../customer-managed-s3/), this example's `tests/defaults.tftest.hcl` cannot assert a normal, successful plan of its own wiring. The module's own `create_eks = false` path reads the existing cluster through `data.aws_eks_cluster.existing`, and that data source's result is unresolvable under `command = plan` with mocked providers once nested inside this example's `module "n8n"` call, a limitation confirmed by direct experimentation rather than assumed; see the comment at the top of that test file for the full writeup, including why one `run` block (`cluster_name` length validation) passes anyway: its failure cascades widely enough through the config to block the unresolvable check blocks from ever being reached, which most other variables' validations don't. The module's own `create_eks = false` logic is already covered by 400+ run blocks in the repo root's `tests/defaults.tftest.hcl`, tested directly rather than through an example wrapper. `terraform validate`, `terraform fmt`, and `tflint` all pass against this example; exercising it end to end needs real AWS credentials.

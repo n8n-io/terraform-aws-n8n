@@ -127,6 +127,16 @@ line) either needs no caller action or carries its own note under **Changed**.
   example variables; the other examples' "Production considerations" tables
   now name the inputs instead of telling readers to fork the module. See
   [#134](https://github.com/n8n-io/terraform-aws-n8n/issues/134).
+- `scripts/check-example-parity.sh` (`task example-parity`, local-only for
+  now, not yet wired into CI): diffs every example's `variables.tf`
+  declarations against `examples/small`'s and fails on any difference not in
+  its per-example allowlist (DNS-provider credentials, `customer_managed_*`
+  stand-in sizing, split-ingress's own Ingress knobs, large's Aurora and BYO
+  certificate inputs, and `n8n_additional_domains` where an example cannot
+  take it). A stale allowlist entry fails too. It also fails when an example
+  still lets the module create RDS or S3 but its README has no "Production
+  considerations" section. Added after both kinds of drift happened silently;
+  see #136.
 
 ### Changed
 
@@ -252,6 +262,29 @@ line) either needs no caller action or carries its own note under **Changed**.
   `examples/cloudflare` and `examples/godaddy` issue the certificate
   themselves, so the module's precondition never reaches them; each gets
   the same 64-character `validation` on its own `n8n_domain`. See #131.
+- `examples/cloudflare` and `examples/godaddy` did not document why they omit
+  the module's `n8n_additional_domains` input, which `examples/small` and
+  every other example pass through: it read as drift rather than a
+  deliberate difference. Both READMEs now explain that the input only
+  reaches the certificate on the module's own Route 53 issuance path: these
+  two examples issue a single-Common-Name certificate themselves, and the
+  module cannot add subject alternative names to a certificate it did not
+  issue. Audited both examples' `variables.tf`/`main.tf` against
+  `examples/small` for every other module input; found no further gaps. See
+  #136.
+- `examples/customer-managed-redis`, `examples/customer-managed-s3`, and
+  `examples/customer-managed-cluster` had no "Production considerations"
+  section at all, unlike every other example. Each still lets the module
+  create RDS and/or S3 with the same teardown-friendly hardcoded defaults
+  `examples/small` documents (only `customer-managed-everything` avoids
+  every module-owned resource these defaults apply to, via `create_database
+  = false` and `create_s3_bucket = false`, so it correctly has no such
+  section). Verified by auditing every `examples/*/variables.tf` against
+  `examples/small`'s and checking each example's actual `create_database`/
+  `create_s3_bucket` wiring, not assumed from the example's name. `-s3`
+  gets only the three database rows: its own bucket's `force_destroy` is
+  already the exposed `customer_managed_s3_force_destroy` variable. See
+  #136.
 
 ### Security
 
