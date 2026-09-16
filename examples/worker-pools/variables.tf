@@ -223,8 +223,11 @@ variable "n8n_chart_version" {
   nullable    = false
 
   validation {
-    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.n8n_chart_version))
-    error_message = "n8n_chart_version must be an exact semver version, optionally with a prerelease suffix (e.g. \"1.12.0\" or \"1.11.0-preview.workerpools.1\"). The Helm provider resolves it literally, so a constraint such as \"~> 1.12\" fails at apply."
+    # Keep in sync with the module root's n8n_chart_version validation: SemVer
+    # 2 with optional prerelease and build-metadata segments, so a version the
+    # module accepts is never rejected one level up.
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version))
+    error_message = "n8n_chart_version must be an exact SemVer 2 version such as \"1.11.0\" or \"1.11.0-preview.workerpools.1\". Helm resolves chart versions literally here, so a range (\">= 1.10\", \"~1.10.0\"), a leading \"v\", or a floating tag is not accepted."
   }
 }
 
@@ -232,5 +235,12 @@ variable "n8n_chart_repository" {
   description = "Helm chart repository the module pulls the n8n chart from, passed to the module's n8n_chart_repository. The default is the module's own default, the public upstream registry, which is right both once a released chart renders pools and while using an official prerelease build published there via n8n-io/n8n-hosting's Preview chart GitHub Action. Only override this to point at a registry you control, e.g. oci://123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-helm-chart, if you packaged and pushed a preview build yourself. The node group's IAM role can pull from ECR in the same account without extra configuration; the Helm provider on your workstation needs `aws ecr get-login-password | helm registry login` first."
   type        = string
   default     = "oci://ghcr.io/n8n-io/n8n-helm-chart"
+  nullable    = false
+}
+
+variable "n8n_worker_pools_chart_verified" {
+  description = "Passed to the module's n8n_worker_pools_chart_verified. Leave false for the documented path, a prerelease build such as 1.11.0-preview.workerpools.1, which the module accepts from the version string alone. Set true only when n8n_chart_version is a numbered build of the feature branch served from a registry you control (see README.md, \"Getting a chart that renders pools\") and you have confirmed it renders queueMode.workerGroups; the module takes that at your word and never re-checks it."
+  type        = bool
+  default     = false
   nullable    = false
 }

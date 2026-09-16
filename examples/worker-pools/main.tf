@@ -139,8 +139,9 @@ module "n8n" {
   # Required by this example and optional everywhere else: the module default
   # chart predates queueMode.workerGroups and would render no pools. See the
   # variable's comment and README.md, "Getting a chart that renders pools".
-  n8n_chart_version    = var.n8n_chart_version
-  n8n_chart_repository = var.n8n_chart_repository
+  n8n_chart_version               = var.n8n_chart_version
+  n8n_chart_repository            = var.n8n_chart_repository
+  n8n_worker_pools_chart_verified = var.n8n_worker_pools_chart_verified
 
   # ── Node capacity ───────────────────────────────────────────────────────────
   # The one place this example is not sizing-equivalent to examples/small.

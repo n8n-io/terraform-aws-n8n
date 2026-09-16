@@ -170,7 +170,7 @@ locals {
 check "worker_pools_require_n8n_2_39" {
   assert {
     condition = length(var.n8n_worker_pools) > 0 && var.n8n_image_tag != null ? (
-      can(regex("^[0-9]+\\.[0-9]+\\.", var.n8n_image_tag)) ? (
+      can(regex("^[0-9]+\\.[0-9]+(\\.|$)", var.n8n_image_tag)) ? (
         tonumber(split(".", var.n8n_image_tag)[0]) > 2 ? true : (
           tonumber(split(".", var.n8n_image_tag)[0]) == 2
           ? tonumber(split(".", var.n8n_image_tag)[1]) >= local.n8n_worker_pools_min_n8n_minor

@@ -218,8 +218,10 @@ fi
 # The chart labels pool resources component=worker-group, deliberately not
 # `worker`: the default worker Deployment's selector is immutable and must not
 # match pool pods. Counting on that label is the whole point of this script.
+# Every label lookup also carries app.kubernetes.io/instance=$RELEASE_NAME, so
+# a second release or a stale pool in the same namespace is not counted here.
 EXPECTED_COUNT=$(echo "$WORKER_POOLS" | wc -w | tr -d ' ')
-RENDERED=$(kubectl get deploy -n "$NAMESPACE" -l app.kubernetes.io/component=worker-group \
+RENDERED=$(kubectl get deploy -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE_NAME,app.kubernetes.io/component=worker-group" \
   -o jsonpath='{range .items[*]}{.metadata.labels.n8n\.io/worker-pool}{"\n"}{end}' 2>/dev/null | sed '/^$/d' || true)
 RENDERED_COUNT=$(printf '%s\n' "$RENDERED" | sed '/^$/d' | wc -l | tr -d ' ')
 
@@ -252,10 +254,10 @@ done
 
 header "Feature flag"
 
-MAIN_DEPLOY=$(kubectl get deploy -n "$NAMESPACE" -l app.kubernetes.io/component=main \
+MAIN_DEPLOY=$(kubectl get deploy -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE_NAME,app.kubernetes.io/component=main" \
   -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 if [[ -z "$MAIN_DEPLOY" ]]; then
-  fail "no main Deployment found (label app.kubernetes.io/component=main)"
+  fail "no main Deployment found (labels app.kubernetes.io/instance=$RELEASE_NAME,app.kubernetes.io/component=main)"
 else
   flag=$(deploy_env "$MAIN_DEPLOY" N8N_WORKER_POOLS_ENABLED)
   if [[ "$flag" == "true" ]]; then
@@ -358,7 +360,7 @@ for pool in $WORKER_POOLS; do
   # Triggers watch this pool's queue, not the default one.
   wait_list=$(trigger_field "$name" 0 listName)
   active_list=$(trigger_field "$name" 1 listName)
-  if [[ "$wait_list" == *"jobs-${pool}:wait" && "$active_list" == *"jobs-${pool}:active" ]]; then
+  if [[ "$wait_list" == *":jobs-${pool}:wait" && "$active_list" == *":jobs-${pool}:active" ]]; then
     pass "triggers watch $wait_list and $active_list"
   else
     fail "triggers watch \"${wait_list:-<none>}\" / \"${active_list:-<none>}\", expected *:jobs-${pool}:wait and *:jobs-${pool}:active"
@@ -387,7 +389,7 @@ for pool in $WORKER_POOLS; do
   fi
 
   # Running pods, if any, carry the pool name in their live environment.
-  pods=$(kubectl get pods -n "$NAMESPACE" -l "n8n.io/worker-pool=$pool" --field-selector=status.phase=Running \
+  pods=$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE_NAME,n8n.io/worker-pool=$pool" --field-selector=status.phase=Running \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | sed '/^$/d' || true)
   if [[ -z "$pods" ]]; then
     skip "no Running pod to inspect (pool at 0 or still starting)"
