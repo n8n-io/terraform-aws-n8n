@@ -73,7 +73,10 @@ TERRAFORM_DIR="$_explicit_tfdir"
 
 # ── Read from Terraform outputs ───────────────────────────────────────────────
 
-if command -v terraform &>/dev/null && [[ -f "$TERRAFORM_DIR/terraform.tfstate" ]]; then
+# .terraform/, not terraform.tfstate: a remote backend leaves no local state
+# file, but still leaves .terraform/ behind after init, so this works for
+# both.
+if command -v terraform &>/dev/null && [[ -d "$TERRAFORM_DIR/.terraform" ]]; then
   echo -e "\033[0;36m↳\033[0m  Reading values from Terraform state in: $TERRAFORM_DIR"
 
   tf_namespace=$(terraform -chdir="$TERRAFORM_DIR" output -raw namespace 2>/dev/null || true)
@@ -84,8 +87,12 @@ if command -v terraform &>/dev/null && [[ -f "$TERRAFORM_DIR/terraform.tfstate" 
   tf_pools=$(terraform -chdir="$TERRAFORM_DIR" output -json worker_pool_names 2>/dev/null \
     | tr -d '[]"\n' | tr ',' ' ' || true)
 
-  NAMESPACE="${NAMESPACE:-$tf_namespace}"
-  WORKER_POOLS="${WORKER_POOLS:-$tf_pools}"
+  # Unset-only fallback: an explicit NAMESPACE="" or WORKER_POOLS="" from the
+  # caller (preserved above from _explicit_ns/_explicit_pools) is a real
+  # choice, distinct from never having set it, and must not be replaced by
+  # Terraform's value.
+  NAMESPACE="${NAMESPACE-$tf_namespace}"
+  WORKER_POOLS="${WORKER_POOLS-$tf_pools}"
 
   echo -e "\033[0;36m↳\033[0m  namespace    = ${NAMESPACE:-<not found>}"
   echo -e "\033[0;36m↳\033[0m  worker pools = ${WORKER_POOLS:-<not found>}"
