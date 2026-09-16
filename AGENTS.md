@@ -112,6 +112,8 @@ expected by the Terraform Registry:
 | `tests/scripts/check-helm-chart-coverage.sh` | Fails when `docs/helm-chart-coverage.md`'s version line or top-level key set is stale against the pinned chart (CI `chart-coverage` job). |
 | `tests/scripts/check-checkov.sh`  | Runs checkov at exactly `CHECKOV_VERSION`; refuses any other local version (CI `checkov` job). Two passes: defaults, then `tests/checkov/opt-in.tfvars` so count-gated opt-in resources are evaluated too. |
 | `tests/scripts/check-version-drift.sh` | Report-only: every pin reachable from a public API versus upstream latest. Weekly via `version-drift.yml`; never gates. |
+| `tests/scripts/chart-values-diff.sh` | Diffs the pinned n8n chart's `values.yaml` against a candidate version via `helm show values` (`task chart-diff CANDIDATE=<version>`). Informational, never bumps a pin, not in CI. |
+| `tests/scripts/lib/tf-defaults.sh` | Shared `read_default` awk helper that reads a variable's string default out of `variables.tf`. Sourced by `check-version-drift.sh`, `check-helm-chart-coverage.sh` and `chart-values-diff.sh`; the one place that knows the format. |
 | `docs/`                           | Long-form supplementary docs (troubleshooting, post-deploy, cleanup, upgrades, Pod Identity, Helm chart coverage, Istio ingress routing, version currency policy). |
 | `.github/workflows/`              | `terraform-tests.yml`: fmt, validate, test, chart, chart-coverage, tflint, checkov, docs, markdownlint. `version-drift.yml`: weekly report-only pin drift, synced to a tracking issue. |
 | `.github/CODEOWNERS`              | Default reviewers for PRs.                                  |

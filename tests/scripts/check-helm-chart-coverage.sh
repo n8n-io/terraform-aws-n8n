@@ -31,25 +31,11 @@ command -v helm >/dev/null 2>&1 || { echo "helm not found on PATH" >&2; exit 1; 
 VARS_FILE="variables.tf"
 DOC_FILE="docs/helm-chart-coverage.md"
 
-read_default() {
-  # $1: variable name. Prints its string default's contents (no quotes).
-  # awk, not sed -n '/../,/../{...}': BSD sed rejects a substitute command
-  # immediately before a block-closing '}' with no separator, and this script
-  # runs on both BSD (local/macOS) and GNU (CI/Linux) sed.
-  awk -v name="$1" '
-    $0 ~ "variable \"" name "\"" { in_block = 1 }
-    in_block && /default[ \t]*=/ {
-      if (match($0, /"[^"]*"/)) {
-        print substr($0, RSTART + 1, RLENGTH - 2)
-        exit
-      }
-    }
-    in_block && /^}/ { exit }
-  ' "$VARS_FILE"
-}
+# shellcheck disable=SC1091 # path is $SCRIPT_DIR-relative, resolved at runtime, not statically
+source "$SCRIPT_DIR/lib/tf-defaults.sh"
 
-pinned_version="$(read_default n8n_chart_version)"
-pinned_repository="$(read_default n8n_chart_repository)"
+pinned_version="$(read_default n8n_chart_version "$VARS_FILE")"
+pinned_repository="$(read_default n8n_chart_repository "$VARS_FILE")"
 
 if [[ -z "$pinned_version" || -z "$pinned_repository" ]]; then
   echo "Could not read n8n_chart_version/n8n_chart_repository defaults from $VARS_FILE" >&2

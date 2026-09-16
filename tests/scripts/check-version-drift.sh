@@ -37,19 +37,8 @@ for tool in curl jq; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Required tool missing: $tool" >&2; exit 1; }
 done
 
-read_default() {
-  # $1: variable name, $2: file. Prints its string default's contents.
-  awk -v name="$1" '
-    $0 ~ "variable \"" name "\"" { in_block = 1 }
-    in_block && /default[ \t]*=/ {
-      if (match($0, /"[^"]*"/)) {
-        print substr($0, RSTART + 1, RLENGTH - 2)
-        exit
-      }
-    }
-    in_block && /^}/ { exit }
-  ' "$2"
-}
+# shellcheck disable=SC1091 # path is $SCRIPT_DIR-relative, resolved at runtime, not statically
+source "$SCRIPT_DIR/lib/tf-defaults.sh"
 
 read_provider_constraint() {
   # $1: provider name (as it appears after "source  = \"hashicorp/$1\"").

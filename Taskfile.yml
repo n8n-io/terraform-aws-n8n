@@ -68,6 +68,13 @@ tasks:
     cmds:
       - ./tests/scripts/check-helm-chart-coverage.sh
 
+  chart-diff:
+    desc: >-
+      Diff the pinned n8n chart's values.yaml against a candidate version
+      (requires Helm). Run before moving the pin, e.g. task chart-diff CANDIDATE=1.12.0
+    cmds:
+      - ./tests/scripts/chart-values-diff.sh "{{.CANDIDATE}}"
+
   version-drift:
     desc: Report every version pin that has fallen behind upstream (see docs/versioning.md). Never fails; requires curl and jq.
     cmds:

@@ -181,7 +181,7 @@ This module ships against specific provider majors. Notably:
   `3.13.1` (0.8.x) or set `install_metrics_server = false`.
 - **PostgreSQL:** validated on RDS `18.6`.
 
-See [docs/upgrading-n8n.md](docs/upgrading-n8n.md) for the procedure to safely bump `n8n_chart_version`/`n8n_image_tag` on an existing deployment, and [docs/helm-chart-coverage.md](docs/helm-chart-coverage.md) for which n8n Helm chart values this module exposes versus leaves untouched.
+See [docs/upgrading-n8n.md](docs/upgrading-n8n.md) for the procedure to safely bump `n8n_chart_version`/`n8n_image_tag` on an existing deployment, [docs/helm-chart-coverage.md](docs/helm-chart-coverage.md) for which n8n Helm chart values this module exposes versus leaves untouched, and [docs/versioning.md](docs/versioning.md) for the full inventory of every version this module pins and its bump policy.
 
 ## Out of scope
 
