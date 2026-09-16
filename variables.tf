@@ -1809,7 +1809,7 @@ variable "db_backup_retention_period" {
 }
 
 variable "db_deletion_protection" {
-  description = "Set deletion_protection on the module-managed RDS instance. When true, AWS rejects any Terraform or console request to delete the database. Flip to true for production, but you must first disable it (or set db_skip_final_snapshot = false and provide db_final_snapshot_identifier) before a deliberate destroy. Defaults to false so examples and evaluation environments tear down cleanly. Ignored when create_database = false."
+  description = "Set deletion_protection on the module-managed RDS instance. When true, AWS rejects any Terraform or console request to delete the database. Flip to true for production. Before a deliberate destroy, first set db_deletion_protection = false and apply; to also retain data, set db_skip_final_snapshot = false and provide db_final_snapshot_identifier. Defaults to false so examples and evaluation environments tear down cleanly. Ignored when create_database = false."
   type        = bool
   default     = false
   nullable    = false
@@ -1823,12 +1823,12 @@ variable "db_skip_final_snapshot" {
 }
 
 variable "db_final_snapshot_identifier" {
-  description = "Name of the final DB snapshot to create when db_skip_final_snapshot = false. Required in that case and ignored otherwise. Must be unique across the account and region; if a snapshot with this identifier already exists, destroy fails. Good practice is to include a timestamp or deployment identifier. Ignored when create_database = false."
+  description = "Name of the final DB snapshot to create when db_skip_final_snapshot = false. Required in that case; must be null when db_skip_final_snapshot = true. Must be unique across the account and region; if a snapshot with this identifier already exists, destroy fails. Good practice is to include a timestamp or deployment identifier. Ignored when create_database = false."
   type        = string
   default     = null
 
   validation {
-    condition     = var.db_final_snapshot_identifier != null ? trimspace(var.db_final_snapshot_identifier) != "" : true
+    condition     = var.create_database ? (var.db_final_snapshot_identifier != null ? trimspace(var.db_final_snapshot_identifier) != "" : true) : true
     error_message = "db_final_snapshot_identifier must not be blank. Leave it null when db_skip_final_snapshot = true."
   }
 
@@ -1836,12 +1836,12 @@ variable "db_final_snapshot_identifier" {
   # and the identifier is meaningless when skip_final_snapshot is true. Catch
   # both misconfigurations at plan time rather than at destroy time.
   validation {
-    condition     = var.db_final_snapshot_identifier != null ? !var.db_skip_final_snapshot : true
+    condition     = var.create_database ? (var.db_final_snapshot_identifier != null ? !var.db_skip_final_snapshot : true) : true
     error_message = "db_final_snapshot_identifier is set but db_skip_final_snapshot is true. Set db_skip_final_snapshot = false to keep a final snapshot, or leave db_final_snapshot_identifier null."
   }
 
   validation {
-    condition     = !var.db_skip_final_snapshot ? var.db_final_snapshot_identifier != null : true
+    condition     = var.create_database ? (!var.db_skip_final_snapshot ? var.db_final_snapshot_identifier != null : true) : true
     error_message = "db_skip_final_snapshot = false requires db_final_snapshot_identifier. Provide a unique snapshot name or set db_skip_final_snapshot = true to skip the final snapshot."
   }
 }

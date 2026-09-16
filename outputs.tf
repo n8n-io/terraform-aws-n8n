@@ -86,6 +86,11 @@ output "rds_deletion_protection" {
   value       = var.create_database ? aws_db_instance.n8n[0].deletion_protection : null
 }
 
+output "rds_backup_retention_period" {
+  description = "The backup_retention_period value in effect for the module-managed RDS instance. Null when create_database = false."
+  value       = var.create_database ? aws_db_instance.n8n[0].backup_retention_period : null
+}
+
 output "rds_skip_final_snapshot" {
   description = "The skip_final_snapshot value in effect for the module-managed RDS instance. Null when create_database = false."
   value       = var.create_database ? aws_db_instance.n8n[0].skip_final_snapshot : null

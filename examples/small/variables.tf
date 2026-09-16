@@ -183,7 +183,7 @@ variable "n8n_execution_data_storage_mode" {
 }
 
 variable "db_backup_retention_period" {
-  description = "Number of days to retain automated RDS backups. Passed to the module's db_backup_retention_period. Leave null (the default) to use the module's default of 7 days."
+  description = "Number of whole days to retain automated RDS backups. A value of 0 disables automated backups and point-in-time recovery. Passed to the module's db_backup_retention_period. Leave null (the default) to use the module's default of 7 days."
   type        = number
   default     = null
 }

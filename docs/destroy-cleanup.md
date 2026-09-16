@@ -56,14 +56,31 @@ stops at the protections you asked for:
 
 ### Key survival checklist
 
-RDS snapshots and S3 objects are encrypted. Module-managed KMS keys enter a
-7-day `PendingDeletion` window on destroy and cannot decrypt data while in that
-state. Before destroying a production stack where recoverability matters:
+This applies only when the database has `db_storage_encrypted = true` (the
+default) and/or the S3 bucket has `s3_kms_encryption_enabled = true` (the
+default), and the relevant key is module-managed (`create_db_kms_key = true`
+or `create_s3_kms_key = true`, both also the default). A module-managed KMS
+key enters a 7-day `PendingDeletion` window on destroy and cannot decrypt
+data while in that state. If you already supply your own retained key via
+`db_kms_key_arn` / `s3_kms_key_arn` with the matching `create_*_kms_key =
+false`, or if encryption is off entirely, none of this applies: your data
+outlives the destroy regardless.
 
-1. Copy the final RDS snapshot to an independently managed KMS key, or use
-   `create_db_kms_key = false` with `db_kms_key_arn` pointing at a key you keep.
-2. Re-encrypt or copy retained S3 objects to a bucket protected by a key you
-   keep, or use `create_s3_kms_key = false` with `s3_kms_key_arn`.
+Before destroying a production stack where recoverability matters:
+
+1. AWS does not let you change an existing RDS instance's KMS key in place
+   (`aws rds modify-db-instance` has no such option). Take a manual snapshot
+   (`aws rds create-db-snapshot`), copy it with `aws rds copy-db-snapshot
+   --kms-key-id <retained-key-arn>`, and keep that copy: it is what you
+   restore from later, independent of the module's key. Do this before
+   destroying; the destroy-time final snapshot (when
+   `db_skip_final_snapshot = false`) still inherits the module-managed key
+   and is subject to the same `PendingDeletion` window, so it is not a
+   substitute for the independently keyed copy.
+2. Re-encrypt or copy every existing S3 object to a key you keep, then switch
+   the bucket to it: setting `create_s3_kms_key = false` with
+   `s3_kms_key_arn` only changes the default for objects written after the
+   change, not objects already in the bucket.
 3. Save the `n8n_encryption_key` output. Restoring the database without it
    leaves workflows intact but every stored credential unreadable.
 

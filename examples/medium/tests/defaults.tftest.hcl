@@ -97,17 +97,38 @@ run "deletion_controls_default_to_module_teardown_friendly_values" {
     condition     = module.n8n.s3_force_destroy == true
     error_message = "s3_force_destroy should pass through as true when the example leaves it at null"
   }
+
+  assert {
+    condition     = module.n8n.rds_delete_automated_backups == true
+    error_message = "db_delete_automated_backups should pass through as true when the example leaves it at null"
+  }
+
+  assert {
+    condition     = module.n8n.rds_final_snapshot_identifier == null
+    error_message = "db_final_snapshot_identifier should pass through as null when the example leaves it at null"
+  }
+
+  assert {
+    condition     = module.n8n.rds_backup_retention_period == 7
+    error_message = "db_backup_retention_period should pass through as the module's default of 7 when the example leaves it at null"
+  }
 }
 
 run "deletion_controls_pass_through_to_module" {
   command = plan
 
   variables {
+    db_backup_retention_period   = 14
     db_deletion_protection       = true
     db_skip_final_snapshot       = false
     db_final_snapshot_identifier = "medium-example-final"
     db_delete_automated_backups  = false
     s3_force_destroy             = false
+  }
+
+  assert {
+    condition     = module.n8n.rds_backup_retention_period == 14
+    error_message = "db_backup_retention_period must pass from the example to the module"
   }
 
   assert {
