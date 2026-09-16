@@ -171,12 +171,14 @@ summarize_and_exit() {
 
 # Value of one env var on the n8n container of a Deployment's pod template.
 # Only literal `value` entries: the module renders pool and feature-flag vars
-# that way, so a valueFrom here would itself be a surprise.
+# that way, so a valueFrom here would itself be a surprise. Exit status is
+# kubectl's own (see trigger_field above); a caller that already knows the
+# Deployment exists must check it, not read an error the same as "unset".
 deploy_env() {
   local deploy="$1" var="$2"
   kubectl get deploy -n "$NAMESPACE" "$deploy" \
     -o jsonpath="{.spec.template.spec.containers[?(@.name==\"n8n-worker\")].env[?(@.name==\"$var\")].value}{.spec.template.spec.containers[?(@.name==\"n8n-main\")].env[?(@.name==\"$var\")].value}{.spec.template.spec.containers[?(@.name==\"n8n\")].env[?(@.name==\"$var\")].value}" \
-    2>/dev/null || true
+    2>/dev/null
 }
 
 # Whole ScaledObject as JSON, empty if absent.
@@ -354,24 +356,27 @@ for pool in $WORKER_POOLS; do
     else
       fail "pod template N8N_WORKER_POOL_NAME is \"${env_pool:-<unset>}\", expected \"$pool\"; these workers would consume the default queue"
     fi
-    replicas=$(kubectl get deploy -n "$NAMESPACE" "$name" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 0)
-    ready=$(kubectl get deploy -n "$NAMESPACE" "$name" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
-    ready="${ready:-0}"
-    if [[ "$replicas" -eq 0 ]]; then
-      pass "scaled to 0 (parked; KEDA owns the count)"
-    elif [[ "$ready" -ge "$replicas" ]]; then
-      pass "$ready/$replicas replicas ready"
+    if ! replicas=$(kubectl get deploy -n "$NAMESPACE" "$name" -o jsonpath='{.spec.replicas}' 2>/dev/null); then
+      fail "kubectl error reading replicas for Deployment $name"
     else
-      fail "$ready/$replicas replicas ready"
-      # The one failure specific to pools: n8n 2.39 exits 1 on a pooled worker
-      # the licence does not cover, while the default worker beside it is fine.
-      # Measured live; the previous container's log carries the sentence.
-      if kubectl logs -n "$NAMESPACE" -l "n8n.io/worker-pool=$pool" -c n8n-worker --previous --tail=50 2>/dev/null \
-          | grep -q 'worker pools are not licensed'; then
-        info "cause: the licence lacks feat:workerPools (\"worker pools are not licensed\" in the previous container log)"
-        info "if the entitlement was just added, delete settings.license.cert in the database and restart the n8n deployments; pods keep the cached certificate otherwise"
+      ready=$(kubectl get deploy -n "$NAMESPACE" "$name" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+      ready="${ready:-0}"
+      if [[ "$replicas" -eq 0 ]]; then
+        pass "scaled to 0 (parked; KEDA owns the count)"
+      elif [[ "$ready" -ge "$replicas" ]]; then
+        pass "$ready/$replicas replicas ready"
       else
-        info "kubectl -n $NAMESPACE describe deploy $name"
+        fail "$ready/$replicas replicas ready"
+        # The one failure specific to pools: n8n 2.39 exits 1 on a pooled worker
+        # the licence does not cover, while the default worker beside it is fine.
+        # Measured live; the previous container's log carries the sentence.
+        if kubectl logs -n "$NAMESPACE" -l "n8n.io/worker-pool=$pool" -c n8n-worker --previous --tail=50 2>/dev/null \
+            | grep -q 'worker pools are not licensed'; then
+          info "cause: the licence lacks feat:workerPools (\"worker pools are not licensed\" in the previous container log)"
+          info "if the entitlement was just added, delete settings.license.cert in the database and restart the n8n deployments; pods keep the cached certificate otherwise"
+        else
+          info "kubectl -n $NAMESPACE describe deploy $name"
+        fi
       fi
     fi
   else
@@ -431,22 +436,26 @@ for pool in $WORKER_POOLS; do
   fi
 
   # Running pods, if any, carry the pool name in their live environment.
-  pods=$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE_NAME,n8n.io/worker-pool=$pool" --field-selector=status.phase=Running \
-    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | sed '/^$/d' || true)
-  if [[ -z "$pods" ]]; then
-    skip "no Running pod to inspect (pool at 0 or still starting)"
+  if ! pods_raw=$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE_NAME,n8n.io/worker-pool=$pool" --field-selector=status.phase=Running \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null); then
+    fail "kubectl error listing Running pods for pool $pool"
   else
-    bad=0
-    while IFS= read -r p; do
-      # Single quotes on purpose: the variable must expand inside the pod, not here.
-      # shellcheck disable=SC2016
-      live=$(kubectl exec -n "$NAMESPACE" "$p" -c n8n-worker -- sh -c 'printf %s "$N8N_WORKER_POOL_NAME"' 2>/dev/null || true)
-      [[ "$live" == "$pool" ]] || { bad=1; info "$p: N8N_WORKER_POOL_NAME=\"${live:-<unset>}\""; }
-    done <<< "$pods"
-    if [[ "$bad" -eq 0 ]]; then
-      pass "every Running pod reports N8N_WORKER_POOL_NAME=$pool"
+    pods=$(printf '%s\n' "$pods_raw" | sed '/^$/d')
+    if [[ -z "$pods" ]]; then
+      skip "no Running pod to inspect (pool at 0 or still starting)"
     else
-      fail "a Running pod does not carry N8N_WORKER_POOL_NAME=$pool"
+      bad=0
+      while IFS= read -r p; do
+        # Single quotes on purpose: the variable must expand inside the pod, not here.
+        # shellcheck disable=SC2016
+        live=$(kubectl exec -n "$NAMESPACE" "$p" -c n8n-worker -- sh -c 'printf %s "$N8N_WORKER_POOL_NAME"' 2>/dev/null || true)
+        [[ "$live" == "$pool" ]] || { bad=1; info "$p: N8N_WORKER_POOL_NAME=\"${live:-<unset>}\""; }
+      done <<< "$pods"
+      if [[ "$bad" -eq 0 ]]; then
+        pass "every Running pod reports N8N_WORKER_POOL_NAME=$pool"
+      else
+        fail "a Running pod does not carry N8N_WORKER_POOL_NAME=$pool"
+      fi
     fi
   fi
 done
@@ -456,8 +465,9 @@ done
 header "Default worker deployment"
 
 if kubectl get deploy -n "$NAMESPACE" "$DEFAULT_SO" &>/dev/null; then
-  dflt=$(deploy_env "$DEFAULT_SO" N8N_WORKER_POOL_NAME)
-  if [[ -z "$dflt" ]]; then
+  if ! dflt=$(deploy_env "$DEFAULT_SO" N8N_WORKER_POOL_NAME); then
+    fail "kubectl error reading $DEFAULT_SO's N8N_WORKER_POOL_NAME"
+  elif [[ -z "$dflt" ]]; then
     pass "$DEFAULT_SO has no N8N_WORKER_POOL_NAME (still serves the default queue)"
   else
     fail "$DEFAULT_SO carries N8N_WORKER_POOL_NAME=$dflt; the default queue has no consumer"
