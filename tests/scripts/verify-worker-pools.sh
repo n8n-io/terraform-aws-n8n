@@ -250,6 +250,18 @@ for rendered in $RENDERED; do
   fi
 done
 
+SO_RENDERED=$(kubectl get scaledobject -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE_NAME,app.kubernetes.io/component=worker-group" \
+  -o jsonpath='{range .items[*]}{.metadata.labels.n8n\.io/worker-pool}{"\n"}{end}' 2>/dev/null | sed '/^$/d' || true)
+for rendered in $SO_RENDERED; do
+  found=0
+  for expected in $WORKER_POOLS; do
+    [[ "$rendered" == "$expected" ]] && found=1
+  done
+  if [[ "$found" -eq 0 ]]; then
+    fail "pool ScaledObject for \"$rendered\" exists on the cluster but is not declared; a removed pool left its scaler behind, or a second release in this namespace"
+  fi
+done
+
 # ── Feature flag on the mains ─────────────────────────────────────────────────
 
 header "Feature flag"
@@ -285,8 +297,14 @@ else
 fi
 
 # The default worker's triggers tell us whether this deployment speaks TLS to
-# Redis, which every pool's triggers then have to match.
+# Redis, which every pool's triggers then have to match. Missing entirely
+# would silently baseline every pool against three empty strings, so a
+# non-TLS pool trigger would match a baseline that was never actually read.
 DEFAULT_SO="${RELEASE_NAME}-worker"
+if [[ -z "$(scaledobject_json "$DEFAULT_SO")" ]]; then
+  fail "ScaledObject $DEFAULT_SO not found; cannot establish the default worker's Redis TLS/AUTH baseline for pool comparison"
+  summarize_and_exit
+fi
 DEFAULT_TLS=$(trigger_field "$DEFAULT_SO" 0 enableTLS)
 DEFAULT_USER=$(trigger_field "$DEFAULT_SO" 0 username)
 DEFAULT_PWENV=$(trigger_field "$DEFAULT_SO" 0 passwordFromEnv)
@@ -421,7 +439,7 @@ if kubectl get deploy -n "$NAMESPACE" "$DEFAULT_SO" &>/dev/null; then
     fail "$DEFAULT_SO carries N8N_WORKER_POOL_NAME=$dflt; the default queue has no consumer"
   fi
 else
-  warn "Deployment $DEFAULT_SO not found; the chart's own worker deployment should exist beside the pools"
+  fail "Deployment $DEFAULT_SO not found; unpinned executions (the default queue) have no consumer"
 fi
 
 echo ""
