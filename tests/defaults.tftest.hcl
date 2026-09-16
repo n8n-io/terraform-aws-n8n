@@ -4926,10 +4926,11 @@ run "rds_deletion_controls_with_external_database_warn" {
   expect_failures = [check.rds_tuning_requires_module_managed_database]
 }
 
-# The identifier's validations only bite when the module manages the database.
-# With create_database = false the module creates no RDS instance, so an
-# identifier that would otherwise be rejected (set while db_skip_final_snapshot
-# is true) must reach the warning-only check above instead of failing the plan.
+# The identifier's pairing rules only bite when the module manages the
+# database. With create_database = false the module creates no RDS instance,
+# so an identifier that would otherwise be rejected (set while
+# db_skip_final_snapshot is true) must reach the warning-only check above
+# instead of failing the plan.
 run "rds_final_snapshot_identifier_is_not_validated_for_external_database" {
   command = plan
 
@@ -4941,6 +4942,21 @@ run "rds_final_snapshot_identifier_is_not_validated_for_external_database" {
   }
 
   expect_failures = [check.rds_tuning_requires_module_managed_database]
+}
+
+# The blank check is a format rule, not an applicability rule, so it still
+# fails the plan with create_database = false.
+run "rds_final_snapshot_identifier_rejects_blank_even_for_external_database" {
+  command = plan
+
+  variables {
+    create_database              = false
+    db_host                      = "db.internal.example.com"
+    db_password                  = "external-db-password"
+    db_final_snapshot_identifier = "   "
+  }
+
+  expect_failures = [var.db_final_snapshot_identifier]
 }
 
 # ── AUTH token rotation rollout ──────────────────────────────────────────────

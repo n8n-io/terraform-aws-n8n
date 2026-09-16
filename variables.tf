@@ -1827,8 +1827,11 @@ variable "db_final_snapshot_identifier" {
   type        = string
   default     = null
 
+  # Format rule, unconditional like db_backup_retention_period's own checks:
+  # a blank identifier is wrong in every mode. The two pairing rules below are
+  # applicability rules and only bite when the module manages the database.
   validation {
-    condition     = var.create_database ? (var.db_final_snapshot_identifier != null ? trimspace(var.db_final_snapshot_identifier) != "" : true) : true
+    condition     = var.db_final_snapshot_identifier != null ? trimspace(var.db_final_snapshot_identifier) != "" : true
     error_message = "db_final_snapshot_identifier must not be blank. Leave it null when db_skip_final_snapshot = true."
   }
 
