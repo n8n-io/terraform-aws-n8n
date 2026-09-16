@@ -61,9 +61,11 @@ notice, and a draft until upstream ships:** the chart side
 `preview/worker-pools` branch but not released, so the example requires an
 explicit `n8n_chart_version` and documents both an official GHCR preview
 build (published via n8n-io/n8n-hosting#191's `Preview chart` GitHub Action)
-and pushing a private preview build to your own registry; the module fails
-the plan when the pinned chart is a release that predates the feature,
-because an older chart accepts the key and silently renders nothing.
+and pushing a private preview build to your own registry; the module rejects
+every numbered `n8n_chart_version` release unless `n8n_worker_pools_chart_verified`
+explicitly attests it, because an older chart accepts the key and silently
+renders nothing (a prerelease build is exempt automatically, taken at the
+caller's word).
 
 Four **customer-managed examples**, also at `small` sizing, cover the
 `create_<x> = false` paths described in

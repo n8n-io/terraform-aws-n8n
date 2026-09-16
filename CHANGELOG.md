@@ -129,7 +129,9 @@ line) either needs no caller action or carries its own note under **Changed**.
   release fails the plan when the pinned `n8n_chart_version` is a numbered
   release, since no numbered release carries the feature yet (a prerelease
   version is taken at the caller's word, which is how a preview build is
-  installed), and a `check` in `worker-pools.tf` warns when a pinned
+  installed; the new `n8n_worker_pools_chart_verified` input lets a caller
+  attest a numbered release instead, for a private mirror already verified
+  to carry the feature), and a `check` in `worker-pools.tf` warns when a pinned
   `n8n_image_tag` is below `2.39.0`, the first n8n release that reads the pool
   variables. n8n-io/n8n-hosting#191 registered a `Preview chart` GitHub Action
   that can publish an official prerelease build from `preview/worker-pools`
