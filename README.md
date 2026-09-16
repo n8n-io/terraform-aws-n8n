@@ -1264,11 +1264,15 @@ you empty the bucket yourself.
 
 ### Recoverability depends on the encryption key
 
-Both module-managed RDS snapshots and S3 objects are encrypted with
-module-managed KMS keys (`aws_kms_key.db` and `aws_kms_key.s3`). Terraform
-schedules those keys for deletion with a 7-day window on destroy. A key in
-`PendingDeletion` cannot decrypt data, so retaining a snapshot or copying
-encrypted objects is not enough to recover them unless the key is also retained.
+With the defaults (`db_storage_encrypted = true`, `create_db_kms_key = true`,
+`s3_kms_encryption_enabled = true`, `create_s3_kms_key = true`), RDS snapshots
+and S3 objects are encrypted with module-managed KMS keys (`aws_kms_key.db`
+and `aws_kms_key.s3`). Terraform schedules those keys for deletion with a
+7-day window on destroy. A key in `PendingDeletion` cannot decrypt data, so
+retaining a snapshot or copying encrypted objects is not enough to recover
+them unless the key is also retained. None of this applies if you already
+supply your own key via `db_kms_key_arn` / `s3_kms_key_arn`, or if encryption
+is disabled.
 
 To make recovery durable, bring your own KMS keys and manage their lifecycle
 outside this module:
@@ -1280,6 +1284,12 @@ db_kms_key_arn    = "arn:aws:kms:<region>:<account-id>:key/<key-id>"
 create_s3_kms_key = false
 s3_kms_key_arn    = "arn:aws:kms:<region>:<account-id>:key/<key-id>"
 ```
+
+Decide this at first apply. On an existing deployment, RDS cannot change an
+instance's storage key in place (the snapshot has to be copied to the new
+key), and changing the bucket default re-keys only objects written afterwards.
+[docs/destroy-cleanup.md](docs/destroy-cleanup.md) has the pre-destroy
+checklist for that case.
 
 See [Bring your own KMS key for RDS](#bring-your-own-kms-key-for-rds) and the
 `create_s3_kms_key` / `s3_kms_key_arn` variable descriptions for the required

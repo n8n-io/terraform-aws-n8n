@@ -68,8 +68,8 @@ outlives the destroy regardless.
 
 Before destroying a production stack where recoverability matters:
 
-1. AWS does not let you change an existing RDS instance's KMS key in place
-   (`aws rds modify-db-instance` has no such option). Take a manual snapshot
+1. AWS does not let you change an existing RDS instance's storage encryption
+   key (`modify-db-instance` has no option for it). Take a manual snapshot
    (`aws rds create-db-snapshot`), copy it with `aws rds copy-db-snapshot
    --kms-key-id <retained-key-arn>`, and keep that copy: it is what you
    restore from later, independent of the module's key. Do this before
