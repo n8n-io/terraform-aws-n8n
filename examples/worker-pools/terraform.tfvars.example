@@ -26,6 +26,7 @@ n8n_license_key = "your-enterprise-license-key-here"
 # feature is released, pin the released version here instead.
 n8n_chart_version = "1.11.0-preview.workerpools.1"
 # n8n_chart_repository = "oci://123456789012.dkr.ecr.us-east-1.amazonaws.com/n8n-helm-chart"  # only if using the private-mirror fallback
+# n8n_worker_pools_chart_verified = true  # only if that mirror serves a numbered (non-prerelease) build you have confirmed renders pools
 
 # First n8n release that reads N8N_WORKER_POOLS_ENABLED and N8N_WORKER_POOL_NAME
 # is 2.39.0. The chart's floating `stable` tag may still be older, and an older

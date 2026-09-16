@@ -298,8 +298,9 @@ pin, and probes, the way `tests/defaults.tftest.hcl`'s
   do this: the mocked helm provider accepts any values, and a real chart that
   predates `queueMode.workerGroups` also accepts them and renders nothing, so
   the release applies clean with the feature flag on and no pool behind it.
-  The module's `check` blocks in `worker-pools.tf` catch the version pairing
-  at plan; this script is what catches the outcome.
+  At plan, the chart pairing is a precondition on `helm_release.n8n` in
+  `n8n.tf` (its locals live in `worker-pools.tf`) and the image pairing is a
+  `check` block in `worker-pools.tf`; this script is what catches the outcome.
 
 When you add a feature, add an `assert` for it in the relevant `.tftest.hcl`
 file. Use `command = plan` unless you specifically need apply semantics.
