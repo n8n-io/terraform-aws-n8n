@@ -67,20 +67,24 @@ combines all three and additionally invokes `modules/controllers` directly,
 which makes it the only root module in the repo that exercises that
 submodule's input contract, so it is the one that catches a change to it.
 
-Every one of these variants is "`small` plus one deliberate difference", so
-the module inputs `small` passes through should stay in sync across them.
+The DNS, topology and single-layer customer-managed variants are each
+"`small` plus one deliberate difference"; `customer-managed-everything`
+stacks three of those differences, and `medium`/`large` are sizing tiers
+rather than variants. In every case the module inputs `small` passes
+through should stay in sync unless the difference itself removes them.
 That surface drifted silently once (see #136): two examples never received
 a pass-through and three lost their "Production considerations" section.
 `scripts/check-example-parity.sh` (`task example-parity`, local-only for
 now, not yet wired into CI) diffs every example's `variables.tf`
 declarations against `small`'s and fails on any difference not in its
 per-example allowlist (the DNS-provider credentials, `customer_managed_*`
-stand-in sizing, split-ingress's own Ingress knobs, large's Aurora and BYO
+stand-in sizing plus `kubernetes_version` where the example builds its own
+cluster, split-ingress's own Ingress knobs, large's Aurora and BYO
 certificate inputs, and `n8n_additional_domains` where the example cannot
-take it). It also fails if an example still lets the module create RDS or
-S3 but its README has no `## Production considerations` section. When you
-add a pass-through to `small`, add it to the variants too, or add an
-allowlist entry with a reason.
+take it). It also fails if an example, `small` included, lets the module
+create RDS or S3 but its README has no `## Production considerations`
+section. When you add a pass-through to `small`, add it to the variants
+too, or add an allowlist entry with a reason.
 
 ### Architecture at a glance
 

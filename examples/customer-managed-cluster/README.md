@@ -73,7 +73,7 @@ This example is a reference deployment optimized for clean `apply` / `destroy` c
 | `database.tf` | `aws_db_instance.n8n.delete_automated_backups` | `true` | `false` |
 | `s3.tf` | `aws_s3_bucket.n8n.force_destroy` | `true` | `false` |
 
-These settings live in the module's `database.tf` and `s3.tf` and are not currently exposed as variables. To override them you would wrap or fork the module.
+These settings live in the module's `database.tf` and `s3.tf` and are not currently exposed as variables. A wrapper module cannot override arguments on its child module's resources, so to change them either fork the module, or set `create_database = false` and/or `create_s3_bucket = false` and bring your own RDS and S3 (see [`docs/customer-managed-infrastructure.md`](../../docs/customer-managed-infrastructure.md)).
 
 ## A note on test coverage
 

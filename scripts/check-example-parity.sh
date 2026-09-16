@@ -116,11 +116,15 @@ for example in "${EXAMPLES[@]}"; do
       fail=1
     fi
   done
+done
 
-  # Production considerations: required unless the module owns neither RDS
-  # nor S3 in this example.
+# Production considerations: required unless the module owns neither RDS nor
+# S3 in this example. Runs over the baseline too, since small's own section is
+# what every other example's points at. POSIX character classes, not \s: this
+# runs under whichever grep the developer has.
+for example in "$BASELINE" "${EXAMPLES[@]}"; do
   main="examples/$example/main.tf"
-  if ! { grep -qE '^\s*create_database\s*=\s*false' "$main" && grep -qE '^\s*create_s3_bucket\s*=\s*false' "$main"; }; then
+  if ! { grep -qE '^[[:space:]]*create_database[[:space:]]*=[[:space:]]*false' "$main" && grep -qE '^[[:space:]]*create_s3_bucket[[:space:]]*=[[:space:]]*false' "$main"; }; then
     if ! grep -qx '## Production considerations' "examples/$example/README.md"; then
       echo "check-example-parity: examples/$example lets the module create RDS and/or S3 but its README has no \"## Production considerations\" section (see examples/$BASELINE/README.md)" >&2
       fail=1

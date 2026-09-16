@@ -263,8 +263,10 @@ line) either needs no caller action or carries its own note under **Changed**.
   themselves, so the module's precondition never reaches them; each gets
   the same 64-character `validation` on its own `n8n_domain`. See #131.
 - `examples/cloudflare` and `examples/godaddy` did not document why they omit
-  the module's `n8n_additional_domains` input, which `examples/small` and
-  every other example pass through: it read as drift rather than a
+  the module's `n8n_additional_domains` input, which `examples/small`,
+  `medium`, and the customer-managed examples pass through (`split-ingress`
+  composes it from `webhook_subdomain`; `large` omits it too, by design): it
+  read as drift rather than a
   deliberate difference. Both READMEs now explain that the input only
   reaches the certificate on the module's own Route 53 issuance path: these
   two examples issue a single-Common-Name certificate themselves, and the
@@ -274,7 +276,8 @@ line) either needs no caller action or carries its own note under **Changed**.
   #136.
 - `examples/customer-managed-redis`, `examples/customer-managed-s3`, and
   `examples/customer-managed-cluster` had no "Production considerations"
-  section at all, unlike every other example. Each still lets the module
+  section at all, unlike the other examples that keep module-owned RDS or
+  S3. Each still lets the module
   create RDS and/or S3 with the same teardown-friendly hardcoded defaults
   `examples/small` documents (only `customer-managed-everything` avoids
   every module-owned resource these defaults apply to, via `create_database
@@ -285,6 +288,12 @@ line) either needs no caller action or carries its own note under **Changed**.
   gets only the three database rows: its own bucket's `force_destroy` is
   already the exposed `customer_managed_s3_force_destroy` variable. See
   #136.
+- Every example's "Production considerations" section said to "wrap or fork
+  the module" to change the teardown-friendly RDS/S3 defaults. A wrapper
+  module cannot override arguments on its child module's resources, so half
+  of that advice could not work. Each now says to fork, or to set
+  `create_database = false` / `create_s3_bucket = false` and bring your own,
+  pointing at `docs/customer-managed-infrastructure.md`. See #136.
 
 ### Security
 

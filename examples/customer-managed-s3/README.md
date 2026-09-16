@@ -55,7 +55,7 @@ This example is a reference deployment optimized for clean `apply` / `destroy` c
 | `database.tf` | `aws_db_instance.n8n.skip_final_snapshot` | `true` | `false`, plus set `final_snapshot_identifier` |
 | `database.tf` | `aws_db_instance.n8n.delete_automated_backups` | `true` | `false` |
 
-These settings live in the module's `database.tf` and are not currently exposed as variables. To override them you would wrap or fork the module.
+These settings live in the module's `database.tf` and are not currently exposed as variables. A wrapper module cannot override arguments on its child module's resources, so to change them either fork the module, or set `create_database = false` and bring your own RDS (see [`docs/customer-managed-infrastructure.md`](../../docs/customer-managed-infrastructure.md)).
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
