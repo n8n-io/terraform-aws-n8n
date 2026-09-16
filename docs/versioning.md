@@ -55,7 +55,9 @@ contract](../README.md#stability--versioning) treats a changed default as a
 minor-version-boundary change regardless. Needs: a CHANGELOG entry under
 **Changed** naming the old and new value and stating plainly that unpinned
 callers move too, a `docs/helm-chart-coverage.md` re-verification when it's
-the n8n chart (see that doc's own instructions), and a passing
+the n8n chart (see that doc's own instructions; `task chart-diff
+CANDIDATE=<version>` prints the `values.yaml` diff that re-verification
+starts from), and a passing
 `tests/scripts/check-main-chart.sh` when it's a chart this module templates
 against. For a controller chart, also compare the new `appVersion`'s
 supported Kubernetes range against every `kubernetes_version` this module

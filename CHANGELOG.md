@@ -84,10 +84,12 @@ line) either needs no caller action or carries its own note under **Changed**.
   version via `helm show values`, so the manual diff step in the
   version-currency pickup workflow is one command instead of two remembered
   `helm show values` invocations. Never writes or bumps a pin. Exits 0 once
-  both `helm show values` calls succeed, regardless of whether a diff was
-  found; exits 1 on bad usage, a missing tool, or a failed `helm show
-  values` call (a network/registry issue, or a candidate version that
-  doesn't exist).
+  both `helm show values` calls succeed and `diff` ran, regardless of
+  whether a diff was found; exits 1 on bad usage, a missing tool, a failed
+  `helm show values` call (a network/registry issue, or a candidate version
+  that doesn't exist), or a `diff` error. The `read_default` awk helper the
+  version-drift and chart-coverage scripts each carried now lives once in
+  `tests/scripts/lib/tf-defaults.sh`, sourced by all three.
 - `docs/versioning.md` is now linked from `README.md`'s `Compatibility`
   section (previously only from `CONTRIBUTING.md`/`AGENTS.md`, both
   contributor-facing), and `docs/upgrading-n8n.md`'s opening paragraph now
