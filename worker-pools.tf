@@ -20,17 +20,20 @@
 # own release-please cuts numbered releases from main independently of the
 # preview/worker-pools branch that carries the feature, so no numbered
 # version can be trusted as a floor: one that predates the feature ships
-# under the same versioning scheme as one that would carry it, and guessing a
-# minimum risks a real release proving the guess wrong (it already has once).
-# Until n8n-io/n8n-hosting#189 merges to main and a numbered release actually
-# carries it, only a prerelease build passes. n8n-io/n8n-hosting#191
-# registered a `Preview chart` GitHub Action on that repo's main branch that
-# packages preview/worker-pools and publishes an official prerelease build to
-# oci://ghcr.io/n8n-io/n8n-helm-chart (this module's default
-# n8n_chart_repository) once someone with write access to that repo
-# dispatches it against preview/worker-pools. See n8n_chart_version and the
-# two checks at the bottom of this file, and examples/worker-pools/README.md
-# for the exact command and a private-mirror fallback.
+# under the same versioning scheme as one that would carry it, and a
+# release cut from main can never prove the feature is present.
+# Until n8n-io/n8n-hosting#189 merges to main and a numbered release
+# actually carries it, only a prerelease build passes automatically, or a
+# numbered build the caller attests with n8n_worker_pools_chart_verified
+# (see that variable and locals.n8n_chart_renders_worker_pools below).
+# n8n-io/n8n-hosting#191 registered a `Preview chart` GitHub Action on that
+# repo's main branch that packages preview/worker-pools and publishes an
+# official prerelease build to oci://ghcr.io/n8n-io/n8n-helm-chart (this
+# module's default n8n_chart_repository) once someone with write access to
+# that repo dispatches it against preview/worker-pools. See n8n_chart_version
+# and the two checks at the bottom of this file, and
+# examples/worker-pools/README.md for the exact command and a
+# private-mirror fallback.
 
 locals {
   # First n8n release that reads N8N_WORKER_POOLS_ENABLED and
@@ -39,22 +42,29 @@ locals {
   # mains never route to a pool and pool workers consume the default queue.
   n8n_worker_pools_min_n8n_minor = 39
 
-  # Semver core of n8n_chart_version, or null for a prerelease (anything with a
-  # hyphen, e.g. 1.11.0-preview.workerpools.1). Helm never resolves a
-  # prerelease unless the caller names it exactly, so a prerelease here is a
-  # deliberate choice and the version check below takes the caller's word.
-  n8n_chart_version_core = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.n8n_chart_version)) ? [
-    for part in split(".", var.n8n_chart_version) : tonumber(part)
-  ] : null
-
   # No numbered n8n-hosting release carries queueMode.workerGroups: the
   # feature is merged only to the preview/worker-pools branch, and main's own
-  # release-please cuts (e.g. 1.12.0) ship independently of it. There is no
-  # real floor to compare against yet, so a numbered version never passes --
-  # only a prerelease (taken at the caller's word) does. Replace this with a
-  # real floor and a numeric compare once n8n-io/n8n-hosting#189 merges to
-  # main and a numbered release carries the feature.
-  n8n_chart_renders_worker_pools = local.n8n_chart_version_core == null
+  # release-please cuts ship independently of it. There is no real floor to
+  # compare against yet, so a numbered version only passes if the caller
+  # explicitly attests it with n8n_worker_pools_chart_verified -- for example
+  # a private mirror serving a numbered build of the feature branch. A
+  # prerelease passes automatically, taken at the caller's word via the
+  # SemVer 2 "-prerelease" separator specifically, with no extra input
+  # needed. n8n_chart_version's own validation also allows an optional
+  # "+buildmetadata" suffix with no hyphen (e.g. "1.11.0+build.5"); Helm
+  # ignores build metadata when resolving a chart from an HTTPS repository,
+  # so that string can resolve to plain "1.11.0" -- the exact silent
+  # no-render case this guard exists to stop. Checking for the hyphen
+  # directly, rather than "fails a strict X.Y.Z match", is what keeps a
+  # build-metadata-only version from falling through as if it were a
+  # prerelease. Replace this whole local with a real floor and a numeric
+  # compare once n8n-io/n8n-hosting#189 merges to main and a numbered
+  # release carries the feature; n8n_worker_pools_chart_verified can retire
+  # at the same time.
+  n8n_chart_renders_worker_pools = (
+    can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+-", var.n8n_chart_version)) ||
+    var.n8n_worker_pools_chart_verified
+  )
 
   n8n_worker_groups = [
     for p in var.n8n_worker_pools : {
@@ -123,26 +133,37 @@ locals {
 # The chart pairing is a hard stop, enforced as a precondition on
 # helm_release.n8n (n8n.tf) because it is a property of that resource and
 # because letting the apply proceed past a warning is exactly the silent
-# outcome described above. A prerelease version is exempt, which is how the
-# official preview build (see the top of this file and
-# examples/worker-pools/README.md) or a private mirror is installed while no
-# release carries the feature. The image pairing stays a warning:
-# n8n_image_tag is usually null (the chart's floating `stable`), which the
-# check cannot see, and pinning a too-old tag fails loudly at runtime anyway
-# (the pooled workers exit 1 on a licence they lack and simply ignore the
-# pool variables on a version they predate).
+# outcome described above. A prerelease version is exempt automatically,
+# which is how the official preview build (see the top of this file and
+# examples/worker-pools/README.md) is installed while no release carries
+# the feature; a numbered version passes only if the caller sets
+# n8n_worker_pools_chart_verified, for a private mirror serving a numbered
+# build it has already verified. The image pairing stays a warning, not a hard
+# stop: n8n_image_tag is usually null (the chart's floating `stable`), which
+# the check cannot see, so it cannot be relied on to catch every case. Unlike
+# the chart pairing, an old image does not fail loudly -- it silently accepts
+# and ignores N8N_WORKER_POOLS_ENABLED and N8N_WORKER_POOL_NAME, so the pods
+# come up healthy with the feature doing nothing (measured; this is what the
+# check's own error_message below describes, and what
+# tests/scripts/verify-worker-pools.sh exists to catch after apply). A
+# missing feat:workerPools licence entitlement is the one pool-related
+# failure that *is* loud (the pooled workers exit 1), but that is a separate
+# concern from the image tag and Terraform cannot see it at plan either.
 
 locals {
   n8n_worker_pools_chart_error = join("", [
     "n8n_worker_pools declares ${length(var.n8n_worker_pools)} pool(s) but n8n_chart_version = \"${var.n8n_chart_version}\" ",
-    "is a numbered release, and no numbered n8n-hosting release carries queueMode.workerGroups yet: the ",
-    "feature (n8n-io/n8n-hosting#189) is merged only to the chart's preview/worker-pools branch. That chart ",
-    "accepts the key and renders nothing for it, so the release would apply cleanly with ",
-    "N8N_WORKER_POOLS_ENABLED switched on and no pool Deployment or ScaledObject behind it, and every ",
-    "project pinned to a pool would run on the default queue. Pin n8n_chart_version to a prerelease build ",
-    "that carries the feature (a version with a hyphen is taken at your word, e.g. an official preview ",
-    "build such as 1.11.0-preview.workerpools.1 published to oci://ghcr.io/n8n-io/n8n-helm-chart via ",
-    "n8n-io/n8n-hosting's Preview chart GitHub Action; see examples/worker-pools/README.md), or remove the pools.",
+    "is a numbered release that n8n_worker_pools_chart_verified does not attest, and no numbered ",
+    "n8n-hosting release carries queueMode.workerGroups yet: the feature (n8n-io/n8n-hosting#189) is ",
+    "merged only to the chart's preview/worker-pools branch. That chart accepts the key and renders ",
+    "nothing for it, so the release would apply cleanly with N8N_WORKER_POOLS_ENABLED switched on and no ",
+    "pool Deployment or ScaledObject behind it, and every project pinned to a pool would run on the ",
+    "default queue. Pin n8n_chart_version to a prerelease build that carries the feature (a version with ",
+    "a hyphen is taken at your word, e.g. an official preview build such as ",
+    "1.11.0-preview.workerpools.1 published to oci://ghcr.io/n8n-io/n8n-helm-chart via n8n-io/n8n-hosting's ",
+    "Preview chart GitHub Action; see examples/worker-pools/README.md), set ",
+    "n8n_worker_pools_chart_verified = true if this numbered version is a private mirror you have already ",
+    "confirmed renders queueMode.workerGroups, or remove the pools.",
   ])
 }
 

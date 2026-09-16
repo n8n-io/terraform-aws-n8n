@@ -3470,3 +3470,10 @@ variable "n8n_worker_pools" {
     error_message = "Each n8n_worker_pools extra_env name must be a valid Kubernetes environment variable name: letters, digits and underscores only, not starting with a digit (for example N8N_LOG_LEVEL). Hyphens, dots and leading digits are rejected by the API server when the pod template is admitted."
   }
 }
+
+variable "n8n_worker_pools_chart_verified" {
+  description = "Attests that n8n_chart_version, whatever repository it resolves from, renders queueMode.workerGroups. Only consulted when n8n_worker_pools is non-empty and n8n_chart_version is a numbered release; a prerelease version (one with a SemVer 2 \"-\" segment) is already taken at your word from the version string itself and needs no extra input. This exists for the one case a hyphen can't cover: a private mirror serving a numbered version you have already built with the feature (n8n-io/n8n-hosting#189) baked in, so you would rather not tag your own build as a prerelease. Setting this to true is a one-time promise, not an automated guarantee: nothing re-checks it if n8n_chart_version later changes to point at a different, unverified chart, so treat a bump to this variable's pinned version with the same scrutiny as setting this flag the first time. Leave it false once n8n-io/n8n-hosting#189 merges to main and a real numbered floor replaces this guard entirely (n8n-io/terraform-aws-n8n#125 tracks that)."
+  type        = bool
+  default     = false
+  nullable    = false
+}

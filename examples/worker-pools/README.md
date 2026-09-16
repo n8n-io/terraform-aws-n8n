@@ -43,12 +43,12 @@ Pool names are lowercase letters, digits and hyphens, 1 to 43 characters, starti
 
 - A Route53 hosted zone for the parent domain (e.g. `example.com` if `n8n_domain = n8n.example.com`). Note its zone ID.
 - An n8n Enterprise licence carrying `feat:workerPools`. For a multi-main deployment (the default) it also needs `feat:multipleMainInstances`; set `n8n_main_hpa_min_replicas = 1` to run single-main on a Business-tier licence, as `small` allows.
-- A chart that renders `queueMode.workerGroups`, reachable from both your workstation and the cluster: the module's default `oci://ghcr.io/n8n-io/n8n-helm-chart` once someone publishes an official preview build there (see the next section), or a registry you control otherwise.
+- A chart that renders `queueMode.workerGroups`, reachable from both your workstation and the cluster: the official preview build `1.11.0-preview.workerpools.1` is already published to the module's default `oci://ghcr.io/n8n-io/n8n-helm-chart` (see the next section for how it was built), or a registry you control otherwise.
 - `helm` 3.8+ on your workstation, to confirm the pinned chart resolves before applying (and, on the private-mirror fallback, to package and push it yourself; add the AWS CLI for that path).
 
 ## Getting a chart that renders pools
 
-Skip this section once a released chart carries `queueMode.workerGroups`: pin that version in `n8n_chart_version`, leave `n8n_chart_repository` at its default, and apply.
+Skip this section, and pin your released chart directly with `n8n_worker_pools_chart_verified = true`, once you have confirmed your target chart renders `queueMode.workerGroups` -- today that means either a private mirror you have built and checked yourself, or an upstream release once one carries the feature ([n8n-io/terraform-aws-n8n#125](https://github.com/n8n-io/terraform-aws-n8n/issues/125) tracks the eventual automatic floor for the latter).
 
 Until then, the fastest path is the chart repo's own **official preview build**. [n8n-io/n8n-hosting#191](https://github.com/n8n-io/n8n-hosting/pull/191) registered a `Preview chart` GitHub Action on `main` that packages the `preview/worker-pools` branch (carrying [#189](https://github.com/n8n-io/n8n-hosting/pull/189)) and pushes a prerelease build to `oci://ghcr.io/n8n-io/n8n-helm-chart`, this module's own default `n8n_chart_repository`. Anyone with write access to n8n-io/n8n-hosting can dispatch it:
 
@@ -112,6 +112,16 @@ n8n_image_tag        = "2.39.0"
 ```
 
 The `helm registry login` is per workstation session; if a later `terraform apply` fails with `unauthorized` on the chart pull, run step 4's login line again. ECR tokens last 12 hours.
+
+`CHART_VERSION` above is suffixed as a prerelease so the module's guard takes
+it at its word without any extra input. If you would rather package and
+distribute this internally under a real numbered version (dropping the
+`-preview.workerpools.1` suffix from `CHART_VERSION`, step 3's `--version`,
+and both `terraform.tfvars` snippets), add
+`n8n_worker_pools_chart_verified = true` to `terraform.tfvars` alongside it:
+that is the one thing this guard cannot infer from a numbered version string,
+so it has to be an explicit attestation that you have already run steps 2
+and 5 successfully against that exact chart.
 
 ## Apply
 
@@ -239,7 +249,7 @@ These settings live in the module's `database.tf` and `s3.tf` and are not curren
 | <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.11 |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.0 |
 | <a name="requirement_helm"></a> [helm](#requirement\_helm) | ~> 3.0 |
-| <a name="requirement_kubernetes"></a> [kubernetes](#requirement\_kubernetes) | ~> 2.0 |
+| <a name="requirement_kubernetes"></a> [kubernetes](#requirement\_kubernetes) | ~> 3.0 |
 
 ## Providers
 

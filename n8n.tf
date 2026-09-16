@@ -1042,9 +1042,11 @@ resource "helm_release" "n8n" {
     # queueMode.workerGroups accepts the key and renders nothing, so with
     # pools declared this release would apply clean, switch
     # N8N_WORKER_POOLS_ENABLED on across every pod, and leave no pool
-    # Deployment or ScaledObject behind it. Prerelease versions are exempt
-    # (local.n8n_chart_renders_worker_pools takes them at the caller's word),
-    # so a preview build still installs. See worker-pools.tf.
+    # Deployment or ScaledObject behind it. A prerelease version is exempt
+    # automatically (local.n8n_chart_renders_worker_pools takes it at the
+    # caller's word), so a preview build still installs; a numbered version
+    # is exempt only if the caller attests it via
+    # n8n_worker_pools_chart_verified. See worker-pools.tf.
     precondition {
       condition     = length(var.n8n_worker_pools) > 0 ? local.n8n_chart_renders_worker_pools : true
       error_message = local.n8n_worker_pools_chart_error
