@@ -179,10 +179,16 @@ scaledobject_json() {
 
 # Pull a top-level trigger metadata field out of ScaledObject JSON for trigger
 # index $2, without jq: the KEDA CRD is regular enough for a targeted jsonpath.
+# Exit status is kubectl's own: a nonzero exit is always a real failure (the
+# object vanished, RBAC, a network blip), never "field absent" -- kubectl's
+# jsonpath prints empty output but still exits 0 when the object exists and
+# the path inside it does not. Callers that already know the object exists
+# must not swallow a nonzero exit into an empty string, or a transient error
+# reads the same as an unset field.
 trigger_field() {
   local so="$1" idx="$2" field="$3"
   kubectl get scaledobject -n "$NAMESPACE" "$so" \
-    -o jsonpath="{.spec.triggers[$idx].metadata.$field}" 2>/dev/null || true
+    -o jsonpath="{.spec.triggers[$idx].metadata.$field}" 2>/dev/null
 }
 
 so_condition() {
@@ -271,11 +277,22 @@ MAIN_DEPLOY=$(kubectl get deploy -n "$NAMESPACE" -l "app.kubernetes.io/instance=
 if [[ -z "$MAIN_DEPLOY" ]]; then
   fail "no main Deployment found (labels app.kubernetes.io/instance=$RELEASE_NAME,app.kubernetes.io/component=main)"
 else
-  flag=$(deploy_env "$MAIN_DEPLOY" N8N_WORKER_POOLS_ENABLED)
-  if [[ "$flag" == "true" ]]; then
-    pass "N8N_WORKER_POOLS_ENABLED=true on $MAIN_DEPLOY (mains route to pools)"
+  # Read from a running pod, not the Deployment template: a rollout in
+  # progress can leave the template updated while old ReplicaSet pods still
+  # serve traffic on the previous env, which the template alone can't show.
+  main_pod=$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE_NAME,app.kubernetes.io/component=main" \
+    --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -z "$main_pod" ]]; then
+    fail "no Running main pod found to inspect (Deployment $MAIN_DEPLOY exists but has no Running pod)"
   else
-    fail "N8N_WORKER_POOLS_ENABLED is \"${flag:-<unset>}\" on $MAIN_DEPLOY; mains will enqueue everything to the default queue"
+    # shellcheck disable=SC2016
+    if ! flag=$(kubectl exec -n "$NAMESPACE" "$main_pod" -c n8n-main -- sh -c 'printf %s "$N8N_WORKER_POOLS_ENABLED"' 2>/dev/null); then
+      fail "could not exec into main pod $main_pod to read N8N_WORKER_POOLS_ENABLED"
+    elif [[ "$flag" == "true" ]]; then
+      pass "N8N_WORKER_POOLS_ENABLED=true on $main_pod (mains route to pools)"
+    else
+      fail "N8N_WORKER_POOLS_ENABLED is \"${flag:-<unset>}\" on $main_pod; mains will enqueue everything to the default queue"
+    fi
   fi
 
   # Advisory only: the image tag is the one thing here the module's own
@@ -305,9 +322,9 @@ if [[ -z "$(scaledobject_json "$DEFAULT_SO")" ]]; then
   fail "ScaledObject $DEFAULT_SO not found; cannot establish the default worker's Redis TLS/AUTH baseline for pool comparison"
   summarize_and_exit
 fi
-DEFAULT_TLS=$(trigger_field "$DEFAULT_SO" 0 enableTLS)
-DEFAULT_USER=$(trigger_field "$DEFAULT_SO" 0 username)
-DEFAULT_PWENV=$(trigger_field "$DEFAULT_SO" 0 passwordFromEnv)
+DEFAULT_TLS=$(trigger_field "$DEFAULT_SO" 0 enableTLS) || { fail "kubectl error reading $DEFAULT_SO trigger metadata (enableTLS)"; summarize_and_exit; }
+DEFAULT_USER=$(trigger_field "$DEFAULT_SO" 0 username) || { fail "kubectl error reading $DEFAULT_SO trigger metadata (username)"; summarize_and_exit; }
+DEFAULT_PWENV=$(trigger_field "$DEFAULT_SO" 0 passwordFromEnv) || { fail "kubectl error reading $DEFAULT_SO trigger metadata (passwordFromEnv)"; summarize_and_exit; }
 
 # ── Per pool ──────────────────────────────────────────────────────────────────
 
@@ -387,9 +404,9 @@ for pool in $WORKER_POOLS; do
   # TLS and AUTH metadata must match the default worker's, or the scaler talks
   # plaintext to a TLS-only endpoint and hangs without crashing.
   for idx in 0 1; do
-    tls=$(trigger_field "$name" "$idx" enableTLS)
-    user=$(trigger_field "$name" "$idx" username)
-    pwenv=$(trigger_field "$name" "$idx" passwordFromEnv)
+    tls=$(trigger_field "$name" "$idx" enableTLS) || { fail "kubectl error reading $name trigger $idx metadata (enableTLS)"; continue; }
+    user=$(trigger_field "$name" "$idx" username) || { fail "kubectl error reading $name trigger $idx metadata (username)"; continue; }
+    pwenv=$(trigger_field "$name" "$idx" passwordFromEnv) || { fail "kubectl error reading $name trigger $idx metadata (passwordFromEnv)"; continue; }
     if [[ "$tls" == "$DEFAULT_TLS" && "$user" == "$DEFAULT_USER" && "$pwenv" == "$DEFAULT_PWENV" ]]; then
       pass "trigger $idx carries the default worker's Redis metadata (enableTLS=${tls:-unset}, passwordFromEnv=${pwenv:-unset}, username=${user:-unset})"
     else
