@@ -106,9 +106,32 @@ line) either needs no caller action or carries its own note under **Changed**.
   "200 with an HTML body" webhook-misroute trap both share. Purely additive:
   no new example, no CI matrix entry, no new module input or output. See
   [#87](https://github.com/n8n-io/terraform-aws-n8n/issues/87).
+- **Deletion-time controls for the module-managed RDS instance and S3
+  bucket**: `db_deletion_protection` (default `false`),
+  `db_skip_final_snapshot` (default `true`), `db_final_snapshot_identifier`
+  (default `null`, required when `db_skip_final_snapshot = false` and
+  rejected when it is `true`), `db_delete_automated_backups` (default
+  `true`), and `s3_force_destroy` (default `true`). Every default matches
+  the value the module previously hardcoded, so existing deployments see no
+  plan diff; flip them for production per the new README section "Deletion
+  protection and teardown", which also covers why a retained snapshot or
+  bucket is unrecoverable once the module-managed KMS key finishes its
+  seven-day deletion window, and the `create_*_kms_key = false` path that
+  avoids it. Matching `rds_*` / `s3_force_destroy` outputs echo the values
+  in effect. `examples/small` and `examples/medium` pass all five through,
+  along with the existing `db_backup_retention_period`, as nullable
+  example variables; the other examples' "Production considerations" tables
+  now name the inputs instead of telling readers to fork the module. See
+  [#134](https://github.com/n8n-io/terraform-aws-n8n/issues/134).
 
 ### Changed
 
+- `db_backup_retention_period` is now `nullable = false`. A caller writing
+  `db_backup_retention_period = null` in a `module` block previously
+  propagated the null into the variable's own `>= 0` validation and failed
+  the plan with "argument must not be null"; it now falls back to the
+  default of `7`. No effect on callers who set a number or leave it unset.
+  Surfaced by the `examples/small`/`medium` pass-through above.
 - **Kubernetes provider requirement bumped to `~> 3.0`** (was `~> 2.0`), across
   all 12 `versions.tf`/`providers.tf` files in the repo (root,
   `modules/controllers`, every `examples/*`). Provider 3.0 deprecates every

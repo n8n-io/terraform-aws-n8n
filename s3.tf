@@ -40,8 +40,9 @@ resource "aws_s3_bucket" "n8n" {
   bucket = local.s3_bucket_name_generated
 
   # Allow terraform destroy to drop the bucket even when n8n has written
-  # binary attachments — without this, destroy fails with BucketNotEmpty.
-  force_destroy = true
+  # binary attachments. Defaults to true for evaluation teardowns; set
+  # var.s3_force_destroy = false for production retention.
+  force_destroy = var.s3_force_destroy
 
   tags = merge(local.common_tags, { Name = local.s3_bucket_name_generated })
 }

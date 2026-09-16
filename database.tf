@@ -436,7 +436,7 @@ resource "aws_db_parameter_group" "n8n" {
 
 resource "aws_db_instance" "n8n" {
   # checkov:skip=CKV2_AWS_30:Query logging is an explicit opt-in through db_query_logging_enabled. Enabling it creates aws_db_parameter_group.n8n with log_statement and log_min_duration_statement and attaches it below. It cannot safely default on because engine_version is ignored: an upgraded module can configure 18.6 while the live instance remains on 16, and RDS rejects a postgres18 group on that instance. Checkov also builds no graph edge between the two count-expanded resources, so it cannot see the attachment even on the enabled path. Tests assert both the safe default and the opt-in group's exact contents.
-  # checkov:skip=CKV_AWS_293:Deletion protection is intentionally left at the provider default (false) so `terraform destroy` works cleanly during evaluation and example teardown. Flip to `true` for production. See examples/*/README.md → "Production considerations" for the full set of teardown-friendly defaults to review before promoting any example to production.
+  # checkov:skip=CKV_AWS_293:Deletion protection defaults to false via var.db_deletion_protection so `terraform destroy` works cleanly during evaluation and example teardown. Flip to `true` for production. See examples/*/README.md → "Production considerations" for the full set of teardown-friendly defaults to review before promoting any example to production.
   count = var.create_database ? 1 : 0
 
   identifier        = "n8n-postgres-${local.cluster_name}"
@@ -513,10 +513,13 @@ resource "aws_db_instance" "n8n" {
   # while restoring, which is what the db_snapshot_* checks below are about.
   snapshot_identifier = var.db_snapshot_identifier
 
-  # skip_final_snapshot = true matches the teardown guide's --skip-final-snapshot.
-  # Set to false and provide final_snapshot_identifier if you want a backup on destroy.
-  skip_final_snapshot      = true
-  delete_automated_backups = true
+  # Deletion-time controls. Defaults are teardown-friendly; flip them for
+  # production and set db_final_snapshot_identifier when skip_final_snapshot
+  # is false. See README.md → "Deletion protection and teardown".
+  deletion_protection       = var.db_deletion_protection
+  skip_final_snapshot       = var.db_skip_final_snapshot
+  final_snapshot_identifier = var.db_final_snapshot_identifier
+  delete_automated_backups  = var.db_delete_automated_backups
 
   # Ensure the log group exists (with our 365-day retention) before RDS would
   # otherwise auto-create it at "Never expire" as soon as
@@ -862,11 +865,16 @@ check "rds_tuning_requires_module_managed_database" {
       var.db_multi_az &&
       var.db_storage_encrypted &&
       var.db_backup_retention_period == 7 &&
-      !var.db_apply_immediately
+      !var.db_apply_immediately &&
+      !var.db_deletion_protection &&
+      var.db_skip_final_snapshot &&
+      var.db_final_snapshot_identifier == null &&
+      var.db_delete_automated_backups
     )
     error_message = join("", [
-      "An RDS sizing or hardening input (db_instance_class, db_allocated_storage, ",
-      "db_multi_az, db_storage_encrypted, db_backup_retention_period, db_apply_immediately) is set while ",
+      "An RDS sizing, hardening or deletion-control input (db_instance_class, db_allocated_storage, ",
+      "db_multi_az, db_storage_encrypted, db_backup_retention_period, db_apply_immediately, ",
+      "db_deletion_protection, db_skip_final_snapshot, db_final_snapshot_identifier, db_delete_automated_backups) is set while ",
       "create_database = false. The module creates no RDS instance in that mode, so none of them apply. ",
       "Configure these on the database you supply via db_host.",
     ])

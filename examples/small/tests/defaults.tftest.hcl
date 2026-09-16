@@ -94,3 +94,63 @@ run "execution_data_storage_mode_rejects_filesystem" {
 
   expect_failures = [var.n8n_execution_data_storage_mode]
 }
+
+# ── Data-resource deletion controls ───────────────────────────────────────────
+# The small example passes these through to the module unchanged. Verify the
+# wiring by setting non-default values and reading the module outputs.
+
+run "deletion_controls_default_to_module_teardown_friendly_values" {
+  command = plan
+
+  assert {
+    condition     = module.n8n.rds_deletion_protection == false
+    error_message = "db_deletion_protection should pass through as false when the example leaves it at null"
+  }
+
+  assert {
+    condition     = module.n8n.rds_skip_final_snapshot == true
+    error_message = "db_skip_final_snapshot should pass through as true when the example leaves it at null"
+  }
+
+  assert {
+    condition     = module.n8n.s3_force_destroy == true
+    error_message = "s3_force_destroy should pass through as true when the example leaves it at null"
+  }
+}
+
+run "deletion_controls_pass_through_to_module" {
+  command = plan
+
+  variables {
+    db_deletion_protection       = true
+    db_skip_final_snapshot       = false
+    db_final_snapshot_identifier = "small-example-final"
+    db_delete_automated_backups  = false
+    s3_force_destroy             = false
+  }
+
+  assert {
+    condition     = module.n8n.rds_deletion_protection == true
+    error_message = "db_deletion_protection must pass from the example to the module"
+  }
+
+  assert {
+    condition     = module.n8n.rds_skip_final_snapshot == false
+    error_message = "db_skip_final_snapshot must pass from the example to the module"
+  }
+
+  assert {
+    condition     = module.n8n.rds_final_snapshot_identifier == "small-example-final"
+    error_message = "db_final_snapshot_identifier must pass from the example to the module"
+  }
+
+  assert {
+    condition     = module.n8n.rds_delete_automated_backups == false
+    error_message = "db_delete_automated_backups must pass from the example to the module"
+  }
+
+  assert {
+    condition     = module.n8n.s3_force_destroy == false
+    error_message = "s3_force_destroy must pass from the example to the module"
+  }
+}

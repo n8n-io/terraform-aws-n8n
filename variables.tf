@@ -1789,6 +1789,7 @@ variable "db_backup_retention_period" {
   description = "Number of days to retain automated RDS backups. 0 disables automated backups (not recommended, and it also disables point-in-time recovery). AWS allows up to 35 days. Ignored when create_database = false."
   type        = number
   default     = 7
+  nullable    = false
 
   validation {
     condition     = var.db_backup_retention_period >= 0 && var.db_backup_retention_period <= 35
@@ -1805,6 +1806,51 @@ variable "db_backup_retention_period" {
     condition     = var.db_backup_retention_period == floor(var.db_backup_retention_period)
     error_message = "db_backup_retention_period must be a whole number of days."
   }
+}
+
+variable "db_deletion_protection" {
+  description = "Set deletion_protection on the module-managed RDS instance. When true, AWS rejects any Terraform or console request to delete the database. Flip to true for production, but you must first disable it (or set db_skip_final_snapshot = false and provide db_final_snapshot_identifier) before a deliberate destroy. Defaults to false so examples and evaluation environments tear down cleanly. Ignored when create_database = false."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "db_skip_final_snapshot" {
+  description = "Skip creating a final DB snapshot before the module-managed RDS instance is deleted. Defaults to true for clean evaluation teardowns. Set to false for production data retention, and provide db_final_snapshot_identifier. Ignored when create_database = false."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
+variable "db_final_snapshot_identifier" {
+  description = "Name of the final DB snapshot to create when db_skip_final_snapshot = false. Required in that case and ignored otherwise. Must be unique across the account and region; if a snapshot with this identifier already exists, destroy fails. Good practice is to include a timestamp or deployment identifier. Ignored when create_database = false."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.db_final_snapshot_identifier != null ? trimspace(var.db_final_snapshot_identifier) != "" : true
+    error_message = "db_final_snapshot_identifier must not be blank. Leave it null when db_skip_final_snapshot = true."
+  }
+
+  # AWS requires a final snapshot identifier when skip_final_snapshot is false,
+  # and the identifier is meaningless when skip_final_snapshot is true. Catch
+  # both misconfigurations at plan time rather than at destroy time.
+  validation {
+    condition     = var.db_final_snapshot_identifier != null ? !var.db_skip_final_snapshot : true
+    error_message = "db_final_snapshot_identifier is set but db_skip_final_snapshot is true. Set db_skip_final_snapshot = false to keep a final snapshot, or leave db_final_snapshot_identifier null."
+  }
+
+  validation {
+    condition     = !var.db_skip_final_snapshot ? var.db_final_snapshot_identifier != null : true
+    error_message = "db_skip_final_snapshot = false requires db_final_snapshot_identifier. Provide a unique snapshot name or set db_skip_final_snapshot = true to skip the final snapshot."
+  }
+}
+
+variable "db_delete_automated_backups" {
+  description = "Delete automated RDS backups when the module-managed RDS instance is destroyed. Defaults to true for clean evaluation teardowns. Set to false to retain automated backups after the instance is gone. Ignored when create_database = false."
+  type        = bool
+  default     = true
+  nullable    = false
 }
 
 variable "db_allowed_cidr_blocks" {
@@ -2351,6 +2397,13 @@ variable "s3_kms_key_arn" {
     condition     = var.s3_kms_key_arn == null ? true : can(regex("^arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key/[a-zA-Z0-9-]+$", var.s3_kms_key_arn))
     error_message = "s3_kms_key_arn must be a valid KMS key ARN of the form arn:aws:kms:<region>:<account-id>:key/<key-id>. Alias ARNs are not accepted: IAM policy Resource elements cannot reference a KMS alias."
   }
+}
+
+variable "s3_force_destroy" {
+  description = "Allow terraform destroy to delete the module-managed S3 bucket even when it still holds objects. Defaults to true so evaluation environments and example teardowns complete without manual object deletion. Set to false for production retention: an intentional destroy then fails with BucketNotEmpty until you empty the bucket yourself. Ignored when create_s3_bucket = false."
+  type        = bool
+  default     = true
+  nullable    = false
 }
 
 # ── HPA: main pods ────────────────────────────────────────────────────────────

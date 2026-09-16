@@ -135,10 +135,13 @@ This example is a reference deployment optimized for clean `apply` / `destroy` c
 | Where | Setting | Current | Production |
 | --- | --- | --- | --- |
 | `main.tf` (VPC) | `single_nat_gateway` | `true` | `false` + `one_nat_gateway_per_az = true` |
-| Module default | `db_deletion_protection` | provider default (`false`) | `true` |
+| Module input | `db_deletion_protection` | `false` | `true` |
+| Module input | `db_skip_final_snapshot` | `true` | `false`, plus set `db_final_snapshot_identifier` |
+| Module input | `db_delete_automated_backups` | `true` | `false` |
+| Module input | `s3_force_destroy` | `true` | `false` |
 | `variables.tf` | `admin_allowed_cidr_blocks` | `[]` | Your VPN or bastion range |
 | `variables.tf` | `waf_acl_arn` | `null` | A regional WAFv2 ACL with rate limiting |
-| Module default | `db_backup_retention_period` | `7` | Match your RPO |
+| Module input | `db_backup_retention_period` | `7` | Match your RPO |
 
 See [../small/README.md](../small/README.md#production-considerations) for the full module-level list, which applies here too.
 

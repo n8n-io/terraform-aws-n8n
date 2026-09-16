@@ -38,6 +38,38 @@ The module's dependency graph ensures resources are destroyed in the correct ord
 
 Most destroys complete in 10–15 minutes without intervention.
 
+## When deletion protection or data retention is enabled
+
+If you have flipped the module's teardown-friendly defaults, `terraform destroy`
+stops at the protections you asked for:
+
+- `db_deletion_protection = true`: destroy fails on `aws_db_instance.n8n`. Set
+  `db_deletion_protection = false` and run `terraform apply` first. If
+  `db_skip_final_snapshot = false`, that apply also creates the final snapshot
+  when the instance is eventually deleted.
+- `db_skip_final_snapshot = false`: `db_final_snapshot_identifier` must be set
+  and unique in the account and region. If a snapshot with that identifier
+  already exists, destroy fails with `DBSnapshotAlreadyExists`.
+- `s3_force_destroy = false`: destroy fails with `BucketNotEmpty` if the bucket
+  holds any objects. Empty the bucket (and any noncurrent versions, if
+  versioning is enabled) before re-running destroy.
+
+### Key survival checklist
+
+RDS snapshots and S3 objects are encrypted. Module-managed KMS keys enter a
+7-day `PendingDeletion` window on destroy and cannot decrypt data while in that
+state. Before destroying a production stack where recoverability matters:
+
+1. Copy the final RDS snapshot to an independently managed KMS key, or use
+   `create_db_kms_key = false` with `db_kms_key_arn` pointing at a key you keep.
+2. Re-encrypt or copy retained S3 objects to a bucket protected by a key you
+   keep, or use `create_s3_kms_key = false` with `s3_kms_key_arn`.
+3. Save the `n8n_encryption_key` output. Restoring the database without it
+   leaves workflows intact but every stored credential unreadable.
+
+See `README.md` → "Deletion protection and teardown" for the full retention
+model and the customer-managed-alternative.
+
 ## Troubleshooting
 
 ### Ingress deletion hangs

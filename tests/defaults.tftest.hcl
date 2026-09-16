@@ -4833,6 +4833,99 @@ run "db_apply_immediately_reaches_the_instance" {
   }
 }
 
+# ── RDS deletion controls ─────────────────────────────────────────────────────
+# These default to teardown-friendly values. The tests also verify that the
+# variables are wired to the instance attributes, not just accepted.
+
+run "rds_deletion_controls_are_teardown_friendly_by_default" {
+  command = plan
+
+  assert {
+    condition     = aws_db_instance.n8n[0].deletion_protection == false
+    error_message = "db_deletion_protection must default to false so evaluation teardowns work"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].skip_final_snapshot == true
+    error_message = "db_skip_final_snapshot must default to true so evaluation teardowns work"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].final_snapshot_identifier == null
+    error_message = "db_final_snapshot_identifier must default to null"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].delete_automated_backups == true
+    error_message = "db_delete_automated_backups must default to true so evaluation teardowns work"
+  }
+}
+
+run "rds_deletion_controls_reach_the_instance" {
+  command = plan
+
+  variables {
+    db_deletion_protection       = true
+    db_skip_final_snapshot       = false
+    db_final_snapshot_identifier = "final-n8n-test"
+    db_delete_automated_backups  = false
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].deletion_protection == true
+    error_message = "db_deletion_protection must reach aws_db_instance"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].skip_final_snapshot == false
+    error_message = "db_skip_final_snapshot must reach aws_db_instance"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].final_snapshot_identifier == "final-n8n-test"
+    error_message = "db_final_snapshot_identifier must reach aws_db_instance"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].delete_automated_backups == false
+    error_message = "db_delete_automated_backups must reach aws_db_instance"
+  }
+}
+
+run "rds_skip_final_snapshot_false_requires_identifier" {
+  command = plan
+
+  variables {
+    db_skip_final_snapshot = false
+  }
+
+  expect_failures = [var.db_final_snapshot_identifier]
+}
+
+run "rds_final_snapshot_identifier_requires_skip_false" {
+  command = plan
+
+  variables {
+    db_skip_final_snapshot       = true
+    db_final_snapshot_identifier = "final-n8n-test"
+  }
+
+  expect_failures = [var.db_final_snapshot_identifier]
+}
+
+run "rds_deletion_controls_with_external_database_warn" {
+  command = plan
+
+  variables {
+    create_database        = false
+    db_host                = "db.internal.example.com"
+    db_password            = "external-db-password"
+    db_deletion_protection = true
+  }
+
+  expect_failures = [check.rds_tuning_requires_module_managed_database]
+}
+
 # ── AUTH token rotation rollout ──────────────────────────────────────────────
 # The token reaches pods through a Secret referenced by name, so rotating it
 # produces no Helm diff and nothing restarts. local.redis_pod_annotations is
@@ -5287,7 +5380,7 @@ run "s3_bucket_is_private" {
   }
 
   # Bucket name: n8n-<cluster_name>-<last 6 of account ID>. With the default
-  # cluster_name "n8n-cluster" and mocked account 123456789012 → 789012.
+  # cluster_name "n8n-cluster" and mocked account 123456789012 -> 789012.
   assert {
     condition     = aws_s3_bucket.n8n[0].bucket == "n8n-n8n-cluster-789012"
     error_message = "S3 bucket name should be n8n-<cluster_name>-<account_suffix>"
@@ -5296,6 +5389,19 @@ run "s3_bucket_is_private" {
   assert {
     condition     = local.s3_bucket_name == "n8n-n8n-cluster-789012"
     error_message = "local.s3_bucket_name should track the module-managed bucket by default"
+  }
+}
+
+run "s3_force_destroy_reaches_the_bucket" {
+  command = plan
+
+  variables {
+    s3_force_destroy = false
+  }
+
+  assert {
+    condition     = aws_s3_bucket.n8n[0].force_destroy == false
+    error_message = "s3_force_destroy must reach aws_s3_bucket.n8n"
   }
 }
 
