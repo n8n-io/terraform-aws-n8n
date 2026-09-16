@@ -63,8 +63,10 @@ or `create_s3_kms_key = true`, both also the default). A module-managed KMS
 key enters a 7-day `PendingDeletion` window on destroy and cannot decrypt
 data while in that state. If you already supply your own retained key via
 `db_kms_key_arn` / `s3_kms_key_arn` with the matching `create_*_kms_key =
-false`, or if encryption is off entirely, none of this applies: your data
-outlives the destroy regardless.
+false`, or if encryption is off entirely, the key side is already covered:
+nothing the module deletes can lock you out of your data. Whether the data
+itself survives still depends on the teardown controls above
+(`db_skip_final_snapshot`, `db_delete_automated_backups`, `s3_force_destroy`).
 
 Before destroying a production stack where recoverability matters:
 
