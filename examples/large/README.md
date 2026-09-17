@@ -118,12 +118,11 @@ This example is a reference deployment optimized for clean `apply` / `destroy` c
 |---|---|---|---|
 | `examples/large/aurora.tf` | `aws_rds_cluster.n8n.deletion_protection` | `false` | `true` |
 | `examples/large/aurora.tf` | `aws_rds_cluster.n8n.skip_final_snapshot` | `true` | `false`, plus set `final_snapshot_identifier` |
-| Module `database.tf` (unused here; Aurora replaces it) | `aws_db_instance.n8n.skip_final_snapshot` | `true` | `false` |
-| Module `s3.tf` | `aws_s3_bucket.n8n.force_destroy` | `true` | `false` |
+| Module input | `s3_force_destroy` | `true` | `false` |
+
+The module's `db_deletion_protection`, `db_skip_final_snapshot`, `db_final_snapshot_identifier` and `db_delete_automated_backups` inputs do not apply here: this example sets `create_database = false`, so the module manages no RDS instance and setting them only raises the `rds_tuning_requires_module_managed_database` warning. Configure the equivalent arguments on `aws_rds_cluster.n8n` in `aurora.tf` instead, as the first two rows show.
 
 The Aurora cluster also carries a `# checkov:skip=CKV_AWS_139` annotation that should be removed once `deletion_protection = true` is set. The annotation exists specifically because flipping the default would break this example's documented `terraform destroy` flow, not because the underlying check is wrong.
-
-The S3 `force_destroy` setting lives in the module and is not currently exposed as a variable; for production you would wrap or fork the module to override it.
 
 ## Reference
 

@@ -81,6 +81,36 @@ output "s3_bucket_name" {
   value       = local.s3_bucket_name
 }
 
+output "rds_deletion_protection" {
+  description = "The deletion_protection value in effect for the module-managed RDS instance. Null when create_database = false."
+  value       = var.create_database ? aws_db_instance.n8n[0].deletion_protection : null
+}
+
+output "rds_backup_retention_period" {
+  description = "The backup_retention_period value in effect for the module-managed RDS instance. Null when create_database = false."
+  value       = var.create_database ? aws_db_instance.n8n[0].backup_retention_period : null
+}
+
+output "rds_skip_final_snapshot" {
+  description = "The skip_final_snapshot value in effect for the module-managed RDS instance. Null when create_database = false."
+  value       = var.create_database ? aws_db_instance.n8n[0].skip_final_snapshot : null
+}
+
+output "rds_final_snapshot_identifier" {
+  description = "The final_snapshot_identifier in effect for the module-managed RDS instance. Null when create_database = false or when db_skip_final_snapshot = true."
+  value       = var.create_database ? aws_db_instance.n8n[0].final_snapshot_identifier : null
+}
+
+output "rds_delete_automated_backups" {
+  description = "The delete_automated_backups value in effect for the module-managed RDS instance. Null when create_database = false."
+  value       = var.create_database ? aws_db_instance.n8n[0].delete_automated_backups : null
+}
+
+output "s3_force_destroy" {
+  description = "The force_destroy value in effect for the module-managed S3 bucket. Null when create_s3_bucket = false."
+  value       = var.create_s3_bucket ? aws_s3_bucket.n8n[0].force_destroy : null
+}
+
 output "cluster_name" {
   description = "EKS cluster name: the cluster this module created (create_eks = true, the default), or the value of existing_eks_cluster_name when create_eks = false."
   value       = local.eks_cluster_name

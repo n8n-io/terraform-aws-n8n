@@ -1397,7 +1397,7 @@ variable "n8n_pruning_max_count" {
 }
 
 variable "n8n_execution_data_storage_mode" {
-  description = "Where n8n stores the data of each new execution. Maps to N8N_EXECUTION_DATA_STORAGE_MODE. \"database\" (the default) keeps execution data in PostgreSQL, matching n8n's own default, and emits no env var. \"s3\" offloads it to the module's S3 bucket, reusing the same bucket and N8N_EXTERNAL_STORAGE_S3_* connection that binary data mode already uses, so no extra bucket, IAM policy, or credentials are needed. Execution-data writes are usually the dominant write load on the n8n database at volume, so s3 is the lever for relieving measured RDS pressure. Measure before reaching for it, though: in a matched A/B on a representative real workflow (same cluster, same load, only this variable changed), database mode OUTPERFORMED s3 mode by 37.8% to 45.2% in sustained throughput, because the per-execution S3 write path costs more than the database write it replaces long before the database itself is a bottleneck (the database sat far from saturation in every measured window). The database default stands on that measurement; switch to s3 when your own database is the measured constraint, not as a default optimization. Requires n8n >= 2.27 (pin n8n_image_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is a different entitlement from the feat:binaryDataS3 one the always-on binary data offload uses: n8n refuses to start in s3 mode without it. There is no backfill: existing executions stay readable where they were written, and only new executions go to S3, under workflows/{workflowId}/executions/{executionId}/execution_data/bundle.json. n8n prunes those objects itself as part of the executions hard-delete path (see n8n_pruning_max_age / n8n_pruning_max_count), so do NOT add an S3 lifecycle rule that can reach execution_data/ objects (see the S3 lifecycle section in the README). Note the durability trade-off: RDS gets automated backups and point-in-time recovery (db_backup_retention_period, default 7 days) while the bucket has no versioning, no backups, and force_destroy = true, so in s3 mode a terraform destroy takes execution history with it. See the durability section in the README. \"filesystem\" is deliberately not accepted: pod filesystems are ephemeral and unshared in this module's queue-mode topology, so execution data written there would be lost on reschedule and invisible to the other pods. See <https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/use-external-storage>."
+  description = "Where n8n stores the data of each new execution. Maps to N8N_EXECUTION_DATA_STORAGE_MODE. \"database\" (the default) keeps execution data in PostgreSQL, matching n8n's own default, and emits no env var. \"s3\" offloads it to the module's S3 bucket, reusing the same bucket and N8N_EXTERNAL_STORAGE_S3_* connection that binary data mode already uses, so no extra bucket, IAM policy, or credentials are needed. Execution-data writes are usually the dominant write load on the n8n database at volume, so s3 is the lever for relieving measured RDS pressure. Measure before reaching for it, though: in a matched A/B on a representative real workflow (same cluster, same load, only this variable changed), database mode OUTPERFORMED s3 mode by 37.8% to 45.2% in sustained throughput, because the per-execution S3 write path costs more than the database write it replaces long before the database itself is a bottleneck (the database sat far from saturation in every measured window). The database default stands on that measurement; switch to s3 when your own database is the measured constraint, not as a default optimization. Requires n8n >= 2.27 (pin n8n_image_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is a different entitlement from the feat:binaryDataS3 one the always-on binary data offload uses: n8n refuses to start in s3 mode without it. There is no backfill: existing executions stay readable where they were written, and only new executions go to S3, under workflows/{workflowId}/executions/{executionId}/execution_data/bundle.json. n8n prunes those objects itself as part of the executions hard-delete path (see n8n_pruning_max_age / n8n_pruning_max_count), so do NOT add an S3 lifecycle rule that can reach execution_data/ objects (see the S3 lifecycle section in the README). Note the durability trade-off: RDS gets automated backups and point-in-time recovery (db_backup_retention_period, default 7 days) while the bucket has no versioning and no backups, and s3_force_destroy defaults to true, so in s3 mode a terraform destroy takes execution history with it unless you flip that default. See the durability section in the README. \"filesystem\" is deliberately not accepted: pod filesystems are ephemeral and unshared in this module's queue-mode topology, so execution data written there would be lost on reschedule and invisible to the other pods. See <https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/use-external-storage>."
   type        = string
   default     = "database"
   nullable    = false
@@ -1789,6 +1789,7 @@ variable "db_backup_retention_period" {
   description = "Number of days to retain automated RDS backups. 0 disables automated backups (not recommended, and it also disables point-in-time recovery). AWS allows up to 35 days. Ignored when create_database = false."
   type        = number
   default     = 7
+  nullable    = false
 
   validation {
     condition     = var.db_backup_retention_period >= 0 && var.db_backup_retention_period <= 35
@@ -1805,6 +1806,67 @@ variable "db_backup_retention_period" {
     condition     = var.db_backup_retention_period == floor(var.db_backup_retention_period)
     error_message = "db_backup_retention_period must be a whole number of days."
   }
+}
+
+variable "db_deletion_protection" {
+  description = "Set deletion_protection on the module-managed RDS instance. When true, AWS rejects any Terraform or console request to delete the database. Flip to true for production. Before a deliberate destroy, first set db_deletion_protection = false and apply; to also retain data, set db_skip_final_snapshot = false and provide db_final_snapshot_identifier. Defaults to false so examples and evaluation environments tear down cleanly. Ignored when create_database = false."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "db_skip_final_snapshot" {
+  description = "Skip creating a final DB snapshot before the module-managed RDS instance is deleted. Defaults to true for clean evaluation teardowns. Set to false for production data retention, and provide db_final_snapshot_identifier. Ignored when create_database = false."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
+variable "db_final_snapshot_identifier" {
+  description = "Name of the final DB snapshot to create when db_skip_final_snapshot = false. Required in that case; must be null when db_skip_final_snapshot = true. Must start with a letter, contain only letters, digits and hyphens, and neither end with a hyphen nor contain two consecutive hyphens (the RDS snapshot identifier rule). Must be unique across the account and region; if a snapshot with this identifier already exists, destroy fails. Good practice is to include a deployment identifier. Takes effect from the value in Terraform state, so apply a change to it before running terraform destroy. Ignored when create_database = false."
+  type        = string
+  default     = null
+
+  # Format rule, unconditional like db_backup_retention_period's own checks:
+  # a blank identifier is wrong in every mode. The two pairing rules below are
+  # applicability rules and only bite when the module manages the database.
+  validation {
+    condition     = var.db_final_snapshot_identifier != null ? trimspace(var.db_final_snapshot_identifier) != "" : true
+    error_message = "db_final_snapshot_identifier must not be blank. Leave it null when db_skip_final_snapshot = true."
+  }
+
+  # RDS naming rule for snapshot identifiers, enforced at plan time because the
+  # alternative is a failed delete after the rest of the stack is already gone.
+  # Terraform's RE2 regex has no lookahead, so the "no consecutive hyphens"
+  # part is a separate strcontains rather than part of the pattern.
+  validation {
+    condition = var.db_final_snapshot_identifier != null ? (
+      can(regex("^[A-Za-z]([A-Za-z0-9-]*[A-Za-z0-9])?$", var.db_final_snapshot_identifier)) &&
+      !strcontains(var.db_final_snapshot_identifier, "--") &&
+      length(var.db_final_snapshot_identifier) <= 255
+    ) : true
+    error_message = "db_final_snapshot_identifier must be 1 to 255 characters, start with a letter, contain only letters, digits and hyphens, and must not end with a hyphen or contain two consecutive hyphens."
+  }
+
+  # AWS requires a final snapshot identifier when skip_final_snapshot is false,
+  # and the identifier is meaningless when skip_final_snapshot is true. Catch
+  # both misconfigurations at plan time rather than at destroy time.
+  validation {
+    condition     = var.create_database ? (var.db_final_snapshot_identifier != null ? !var.db_skip_final_snapshot : true) : true
+    error_message = "db_final_snapshot_identifier is set but db_skip_final_snapshot is true. Set db_skip_final_snapshot = false to keep a final snapshot, or leave db_final_snapshot_identifier null."
+  }
+
+  validation {
+    condition     = var.create_database ? (!var.db_skip_final_snapshot ? var.db_final_snapshot_identifier != null : true) : true
+    error_message = "db_skip_final_snapshot = false requires db_final_snapshot_identifier. Provide a unique snapshot name or set db_skip_final_snapshot = true to skip the final snapshot."
+  }
+}
+
+variable "db_delete_automated_backups" {
+  description = "Delete automated RDS backups when the module-managed RDS instance is destroyed. Defaults to true for clean evaluation teardowns. Set to false to retain automated backups after the instance is gone. Ignored when create_database = false."
+  type        = bool
+  default     = true
+  nullable    = false
 }
 
 variable "db_allowed_cidr_blocks" {
@@ -2351,6 +2413,13 @@ variable "s3_kms_key_arn" {
     condition     = var.s3_kms_key_arn == null ? true : can(regex("^arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key/[a-zA-Z0-9-]+$", var.s3_kms_key_arn))
     error_message = "s3_kms_key_arn must be a valid KMS key ARN of the form arn:aws:kms:<region>:<account-id>:key/<key-id>. Alias ARNs are not accepted: IAM policy Resource elements cannot reference a KMS alias."
   }
+}
+
+variable "s3_force_destroy" {
+  description = "Allow terraform destroy to delete the module-managed S3 bucket even when it still holds objects. Defaults to true so evaluation environments and example teardowns complete without manual object deletion. Set to false for production retention: an intentional destroy then fails with BucketNotEmpty until you empty the bucket yourself. Ignored when create_s3_bucket = false."
+  type        = bool
+  default     = true
+  nullable    = false
 }
 
 # ── HPA: main pods ────────────────────────────────────────────────────────────

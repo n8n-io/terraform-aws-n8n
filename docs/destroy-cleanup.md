@@ -38,6 +38,69 @@ The module's dependency graph ensures resources are destroyed in the correct ord
 
 Most destroys complete in 10–15 minutes without intervention.
 
+## When deletion protection or data retention is enabled
+
+If you have flipped the module's teardown-friendly defaults, `terraform destroy`
+stops at the protections you asked for. All of them take effect from the value
+in Terraform state, not from the configuration on disk, so after changing any
+of them run `terraform apply` before `terraform destroy`: a
+`db_skip_final_snapshot = false` (with its `db_final_snapshot_identifier`)
+that was never applied produces no snapshot.
+
+- `db_deletion_protection = true`: destroy fails on `aws_db_instance.n8n` with
+  `InvalidParameterCombination: Cannot delete protected DB Instance`. The
+  database and its data are untouched, but everything that depends on it is
+  already gone by then: Terraform destroys dependents first, so the n8n Helm
+  release, the Ingress (and its ALB), the webhook HPA and the Route 53 alias
+  record are deleted before the RDS delete is attempted. Treat this as an
+  outage, not a no-op. To proceed, set `db_deletion_protection = false` and
+  run `terraform apply` first (that apply also recreates the application
+  layer, or use `-target='module.n8n.aws_db_instance.n8n[0]'` to flip only the
+  flag). If `db_skip_final_snapshot = false`, the apply also records the
+  snapshot settings in state; AWS creates the snapshot itself during the
+  deletion.
+- `db_skip_final_snapshot = false`: `db_final_snapshot_identifier` must be set
+  and unique in the account and region. If a snapshot with that identifier
+  already exists, destroy fails with `DBSnapshotAlreadyExists`.
+- `s3_force_destroy = false`: destroy fails with `BucketNotEmpty` if the bucket
+  holds any objects. Empty the bucket (and any noncurrent versions, if
+  versioning is enabled) before re-running destroy.
+
+### Key survival checklist
+
+This applies only when the database has `db_storage_encrypted = true` (the
+default) and/or the S3 bucket has `s3_kms_encryption_enabled = true` (the
+default), and the relevant key is module-managed (`create_db_kms_key = true`
+or `create_s3_kms_key = true`, both also the default). A module-managed KMS
+key enters a 7-day `PendingDeletion` window on destroy and cannot decrypt
+data while in that state. If you already supply your own retained key via
+`db_kms_key_arn` / `s3_kms_key_arn` with the matching `create_*_kms_key =
+false`, or if encryption is off entirely, the key side is already covered:
+nothing the module deletes can lock you out of your data. Whether the data
+itself survives still depends on the teardown controls above
+(`db_skip_final_snapshot`, `db_delete_automated_backups`, `s3_force_destroy`).
+
+Before destroying a production stack where recoverability matters:
+
+1. AWS does not let you change an existing RDS instance's storage encryption
+   key (`modify-db-instance` has no option for it). Take a manual snapshot
+   (`aws rds create-db-snapshot`), copy it with `aws rds copy-db-snapshot
+   --kms-key-id <retained-key-arn>`, and keep that copy: it is what you
+   restore from later, independent of the module's key. Do this before
+   destroying; the destroy-time final snapshot (when
+   `db_skip_final_snapshot = false`) still inherits the module-managed key
+   and is subject to the same `PendingDeletion` window, so it is not a
+   substitute for the independently keyed copy.
+2. Re-encrypt or copy every existing S3 object to a key you keep, then switch
+   the bucket to it: setting `create_s3_kms_key = false` with
+   `s3_kms_key_arn` only changes the default for objects written after the
+   change, not objects already in the bucket.
+3. Save the `n8n_encryption_key` output. Restoring the database without it
+   leaves workflows intact but every stored credential unreadable.
+
+See `README.md` → "Deletion protection and teardown" for the full retention
+model and the customer-managed-alternative.
+
 ## Troubleshooting
 
 ### Ingress deletion hangs

@@ -40,8 +40,9 @@ resource "aws_s3_bucket" "n8n" {
   bucket = local.s3_bucket_name_generated
 
   # Allow terraform destroy to drop the bucket even when n8n has written
-  # binary attachments — without this, destroy fails with BucketNotEmpty.
-  force_destroy = true
+  # binary attachments. Defaults to true for evaluation teardowns; set
+  # var.s3_force_destroy = false for production retention.
+  force_destroy = var.s3_force_destroy
 
   tags = merge(local.common_tags, { Name = local.s3_bucket_name_generated })
 }
@@ -428,6 +429,19 @@ check "existing_s3_bucket_name_requires_create_s3_bucket_false" {
       "existing_s3_bucket_name is set while create_s3_bucket = true, so it is ignored: the module creates its ",
       "own S3 bucket and points n8n at that, not at the bucket you supplied. Set create_s3_bucket = false to use ",
       "an existing bucket.",
+    ])
+  }
+}
+
+# The S3 counterpart of the deletion-control clause in database.tf's
+# rds_tuning_requires_module_managed_database check.
+check "s3_force_destroy_requires_module_managed_bucket" {
+  assert {
+    condition = !var.create_s3_bucket ? var.s3_force_destroy : true
+    error_message = join("", [
+      "s3_force_destroy = false is set while create_s3_bucket = false, so it is ignored: the module creates no ",
+      "bucket in that mode and the setting protects nothing. Configure force_destroy on the bucket you supply ",
+      "via existing_s3_bucket_name.",
     ])
   }
 }
