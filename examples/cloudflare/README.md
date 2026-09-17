@@ -39,9 +39,13 @@ path (`route53_zone_id` set): with this example's caller-supplied
 certificate it did not issue, and its `dns.tf` warns if you try. If n8n
 needs to answer on more than one hostname, use `examples/small` (Route 53),
 or extend this example: request a certificate in `dns.tf` whose subject
-alternative names cover every hostname (with a validation record each),
-add a CNAME per hostname, and pass the extra names through to the module's
-`n8n_additional_domains`, which adds the Ingress rules. The module's
+alternative names cover every hostname, widen the `for_each` on
+`cloudflare_record.cert_validation` from `toset([var.n8n_domain])` to the
+full static set of names so every name gets a validation record (keep the
+lookup keyed by domain name; iterating `domain_validation_options` directly
+fails at plan because its keys are unknown, as the comment in `dns.tf`
+explains), add a CNAME per hostname, and pass the extra names through to
+the module's `n8n_additional_domains`, which adds the Ingress rules. The module's
 plan-time warning still fires in that setup because it cannot inspect the
 certificate you supplied; it is safe to ignore once the names match.
 

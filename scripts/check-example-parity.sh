@@ -7,9 +7,9 @@
 # added to one was never added to the others, and three examples lost the
 # "Production considerations" section entirely. Two checks:
 #
-#   1. Variable parity. Diffs each example's variables.tf declarations against
-#      examples/small's and fails on any difference not listed in
-#      ALLOWED_DIFFS below. Entries are "example:pattern"; a pattern may be a
+#   1. Variable parity. Diffs the set of variable NAMES each example's
+#      variables.tf declares against examples/small's and fails on any name
+#      present on one side only that is not listed in ALLOWED_DIFFS below. Entries are "example:pattern"; a pattern may be a
 #      bash glob (customer_managed_*). Every entry must still match a real
 #      variable, so a rename cannot leave a stale exemption behind.
 #
@@ -19,9 +19,11 @@
 #      deletion-control defaults, and its README must carry a "## Production
 #      considerations" section saying so.
 #
-# What this script deliberately does NOT check: main.tf wiring, tftest.hcl
-# coverage, or the content of the considerations table. It catches the
-# surface going out of sync, which is what #136 found.
+# What this script deliberately does NOT check: a shared variable's type,
+# default, description or validation (defaults legitimately differ between
+# sizing tiers), main.tf wiring, tftest.hcl coverage, or the content of the
+# considerations table. It catches the surface going out of sync, which is
+# what #136 found.
 
 set -euo pipefail
 

@@ -111,8 +111,8 @@ tasks:
 
   example-parity:
     desc: >-
-      Diff every example's variables.tf against examples/small for undeclared
-      drift, and require a "Production considerations" README section wherever
+      Diff the variable names every example's variables.tf declares against
+      examples/small for undeclared drift, and require a "Production considerations" README section wherever
       the module still creates RDS or S3 (see #136). Local-only for now, not yet
       a CI-gated check.
     cmds:

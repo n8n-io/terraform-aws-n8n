@@ -128,14 +128,15 @@ line) either needs no caller action or carries its own note under **Changed**.
   now name the inputs instead of telling readers to fork the module. See
   [#134](https://github.com/n8n-io/terraform-aws-n8n/issues/134).
 - `scripts/check-example-parity.sh` (`task example-parity`, local-only for
-  now, not yet wired into CI): diffs every example's `variables.tf`
-  declarations against `examples/small`'s and fails on any difference not in
-  its per-example allowlist (DNS-provider credentials, `customer_managed_*`
+  now, not yet wired into CI): diffs the set of variable names every
+  example's `variables.tf` declares against `examples/small`'s and fails on
+  any name present on one side only that is not in its per-example allowlist (DNS-provider credentials, `customer_managed_*`
   stand-in sizing plus `kubernetes_version` where the example builds its own
   cluster, split-ingress's own Ingress knobs, large's Aurora and BYO
   certificate inputs, `n8n_additional_domains` where an example cannot take
   it, and the module-side deletion controls on a layer the example brings
-  itself). A stale allowlist entry fails too. It also fails when an example
+  itself). A stale allowlist entry fails too. Names only: a shared
+  variable's type or default is not compared. It also fails when an example
   still lets the module create RDS or S3 but its README has no "Production
   considerations" section. Added after both kinds of drift happened silently;
   see #136.
