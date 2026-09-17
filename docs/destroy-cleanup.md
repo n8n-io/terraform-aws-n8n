@@ -41,12 +41,16 @@ Most destroys complete in 10–15 minutes without intervention.
 ## When deletion protection or data retention is enabled
 
 If you have flipped the module's teardown-friendly defaults, `terraform destroy`
-stops at the protections you asked for:
+stops at the protections you asked for. All of them take effect from the value
+in Terraform state, not from the configuration on disk, so after changing any
+of them run `terraform apply` before `terraform destroy`: a
+`db_skip_final_snapshot = false` (with its `db_final_snapshot_identifier`)
+that was never applied produces no snapshot.
 
 - `db_deletion_protection = true`: destroy fails on `aws_db_instance.n8n`. Set
   `db_deletion_protection = false` and run `terraform apply` first. If
-  `db_skip_final_snapshot = false`, that apply also creates the final snapshot
-  when the instance is eventually deleted.
+  `db_skip_final_snapshot = false`, that apply also records the snapshot
+  settings in state; AWS creates the snapshot itself during the deletion.
 - `db_skip_final_snapshot = false`: `db_final_snapshot_identifier` must be set
   and unique in the account and region. If a snapshot with that identifier
   already exists, destroy fails with `DBSnapshotAlreadyExists`.

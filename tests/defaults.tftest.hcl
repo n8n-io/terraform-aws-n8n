@@ -5501,7 +5501,7 @@ run "s3_bucket_is_private" {
   }
 
   # Bucket name: n8n-<cluster_name>-<last 6 of account ID>. With the default
-  # cluster_name "n8n-cluster" and mocked account 123456789012 -> 789012.
+  # cluster_name "n8n-cluster" and mocked account 123456789012 → 789012.
   assert {
     condition     = aws_s3_bucket.n8n[0].bucket == "n8n-n8n-cluster-789012"
     error_message = "S3 bucket name should be n8n-<cluster_name>-<account_suffix>"
