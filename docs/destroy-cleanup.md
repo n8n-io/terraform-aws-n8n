@@ -47,10 +47,18 @@ of them run `terraform apply` before `terraform destroy`: a
 `db_skip_final_snapshot = false` (with its `db_final_snapshot_identifier`)
 that was never applied produces no snapshot.
 
-- `db_deletion_protection = true`: destroy fails on `aws_db_instance.n8n`. Set
-  `db_deletion_protection = false` and run `terraform apply` first. If
-  `db_skip_final_snapshot = false`, that apply also records the snapshot
-  settings in state; AWS creates the snapshot itself during the deletion.
+- `db_deletion_protection = true`: destroy fails on `aws_db_instance.n8n` with
+  `InvalidParameterCombination: Cannot delete protected DB Instance`. The
+  database and its data are untouched, but everything that depends on it is
+  already gone by then: Terraform destroys dependents first, so the n8n Helm
+  release, the Ingress (and its ALB), the webhook HPA and the Route 53 alias
+  record are deleted before the RDS delete is attempted. Treat this as an
+  outage, not a no-op. To proceed, set `db_deletion_protection = false` and
+  run `terraform apply` first (that apply also recreates the application
+  layer, or use `-target='module.n8n.aws_db_instance.n8n[0]'` to flip only the
+  flag). If `db_skip_final_snapshot = false`, the apply also records the
+  snapshot settings in state; AWS creates the snapshot itself during the
+  deletion.
 - `db_skip_final_snapshot = false`: `db_final_snapshot_identifier` must be set
   and unique in the account and region. If a snapshot with that identifier
   already exists, destroy fails with `DBSnapshotAlreadyExists`.
