@@ -433,6 +433,19 @@ check "existing_s3_bucket_name_requires_create_s3_bucket_false" {
   }
 }
 
+# The S3 counterpart of the deletion-control clause in database.tf's
+# rds_tuning_requires_module_managed_database check.
+check "s3_force_destroy_requires_module_managed_bucket" {
+  assert {
+    condition = !var.create_s3_bucket ? var.s3_force_destroy : true
+    error_message = join("", [
+      "s3_force_destroy = false is set while create_s3_bucket = false, so it is ignored: the module creates no ",
+      "bucket in that mode and the setting protects nothing. Configure force_destroy on the bucket you supply ",
+      "via existing_s3_bucket_name.",
+    ])
+  }
+}
+
 # No check for s3_kms_key_arn alongside create_s3_bucket = false. That
 # combination used to be an "X is ignored when Y" case and was flagged as one,
 # but it no longer is: the input now also grants the pod role kms:Decrypt and

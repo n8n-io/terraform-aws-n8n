@@ -5653,6 +5653,21 @@ run "existing_s3_bucket_name_with_create_s3_bucket_true_warns" {
   expect_failures = [check.existing_s3_bucket_name_requires_create_s3_bucket_false]
 }
 
+# s3_force_destroy = false alongside create_s3_bucket = false applies to
+# nothing: the module manages no bucket to protect. Warn, matching how the
+# db_* deletion controls surface through rds_tuning_requires_module_managed_database.
+run "s3_force_destroy_with_existing_bucket_warns" {
+  command = plan
+
+  variables {
+    create_s3_bucket        = false
+    existing_s3_bucket_name = "my-existing-n8n-bucket"
+    s3_force_destroy        = false
+  }
+
+  expect_failures = [check.s3_force_destroy_requires_module_managed_bucket]
+}
+
 # s3_kms_key_arn alongside create_s3_bucket = false used to trip a check block
 # warning that the input was ignored. It is not ignored any more: it is how a
 # caller tells the module that the bucket they supplied is SSE-KMS encrypted, so

@@ -119,7 +119,10 @@ line) either needs no caller action or carries its own note under **Changed**.
   bucket is unrecoverable once the module-managed KMS key finishes its
   seven-day deletion window, and the `create_*_kms_key = false` path that
   avoids it. Matching `rds_*` / `s3_force_destroy` outputs echo the values
-  in effect. `examples/small` and `examples/medium` pass all five through,
+  in effect, and a new `s3_force_destroy_requires_module_managed_bucket`
+  check warns when `s3_force_destroy = false` is set alongside
+  `create_s3_bucket = false`, mirroring the RDS controls' clause in
+  `rds_tuning_requires_module_managed_database`. `examples/small` and `examples/medium` pass all five through,
   along with the existing `db_backup_retention_period`, as nullable
   example variables; the other examples' "Production considerations" tables
   now name the inputs instead of telling readers to fork the module. See
