@@ -4930,8 +4930,8 @@ run "rds_deletion_controls_with_external_database_warn" {
 # database. With create_database = false the module creates no RDS instance,
 # so an identifier that would otherwise be rejected (set while
 # db_skip_final_snapshot is true) must reach the warning-only check above
-# instead of failing the plan.
-run "rds_final_snapshot_identifier_is_not_validated_for_external_database" {
+# instead of failing the plan. The format rules below stay unconditional.
+run "rds_final_snapshot_identifier_pairing_rules_skipped_for_external_database" {
   command = plan
 
   variables {
@@ -4946,6 +4946,94 @@ run "rds_final_snapshot_identifier_is_not_validated_for_external_database" {
 
 # The blank check is a format rule, not an applicability rule, so it still
 # fails the plan with create_database = false.
+# AWS rejects identifiers outside its naming rule at delete time, which is the
+# worst moment to learn about it: the stack is half gone. Catch it at plan.
+run "rds_final_snapshot_identifier_rejects_invalid_format" {
+  command = plan
+
+  variables {
+    db_skip_final_snapshot       = false
+    db_final_snapshot_identifier = "1-starts-with-digit"
+  }
+
+  expect_failures = [var.db_final_snapshot_identifier]
+}
+
+run "rds_final_snapshot_identifier_rejects_consecutive_hyphens" {
+  command = plan
+
+  variables {
+    db_skip_final_snapshot       = false
+    db_final_snapshot_identifier = "n8n--final"
+  }
+
+  expect_failures = [var.db_final_snapshot_identifier]
+}
+
+run "rds_final_snapshot_identifier_rejects_trailing_hyphen" {
+  command = plan
+
+  variables {
+    db_skip_final_snapshot       = false
+    db_final_snapshot_identifier = "n8n-final-"
+  }
+
+  expect_failures = [var.db_final_snapshot_identifier]
+}
+
+run "rds_final_snapshot_identifier_rejects_underscore" {
+  command = plan
+
+  variables {
+    db_skip_final_snapshot       = false
+    db_final_snapshot_identifier = "n8n_final"
+  }
+
+  expect_failures = [var.db_final_snapshot_identifier]
+}
+
+# 256 characters: one over the RDS limit.
+run "rds_final_snapshot_identifier_rejects_256_characters" {
+  command = plan
+
+  variables {
+    db_skip_final_snapshot       = false
+    db_final_snapshot_identifier = "a${join("", [for i in range(255) : "x"])}"
+  }
+
+  expect_failures = [var.db_final_snapshot_identifier]
+}
+
+# Boundary cases the rule must accept: a single letter, and exactly 255
+# characters.
+run "rds_final_snapshot_identifier_accepts_boundary_values" {
+  command = plan
+
+  variables {
+    db_skip_final_snapshot       = false
+    db_final_snapshot_identifier = "a"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].final_snapshot_identifier == "a"
+    error_message = "a one-letter identifier is valid for RDS and must be accepted"
+  }
+}
+
+run "rds_final_snapshot_identifier_accepts_255_characters" {
+  command = plan
+
+  variables {
+    db_skip_final_snapshot       = false
+    db_final_snapshot_identifier = "a${join("", [for i in range(254) : "x"])}"
+  }
+
+  assert {
+    condition     = length(aws_db_instance.n8n[0].final_snapshot_identifier) == 255
+    error_message = "a 255-character identifier is the RDS maximum and must be accepted"
+  }
+}
+
 run "rds_final_snapshot_identifier_rejects_blank_even_for_external_database" {
   command = plan
 

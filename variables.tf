@@ -1823,7 +1823,7 @@ variable "db_skip_final_snapshot" {
 }
 
 variable "db_final_snapshot_identifier" {
-  description = "Name of the final DB snapshot to create when db_skip_final_snapshot = false. Required in that case; must be null when db_skip_final_snapshot = true. Must be unique across the account and region; if a snapshot with this identifier already exists, destroy fails. Good practice is to include a timestamp or deployment identifier. Ignored when create_database = false."
+  description = "Name of the final DB snapshot to create when db_skip_final_snapshot = false. Required in that case; must be null when db_skip_final_snapshot = true. Must start with a letter, contain only letters, digits and hyphens, and neither end with a hyphen nor contain two consecutive hyphens (the RDS snapshot identifier rule). Must be unique across the account and region; if a snapshot with this identifier already exists, destroy fails. Good practice is to include a deployment identifier. Takes effect from the value in Terraform state, so apply a change to it before running terraform destroy. Ignored when create_database = false."
   type        = string
   default     = null
 
@@ -1833,6 +1833,19 @@ variable "db_final_snapshot_identifier" {
   validation {
     condition     = var.db_final_snapshot_identifier != null ? trimspace(var.db_final_snapshot_identifier) != "" : true
     error_message = "db_final_snapshot_identifier must not be blank. Leave it null when db_skip_final_snapshot = true."
+  }
+
+  # RDS naming rule for snapshot identifiers, enforced at plan time because the
+  # alternative is a failed delete after the rest of the stack is already gone.
+  # Terraform's RE2 regex has no lookahead, so the "no consecutive hyphens"
+  # part is a separate strcontains rather than part of the pattern.
+  validation {
+    condition = var.db_final_snapshot_identifier != null ? (
+      can(regex("^[A-Za-z]([A-Za-z0-9-]*[A-Za-z0-9])?$", var.db_final_snapshot_identifier)) &&
+      !strcontains(var.db_final_snapshot_identifier, "--") &&
+      length(var.db_final_snapshot_identifier) <= 255
+    ) : true
+    error_message = "db_final_snapshot_identifier must be 1 to 255 characters, start with a letter, contain only letters, digits and hyphens, and must not end with a hyphen or contain two consecutive hyphens."
   }
 
   # AWS requires a final snapshot identifier when skip_final_snapshot is false,

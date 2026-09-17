@@ -109,8 +109,9 @@ line) either needs no caller action or carries its own note under **Changed**.
 - **Deletion-time controls for the module-managed RDS instance and S3
   bucket**: `db_deletion_protection` (default `false`),
   `db_skip_final_snapshot` (default `true`), `db_final_snapshot_identifier`
-  (default `null`, required when `db_skip_final_snapshot = false` and
-  rejected when it is `true`), `db_delete_automated_backups` (default
+  (default `null`, required when `db_skip_final_snapshot = false`,
+  rejected when it is `true`, and validated against the RDS snapshot naming
+  rule at plan time), `db_delete_automated_backups` (default
   `true`), and `s3_force_destroy` (default `true`). Every default matches
   the value the module previously hardcoded, so existing deployments see no
   plan diff; flip them for production per the new README section "Deletion
