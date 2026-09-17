@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# check-example-parity.sh: every example other than medium/large is documented
-# as examples/small plus one deliberate difference (a DNS provider, a split
-# Ingress, one customer-managed layer). In practice the module input surface
+# check-example-parity.sh: the DNS, topology and single-layer customer-managed
+# examples are documented as examples/small plus one deliberate difference,
+# customer-managed-everything stacks three of those, and medium/large are
+# sizing tiers of the same input surface. In practice the module input surface
 # each one passes through has silently drifted before (see #136): a variable
 # added to one was never added to the others, and three examples lost the
 # "Production considerations" section entirely. Two checks:
@@ -15,7 +16,7 @@
 #   2. Production considerations. Any example whose main.tf still lets the
 #      module create RDS or S3 (does not set both create_database = false and
 #      create_s3_bucket = false) inherits the module's teardown-friendly
-#      hardcoded defaults, and its README must carry a "## Production
+#      deletion-control defaults, and its README must carry a "## Production
 #      considerations" section saying so.
 #
 # What this script deliberately does NOT check: main.tf wiring, tftest.hcl
@@ -56,6 +57,25 @@ ALLOWED_DIFFS=(
   "customer-managed-cluster:kubernetes_version"
   "customer-managed-everything:customer_managed_*"
   "customer-managed-everything:kubernetes_version"
+  # The module-side deletion controls (db_*, s3_force_destroy) are no-ops on
+  # a layer the module does not create, and setting one there only raises the
+  # module's rds_tuning_requires_module_managed_database /
+  # s3_force_destroy_requires_module_managed_bucket warning. So: -s3 brings
+  # its own bucket (its force_destroy is customer_managed_s3_force_destroy),
+  # -everything brings both RDS and S3, and large runs Aurora in place of RDS
+  # (the equivalent arguments live on aws_rds_cluster.n8n in its aurora.tf).
+  "customer-managed-s3:s3_force_destroy"
+  "customer-managed-everything:db_backup_retention_period"
+  "customer-managed-everything:db_deletion_protection"
+  "customer-managed-everything:db_skip_final_snapshot"
+  "customer-managed-everything:db_final_snapshot_identifier"
+  "customer-managed-everything:db_delete_automated_backups"
+  "customer-managed-everything:s3_force_destroy"
+  "large:db_backup_retention_period"
+  "large:db_deletion_protection"
+  "large:db_skip_final_snapshot"
+  "large:db_final_snapshot_identifier"
+  "large:db_delete_automated_backups"
   # large swaps RDS for Aurora and accepts a BYO certificate_arn instead of
   # route53_zone_id; it does not offer additional hostnames.
   "large:aurora_*"
@@ -64,7 +84,9 @@ ALLOWED_DIFFS=(
 )
 
 declare_vars() {
-  grep -oE '^variable "[^"]+"' "examples/$1/variables.tf" | sed -E 's/^variable "(.+)"$/\1/' | sort -u
+  # `|| true` keeps a variables.tf with no declarations from tripping
+  # `set -e` inside the caller's command substitution with an unexplained exit.
+  { grep -oE '^variable "[^"]+"' "examples/$1/variables.tf" || true; } | sed -E 's/^variable "(.+)"$/\1/' | sort -u
 }
 
 is_allowed() {
@@ -121,7 +143,9 @@ done
 # Production considerations: required unless the module owns neither RDS nor
 # S3 in this example. Runs over the baseline too, since small's own section is
 # what every other example's points at. POSIX character classes, not \s: this
-# runs under whichever grep the developer has.
+# runs under whichever grep the developer has. Only a literal `= false` counts
+# as "customer-managed"; anything else (unset, `= true`, `= var.x`) is treated
+# as module-owned, so the check errs toward demanding the section.
 for example in "$BASELINE" "${EXAMPLES[@]}"; do
   main="examples/$example/main.tf"
   if ! { grep -qE '^[[:space:]]*create_database[[:space:]]*=[[:space:]]*false' "$main" && grep -qE '^[[:space:]]*create_s3_bucket[[:space:]]*=[[:space:]]*false' "$main"; }; then

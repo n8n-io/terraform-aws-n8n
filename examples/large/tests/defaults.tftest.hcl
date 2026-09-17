@@ -516,3 +516,33 @@ run "execution_data_storage_mode_rejects_filesystem" {
 
   expect_failures = [var.n8n_execution_data_storage_mode]
 }
+
+# ── Data-resource deletion controls ───────────────────────────────────────────
+# Only s3_force_destroy is passed through here. The module's db_* deletion
+# controls are deliberately absent: create_database = false means the module
+# manages no RDS instance, so they would be no-ops that only raise the
+# rds_tuning_requires_module_managed_database warning; the Aurora equivalents
+# live on aws_rds_cluster.n8n in aurora.tf. Verify the one wire by reading the
+# module output at its default and again after setting a non-default value.
+
+run "s3_force_destroy_defaults_to_module_teardown_friendly_value" {
+  command = plan
+
+  assert {
+    condition     = module.n8n.s3_force_destroy == true
+    error_message = "s3_force_destroy should pass through as true when the example leaves it at null"
+  }
+}
+
+run "s3_force_destroy_passes_through_to_module" {
+  command = plan
+
+  variables {
+    s3_force_destroy = false
+  }
+
+  assert {
+    condition     = module.n8n.s3_force_destroy == false
+    error_message = "s3_force_destroy must pass from the example to the module"
+  }
+}

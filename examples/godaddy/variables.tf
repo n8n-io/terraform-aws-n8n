@@ -201,6 +201,42 @@ variable "n8n_execution_data_storage_mode" {
   }
 }
 
+variable "db_backup_retention_period" {
+  description = "Number of whole days to retain automated RDS backups. A value of 0 disables automated backups and point-in-time recovery. Passed to the module's db_backup_retention_period. Leave null (the default) to use the module's default of 7 days."
+  type        = number
+  default     = null
+}
+
+variable "db_deletion_protection" {
+  description = "Passed to the module's db_deletion_protection. Leave null (the default) to use the module's teardown-friendly default of false."
+  type        = bool
+  default     = null
+}
+
+variable "db_skip_final_snapshot" {
+  description = "Passed to the module's db_skip_final_snapshot. Leave null (the default) to use the module's teardown-friendly default of true."
+  type        = bool
+  default     = null
+}
+
+variable "db_final_snapshot_identifier" {
+  description = "Passed to the module's db_final_snapshot_identifier. Required when db_skip_final_snapshot is false; must be left null otherwise, or the module rejects the plan."
+  type        = string
+  default     = null
+}
+
+variable "db_delete_automated_backups" {
+  description = "Passed to the module's db_delete_automated_backups. Leave null (the default) to use the module's teardown-friendly default of true."
+  type        = bool
+  default     = null
+}
+
+variable "s3_force_destroy" {
+  description = "Passed to the module's s3_force_destroy. Leave null (the default) to use the module's teardown-friendly default of true."
+  type        = bool
+  default     = null
+}
+
 variable "tags" {
   description = "Additional AWS tags to apply to all resources this example creates. Merged on top of the built-in ManagedBy/Project tags."
   type        = map(string)

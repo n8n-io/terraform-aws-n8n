@@ -201,7 +201,7 @@ variable "db_skip_final_snapshot" {
 }
 
 variable "db_final_snapshot_identifier" {
-  description = "Passed to the module's db_final_snapshot_identifier. Required when db_skip_final_snapshot is false; ignored otherwise."
+  description = "Passed to the module's db_final_snapshot_identifier. Required when db_skip_final_snapshot is false; must be left null otherwise, or the module rejects the plan."
   type        = string
   default     = null
 }

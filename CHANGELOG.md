@@ -131,12 +131,36 @@ line) either needs no caller action or carries its own note under **Changed**.
   now, not yet wired into CI): diffs every example's `variables.tf`
   declarations against `examples/small`'s and fails on any difference not in
   its per-example allowlist (DNS-provider credentials, `customer_managed_*`
-  stand-in sizing, split-ingress's own Ingress knobs, large's Aurora and BYO
-  certificate inputs, and `n8n_additional_domains` where an example cannot
-  take it). A stale allowlist entry fails too. It also fails when an example
+  stand-in sizing plus `kubernetes_version` where the example builds its own
+  cluster, split-ingress's own Ingress knobs, large's Aurora and BYO
+  certificate inputs, `n8n_additional_domains` where an example cannot take
+  it, and the module-side deletion controls on a layer the example brings
+  itself). A stale allowlist entry fails too. It also fails when an example
   still lets the module create RDS or S3 but its README has no "Production
   considerations" section. Added after both kinds of drift happened silently;
   see #136.
+- The deletion-control pass-throughs #134 added to `examples/small` and
+  `examples/medium` (`db_backup_retention_period`, `db_deletion_protection`,
+  `db_skip_final_snapshot`, `db_final_snapshot_identifier`,
+  `db_delete_automated_backups`, `s3_force_destroy`) now reach every other
+  example that lets the module own the layer they control: all six on
+  `cloudflare`, `godaddy`, `split-ingress`, `customer-managed-redis` and
+  `customer-managed-cluster`; the five `db_*` on `customer-managed-s3`, whose
+  stand-in bucket already has `customer_managed_s3_force_destroy`; and
+  `s3_force_destroy` alone on `large`, whose Aurora cluster carries the
+  database-side equivalents in `aurora.tf`. `customer-managed-everything`
+  brings both RDS and S3 itself, so it takes none. Each is a nullable
+  variable defaulting to the module's value, so no plan diff. Every example's
+  `tests/defaults.tftest.hcl` asserts the wiring at defaults and with every
+  value flipped, except `customer-managed-cluster`, whose test file cannot
+  complete an ordinary plan under mocks (see its header); there `terraform
+  validate` proves the inputs are accepted and the note in that file says
+  why nothing more is possible. This is the first drift
+  `scripts/check-example-parity.sh` caught: on a checkout of #134 alone it
+  fails 48 times. The shared `db_final_snapshot_identifier` description in
+  all eight examples also now says the value must stay null when
+  `db_skip_final_snapshot` is true, matching the module's validation, rather
+  than "ignored otherwise". See #136.
 
 ### Changed
 
@@ -266,8 +290,8 @@ line) either needs no caller action or carries its own note under **Changed**.
   the module's `n8n_additional_domains` input, which `examples/small`,
   `medium`, and the customer-managed examples pass through (`split-ingress`
   composes it from `webhook_subdomain`; `large` omits it too, by design): it
-  read as drift rather than a
-  deliberate difference. Both READMEs now explain that the input only
+  read as drift rather than a deliberate difference. Both READMEs now
+  explain that the input only
   reaches the certificate on the module's own Route 53 issuance path: these
   two examples issue a single-Common-Name certificate themselves, and the
   module cannot add subject alternative names to a certificate it did not
@@ -277,23 +301,18 @@ line) either needs no caller action or carries its own note under **Changed**.
 - `examples/customer-managed-redis`, `examples/customer-managed-s3`, and
   `examples/customer-managed-cluster` had no "Production considerations"
   section at all, unlike the other examples that keep module-owned RDS or
-  S3. Each still lets the module
-  create RDS and/or S3 with the same teardown-friendly hardcoded defaults
-  `examples/small` documents (only `customer-managed-everything` avoids
-  every module-owned resource these defaults apply to, via `create_database
-  = false` and `create_s3_bucket = false`, so it correctly has no such
-  section). Verified by auditing every `examples/*/variables.tf` against
-  `examples/small`'s and checking each example's actual `create_database`/
-  `create_s3_bucket` wiring, not assumed from the example's name. `-s3`
-  gets only the three database rows: its own bucket's `force_destroy` is
-  already the exposed `customer_managed_s3_force_destroy` variable. See
-  #136.
-- Every example's "Production considerations" section said to "wrap or fork
-  the module" to change the teardown-friendly RDS/S3 defaults. A wrapper
-  module cannot override arguments on its child module's resources, so half
-  of that advice could not work. Each now says to fork, or to set
-  `create_database = false` / `create_s3_bucket = false` and bring your own,
-  pointing at `docs/customer-managed-infrastructure.md`. See #136.
+  S3. Each still lets the module create RDS and/or S3 with the same
+  teardown-friendly defaults `examples/small` documents (only
+  `customer-managed-everything` avoids every module-owned resource these
+  defaults apply to, via `create_database = false` and `create_s3_bucket =
+  false`, so it correctly has no such section). Verified by auditing every
+  `examples/*/variables.tf` against `examples/small`'s and checking each
+  example's actual `create_database`/`create_s3_bucket` wiring, not assumed
+  from the example's name. `-s3` gets only the four database rows: the
+  module's `s3_force_destroy` is a no-op there and its own bucket's
+  `force_destroy` is already the `customer_managed_s3_force_destroy`
+  variable. Every section now uses the same "Module input" table as
+  `examples/small` and says the inputs are passed through. See #136.
 
 ### Security
 

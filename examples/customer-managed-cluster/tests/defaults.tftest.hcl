@@ -158,3 +158,13 @@ run "customer_managed_node_desired_rejects_above_max" {
 # ordinary plan here, regardless of the assertion's own correctness. It has
 # no validation block to drive an expect_failures run either. Not testable in
 # this file; covered at the repo root's tests/defaults.tftest.hcl instead.
+
+# The six data-resource deletion-control pass-throughs (db_backup_retention_period,
+# db_deletion_protection, db_skip_final_snapshot, db_final_snapshot_identifier,
+# db_delete_automated_backups, s3_force_destroy) are in the same position as
+# n8n_main_hpa_min_replicas above: nullable pass-throughs with no validation
+# block of their own, whose default and non-default values could only be read
+# back through module outputs in an ordinary `command = plan` run, which this
+# file cannot complete. Their wiring is asserted in every other example's test
+# file and the module's own contract in tests/defaults.tftest.hcl at the repo
+# root; `terraform validate` here still proves each is an accepted module input.

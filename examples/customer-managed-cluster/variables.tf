@@ -199,6 +199,42 @@ variable "kubernetes_version" {
   }
 }
 
+variable "db_backup_retention_period" {
+  description = "Number of whole days to retain automated RDS backups. A value of 0 disables automated backups and point-in-time recovery. Passed to the module's db_backup_retention_period. Leave null (the default) to use the module's default of 7 days."
+  type        = number
+  default     = null
+}
+
+variable "db_deletion_protection" {
+  description = "Passed to the module's db_deletion_protection. Leave null (the default) to use the module's teardown-friendly default of false."
+  type        = bool
+  default     = null
+}
+
+variable "db_skip_final_snapshot" {
+  description = "Passed to the module's db_skip_final_snapshot. Leave null (the default) to use the module's teardown-friendly default of true."
+  type        = bool
+  default     = null
+}
+
+variable "db_final_snapshot_identifier" {
+  description = "Passed to the module's db_final_snapshot_identifier. Required when db_skip_final_snapshot is false; must be left null otherwise, or the module rejects the plan."
+  type        = string
+  default     = null
+}
+
+variable "db_delete_automated_backups" {
+  description = "Passed to the module's db_delete_automated_backups. Leave null (the default) to use the module's teardown-friendly default of true."
+  type        = bool
+  default     = null
+}
+
+variable "s3_force_destroy" {
+  description = "Passed to the module's s3_force_destroy. Leave null (the default) to use the module's teardown-friendly default of true."
+  type        = bool
+  default     = null
+}
+
 variable "customer_managed_node_instance_type" {
   description = "EC2 instance type for the stand-in cluster's node group. Matches the module's own node_instance_type default (t3.xlarge), not a cheaper demo size: the module's own variable description warns that a full multi-main n8n workload (main x2, worker x2, webhook x2 pods at minimum replicas) needs at least this much headroom for HPA to have room to scale. A real customer-managed cluster would be sized for its own broader workload, which may already be larger than this."
   type        = string
