@@ -203,6 +203,16 @@ module "n8n" {
   n8n_pruning_max_age             = 24
   n8n_pruning_max_count           = 5000000
 
+  # ── Data-resource deletion controls ─────────────────────────────────────────
+  # Defaults to null, which lets the module's own default apply. Exposed so the
+  # large example's production-considerations checklist can be implemented
+  # without wrapping or forking the module. The db_* deletion controls are
+  # deliberately absent: create_database = false above means the module manages
+  # no RDS instance, so they would be no-ops that only raise the
+  # rds_tuning_requires_module_managed_database warning. The equivalent Aurora
+  # arguments live on aws_rds_cluster.n8n in aurora.tf.
+  s3_force_destroy = var.s3_force_destroy
+
   # ── Helm timeout ──────────────────────────────────────────────────────────────
   # Default 600s is too tight for ~52 pods at min replicas (and up to 240+ at
   # max). 1800s gives time for image pulls, init containers, and KEDA/HPA

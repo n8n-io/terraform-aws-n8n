@@ -67,6 +67,37 @@ combines all three and additionally invokes `modules/controllers` directly,
 which makes it the only root module in the repo that exercises that
 submodule's input contract, so it is the one that catches a change to it.
 
+The DNS, topology and single-layer customer-managed variants are each
+"`small` plus one deliberate difference"; `customer-managed-everything`
+stacks three of those differences, and `medium`/`large` are sizing tiers
+rather than variants. In every case the module inputs `small` passes
+through should stay in sync unless the difference itself removes them.
+That surface drifted silently once (see #136): two examples never received
+a pass-through and three lost their "Production considerations" section.
+`scripts/check-example-parity.sh` (`task example-parity`, local-only for
+now, not yet wired into CI) diffs the set of variable names every example's
+`variables.tf` declares against `small`'s and fails on any name present on
+one side only that is not in its per-example allowlist (the DNS-provider credentials, `customer_managed_*`
+stand-in sizing plus `kubernetes_version` where the example builds its own
+cluster, split-ingress's own Ingress knobs, large's Aurora and BYO
+certificate inputs, `n8n_additional_domains` where the example cannot
+take it, and the module-side deletion controls (`db_*`,
+`s3_force_destroy`) on a layer the example brings itself, where they would
+be no-ops that only raise the module's `check` warnings). It also fails if
+an example, `small` included, lets the module create RDS or S3 but its
+README has no `## Production considerations` section. It compares names
+only: a shared variable's type, default or description can still differ
+between examples unnoticed, and sizing tiers rely on that. When you add a
+pass-through to `small`, add it to the variants too, or add an allowlist
+entry with a reason. The pass-through itself follows the shape `small`
+uses: a nullable example variable defaulting to `null` so the module's own
+default applies, plus two `run` blocks in the example's
+`tests/defaults.tftest.hcl` reading the module output at the default and
+with the value flipped. `customer-managed-cluster` is the one exception:
+its test file cannot complete an ordinary plan under mocks (its header
+explains why), so there you add a note to that file instead and rely on
+`terraform validate` plus the other examples' runs.
+
 ### Architecture at a glance
 
 ```text

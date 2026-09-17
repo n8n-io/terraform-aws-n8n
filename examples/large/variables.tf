@@ -207,6 +207,12 @@ variable "n8n_main_hpa_min_replicas" {
   nullable    = false
 }
 
+variable "s3_force_destroy" {
+  description = "Passed to the module's s3_force_destroy. Leave null (the default) to use the module's teardown-friendly default of true."
+  type        = bool
+  default     = null
+}
+
 variable "tags" {
   description = "Additional AWS tags to apply to every resource this example creates."
   type        = map(string)

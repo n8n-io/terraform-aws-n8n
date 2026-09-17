@@ -157,6 +157,17 @@ module "n8n" {
   n8n_additional_domains          = var.n8n_additional_domains
   n8n_execution_data_storage_mode = var.n8n_execution_data_storage_mode
 
+  # ── Data-resource deletion controls ─────────────────────────────────────────
+  # All of these default to null, which lets the module's own defaults apply.
+  # They are exposed here so the customer-managed-redis example's production-considerations
+  # checklist can be implemented without wrapping or forking the module.
+  db_backup_retention_period   = var.db_backup_retention_period
+  db_deletion_protection       = var.db_deletion_protection
+  db_skip_final_snapshot       = var.db_skip_final_snapshot
+  db_final_snapshot_identifier = var.db_final_snapshot_identifier
+  db_delete_automated_backups  = var.db_delete_automated_backups
+  s3_force_destroy             = var.s3_force_destroy
+
   # ── Customer-managed Redis wiring ───────────────────────────────────────────
   create_elasticache               = false
   redis_host                       = aws_elasticache_replication_group.customer_managed.primary_endpoint_address

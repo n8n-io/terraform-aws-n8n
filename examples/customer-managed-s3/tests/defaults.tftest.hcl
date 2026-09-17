@@ -129,3 +129,77 @@ run "execution_data_storage_mode_rejects_filesystem" {
 
   expect_failures = [var.n8n_execution_data_storage_mode]
 }
+
+# ── Data-resource deletion controls ───────────────────────────────────────────
+# This example passes the five RDS deletion controls through to the module
+# unchanged, the same way examples/small does. s3_force_destroy is deliberately
+# not passed through: the module creates no bucket here (create_s3_bucket =
+# false), and the stand-in bucket's force_destroy is its own
+# customer_managed_s3_force_destroy variable. Verify the wiring by reading the
+# module outputs at their defaults and again after setting non-default values.
+
+run "deletion_controls_default_to_module_teardown_friendly_values" {
+  command = plan
+
+  assert {
+    condition     = module.n8n.rds_deletion_protection == false
+    error_message = "db_deletion_protection should pass through as false when the example leaves it at null"
+  }
+
+  assert {
+    condition     = module.n8n.rds_skip_final_snapshot == true
+    error_message = "db_skip_final_snapshot should pass through as true when the example leaves it at null"
+  }
+
+  assert {
+    condition     = module.n8n.rds_delete_automated_backups == true
+    error_message = "db_delete_automated_backups should pass through as true when the example leaves it at null"
+  }
+
+  assert {
+    condition     = module.n8n.rds_final_snapshot_identifier == null
+    error_message = "db_final_snapshot_identifier should pass through as null when the example leaves it at null"
+  }
+
+  assert {
+    condition     = module.n8n.rds_backup_retention_period == 7
+    error_message = "db_backup_retention_period should pass through as the module's default of 7 when the example leaves it at null"
+  }
+}
+
+run "deletion_controls_pass_through_to_module" {
+  command = plan
+
+  variables {
+    db_backup_retention_period   = 14
+    db_deletion_protection       = true
+    db_skip_final_snapshot       = false
+    db_final_snapshot_identifier = "customer-managed-s3-example-final"
+    db_delete_automated_backups  = false
+  }
+
+  assert {
+    condition     = module.n8n.rds_backup_retention_period == 14
+    error_message = "db_backup_retention_period must pass from the example to the module"
+  }
+
+  assert {
+    condition     = module.n8n.rds_deletion_protection == true
+    error_message = "db_deletion_protection must pass from the example to the module"
+  }
+
+  assert {
+    condition     = module.n8n.rds_skip_final_snapshot == false
+    error_message = "db_skip_final_snapshot must pass from the example to the module"
+  }
+
+  assert {
+    condition     = module.n8n.rds_final_snapshot_identifier == "customer-managed-s3-example-final"
+    error_message = "db_final_snapshot_identifier must pass from the example to the module"
+  }
+
+  assert {
+    condition     = module.n8n.rds_delete_automated_backups == false
+    error_message = "db_delete_automated_backups must pass from the example to the module"
+  }
+}

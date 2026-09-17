@@ -158,3 +158,19 @@ run "customer_managed_node_desired_rejects_above_max" {
 # ordinary plan here, regardless of the assertion's own correctness. It has
 # no validation block to drive an expect_failures run either. Not testable in
 # this file; covered at the repo root's tests/defaults.tftest.hcl instead.
+
+# The six data-resource deletion-control pass-throughs (db_backup_retention_period,
+# db_deletion_protection, db_skip_final_snapshot, db_final_snapshot_identifier,
+# db_delete_automated_backups, s3_force_destroy) are in the same position as
+# n8n_main_hpa_min_replicas above. This example's own declarations of them in
+# variables.tf are plain `default = null` variables with no validation block,
+# so there is nothing here for expect_failures to target. The module's
+# declarations do validate two of them (db_backup_retention_period's range,
+# db_final_snapshot_identifier's format and pairing), but a run that trips one
+# of those still hard-errors on the two unresolvable check blocks the header
+# describes, because neither variable gates the stand-in cluster's evaluation
+# the way cluster_name does. And a no-failure plan that would read the values
+# back through module outputs cannot complete here at all. Their wiring is
+# asserted in every other example's test file and the module's own contract in
+# tests/defaults.tftest.hcl at the repo root; `terraform validate` here still
+# proves each is an accepted module input.

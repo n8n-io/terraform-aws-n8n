@@ -45,6 +45,19 @@ terraform apply
 
 After apply, see the root [`docs/post-deployment.md`](../../docs/post-deployment.md) for DNS propagation and license activation.
 
+## Production considerations
+
+This example is a reference deployment optimized for clean `apply` / `destroy` cycles during evaluation. The module creates no bucket here, so its `s3_force_destroy` input is a no-op and is not passed through; the stand-in bucket's `force_destroy` is this example's own `customer_managed_s3_force_destroy` variable (see the Inputs table). The module still creates RDS with the same teardown-friendly defaults documented in [`examples/small`](../small/README.md#production-considerations), and you should review those before promoting this example to production:
+
+| Module input | Current default | Production |
+|---|---|---|
+| `db_backup_retention_period` | `7` | Match your RPO (up to 35 days) |
+| `db_deletion_protection` | `false` | `true` |
+| `db_skip_final_snapshot` | `true` | `false`, plus set `db_final_snapshot_identifier` |
+| `db_delete_automated_backups` | `true` | `false` |
+
+These inputs are passed straight through to the module; set them in `terraform.tfvars` (or via any other variable source) to override the defaults. They no longer require wrapping or forking the module.
+
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
 
@@ -85,6 +98,11 @@ After apply, see the root [`docs/post-deployment.md`](../../docs/post-deployment
 | <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1). | `string` | `"us-east-1"` | no |
 | <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | Name for the EKS cluster. Keep to 14 characters or fewer: the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. Also embedded in the stand-in bucket's name (main.tf), which is then handed to the module as existing\_s3\_bucket\_name, so it is additionally held to S3's lowercase naming rules here. | `string` | `"n8n-cluster"` | no |
 | <a name="input_customer_managed_s3_force_destroy"></a> [customer\_managed\_s3\_force\_destroy](#input\_customer\_managed\_s3\_force\_destroy) | Whether the stand-in bucket this example creates can be destroyed while it still holds objects. true here only so `terraform destroy` doesn't fail on a demo bucket; a real customer-managed bucket's lifecycle, including whether it can be force-destroyed, is that bucket owner's decision, not this module's or this example's. | `bool` | `true` | no |
+| <a name="input_db_backup_retention_period"></a> [db\_backup\_retention\_period](#input\_db\_backup\_retention\_period) | Number of whole days to retain automated RDS backups. A value of 0 disables automated backups and point-in-time recovery. Passed to the module's db\_backup\_retention\_period. Leave null (the default) to use the module's default of 7 days. | `number` | `null` | no |
+| <a name="input_db_delete_automated_backups"></a> [db\_delete\_automated\_backups](#input\_db\_delete\_automated\_backups) | Passed to the module's db\_delete\_automated\_backups. Leave null (the default) to use the module's teardown-friendly default of true. | `bool` | `null` | no |
+| <a name="input_db_deletion_protection"></a> [db\_deletion\_protection](#input\_db\_deletion\_protection) | Passed to the module's db\_deletion\_protection. Leave null (the default) to use the module's teardown-friendly default of false. | `bool` | `null` | no |
+| <a name="input_db_final_snapshot_identifier"></a> [db\_final\_snapshot\_identifier](#input\_db\_final\_snapshot\_identifier) | Passed to the module's db\_final\_snapshot\_identifier. Required when db\_skip\_final\_snapshot is false; must be left null otherwise, or the module rejects the plan. | `string` | `null` | no |
+| <a name="input_db_skip_final_snapshot"></a> [db\_skip\_final\_snapshot](#input\_db\_skip\_final\_snapshot) | Passed to the module's db\_skip\_final\_snapshot. Leave null (the default) to use the module's teardown-friendly default of true. | `bool` | `null` | no |
 | <a name="input_n8n_additional_domains"></a> [n8n\_additional\_domains](#input\_n8n\_additional\_domains) | Extra hostnames n8n should answer on, beyond n8n\_domain. Each is added to the module-issued ACM certificate as a subject alternative name, given a Route 53 validation record and alias A-record, and routed by the module's Ingress. Leave empty for a single hostname. | `list(string)` | `[]` | no |
 | <a name="input_n8n_custom_extensions_path"></a> [n8n\_custom\_extensions\_path](#input\_n8n\_custom\_extensions\_path) | Absolute path inside the n8n container that n8n scans for custom nodes at startup (e.g. "/opt/n8n-nodes"). Maps to N8N\_CUSTOM\_EXTENSIONS, and is set on main, worker and webhook processor pods alike. Set this alongside n8n\_image\_repository when the custom image bakes community packages in: since n8n 1.0 the loader no longer reads the image's global node\_modules, so a plain npm install into the image is never scanned and the packages ship but never load. Nodes found here register under the package name CUSTOM, so a node installed from npm as n8n-nodes-example.myNode becomes CUSTOM.myNode and existing workflows referencing the npm-qualified type will not resolve. Leave null (the default) to omit the env var. | `string` | `null` | no |
 | <a name="input_n8n_domain"></a> [n8n\_domain](#input\_n8n\_domain) | Fully-qualified domain name for n8n (e.g. n8n.example.com). The parent zone must be hosted in Route53 (pass its ID via route53\_zone\_id). | `string` | n/a | yes |

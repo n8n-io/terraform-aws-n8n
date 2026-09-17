@@ -128,6 +128,19 @@ module "n8n" {
   n8n_execution_data_storage_mode = var.n8n_execution_data_storage_mode
   n8n_main_hpa_min_replicas       = var.n8n_main_hpa_min_replicas
 
+  # ── Data-resource deletion controls ─────────────────────────────────────────
+  # All of these default to null, which lets the module's own defaults apply.
+  # They are exposed here so this example's production-considerations checklist
+  # can be implemented without wrapping or forking the module. s3_force_destroy
+  # is deliberately absent: this example brings its own bucket
+  # (create_s3_bucket = false below), whose force_destroy is the
+  # customer_managed_s3_force_destroy variable instead.
+  db_backup_retention_period   = var.db_backup_retention_period
+  db_deletion_protection       = var.db_deletion_protection
+  db_skip_final_snapshot       = var.db_skip_final_snapshot
+  db_final_snapshot_identifier = var.db_final_snapshot_identifier
+  db_delete_automated_backups  = var.db_delete_automated_backups
+
   # ── Customer-managed S3 wiring ──────────────────────────────────────────────
   create_s3_bucket        = false
   existing_s3_bucket_name = aws_s3_bucket.customer_managed.id
