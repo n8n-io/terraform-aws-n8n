@@ -169,7 +169,9 @@ line) either needs no caller action or carries its own note under **Changed**.
   own `jobs-<name>` queue. Per-pool replica bounds, concurrency, resources and
   extra env, each falling back to the module-wide worker setting when null.
   Declaring any pool also emits `N8N_WORKER_POOLS_ENABLED=true` on every pod.
-  Default `[]`, which renders nothing and emits nothing, so this is additive.
+  Default `[]`, which omits `queueMode.workerGroups` from the Helm values
+  entirely rather than sending an empty list, so a deployment that declares no
+  pool sees no `helm_release` diff at all.
   Pool names are validated at plan to the pattern n8n itself only warns
   about, capped at 43 characters because the ScaledObject name
   `n8n-worker-<name>` must fit KEDA's 54, and `"default"` is refused since
@@ -219,7 +221,9 @@ line) either needs no caller action or carries its own note under **Changed**.
 - `n8n_worker_extra_env`: worker-only environment variables via the chart's
   `queueMode.workerExtraEnv`, reaching the default worker deployment and every
   pool alike. Same plan-time guards as `n8n_extra_env` plus a C_IDENTIFIER
-  name check. Default `[]`, additive.
+  name check. Default `[]`, which omits `queueMode.workerExtraEnv` from the
+  Helm values rather than sending an empty list, so this is additive with no
+  plan diff for a caller who does not set it.
 
 - `examples/worker-pools/` (**Early Alpha, subject to change without notice**):
   topology variant of `small` running three pools (`heavy`, `secteam`,
@@ -227,8 +231,12 @@ line) either needs no caller action or carries its own note under **Changed**.
   6 to 8 to hold their ceilings. `n8n_chart_version` is a required input
   there, since the module default renders no pools, and its README documents
   both the official GHCR preview-build path and packaging one to a private
-  mirror, plus an end-to-end routing test. Draft until the chart and n8n
-  releases both ship.
+  mirror, plus an end-to-end routing test. Carries the same six deletion
+  controls and the same "Production considerations" table as every other
+  example the module builds RDS and S3 for, and is covered by
+  `scripts/check-example-parity.sh`, whose allowlist explains the three chart
+  inputs and two default-worker KEDA bounds it declares beyond `small`'s.
+  Draft until the chart and n8n releases both ship.
 
 - `tests/scripts/verify-worker-pools.sh`: post-apply check for
   `n8n_worker_pools`. Reads `worker_pool_names` and `namespace` from the

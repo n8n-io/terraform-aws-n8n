@@ -325,20 +325,29 @@ resource "helm_release" "n8n" {
 
     replicaCount = var.n8n_main_hpa_min_replicas
 
-    queueMode = {
-      enabled            = true
-      workerReplicaCount = var.n8n_worker_keda_min_replicas
-      workerConcurrency  = var.n8n_worker_concurrency
+    # Both optional keys are merged in only when they carry something, for the
+    # same reason `strategy` is further down: an empty list renders nothing
+    # either way, but it still changes the values string, and that is a
+    # helm_release diff every existing release would see on upgrade for a
+    # feature it does not use.
+    queueMode = merge(
+      {
+        enabled            = true
+        workerReplicaCount = var.n8n_worker_keda_min_replicas
+        workerConcurrency  = var.n8n_worker_concurrency
+      },
+
       # Worker-only env, appended after config.extraEnv in worker containers and
       # nowhere else. Distinct from n8n_extra_env, which reaches main and webhook
       # pods too. "Worker" here covers every worker: the chart renders the
       # unlabelled deployment and each pool from one shared pod template, so this
       # lands in all of them, with a pool's own extraEnv applied afterwards.
-      workerExtraEnv = var.n8n_worker_extra_env
-      # One additional worker Deployment and ScaledObject per pool. Empty list
-      # on the default path, which renders nothing. See worker-pools.tf.
-      workerGroups = local.n8n_worker_groups
-    }
+      length(var.n8n_worker_extra_env) > 0 ? { workerExtraEnv = var.n8n_worker_extra_env } : {},
+
+      # One additional worker Deployment and ScaledObject per pool. Omitted
+      # entirely on the default path. See worker-pools.tf.
+      length(local.n8n_worker_groups) > 0 ? { workerGroups = local.n8n_worker_groups } : {},
+    )
 
     webhookProcessor = {
       enabled                                = true
