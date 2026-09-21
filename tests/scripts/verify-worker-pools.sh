@@ -350,8 +350,9 @@ for pool in $WORKER_POOLS; do
     else
       fail "label n8n.io/worker-pool is \"${label:-<unset>}\", expected \"$pool\""
     fi
-    env_pool=$(deploy_env "$name" N8N_WORKER_POOL_NAME)
-    if [[ "$env_pool" == "$pool" ]]; then
+    if ! env_pool=$(deploy_env "$name" N8N_WORKER_POOL_NAME); then
+      fail "kubectl error reading $name's N8N_WORKER_POOL_NAME"
+    elif [[ "$env_pool" == "$pool" ]]; then
       pass "pod template carries N8N_WORKER_POOL_NAME=$pool"
     else
       fail "pod template N8N_WORKER_POOL_NAME is \"${env_pool:-<unset>}\", expected \"$pool\"; these workers would consume the default queue"
@@ -405,9 +406,13 @@ for pool in $WORKER_POOLS; do
   fi
 
   # Triggers watch this pool's queue, not the default one.
-  wait_list=$(trigger_field "$name" 0 listName)
-  active_list=$(trigger_field "$name" 1 listName)
-  if [[ "$wait_list" == *":jobs-${pool}:wait" && "$active_list" == *":jobs-${pool}:active" ]]; then
+  wait_list=""
+  active_list=""
+  if ! wait_list=$(trigger_field "$name" 0 listName); then
+    fail "kubectl error reading $name trigger 0 metadata (listName)"
+  elif ! active_list=$(trigger_field "$name" 1 listName); then
+    fail "kubectl error reading $name trigger 1 metadata (listName)"
+  elif [[ "$wait_list" == *":jobs-${pool}:wait" && "$active_list" == *":jobs-${pool}:active" ]]; then
     pass "triggers watch $wait_list and $active_list"
   else
     fail "triggers watch \"${wait_list:-<none>}\" / \"${active_list:-<none>}\", expected *:jobs-${pool}:wait and *:jobs-${pool}:active"

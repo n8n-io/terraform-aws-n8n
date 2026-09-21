@@ -11330,8 +11330,9 @@ run "worker_pools_fail_the_plan_when_the_default_chart_predates_them" {
   command = plan
 
   variables {
-    # No n8n_chart_version: the module default, which at the time of writing
-    # is 1.10.0 and has no workerGroups.
+    # No n8n_chart_version: the module default, which is a numbered release
+    # (1.11.0 at the time of writing) and so never passes the guard, whatever
+    # the number is.
     n8n_worker_pools = [{ name = "gpu" }]
   }
 
