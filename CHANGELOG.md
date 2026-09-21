@@ -224,6 +224,12 @@ line) either needs no caller action or carries its own note under **Changed**.
   name check. Default `[]`, which omits `queueMode.workerExtraEnv` from the
   Helm values rather than sending an empty list, so this is additive with no
   plan diff for a caller who does not set it.
+  `n8n_credentials_overwrite_secret_ref`'s conflict validation now covers this
+  input and each pool's `extra_env` as well as `n8n_extra_env`: all three are
+  appended after the module's own `CREDENTIALS_OVERWRITE_DATA_FILE`, and n8n's
+  `readEnv` prefers `CREDENTIALS_OVERWRITE_DATA` wherever it appears, so a
+  worker-only entry would otherwise leave workers running different credential
+  overwrites from the mains with nothing to announce it.
 
 - `examples/worker-pools/` (**Early Alpha, subject to change without notice**):
   topology variant of `small` running three pools (`heavy`, `secteam`,

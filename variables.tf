@@ -3038,11 +3038,22 @@ variable "n8n_credentials_overwrite_secret_ref" {
   }
 
   validation {
+    # All three env escape hatches, not just n8n_extra_env: the module's own
+    # CREDENTIALS_OVERWRITE_DATA_FILE entry rides on config.extraEnv, which
+    # reaches every pod, while n8n_worker_extra_env and a pool's extra_env are
+    # appended after it in worker containers. readEnv prefers
+    # CREDENTIALS_OVERWRITE_DATA over the _FILE variant wherever it appears, so
+    # a worker-only entry would leave the workers running a different set of
+    # credential overwrites from the mains, with nothing to announce it.
     condition = var.n8n_credentials_overwrite_secret_ref == null ? true : alltrue([
-      for env in var.n8n_extra_env :
+      for env in concat(
+        var.n8n_extra_env,
+        var.n8n_worker_extra_env,
+        flatten([for pool in var.n8n_worker_pools : pool.extra_env]),
+      ) :
       !contains(["CREDENTIALS_OVERWRITE_DATA", "CREDENTIALS_OVERWRITE_DATA_FILE"], env.name)
     ])
-    error_message = "n8n_credentials_overwrite_secret_ref conflicts with CREDENTIALS_OVERWRITE_DATA or CREDENTIALS_OVERWRITE_DATA_FILE in n8n_extra_env. Remove the escape-hatch entry and let the dedicated input set the file path."
+    error_message = "n8n_credentials_overwrite_secret_ref conflicts with CREDENTIALS_OVERWRITE_DATA or CREDENTIALS_OVERWRITE_DATA_FILE in n8n_extra_env, n8n_worker_extra_env or an n8n_worker_pools entry's extra_env. Remove the escape-hatch entry and let the dedicated input set the file path."
   }
 
   validation {

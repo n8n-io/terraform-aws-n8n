@@ -265,8 +265,23 @@ for rendered in $RENDERED; do
   fi
 done
 
-SO_RENDERED=$(kubectl get scaledobject -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE_NAME,app.kubernetes.io/component=worker-group" \
-  -o jsonpath='{range .items[*]}{.metadata.labels.n8n\.io/worker-pool}{"\n"}{end}' 2>/dev/null | sed '/^$/d' || true)
+# Not `|| true`: an API error here would otherwise read as "no stale scaler",
+# which is the same output a healthy cluster gives and the reason this loop
+# exists at all.
+if ! so_raw=$(kubectl get scaledobject -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE_NAME,app.kubernetes.io/component=worker-group" \
+    -o jsonpath='{range .items[*]}{.metadata.labels.n8n\.io/worker-pool}{"\n"}{end}' 2>/dev/null); then
+  fail "kubectl error listing pool ScaledObjects; cannot tell a stale scaler from none"
+  so_raw=""
+fi
+SO_RENDERED=$(printf '%s\n' "$so_raw" | sed '/^$/d')
+
+SO_COUNT=$(printf '%s\n' "$SO_RENDERED" | sed '/^$/d' | wc -l | tr -d ' ')
+if [[ "$SO_COUNT" -eq "$EXPECTED_COUNT" ]]; then
+  pass "$SO_COUNT pool ScaledObject(s) rendered, matching the $EXPECTED_COUNT declared"
+else
+  fail "$SO_COUNT pool ScaledObject(s) rendered but $EXPECTED_COUNT declared; a pool without a scaler sits at a fixed replica count"
+fi
+
 for rendered in $SO_RENDERED; do
   found=0
   for expected in $WORKER_POOLS; do

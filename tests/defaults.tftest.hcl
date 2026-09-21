@@ -8258,6 +8258,80 @@ run "credentials_overwrite_secret_ref_rejects_overwrite_file_env_conflict" {
   expect_failures = [var.n8n_credentials_overwrite_secret_ref]
 }
 
+# The worker-only escape hatches reach the same variable. A pod's worker
+# container gets config.extraEnv first, carrying the module's own
+# CREDENTIALS_OVERWRITE_DATA_FILE, and then these afterwards; readEnv prefers
+# CREDENTIALS_OVERWRITE_DATA over the _FILE variant wherever it appears, so a
+# worker-only entry silently gives the workers a different set of credential
+# overwrites from the mains.
+run "credentials_overwrite_secret_ref_rejects_a_worker_extra_env_conflict" {
+  command = plan
+
+  variables {
+    n8n_credentials_overwrite_secret_ref = {
+      name = "n8n-credentials-overwrite"
+    }
+    n8n_worker_extra_env = [
+      { name = "CREDENTIALS_OVERWRITE_DATA", value = "{}" },
+    ]
+  }
+
+  expect_failures = [var.n8n_credentials_overwrite_secret_ref]
+}
+
+run "credentials_overwrite_secret_ref_rejects_a_worker_extra_env_file_conflict" {
+  command = plan
+
+  variables {
+    n8n_credentials_overwrite_secret_ref = {
+      name = "n8n-credentials-overwrite"
+    }
+    n8n_worker_extra_env = [
+      { name = "CREDENTIALS_OVERWRITE_DATA_FILE", value = "/existing/credentials-overwrite.json" },
+    ]
+  }
+
+  expect_failures = [var.n8n_credentials_overwrite_secret_ref]
+}
+
+run "credentials_overwrite_secret_ref_rejects_a_pool_extra_env_conflict" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_credentials_overwrite_secret_ref = {
+      name = "n8n-credentials-overwrite"
+    }
+    n8n_worker_pools = [
+      {
+        name      = "gpu"
+        extra_env = [{ name = "CREDENTIALS_OVERWRITE_DATA", value = "{}" }]
+      },
+    ]
+  }
+
+  expect_failures = [var.n8n_credentials_overwrite_secret_ref]
+}
+
+run "credentials_overwrite_secret_ref_rejects_a_pool_extra_env_file_conflict" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_credentials_overwrite_secret_ref = {
+      name = "n8n-credentials-overwrite"
+    }
+    n8n_worker_pools = [
+      {
+        name      = "gpu"
+        extra_env = [{ name = "CREDENTIALS_OVERWRITE_DATA_FILE", value = "/existing/credentials-overwrite.json" }]
+      },
+    ]
+  }
+
+  expect_failures = [var.n8n_credentials_overwrite_secret_ref]
+}
+
 run "credentials_overwrite_secret_ref_rejects_volume_name_conflict" {
   command = plan
 
