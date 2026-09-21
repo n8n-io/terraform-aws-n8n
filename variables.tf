@@ -1568,7 +1568,12 @@ variable "n8n_task_runner_custom_config" {
 
     The names are literal: the module pins the Helm release name to "n8n", and
     the chart's only Deployments mounting this config are <fullname>-main and
-    <fullname>-worker (the webhook processor runs no task runners).
+    <fullname>-worker (the webhook processor runs no task runners). Each
+    n8n_worker_pools pool renders from the same worker pod template and so
+    mounts it too; roll those by label alongside the two above:
+
+      kubectl rollout restart deployment \
+        -l app.kubernetes.io/component=worker-group -n <namespace>
   EOT
 
   type = object({
