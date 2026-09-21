@@ -7,6 +7,8 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-21
+
 Minor release per the [stability contract](./README.md#stability--versioning):
 the Kubernetes provider floor bump below is breaking for callers pinned to
 the previous major. Pin this module to `~> 0.4.0` to stay on Kubernetes
@@ -261,7 +263,7 @@ line) either needs no caller action or carries its own note under **Changed**.
   default of `7`. No effect on callers who set a number or leave it unset.
   Surfaced by the `examples/small`/`medium` pass-through above.
 - **Kubernetes provider requirement bumped to `~> 3.0`** (was `~> 2.0`), across
-  all 12 `versions.tf`/`providers.tf` files in the repo (root,
+  all 13 `versions.tf`/`providers.tf` files in the repo (root,
   `modules/controllers`, every `examples/*`). Provider 3.0 deprecates every
   unversioned Kubernetes resource type in favor of its `_v1` twin. This
   module still uses `kubernetes_namespace` and three `kubernetes_secret`
@@ -318,10 +320,13 @@ line) either needs no caller action or carries its own note under **Changed**.
   `deployment-main.yaml` reads `multiMain.replicas` only while
   `multiMain.enabled`; single-main mode (`n8n_main_hpa_min_replicas == 1`)
   reads the chart's own `replicaCount` instead, which this module previously
-  left to the chart's default. Both resolve to `1` today, so no plan diff for
-  any existing deployment; this closes a latent gap where a future chart
-  release changing that default would have silently changed the single-main
-  replica count with no line in this module to catch it.
+  left to the chart's default. Both resolve to `1` today, so the rendered
+  replica count does not change; setting the key does trigger the one-time
+  in-place `helm_release.n8n` update described under "What moves on apply"
+  above, for every existing deployment regardless of pinned chart version.
+  This closes a latent gap where a future chart release changing that
+  default would have silently changed the single-main replica count with no
+  line in this module to catch it.
 - `n8n_extra_env` and `n8n_worker_extra_env` now reject `N8N_WORKER_POOLS_ENABLED`
   and `N8N_WORKER_POOL_NAME`, which `n8n_worker_pools` owns. A caller who was
   setting either through the escape hatch fails at plan on upgrade rather than
@@ -3223,7 +3228,8 @@ Initial release on the Terraform Registry as `n8n-io/n8n/aws`.
   block CI. Curated suppressions and a flip to hard-fail are tracked
   for v0.2.0.
 
-[Unreleased]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.4.0...HEAD
+[Unreleased]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.5.0...HEAD
+[0.5.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.1.0...0.2.0
