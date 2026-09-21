@@ -92,7 +92,8 @@ now, not yet wired into CI) diffs the set of variable names every example's
 `variables.tf` declares against `small`'s and fails on any name present on
 one side only that is not in its per-example allowlist (the DNS-provider credentials, `customer_managed_*`
 stand-in sizing plus `kubernetes_version` where the example builds its own
-cluster, split-ingress's own Ingress knobs, large's Aurora and BYO
+cluster, split-ingress's own Ingress knobs, worker-pools' chart pins and
+default-worker KEDA bounds, large's Aurora and BYO
 certificate inputs, `n8n_additional_domains` where the example cannot
 take it, and the module-side deletion controls (`db_*`,
 `s3_force_destroy`) on a layer the example brings itself, where they would
