@@ -31,7 +31,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 BASELINE=small
-EXAMPLES=(cloudflare godaddy split-ingress customer-managed-redis customer-managed-s3
+EXAMPLES=(cloudflare godaddy split-ingress worker-pools customer-managed-redis customer-managed-s3
   customer-managed-cluster customer-managed-everything medium large)
 
 # "example:pattern" pairs allowed to differ from examples/small, either way.
@@ -52,6 +52,18 @@ ALLOWED_DIFFS=(
   "split-ingress:admin_allowed_cidr_blocks"
   "split-ingress:waf_acl_arn"
   "split-ingress:ssl_policy"
+  # worker-pools is the only example that cannot run the module's default
+  # chart: queueMode.workerGroups ships in a preview build, so the version is
+  # a required input there, the repository is exposed for a private mirror of
+  # that build, and the attestation flag goes with them. See its README,
+  # "Getting a chart that renders pools".
+  "worker-pools:n8n_chart_version"
+  "worker-pools:n8n_chart_repository"
+  "worker-pools:n8n_worker_pools_chart_verified"
+  # It also sizes the chart's own unlabelled worker deployment, which runs
+  # beside the pools as the control group for everything not pinned to one.
+  "worker-pools:n8n_worker_keda_min_replicas"
+  "worker-pools:n8n_worker_keda_max_replicas"
   # Customer-managed variants size their stand-in infrastructure themselves.
   "customer-managed-redis:customer_managed_*"
   "customer-managed-s3:customer_managed_*"
