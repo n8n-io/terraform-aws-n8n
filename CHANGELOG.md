@@ -7,6 +7,8 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-21
+
 Minor release per the [stability contract](./README.md#stability--versioning):
 the Kubernetes provider floor bump below is breaking for callers pinned to
 the previous major. Pin this module to `~> 0.4.0` to stay on Kubernetes
@@ -3223,7 +3225,8 @@ Initial release on the Terraform Registry as `n8n-io/n8n/aws`.
   block CI. Curated suppressions and a flip to hard-fail are tracked
   for v0.2.0.
 
-[Unreleased]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.4.0...HEAD
+[Unreleased]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.5.0...HEAD
+[0.5.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.1.0...0.2.0
