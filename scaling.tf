@@ -118,14 +118,21 @@ locals {
   # in the interpolated arithmetic would abort the plan outright.
   n8n_cpu_requests = {
     main = var.n8n_main_cpu_request
-    # A task runner sidecar rides on main and worker pods only. The chart adds
-    # the container in deployment-main.yaml and deployment-worker.yaml, not in
-    # deployment-webhook-processor.yaml, so webhook processors carry no sidecar
-    # cost below.
+    # Workers carry a runner when enabled; webhook processors never do.
+    # Main placement depends on the selected chart, accounted for below.
     task_runner = var.n8n_task_runners_enabled ? var.n8n_task_runner_cpu_request : "0"
     webhook     = var.n8n_webhook_cpu_request
     worker      = var.n8n_worker_cpu_request
   }
+
+  # Verified upstream 1.12.0 removes runners from queue-mode mains. Strip build
+  # metadata only: previews, older/future releases and custom repositories keep
+  # the conservative main-sidecar allowance until their topology is verified.
+  n8n_chart_has_worker_only_runners = (
+    var.n8n_chart_repository == "oci://ghcr.io/n8n-io/n8n-helm-chart" &&
+    split("+", var.n8n_chart_version)[0] == "1.12.0"
+  )
+  n8n_main_task_runner_cpu_millis = local.n8n_chart_has_worker_only_runners ? 0 : local.n8n_cpu_request_millis["task_runner"]
 
   # Every worker pool is a fourth claim on the same nodes. Each pool carries its
   # own KEDA ScaledObject and can reach its own max_replicas independently of
@@ -180,7 +187,7 @@ locals {
   # schedulable at all, because each autoscaler can independently reach its own
   # maximum, and every declared pool adds one more autoscaler that can.
   n8n_peak_cpu_request_millis = local.n8n_cpu_requests_readable ? (
-    local.n8n_main_hpa_effective_max_replicas * (local.n8n_cpu_request_millis["main"] + local.n8n_cpu_request_millis["task_runner"]) +
+    local.n8n_main_hpa_effective_max_replicas * (local.n8n_cpu_request_millis["main"] + local.n8n_main_task_runner_cpu_millis) +
     var.n8n_worker_keda_max_replicas * (local.n8n_cpu_request_millis["worker"] + local.n8n_cpu_request_millis["task_runner"]) +
     var.n8n_webhook_hpa_max_replicas * local.n8n_cpu_request_millis["webhook"] +
     local.n8n_pool_peak_cpu_request_millis
@@ -326,7 +333,7 @@ check "autoscaling_maxima_fit_node_group_capacity" {
     error_message = join("", [
       "Autoscaler maxima exceed the CPU the node group can ever schedule. At their ceilings the n8n pods ",
       "request ${local.n8n_peak_cpu_request_millis}m CPU ",
-      "(main ${local.n8n_main_hpa_effective_max_replicas} × ${local.n8n_cpu_request_millis["main"] + local.n8n_cpu_request_millis["task_runner"]}m, ",
+      "(main ${local.n8n_main_hpa_effective_max_replicas} × ${local.n8n_cpu_request_millis["main"] + local.n8n_main_task_runner_cpu_millis}m, ",
       "worker ${var.n8n_worker_keda_max_replicas} × ${local.n8n_cpu_request_millis["worker"] + local.n8n_cpu_request_millis["task_runner"]}m, ",
       "webhook ${var.n8n_webhook_hpa_max_replicas} × ${local.n8n_cpu_request_millis["webhook"]}m",
       length(var.n8n_worker_pools) > 0 ? join("", [

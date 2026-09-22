@@ -9,6 +9,19 @@ this project adheres to the stability contract in
 
 ### Changed
 
+- Default n8n chart `1.11.0` to `1.12.0`. This requires a minor module
+  release: callers without an explicit chart pin receive a Helm upgrade and
+  pod rollouts. `n8n_image_tag = null` still uses the selected chart's default,
+  but that changes from floating `stable` to `appVersion: 2.39.6`. **Inspect
+  and pin the running application version before upgrading the chart** to
+  avoid a downgrade, such as `2.40.5` back to `2.39.6`. See
+  `docs/upgrading-n8n.md`; Helm rollback cannot reverse database migrations.
+  In queue mode, runners now run only on workers. The capacity estimate
+  removes main-runner CPU for verified upstream `1.12.0` (including build
+  metadata), reducing default peak requests from `16,600m` to `15,400m`.
+  Older, preview, future unverified, and custom charts keep conservative
+  accounting. No autoscaler ceilings change; worker-pool guards remain in
+  place and the new chart KEDA pause settings are not exposed.
 - CI Terraform pin `1.16.2` to `1.16.3` and Checkov `3.3.17` to `3.3.19`.
   The Terraform requirement remains `>= 1.11`. The new `CKV_AWS_394`
   findings have scoped exceptions on all eleven examples' dynamic
@@ -19,7 +32,8 @@ this project adheres to the stability contract in
   and `modules/controllers`, with checksums for Linux amd64, Linux arm64,
   and macOS arm64. The `~> 6.0` constraint and all other provider selections
   are unchanged. Published-module consumers retain their own provider
-  locks. No chart, image, or infrastructure defaults change. See #139.
+  locks. These provider and toolchain updates do not change infrastructure
+  defaults. See #139.
 
 ## [0.5.0] - 2026-09-21
 
