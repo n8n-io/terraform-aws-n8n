@@ -16,6 +16,10 @@ data "aws_caller_identity" "current" {}
 # the AWS Load Balancer Controller need.
 
 data "aws_availability_zones" "available" {
+  # checkov:skip=CKV_AWS_394:Region-portable example intentionally discovers AZs instead of hardcoding region-specific zone identities; see docs/versioning.md for the accepted replacement risk.
+  # slice(..., 0, 2) bounds the count, not the zone identities. A changed list
+  # can replace subnets. Pin the existing zones in long-lived deployments and
+  # review the plan before applying.
   state = "available"
 }
 

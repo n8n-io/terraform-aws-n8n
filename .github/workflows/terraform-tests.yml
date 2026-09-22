@@ -25,7 +25,7 @@ env:
   # nobody is checking, and this repo has already been bitten by the specific
   # version-skew hazard that hides behind one (`check` blocks did not
   # short-circuit && / || before Terraform 1.10; see AGENTS.md).
-  TF_VERSION: "1.16.2"
+  TF_VERSION: "1.16.3"
   TFLINT_VERSION: "v0.64.0"
   # Tracks the version `brew install markdownlint-cli` installs, so
   # contributors don't need a special install path — the same trap
@@ -38,7 +38,7 @@ env:
   # refuses to run against a different local version, which makes this line the
   # single source of truth for both. Bumping it is a deliberate change: expect a
   # new release to report findings that need triaging in the same commit.
-  CHECKOV_VERSION: "3.3.17"
+  CHECKOV_VERSION: "3.3.19"
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
   # Shared provider plugin cache across the validate/test/tflint matrices.
