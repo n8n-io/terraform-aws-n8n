@@ -87,7 +87,7 @@ variable "n8n_image_pull_secrets" {
 }
 
 variable "n8n_image_tag" {
-  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). Leave null to use the selected Helm chart's default. This example requires a preview or verified custom chart, whose image default can differ from the module's pinned release. Inspect and pin the running application version before upgrading the chart; see docs/upgrading-n8n.md."
+  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). Leave null to use the selected Helm chart's default. This example requires a preview or verified custom chart, whose image default can differ from the module's pinned release. Inspect and pin the running application version before upgrading the chart; see the [upgrade guide](../../docs/upgrading-n8n.md)."
   type        = string
   default     = null
 

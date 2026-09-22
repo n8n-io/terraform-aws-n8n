@@ -29,7 +29,7 @@ to `2.39.6`. Helm rollback does not reverse database migrations.
    ```bash
    export KUBECONFIG=/path/to/deployment-kubeconfig
    kubectl config current-context
-   kubectl -n n8n get pods -l app.kubernetes.io/instance=n8n \
+   kubectl -n <namespace> get pods -l app.kubernetes.io/instance=n8n \
      -o custom-columns='POD:.metadata.name,IMAGES:.spec.containers[*].image,IMAGE_IDS:.status.containerStatuses[*].imageID'
    ```
 
@@ -37,7 +37,7 @@ to `2.39.6`. Helm rollback does not reverse database migrations.
    A `stable` image reference alone does not identify the running version:
 
    ```bash
-   kubectl -n n8n exec <pod> -c <n8n-container> -- n8n --version
+   kubectl -n <namespace> exec <pod> -c <n8n-container> -- n8n --version
    ```
 
    If pods disagree, resolve the mixed-version deployment before proceeding.
