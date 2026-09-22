@@ -6820,7 +6820,7 @@ run "image_tag_defaults_to_null" {
 
   assert {
     condition     = var.n8n_image_tag == null
-    error_message = "n8n_image_tag should default to null so the chart's own stable tag applies by default."
+    error_message = "n8n_image_tag should default to null so the selected chart's own image default applies."
   }
 }
 
@@ -7457,7 +7457,7 @@ run "task_runner_custom_config_requires_task_runners_enabled" {
 # These warn rather than fail, so expect_failures on the check is how a warning
 # is asserted (same pattern as the ingress and RDS tuning checks above).
 
-# A repository with no tag resolves to "<repo>:stable" via the chart default,
+# A repository with no tag uses the selected chart's image default,
 # which a private registry almost never publishes.
 run "custom_image_repository_without_tag_warns" {
   command = plan
@@ -8491,11 +8491,16 @@ run "extra_env_accepts_community_packages_auth_token" {
 # numbers are deterministic under mocks with nothing to override. At the default
 # t3.xlarge: 6 nodes × (4,000m − 80m kubelet reserve − 180m of per-node
 # DaemonSets) − 720m of cluster add-ons ≈ 21,720m available to n8n, against
-# 16,600m requested at the default ceilings. The remainder is headroom for a
+# 15,400m requested at the default ceilings. The remainder is headroom for a
 # rollout surge. scaling.tf documents where each constant in that sum comes from.
 
 run "autoscaling_defaults_fit_the_default_node_group" {
   command = plan
+
+  assert {
+    condition     = var.n8n_chart_version == "1.12.0" && local.n8n_peak_cpu_request_millis == 15400
+    error_message = "Upstream chart 1.12.0 must count runners only on workers: 15400m at default ceilings."
+  }
 
   # No expect_failures: a warning from the capacity check would fail this run,
   # which is the assertion that matters here. The replica asserts pin the
@@ -8516,8 +8521,8 @@ run "autoscaling_defaults_fit_the_default_node_group" {
   }
 }
 
-# The pre-fix defaults: 20 mains at 1,200m each (pod + task runner sidecar) is
-# 24,000m on its own, more than the whole node group can ever schedule.
+# The old ceiling of 20 mains remains oversized even without main runners:
+# 20,000m plus worker and webhook ceilings exceeds the node group's budget.
 run "pre_fix_main_hpa_maximum_warns" {
   command = plan
 
@@ -8565,30 +8570,117 @@ run "worker_keda_maximum_counts_against_the_same_budget" {
   expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
 }
 
-# Task runner sidecars ride on main and worker pods only, so turning them off
-# frees 200m per main and per worker. 12 mains is over the line with them
-# (23,800m) and under it without (19,400m). The pair pins that accounting.
-run "main_maximum_of_twelve_warns_with_task_runners_enabled" {
+# Chart 1.12.0 places runners on workers only. Twelve mains now fit, while
+# thirteen exceed the 21,720m budget only when worker runners are enabled.
+run "main_maximum_of_twelve_fits_with_task_runners_enabled" {
   command = plan
 
   variables {
     n8n_main_hpa_max_replicas = 12
+  }
+
+  assert {
+    condition     = local.n8n_peak_cpu_request_millis == 21400
+    error_message = "Twelve mains with worker runners must request 21400m."
+  }
+}
+
+run "main_maximum_of_thirteen_warns_with_task_runners_enabled" {
+  command = plan
+
+  variables {
+    n8n_main_hpa_max_replicas = 13
+  }
+
+  assert {
+    condition     = local.n8n_peak_cpu_request_millis == 22400
+    error_message = "Thirteen mains with worker runners must request 22400m."
   }
 
   expect_failures = [check.autoscaling_maxima_fit_node_group_capacity]
 }
 
-run "main_maximum_of_twelve_fits_without_task_runners" {
+run "main_maximum_of_thirteen_fits_without_task_runners" {
   command = plan
 
   variables {
-    n8n_main_hpa_max_replicas = 12
+    n8n_main_hpa_max_replicas = 13
     n8n_task_runners_enabled  = false
+  }
+
+  assert {
+    condition     = local.n8n_peak_cpu_request_millis == 20400
+    error_message = "Disabling worker runners must remove 2000m from the total."
   }
 
   assert {
     condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].max_replicas == 8
     error_message = "Disabling task runners must not disturb the webhook ceiling"
+  }
+}
+
+run "verified_chart_build_metadata_keeps_worker_only_accounting" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.12.0+build.5"
+  }
+
+  assert {
+    condition     = local.n8n_peak_cpu_request_millis == 15400
+    error_message = "Build metadata must not change verified release topology accounting."
+  }
+}
+
+run "older_chart_keeps_conservative_runner_accounting" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0"
+  }
+
+  assert {
+    condition     = local.n8n_peak_cpu_request_millis == 16600
+    error_message = "Older charts must retain the main runner allowance."
+  }
+}
+
+run "preview_chart_keeps_conservative_runner_accounting" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.12.0-preview.workerpools.1"
+  }
+
+  assert {
+    condition     = local.n8n_peak_cpu_request_millis == 16600
+    error_message = "An unverified preview must retain the main runner allowance."
+  }
+}
+
+run "future_chart_keeps_conservative_runner_accounting" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.13.0"
+  }
+
+  assert {
+    condition     = local.n8n_peak_cpu_request_millis == 16600
+    error_message = "Future releases need topology verification before removing the main runner allowance."
+  }
+}
+
+run "custom_chart_keeps_conservative_runner_accounting" {
+  command = plan
+
+  variables {
+    n8n_chart_repository = "oci://registry.example.com/charts"
+  }
+
+  assert {
+    condition     = local.n8n_peak_cpu_request_millis == 16600
+    error_message = "A custom repository need not share upstream topology at the same version."
   }
 }
 
@@ -8901,7 +8993,7 @@ run "execution_data_storage_mode_rejects_unknown_value" {
 
 # The version check only compares tags shaped like MAJOR.MINOR.<rest>, so it
 # warns on 2.26.9 but stays silent on 2.27.0 (exercised by the accepts_s3 run
-# above), on a null tag (the chart's floating `stable`), and on channel tags,
+# above), on a null tag (the selected chart's default), and on channel tags,
 # both exercised by the runs below.
 run "execution_data_s3_with_pre_2_27_image_tag_triggers_check_warning" {
   command = plan
@@ -8915,7 +9007,7 @@ run "execution_data_s3_with_pre_2_27_image_tag_triggers_check_warning" {
 }
 
 # The chart-default case most callers hit: s3 mode with n8n_image_tag left at
-# null (the floating `stable` tag). There is no version to compare, so the
+# null (the selected chart's default). There is no explicit version to compare, so the
 # check must stay quiet rather than block the plan.
 run "execution_data_s3_with_null_image_tag_plans_cleanly" {
   command = plan
@@ -8926,7 +9018,7 @@ run "execution_data_s3_with_null_image_tag_plans_cleanly" {
 
   assert {
     condition     = var.n8n_image_tag == null
-    error_message = "A null image tag (chart default, floating stable) should be accepted without the version check firing."
+    error_message = "A null image tag (selected chart default) should be accepted without the version check firing."
   }
 }
 
@@ -11405,7 +11497,7 @@ run "worker_pools_fail_the_plan_when_the_default_chart_predates_them" {
 
   variables {
     # No n8n_chart_version: the module default, which is a numbered release
-    # (1.11.0 at the time of writing) and so never passes the guard, whatever
+    # (1.12.0 at the time of writing) and so never passes the guard, whatever
     # the number is.
     n8n_worker_pools = [{ name = "gpu" }]
   }

@@ -95,18 +95,18 @@ variable "n8n_image_pull_secrets" {
 }
 
 variable "n8n_image_tag" {
-  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). Leave null to use the Helm chart's floating `stable` tag. Pin a concrete version for reproducible upgrades and to avoid crossing major-version boundaries on an unplanned pod reschedule."
+  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). Leave null to use the selected Helm chart's default (appVersion 2.39.6 in chart 1.12.0). Inspect and pin the running application version before upgrading the chart to avoid a downgrade; see the [upgrade guide](../../docs/upgrading-n8n.md)."
   type        = string
   default     = null
 
   validation {
     condition     = var.n8n_image_tag == null ? true : can(regex("^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$", var.n8n_image_tag))
-    error_message = "n8n_image_tag must be a non-empty string with no whitespace, containing only alphanumeric characters, dots, underscores, and hyphens (e.g. \"1.2.3\", \"1.2.3-alpine\"). Set to null to use the chart's default (stable)."
+    error_message = "n8n_image_tag must be a non-empty string with no whitespace, containing only alphanumeric characters, dots, underscores, and hyphens (e.g. \"1.2.3\", \"1.2.3-alpine\"). Set to null to use the selected chart's default."
   }
 }
 
 variable "n8n_task_runner_image_tag" {
-  description = "Image tag for the task runner sidecar (`n8nio/runners`). Leave null to inherit the n8n application image's tag, which is correct as long as that tag is a published n8n version. Set it to the underlying n8n version when running a custom image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar image cannot be pulled and every main and worker pod stays in ImagePullBackOff."
+  description = "Image tag for the task runner sidecar (`n8nio/runners`). Leave null to inherit the n8n application image's tag, which is correct as long as that tag is a published n8n version. Set it to the underlying n8n version when running a custom image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar image cannot be pulled and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 1.12.0 queue mode)."
   type        = string
   default     = null
 

@@ -89,7 +89,7 @@ run "n8n_image_tag_defaults_to_null" {
 
   assert {
     condition     = var.n8n_image_tag == null
-    error_message = "Example must not pin an image tag by default; the module's chart default (stable) should apply."
+    error_message = "Example must not pin an image tag by default; the module's selected chart default should apply."
   }
 }
 

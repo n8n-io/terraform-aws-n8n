@@ -746,7 +746,7 @@ variable "keda_chart_repository" {
 variable "n8n_chart_version" {
   description = "n8n Helm chart version to deploy. Must be an exact version, not a constraint: the Helm provider resolves this literally."
   type        = string
-  default     = "1.11.0"
+  default     = "1.12.0"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version))
@@ -799,13 +799,13 @@ variable "keda_chart_version" {
 }
 
 variable "n8n_image_tag" {
-  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). When it is null (the default), the Helm chart's own default applies — currently the floating `stable` tag, which resolves to whatever n8n version is latest at the time each pod starts. Pin this to a concrete version for reproducible, incremental upgrades and to avoid crossing major-version boundaries (e.g. the n8n 2.0 breaking changes) on an unplanned pod reschedule. See <https://docs.n8n.io/2-0-breaking-changes/> for the n8n 2.x migration guide."
+  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). When it is null (the default), the selected Helm chart's own default applies: chart 1.12.0 uses its appVersion, 2.39.6, while 1.11.0 used the floating `stable` tag. A chart upgrade can therefore downgrade an unpinned application. Inspect and pin the currently running n8n version before upgrading the chart; see docs/upgrading-n8n.md. Keep a concrete tag for reproducible, incremental upgrades. See <https://docs.n8n.io/2-0-breaking-changes/> for the n8n 2.x migration guide."
   type        = string
   default     = null
 
   validation {
     condition     = var.n8n_image_tag == null ? true : can(regex("^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$", var.n8n_image_tag))
-    error_message = "n8n_image_tag must be a non-empty string with no whitespace, containing only alphanumeric characters, dots, underscores, and hyphens (e.g. \"1.2.3\", \"1.2.3-alpine\"). Set to null to use the chart's default (stable)."
+    error_message = "n8n_image_tag must be a non-empty string with no whitespace, containing only alphanumeric characters, dots, underscores, and hyphens (e.g. \"1.2.3\", \"1.2.3-alpine\"). Set to null to use the selected chart's default."
   }
 }
 
@@ -1435,14 +1435,14 @@ variable "n8n_prestop_sleep" {
 # ── Task runners ──────────────────────────────────────────────────────────────
 
 variable "n8n_task_runners_enabled" {
-  description = "Enable task runner sidecars for isolated JavaScript and Python code execution"
+  description = "Enable task runner sidecars for isolated JavaScript and Python code execution. In queue mode, upstream chart 1.12.0 places them on workers only, not main or webhook pods."
   type        = bool
   default     = true
   nullable    = false
 }
 
 variable "n8n_task_runner_image_tag" {
-  description = "Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every main and worker pod stays in ImagePullBackOff. Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n_task_runners_enabled = false."
+  description = "Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 1.12.0 queue mode). Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n_task_runners_enabled = false."
   type        = string
   default     = null
 
@@ -1562,15 +1562,14 @@ variable "n8n_task_runner_custom_config" {
     refresh. The module cannot roll the pods for you here: it is given the
     ConfigMap's name, never its contents, so it has nothing to hash into a pod
     annotation, exactly as with `redis_auth_token_secret_ref`. Restart the
-    deployments after every launcher-config change:
+    worker deployment after every launcher-config change:
 
-      kubectl rollout restart deploy/n8n-main deploy/n8n-worker -n <namespace>
+      kubectl rollout restart deploy/n8n-worker -n <namespace>
 
-    The names are literal: the module pins the Helm release name to "n8n", and
-    the chart's only Deployments mounting this config are <fullname>-main and
-    <fullname>-worker (the webhook processor runs no task runners). Each
-    n8n_worker_pools pool renders from the same worker pod template and so
-    mounts it too; roll those by label alongside the two above:
+    Upstream chart 1.12.0 mounts this config only on workers in queue mode.
+    For older or custom charts that also place runners on mains, restart
+    deploy/n8n-main too. Each n8n_worker_pools pool on a suitable preview or
+    verified custom chart also mounts it; roll those by label:
 
       kubectl rollout restart deployment \
         -l app.kubernetes.io/component=worker-group -n <namespace>
@@ -2449,7 +2448,7 @@ variable "n8n_main_hpa_min_replicas" {
 }
 
 variable "n8n_main_hpa_max_replicas" {
-  description = "Maximum replicas for n8n main pods in multi-main mode. When n8n_main_hpa_min_replicas = 1, the effective maximum is always 1, even if this input is explicitly higher. Otherwise HPA will not scale above this. The default of 6 is sized to the default node group (node_max × node_instance_type): at the default CPU requests, 6 main pods plus their task runner sidecars, the worker ceiling, and the webhook ceiling all fit in what 6 t3.xlarge nodes can schedule. Raise this together with node_max or node_instance_type. An HPA ceiling the node group cannot hold leaves pods Pending with \"Insufficient cpu\" once the Cluster Autoscaler reaches node_max, which also slows rollouts. The module warns at plan time when the three groups are out of step; see README.md → \"Sizing autoscaling against node capacity\"."
+  description = "Maximum replicas for n8n main pods in multi-main mode. When n8n_main_hpa_min_replicas = 1, the effective maximum is always 1, even if this input is explicitly higher. Otherwise HPA will not scale above this. The default of 6 is sized to the default node group (node_max × node_instance_type): at the default CPU requests, 6 main pods, the worker ceiling including enabled task runners, and the webhook ceiling all fit in what 6 t3.xlarge nodes can schedule. Raise this together with node_max or node_instance_type. An HPA ceiling the node group cannot hold leaves pods Pending with \"Insufficient cpu\" once the Cluster Autoscaler reaches node_max, which also slows rollouts. The module warns at plan time when the three groups are out of step; see README.md → \"Sizing autoscaling against node capacity\"."
   type        = number
   default     = 6
   nullable    = false

@@ -48,7 +48,7 @@ locals {
 
 # ── Task runner auth token ─────────────────────────────────────────────────────
 # Generated once and stored in state. Used as the shared secret between the n8n
-# task broker (port 5679) and the runner sidecars on main and worker pods.
+# task broker (port 5679) and runner sidecars (workers only with chart 1.12.0).
 # Only active when n8n_task_runners_enabled = true.
 
 resource "random_password" "task_runner_token" {
@@ -902,15 +902,14 @@ resource "helm_release" "n8n" {
     }
 
     # ── Task runners ─────────────────────────────────────────────────────────
-    # When enabled, a sidecar container (n8nio/runners) is added to both main and
-    # worker pods to execute JavaScript and Python code in isolation from the n8n
-    # process. The n8n container runs a task broker on port 5679; each sidecar
-    # connects to it over localhost using the auto-generated auth token.
+    # When enabled, upstream chart 1.12.0 adds a runner sidecar to worker pods
+    # only in queue mode, isolating JavaScript and Python from the n8n process.
+    # The worker's n8n container runs a task broker on port 5679; its sidecar
+    # connects over localhost using the auto-generated auth token.
     #
     # The sidecar's image tag is left to the chart, which defaults it to the n8n
-    # application image's tag (`default .Values.image.tag
-    # .Values.taskRunners.image.tag` in deployment-main.yaml and
-    # deployment-worker.yaml). That is correct for a published n8n tag but wrong
+    # application image's resolved tag (including appVersion fallback).
+    # That is correct for a published n8n tag but wrong
     # for a custom image tagged something like "2.27.4-mypackages", since no such
     # `n8nio/runners` tag exists, hence the n8n_task_runner_image_tag override,
     # merged in only when set so the chart's inheritance stays the default.
@@ -975,7 +974,7 @@ resource "helm_release" "n8n" {
     extraVolumeMounts = local.n8n_extra_volume_mounts
     },
     # Override the app image only where the caller asks for it; otherwise the
-    # chart defaults apply untouched (docker.n8n.io/n8nio/n8n:stable). Repository
+    # selected chart defaults apply untouched (1.12.0 uses appVersion). Repository
     # and tag are merged key by key rather than as a whole `image` map so setting
     # one does not blank the other: yamlencode would emit `repository: null`,
     # which the chart renders into an unpullable `null:2.27.4` reference.
@@ -1480,7 +1479,7 @@ check "log_streaming_destinations_require_managed_by_env" {
 check "custom_image_repository_needs_an_explicit_tag" {
   assert {
     condition     = var.n8n_image_repository != null ? var.n8n_image_tag != null : true
-    error_message = "n8n_image_repository is set but n8n_image_tag is null, so the chart appends its own default and the release resolves to <repository>:stable. A custom registry rarely publishes a `stable` tag, and the pods then fail with ImagePullBackOff. Set n8n_image_tag to a tag that exists in this repository. Ignore this warning if the repository is a mirror that does publish `stable`."
+    error_message = "n8n_image_repository is set but n8n_image_tag is null, so the chart appends its own default tag (appVersion 2.39.6 in upstream chart 1.12.0). If this tag is absent from the custom repository, the pods fail with ImagePullBackOff. Set n8n_image_tag to a tag that exists in this repository. Ignore this warning only if the repository publishes the selected chart's default tag."
   }
 }
 
@@ -1491,7 +1490,7 @@ check "custom_image_tag_needs_a_task_runner_tag" {
         var.n8n_image_tag == null || var.n8n_task_runner_image_tag != null
       ) : true
     ) : true
-    error_message = "A custom n8n image (n8n_image_repository + n8n_image_tag) is set with task runners enabled, but n8n_task_runner_image_tag is null. The chart tags the runner sidecar from the app image, so the sidecar resolves to n8nio/runners:<n8n_image_tag> and every main and worker pod fails with ImagePullBackOff unless that exact tag exists upstream, which fails the apply rather than completing with broken pods. Set n8n_task_runner_image_tag to the n8n version the custom image is built from. Ignore this warning if the custom image's tag is itself a published n8n version."
+    error_message = "A custom n8n image (n8n_image_repository + n8n_image_tag) is set with task runners enabled, but n8n_task_runner_image_tag is null. The chart tags the runner sidecar from the app image, so the sidecar resolves to n8nio/runners:<n8n_image_tag> and every pod carrying a runner sidecar (workers only in upstream chart 1.12.0 queue mode) fails with ImagePullBackOff unless that exact tag exists upstream, which fails the apply rather than completing with broken pods. Set n8n_task_runner_image_tag to the n8n version the custom image is built from. Ignore this warning if the custom image's tag is itself a published n8n version."
   }
 }
 

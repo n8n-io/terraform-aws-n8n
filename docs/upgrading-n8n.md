@@ -6,13 +6,66 @@ This covers bumping the deployed n8n version on an existing deployment. It does 
 
 | Variable | Controls | Default |
 | --- | --- | --- |
-| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.11.0"`, pinned |
-| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the chart's own default applies (currently the floating `stable` tag) |
+| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.12.0"`, pinned |
+| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.39.6` in chart `1.12.0`) |
 | `n8n_task_runner_image_tag` | Task runner image tag; keep aligned with the underlying n8n version when using a custom application tag. | `null`, meaning the application image tag |
 
 Bumping the image tag alone gets you a new n8n version without changing the chart's templates or value schema. Bumping the chart version can also change what values the chart accepts, so treat it as the larger-blast-radius change of the two.
 
 Production deployments should pin `n8n_image_tag`. The chart uses `IfNotPresent`, so floating `stable` can resolve differently across nodes and create a mixed-version deployment.
+
+## Moving from chart 1.11.0 to 1.12.0
+
+**Inspect and pin the running application version before changing the chart.**
+Chart `1.11.0` defaulted to the floating `stable` tag. Chart `1.12.0` instead
+uses its `appVersion`, `2.39.6`, when `n8n_image_tag` is null. This preserves
+null as "use the chart default", but can downgrade an existing application.
+For example, a deployment where `stable` resolved to `2.40.5` would move back
+to `2.39.6`. Helm rollback does not reverse database migrations.
+
+1. Select the deployment's kubeconfig explicitly, especially when managing
+   several clusters:
+
+   ```bash
+   export KUBECONFIG=/path/to/deployment-kubeconfig
+   kubectl config current-context
+   kubectl -n <namespace> get pods -l app.kubernetes.io/instance=n8n \
+     -o custom-columns='POD:.metadata.name,IMAGES:.spec.containers[*].image,IMAGE_IDS:.status.containerStatuses[*].imageID'
+   ```
+
+2. Inspect the actual n8n version on each main, worker, and webhook pod.
+   A `stable` image reference alone does not identify the running version:
+
+   ```bash
+   kubectl -n <namespace> exec <pod> -c <n8n-container> -- n8n --version
+   ```
+
+   If pods disagree, resolve the mixed-version deployment before proceeding.
+   Record runner image versions too. Set `n8n_image_tag` to the verified
+   application version in your configuration; for a custom image tag, also
+   set `n8n_task_runner_image_tag` to its underlying n8n version.
+3. Keep those pins while setting `n8n_chart_version = "1.12.0"`. Review a
+   fresh Terraform plan and the rendered chart images before applying.
+   An explicit tag prevents the fallback change, but is not proof that an
+   arbitrary older application is compatible with the new chart.
+
+In this module's queue-mode topology, chart `1.12.0` removes task-runner
+sidecars from mains. Runners remain on workers when enabled; webhook pods
+still have none. **Use n8n 2.13.0 or newer with this topology.** The
+[upstream chart guidance](https://github.com/n8n-io/n8n-hosting/blob/v1.12.0/charts/n8n/README.md)
+notes that n8n 1.108.0 through 2.12.x still needs a runner on main for MCP
+Server Trigger executions. An older explicit image pin is not made compatible
+by keeping its tag. Expect pod rollouts and verify JavaScript and Python Code
+nodes through workers after the upgrade, including manual executions.
+
+The CPU-capacity estimate excludes main runners only for verified upstream
+`1.12.0` (including build metadata). Older, preview, future unverified, and
+custom charts retain the conservative main-runner allowance. Default peak
+requests fall from `16,600m` to `15,400m`; no autoscaler ceiling changes.
+
+Chart `1.12.0` does not include worker pools. Keep using a suitable preview
+or verified custom chart for `n8n_worker_pools`. The chart's new KEDA pause
+settings remain at their defaults and are not exposed by this module.
 
 ## Before bumping
 
@@ -74,7 +127,7 @@ numbers longer.
 
 ## Bumping
 
-1. Set `n8n_image_tag`, any required `n8n_chart_version`, and—when using a custom application tag—the matching `n8n_task_runner_image_tag`.
+1. Set `n8n_image_tag`, any required `n8n_chart_version`, and, when using a custom application tag, the matching `n8n_task_runner_image_tag`.
 2. `terraform plan` and review the diff. `atomic = true` rolls back Kubernetes resources after a failed rollout, not PostgreSQL migrations.
 3. `terraform apply`. Watch the main pods through the rollout:
 

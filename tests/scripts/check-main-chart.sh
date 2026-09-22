@@ -36,6 +36,8 @@ console() {
 chart_version=$(console <<< 'var.n8n_chart_version')
 chart_repository=$(console <<< 'var.n8n_chart_repository')
 helm pull "$chart_repository/n8n" --version "$chart_version" --untar --untardir "$tmp"
+app_version=$(console <<< "yamldecode(file(\"$tmp/n8n/Chart.yaml\")).appVersion")
+[[ "$app_version" == "2.39.6" ]] || { echo "Review image fallback tests for appVersion=$app_version" >&2; exit 1; }
 
 # Include a larger multi-main floor, plus an explicitly high ceiling for the
 # single-main case. Expected results below are independent of the locals.
@@ -50,7 +52,7 @@ HCL
       --set secretRefs.existingSecret=test-core \
       --set license.enabled=true --set license.existingSecret.name=test-license \
       --set queueMode.enabled=true --set webhookProcessor.enabled=true \
-      --set keda.enabled=true \
+      --set keda.enabled=true --set taskRunners.enabled=true \
       --show-only "templates/$template.yaml" > "$tmp/$template.yaml"
     console <<< "jsonencode(yamldecode(file(\"$tmp/$template.yaml\")))" > "$tmp/$template.json"
   done
@@ -72,5 +74,46 @@ HCL
     jq -e '.spec | has("strategy") | not' "$tmp/$template.json" >/dev/null
   done
   jq -e '.spec.selector.matchLabels["app.kubernetes.io/component"] == "main"' "$tmp/pdb.json" >/dev/null
-  echo "PASS: chart $chart_version, main replicas=$replicas"
+  # Omitted image tags use appVersion, and queue-mode runners are worker-only.
+  for template in deployment-main deployment-worker deployment-webhook-processor; do
+    jq -e --arg image "docker.n8n.io/n8nio/n8n:$app_version" \
+      '[.spec.template.spec.containers[] | select(.name != "task-runner") | .image] == [$image]' \
+      "$tmp/$template.json" >/dev/null
+  done
+  for template in deployment-main deployment-webhook-processor; do
+    jq -e '[.spec.template.spec.containers[] | select(.name == "task-runner")] | length == 0' "$tmp/$template.json" >/dev/null
+  done
+  jq -e --arg image "n8nio/runners:$app_version" \
+    '[.spec.template.spec.containers[] | select(.name == "task-runner") | .image] == [$image]' \
+    "$tmp/deployment-worker.json" >/dev/null
+  echo "PASS: chart $chart_version, main replicas=$replicas, image fallback and worker-only runners"
+done
+
+# Explicit app tags must override appVersion; runner tags follow the app unless
+# explicitly set. Custom repositories must not reset either explicit tag.
+for scenario in explicit custom; do
+  args=(--set-string image.tag=2.40.5)
+  repository=docker.n8n.io/n8nio/n8n
+  tag=2.40.5
+  if [[ "$scenario" == custom ]]; then
+    repository=registry.example.com/n8n
+    tag=2.40.5-custom
+    args=(--set-string "image.repository=$repository" --set-string "image.tag=$tag"
+      --set-string taskRunners.image.tag=2.40.5)
+  fi
+  for template in deployment-main deployment-worker deployment-webhook-processor; do
+    helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
+      --set secretRefs.existingSecret=test-core \
+      --set license.enabled=true --set license.existingSecret.name=test-license \
+      --set queueMode.enabled=true --set webhookProcessor.enabled=true \
+      --set keda.enabled=true --set taskRunners.enabled=true "${args[@]}" \
+      --show-only "templates/$template.yaml" > "$tmp/$template.yaml"
+    console <<< "jsonencode(yamldecode(file(\"$tmp/$template.yaml\")))" > "$tmp/$template.json"
+    jq -e --arg image "$repository:$tag" \
+      '[.spec.template.spec.containers[] | select(.name != "task-runner") | .image] == [$image]' \
+      "$tmp/$template.json" >/dev/null
+  done
+  jq -e '[.spec.template.spec.containers[] | select(.name == "task-runner") | .image] == ["n8nio/runners:2.40.5"]' \
+    "$tmp/deployment-worker.json" >/dev/null
+  echo "PASS: chart $chart_version, $scenario image overrides"
 done

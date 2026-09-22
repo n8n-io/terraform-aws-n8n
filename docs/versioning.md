@@ -84,6 +84,22 @@ in this module's case, taking everything inside it down too), which is worse
 than living with the provider's deprecation warning until it ships that
 support.
 
+## Chart 1.12.0 upgrade requirements
+
+The default moves from `1.11.0` to `1.12.0`, so this belongs in a minor
+module release. `n8n_image_tag = null` still delegates to the selected chart,
+whose fallback changes from floating `stable` to `appVersion: 2.39.6`.
+An existing deployment may already run a newer application. Inspect and pin
+its running version before changing the chart; see
+[Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1110-to-1120).
+
+Rendering tests cover fallback and explicit image tags, custom repositories,
+and worker-only task runners in queue mode. The capacity model removes main
+runner requests only for upstream `1.12.0`, ignoring build metadata but not
+prerelease suffixes. Verify topology before extending that exception to any
+other release or repository. Worker pools still require their separate preview
+or verified custom chart; the new KEDA pause settings are not exposed.
+
 ## What this policy deliberately does not force
 
 - **Redis → Valkey.** AWS steers new ElastiCache deployments toward Valkey
