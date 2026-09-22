@@ -7,6 +7,20 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+### Changed
+
+- CI Terraform pin `1.16.2` to `1.16.3` and Checkov `3.3.17` to `3.3.19`.
+  The Terraform requirement remains `>= 1.11`. The new `CKV_AWS_394`
+  findings have scoped exceptions on all eleven examples' dynamic
+  Availability Zone lookups to preserve their region-portable behavior.
+  Zone identities can still change between plans; pin them in long-lived
+  VPC configurations before applying. No checks are suppressed repo-wide.
+- AWS provider locks `6.64.0` to `6.65.0` in the root, all eleven examples,
+  and `modules/controllers`, with checksums for Linux amd64, Linux arm64,
+  and macOS arm64. The `~> 6.0` constraint and all other provider selections
+  are unchanged. Published-module consumers retain their own provider
+  locks. No chart, image, or infrastructure defaults change. See #139.
+
 ## [0.5.0] - 2026-09-21
 
 Minor release per the [stability contract](./README.md#stability--versioning):

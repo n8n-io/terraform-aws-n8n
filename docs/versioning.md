@@ -117,14 +117,36 @@ support.
   available June 2, 2026 (see AWS's own "what's new" announcement and
   `docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html`), so
   this is not a currency gap in the sense the other rows in this doc mean
-  it. It is a gate-compatibility gap instead: `checkov` 3.3.17, confirmed the
-  newest release on PyPI as of this PR, hardcodes `CKV_AWS_339`'s allow-list
-  at `["1.29", …, "1.35"]` with no `1.36` entry (checked directly in its
-  installed source, not inferred from a changelog), so bumping today would
+  it. It is a gate-compatibility gap instead: the pinned `checkov` 3.3.19
+  still hardcodes `CKV_AWS_339`'s allow-list at `["1.29", …, "1.35"]` with
+  no `1.36` entry (verified in that release's
+  [check source](https://github.com/bridgecrewio/checkov/blob/3.3.19/checkov/terraform/checks/resource/aws/EKSPlatformVersion.py)), so bumping today would
   add a curated-finding suppression for a version this repo's own security
   gate cannot yet vouch for, while `1.35` remains inside AWS's 14-month
   standard-support window. Revisit once a `checkov` release adds `1.36` to
   that list.
+
+## Provider locks and toolchain updates
+
+The provider rows in the drift report compare constraints with upstream
+versions, not with the versions selected in `.terraform.lock.hcl`. Check
+all 13 tracked lock files: the root, eleven examples, and
+`modules/controllers`. A compatible provider update normally changes only
+its lock entries, not the module's constraints. Preserve checksums for
+`linux_amd64`, `linux_arm64`, and `darwin_arm64`, and leave unrelated
+providers unchanged. Consumers of the published module use their own root
+lock file, not this repository's locks.
+
+Checkov `3.3.19` adds `CKV_AWS_394`, which requires a `zone-name` or
+`zone-id` filter on `aws_availability_zones`. All eleven examples retain
+dynamic discovery so they remain runnable across regions without changing
+existing subnet placement in a toolchain update. Each data source carries
+a scoped exception, not a repository-wide suppression. This accepts a
+real risk: `slice(..., 0, 2)` limits the number of zones but does not pin
+their identities. Changes to the returned list can replace subnets. For a
+long-lived deployment, pin the existing zone identities in the VPC
+configuration and review the plan before applying. The published n8n
+module itself consumes a pre-existing VPC and performs no zone discovery.
 
 ## What the automated drift report cannot see
 

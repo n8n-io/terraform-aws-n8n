@@ -16,6 +16,10 @@ locals {
 # single_nat_gateway = false and one_nat_gateway_per_az = true.
 
 data "aws_availability_zones" "available" {
+  # checkov:skip=CKV_AWS_394:Region-portable example intentionally discovers AZs instead of hardcoding region-specific zone identities; see docs/versioning.md for the accepted replacement risk.
+  # slice(..., 0, 2) bounds the count, not the zone identities. A changed list
+  # can replace subnets. Pin the existing zones in long-lived deployments and
+  # review the plan before applying.
   state = "available"
 }
 
