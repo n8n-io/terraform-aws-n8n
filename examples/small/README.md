@@ -18,7 +18,7 @@ cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars and set n8n_domain, route53_zone_id, n8n_license_key
 
 terraform init
-terraform apply
+terraform apply -compact-warnings
 ```
 
 That's it. Terraform provisions the VPC, issues the ACM certificate (validating it automatically via Route53), stands up EKS and everything on top, and creates the alias record pointing `n8n_domain` at the ALB. Allow ~5 minutes after apply for the ALB to become reachable.

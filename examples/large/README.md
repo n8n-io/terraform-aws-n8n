@@ -64,7 +64,7 @@ cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars with your values
 
 terraform init
-terraform apply   # ~30 min: Aurora provisioning dominates
+terraform apply -compact-warnings   # ~30 min: Aurora provisioning dominates
 ```
 
 After apply, retrieve credentials:

@@ -34,6 +34,15 @@ this project adheres to the stability contract in
   are unchanged. Published-module consumers retain their own provider
   locks. These provider and toolchain updates do not change infrastructure
   defaults. See #139.
+- Every documented `terraform plan`/`terraform apply` quickstart command
+  (all `examples/*/README.md` and `docs/upgrading-n8n.md`) now passes
+  `-compact-warnings`, collapsing the "Deprecated Resource" warnings on
+  `kubernetes_namespace`/`kubernetes_secret` (tracked in #138) to one line
+  each instead of a multi-line block. Cosmetic only: the warnings themselves
+  are still emitted and still worth reading once; see the
+  "Verification-required" tier in `docs/versioning.md` for why the
+  underlying rename is blocked on upstream
+  `hashicorp/terraform-provider-kubernetes#2812`.
 
 ## [0.5.0] - 2026-09-21
 
