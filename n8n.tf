@@ -285,28 +285,47 @@ resource "helm_release" "n8n" {
 
     # ── Deployment replica counts ─────────────────────────────────────────────
     # Each of these is wired to its autoscaler's floor rather than left at a
-    # constant, because the chart renders spec.replicas unconditionally:
-    # deployment-main.yaml is `ternary .Values.multiMain.replicas .Values.replicaCount
-    # .Values.multiMain.enabled`, so multi-main reads multiMain.replicas but
-    # single-main reads the chart's own top-level replicaCount instead, not
-    # multiMain.replicas. deployment-worker.yaml uses queueMode.workerReplicaCount,
-    # and deployment-webhook-processor.yaml uses webhookProcessor.replicaCount, with
-    # no regard for whether an HPA or a KEDA ScaledObject also owns the field.
+    # constant, because deployment-main.yaml renders spec.replicas
+    # unconditionally: it is `ternary .Values.multiMain.replicas
+    # .Values.replicaCount .Values.multiMain.enabled`, so multi-main reads
+    # multiMain.replicas but single-main reads the chart's own top-level
+    # replicaCount instead, not multiMain.replicas. That is still true on
+    # every chart version this module supports, main included.
     #
-    # A constant here fights the autoscaler on every helm upgrade. Helm writes
-    # spec.replicas back to the constant, the deployment scales down to it, and
-    # the autoscaler then has to scale back up to its floor, which erases the warm
-    # floor at exactly the moment a rollout needs it. Setting each to its floor
+    # Chart >= 1.13.0 (n8n-io/n8n-hosting#201) fixed this for
+    # deployment-worker.yaml: it now omits spec.replicas entirely once an
+    # autoscaler owns the count, which this module's worker deployment
+    # always satisfies (keda.enabled = true with non-empty
+    # keda.worker.triggers below), so workerReplicaCount only still takes
+    # effect as the literal spec.replicas value on an older, preview, or
+    # unverified chart (see n8n_chart_has_worker_only_runners in
+    # scaling.tf for the same version gate applied to task-runner
+    # placement). deployment-webhook-processor.yaml carries the identical
+    # chart-side guard from the same release, but this module never
+    # satisfies it: keda.webhookProcessor.enabled is never set, and
+    # keda.enabled = true (needed for worker autoscaling) blocks the
+    # "built-in HPA owns it" branch too, so webhookProcessor.replicaCount
+    # still renders unconditionally on every chart version, regardless of
+    # this module's own externally-managed webhook HPA in scaling.tf.
+    #
+    # A constant here fights the autoscaler on every helm upgrade wherever
+    # the chart still renders the field unconditionally (main always;
+    # webhook processors always, given this module's config; workers only
+    # on a chart older than 1.13.0). Helm writes spec.replicas back to the
+    # constant, the deployment scales down to it, and the autoscaler then
+    # has to scale back up to its floor, which erases the warm floor at
+    # exactly the moment a rollout needs it. Setting each to its floor
     # makes Helm's write a no-op while the deployment sits at that floor.
     #
-    # It does not preserve an active scale-up. A deployment the autoscaler has
-    # taken above its floor is still written down to the floor on the next
-    # upgrade, and the autoscaler has to climb again. Bounding the drop at the
-    # floor is the most a caller of this chart can do: the field is rendered
-    # unconditionally, so no value omits it, and reading the live replica count
-    # back into the plan would make every plan depend on current cluster state.
-    # Fixing it properly means the chart guarding spec.replicas on whether an
-    # autoscaler owns the deployment.
+    # It does not preserve an active scale-up. A deployment the autoscaler
+    # has taken above its floor is still written down to the floor on the
+    # next upgrade (main and webhook processors always; workers only
+    # pre-1.13.0), and the autoscaler has to climb again. Bounding the drop
+    # at the floor is the most a caller of an unguarded chart path can do.
+    # Where the chart already guards the field (workers, from 1.13.0), the
+    # value is inert, and reading the live replica count back into the plan
+    # to do better for main and webhook processors would make every plan
+    # depend on current cluster state.
     #
     # replicaCount only takes effect while multiMain.enabled = false
     # (n8n_main_hpa_min_replicas == 1, the only value that disables multi-main),

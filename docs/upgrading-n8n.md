@@ -82,13 +82,17 @@ since `n8n_worker_keda_min_replicas`/`n8n_worker_keda_max_replicas` always
 configure `keda.enabled = true` with non-empty Redis queue-depth triggers.
 Kubernetes defaults the field to 1 on first create; because the field is
 *removed*, not changed, the very next `helm upgrade` to `1.13.0` triggers
-that default once, and the existing KEDA `ScaledObject` (unchanged by this
-bump, still targeting the same Deployment) rescales it back up on its next
-poll (`pollingInterval = 15`s). Expect a brief, one-time dip in worker
-capacity during the upgrade window, not a lasting change — no Terraform
-input changes as a result, and no action is needed unless the deployment
-cannot tolerate any capacity dip, in which case scale main/worker headroom
-up first or upgrade during a low-traffic window.
+that default once. Since this module's own worker floor
+(`n8n_worker_keda_min_replicas`) also defaults to 1, this is only a real
+capacity dip when the deployment is actively scaled above the floor at
+upgrade time. Recovery from that dip is driven by the native HPA KEDA
+manages behind the `ScaledObject` (visible as `kubectl get hpa
+keda-hpa-n8n-worker`), not bounded by `keda.worker.pollingInterval`
+(which only governs how often KEDA refreshes the external metric, not the
+HPA's own reconciliation cadence). No Terraform input changes as a
+result, and no action is needed unless the deployment cannot tolerate any
+capacity dip, in which case scale main/worker headroom up first or
+upgrade during a low-traffic window.
 
 **Webhook processors are unaffected.** This module's webhook-processor
 autoscaling is a Terraform-managed `kubernetes_horizontal_pod_autoscaler_v2`

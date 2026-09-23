@@ -16,11 +16,16 @@ this project adheres to the stability contract in
   worker Deployment's `replicas` once an autoscaler owns the count
   (n8n-io/n8n-hosting#201), which is this module's real shape (KEDA always
   configured with non-empty queue-depth triggers): the first `helm upgrade`
-  drops `spec.replicas` from the worker Deployment, Kubernetes defaults it
-  to 1 once, and the existing `ScaledObject` rescales it on its next poll
-  (`pollingInterval = 15s`). One-time, bounded, no input changes. Webhook
-  processors are unaffected — their autoscaling is the module's own
-  Terraform-managed HPA in `scaling.tf`, outside the chart's KEDA/HPA model.
+  drops `spec.replicas` from the worker Deployment and Kubernetes defaults
+  it to 1 once. Since the module's own worker floor
+  (`n8n_worker_keda_min_replicas`) also defaults to 1, this is only a real
+  capacity dip when a deployment is actively scaled above the floor at
+  upgrade time; recovery from that dip is HPA-driven, not bounded by
+  `keda.worker.pollingInterval` (which only governs how often KEDA
+  refreshes the external metric, not the native HPA's own reconciliation
+  cadence). No input changes. Webhook processors are unaffected: their
+  autoscaling is the module's own Terraform-managed HPA in `scaling.tf`,
+  outside the chart's KEDA/HPA model.
   The capacity model's worker-only-runner accounting now covers both
   `1.12.0` and `1.13.0`. The new `keda.webhookProcessor` pause/scale-to-zero
   values are not exposed by this module. See

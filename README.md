@@ -172,9 +172,9 @@ This module ships against specific provider majors. Notably:
   Kubernetes provider 2.x should pin this module to `~> 0.4.0` (see
   `CHANGELOG.md`).
 - **Terraform CLI:** `>= 1.11`.
-- **n8n Helm chart:** default `1.12.0`. Other chart versions can be
+- **n8n Helm chart:** default `1.13.0`. Other chart versions can be
   selected via `n8n_chart_version`.
-- **n8n application image:** `n8n_image_tag = null` uses the selected chart's default. Chart `1.12.0` resolves to `docker.n8n.io/n8nio/n8n:2.39.6`, not the floating `stable` tag used by `1.11.0`. **Pin the running application version before upgrading the chart to avoid an accidental downgrade.** See [Upgrading n8n](./docs/upgrading-n8n.md). `n8n_image_repository` points the release at a custom image (see [Custom n8n images](#custom-n8n-images)).
+- **n8n application image:** `n8n_image_tag = null` uses the selected chart's default. Chart `1.13.0` resolves to `docker.n8n.io/n8nio/n8n:2.40.5`, not the floating `stable` tag used by `1.11.0`. **Pin the running application version before upgrading the chart to avoid an accidental downgrade.** See [Upgrading n8n](./docs/upgrading-n8n.md). `n8n_image_repository` points the release at a custom image (see [Custom n8n images](#custom-n8n-images)).
 - **EKS:** validated on Kubernetes `1.35`. The default
   `metrics_server_chart_version` (`3.14.0`, metrics-server 0.9.x) requires
   Kubernetes `1.34` or newer; on a `1.31` to `1.33` cluster pin it to
@@ -1371,7 +1371,7 @@ module "n8n" {
   # The chart derives the task runner sidecar's tag from the app image's tag,
   # and no n8nio/runners:2.27.4-mypackages exists. Pin the n8n version the
   # custom image is built from, or pods carrying runners land in
-  # ImagePullBackOff (workers only in chart 1.12.0 queue mode).
+  # ImagePullBackOff (workers only in chart 1.13.0 queue mode).
   n8n_task_runner_image_tag = "2.27.4"
 
   # Not needed any more: the packages are in the image.
@@ -1385,7 +1385,7 @@ Three things to know about the inputs:
   image tag to the repository, so a tag or digest inlined into
   `n8n_image_repository` is rejected at plan time. Setting the repository
   without a tag is accepted but warns: the selected chart's default tag
-  (`2.39.6` in chart `1.12.0`) may not exist in your private registry.
+  (`2.40.5` in chart `1.13.0`) may not exist in your private registry.
 - **`n8n_task_runner_image_tag` is usually required alongside a custom tag.**
   Task runners are enabled by default (`n8n_task_runners_enabled = true`) and
   the sidecar image is `n8nio/runners`, tagged from `image.tag` unless
@@ -1637,7 +1637,7 @@ is often cheaper than resizing the database. The two examples that set
 headroom question on whatever database you supply.
 
 - **Requires n8n >= 2.27.** Pin `n8n_image_tag` accordingly. With a null tag,
-  the selected chart controls the image version (`2.39.6` in chart `1.12.0`).
+  the selected chart controls the image version (`2.40.5` in chart `1.13.0`).
   Inspect and pin the running version before upgrading the chart.
 - **Requires an Enterprise license** carrying the `feat:executionDataS3`
   entitlement (the module already requires `n8n_license_key`). Note that this is
@@ -2342,7 +2342,7 @@ doing at this node count, but neither removes the fivefold waste at source.
 | <a name="input_n8n_worker_extra_env"></a> [n8n\_worker\_extra\_env](#input\_n8n\_worker\_extra\_env) | Additional environment variables injected into worker pods only, via queueMode.workerExtraEnv. Use this for worker-only tuning that must not reach main or webhook-processor pods; n8n\_extra\_env is the equivalent for all three. This reaches every worker, the chart's own unlabelled deployment and each n8n\_worker\_pools pool alike, because they render from one shared pod template; a pool's own extra\_env is applied after this and wins on a repeated name. Set it here for tuning that should apply pool-wide, and on the pool for tuning that should not. N8N\_WORKER\_POOL\_NAME is rejected here along with the other module-managed names: pool membership is owned by n8n\_worker\_pools, which also builds the queue and the KEDA scaler that go with it, and pinning the chart's own worker deployment to a pool through this input would leave those workers consuming a pool queue that nothing scales. Rejected at plan time for the same module-managed names as n8n\_extra\_env. | <pre>list(object({<br/>    name  = string<br/>    value = string<br/>  }))</pre> | `[]` | no |
 | <a name="input_n8n_worker_keda_jobs_per_replica"></a> [n8n\_worker\_keda\_jobs\_per\_replica](#input\_n8n\_worker\_keda\_jobs\_per\_replica) | Number of waiting jobs per worker replica used as the KEDA scaling threshold. KEDA targets ceil(queue\_depth / jobs\_per\_replica) replicas. | `number` | `5` | no |
 | <a name="input_n8n_worker_keda_max_replicas"></a> [n8n\_worker\_keda\_max\_replicas](#input\_n8n\_worker\_keda\_max\_replicas) | Maximum worker replicas KEDA may scale to. Workers compete for the same nodes as the main and webhook pods, and each carries a task runner sidecar, so this ceiling counts against the same node group budget as the two HPA maxima. See README.md → "Sizing autoscaling against node capacity". | `number` | `10` | no |
-| <a name="input_n8n_worker_keda_min_replicas"></a> [n8n\_worker\_keda\_min\_replicas](#input\_n8n\_worker\_keda\_min\_replicas) | Minimum worker replicas. KEDA keeps at least this many workers running even when the queue is empty. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back. | `number` | `1` | no |
+| <a name="input_n8n_worker_keda_min_replicas"></a> [n8n\_worker\_keda\_min\_replicas](#input\_n8n\_worker\_keda\_min\_replicas) | Minimum worker replicas. KEDA keeps at least this many workers running even when the queue is empty. Chart >= 1.13.0 leaves the worker Deployment's replica count to the autoscaler once keda.worker.triggers is non-empty (always true here), so this value only sets the KEDA floor, not spec.replicas directly; a chart older than 1.13.0 still renders spec.replicas from this value unconditionally, so leaving it below the intended floor makes every helm upgrade scale down and then wait for the autoscaler to climb back. | `number` | `1` | no |
 | <a name="input_n8n_worker_memory_limit"></a> [n8n\_worker\_memory\_limit](#input\_n8n\_worker\_memory\_limit) | Memory limit for n8n worker pods (e.g. 2Gi, 4Gi) | `string` | `"2Gi"` | no |
 | <a name="input_n8n_worker_memory_request"></a> [n8n\_worker\_memory\_request](#input\_n8n\_worker\_memory\_request) | Memory request for n8n worker pods (e.g. 1Gi, 2Gi) | `string` | `"1Gi"` | no |
 | <a name="input_n8n_worker_pools"></a> [n8n\_worker\_pools](#input\_n8n\_worker\_pools) | EARLY ALPHA, SUBJECT TO CHANGE WITHOUT NOTICE: tracks n8n's own worker pools feature and the chart support for it, both alpha upstream. Labelled worker pools to run beside the chart's own unlabelled worker deployment. Each entry becomes one queueMode.workerGroups entry in the Helm release, which renders one Deployment (identical to the chart's worker pods but carrying N8N\_WORKER\_POOL\_NAME) and one KEDA ScaledObject watching that pool's own `jobs-<name>` queue, so a pool autoscales on its own backlog rather than the default queue's. Requires an n8n\_chart\_version whose chart supports queueMode.workerGroups: that feature (n8n-io/n8n-hosting#189) is merged to the chart's preview/worker-pools branch but not released to a numbered chart version, and an older chart accepts the key and renders nothing for it, so a precondition on the Helm release fails the plan for every numbered chart version (only a prerelease, taken at the caller's word, passes). An official preview build can be published from that branch's Preview chart GitHub Action (n8n-io/n8n-hosting#191) to oci://ghcr.io/n8n-io/n8n-helm-chart, this variable's default n8n\_chart\_repository, at a version such as 1.11.0-preview.workerpools.1, which is what to pin in n8n\_chart\_version. See examples/worker-pools/README.md for the exact command and a private-mirror fallback. | <pre>list(object({<br/>    name         = string<br/>    min_replicas = optional(number, 1)<br/>    max_replicas = optional(number, 5)<br/><br/>    # Null inherits the module-wide worker setting of the same name.<br/>    concurrency    = optional(number, null)<br/>    cpu_request    = optional(string, null)<br/>    cpu_limit      = optional(string, null)<br/>    memory_request = optional(string, null)<br/>    memory_limit   = optional(string, null)<br/><br/>    # Extra env for this pool's workers only, on top of what every worker gets.<br/>    extra_env = optional(list(object({<br/>      name  = string<br/>      value = string<br/>    })), [])<br/>  }))</pre> | `[]` | no |

@@ -114,8 +114,13 @@ counts to the autoscaler once one is actually configured
 This module's worker deployment always configures `keda.worker.triggers`
 non-empty, so it is affected: the first `helm upgrade` to `1.13.0` drops
 `spec.replicas` from the worker Deployment, Kubernetes defaults it to 1 on
-that one apply, and the existing `ScaledObject` rescales it on its next
-poll. One-time, bounded by `pollingInterval = 15`s, no Terraform input
+that one apply. Since this module's own worker floor
+(`n8n_worker_keda_min_replicas`) also defaults to 1, this is only a real
+capacity dip when a deployment is actively scaled above the floor at
+upgrade time; recovery is HPA-driven (the native HPA KEDA manages behind
+the `ScaledObject`), not bounded by `keda.worker.pollingInterval`, which
+only governs how often KEDA refreshes the external metric rather than the
+HPA's own reconciliation cadence. No Terraform input
 changes. Webhook processors are unaffected: their autoscaling is a
 Terraform-managed HPA in `scaling.tf`, outside the chart's KEDA/HPA model
 entirely (`keda.webhookProcessor.enabled` is never set by this module).
