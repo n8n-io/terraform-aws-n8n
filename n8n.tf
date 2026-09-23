@@ -539,10 +539,12 @@ resource "helm_release" "n8n" {
     keda = {
       enabled = true
       worker = {
-        pollingInterval = 15
-        cooldownPeriod  = 60
-        minReplicaCount = var.n8n_worker_keda_min_replicas
-        maxReplicaCount = var.n8n_worker_keda_max_replicas
+        pollingInterval    = 15
+        cooldownPeriod     = 60
+        minReplicaCount    = var.n8n_worker_keda_min_replicas
+        maxReplicaCount    = var.n8n_worker_keda_max_replicas
+        pause              = var.n8n_worker_keda_pause
+        pausedReplicaCount = var.n8n_worker_keda_paused_replica_count
         triggers = [
           {
             type = "redis"
@@ -1483,6 +1485,16 @@ check "log_streaming_destinations_require_managed_by_env" {
       length(var.n8n_log_streaming_destinations) == 0
     )
     error_message = "n8n_log_streaming_destinations is set, but n8n_log_streaming_managed_by_env is false — the destinations will be ignored and no N8N_LOG_STREAMING_* env vars will be set on the n8n pods. Set n8n_log_streaming_managed_by_env = true to apply them, or clear the destinations to silence this warning."
+  }
+}
+
+# Same pattern again: the chart only renders autoscaling.keda.sh/paused-replicas
+# while the worker ScaledObject is paused (templates/_helpers.tpl,
+# n8n.kedaAnnotations), so a held count set without pause is silently inert.
+check "worker_keda_paused_replica_count_requires_pause" {
+  assert {
+    condition     = var.n8n_worker_keda_paused_replica_count != null ? var.n8n_worker_keda_pause : true
+    error_message = "n8n_worker_keda_paused_replica_count is set while n8n_worker_keda_pause is false. The chart only renders autoscaling.keda.sh/paused-replicas while the worker ScaledObject is paused, so the count is inert. Set n8n_worker_keda_pause = true or clear the count."
   }
 }
 

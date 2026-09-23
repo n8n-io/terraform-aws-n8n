@@ -10409,6 +10409,67 @@ run "keda_jobs_per_replica_rejects_zero" {
   expect_failures = [var.n8n_worker_keda_jobs_per_replica]
 }
 
+# ── Worker KEDA pause (chart keda.worker.pause / pausedReplicaCount) ─────────
+# helm_release.n8n.values is unknown at plan time under the mock providers
+# (see AGENTS.md's "Known mock provider limitations"), so the wiring into
+# keda.worker.pause/pausedReplicaCount itself is proven by
+# tests/scripts/check-main-chart.sh's paused render instead. These runs pin
+# the variable contract and the advisory check.
+run "worker_keda_pause_defaults_off" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_worker_keda_pause == false && var.n8n_worker_keda_paused_replica_count == null
+    error_message = "Worker KEDA autoscaling must not be paused by default, with no held replica count."
+  }
+}
+
+run "worker_keda_pause_accepts_zero_hold_count" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause                = true
+    n8n_worker_keda_paused_replica_count = 0
+  }
+
+  assert {
+    condition     = var.n8n_worker_keda_pause && var.n8n_worker_keda_paused_replica_count == 0
+    error_message = "A zero hold count (scale workers to zero while paused) must be accepted."
+  }
+}
+
+run "worker_keda_paused_replica_count_rejects_negative" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause                = true
+    n8n_worker_keda_paused_replica_count = -1
+  }
+
+  expect_failures = [var.n8n_worker_keda_paused_replica_count]
+}
+
+run "worker_keda_paused_replica_count_rejects_fractional" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause                = true
+    n8n_worker_keda_paused_replica_count = 1.5
+  }
+
+  expect_failures = [var.n8n_worker_keda_paused_replica_count]
+}
+
+run "worker_keda_paused_replica_count_warns_when_inert" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_paused_replica_count = 2
+  }
+
+  expect_failures = [check.worker_keda_paused_replica_count_requires_pause]
+}
+
 # node_min, node_max and node_desired were each floored at 1 on their own, but
 # never checked against each other. AWS rejects the resulting scaling config.
 run "node_max_below_node_min_is_rejected" {

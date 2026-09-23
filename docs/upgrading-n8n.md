@@ -106,6 +106,16 @@ The new `keda.webhookProcessor.{pause,pausedReplicaCount}` values (pausing
 webhook processors and scaling them to zero) are not exposed by this
 module's inputs.
 
+**New inputs.** `n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`
+expose the chart's `keda.worker.pause` / `pausedReplicaCount` (n8n-io/n8n-hosting#177,
+shipped in chart 1.12.0): `pause = true` holds workers at their current count
+for a maintenance window, and a `paused_replica_count` of `0` drains them to
+zero while jobs wait in Redis. Both default to their chart-matching off
+state, so this is additive: no behavior changes for an existing deployment
+that leaves them unset. The chart's matching `keda.webhookProcessor.pause` is
+not exposed, for the same reason `keda.webhookProcessor` itself is not: no
+webhook `ScaledObject` exists here for the annotation to land on.
+
 ## Before bumping
 
 1. Read the breaking-changes doc for every major version you're crossing, not just the target: [n8n v2.0 breaking changes](https://docs.n8n.io/2-0-breaking-changes/), [n8n v3.0 breaking changes](https://docs.n8n.io/changelog/v30-breaking-changes) (scheduled October 2026). Jumping from, say, 1.x straight to a 3.x tag means both apply.

@@ -129,7 +129,7 @@ done
 # and queueMode.enabled are both set and keda.worker.triggers is non-empty.
 # The module always sets keda.enabled=true with two non-empty Redis
 # triggers (n8n.tf), so this is this module's real shape, not a synthetic
-# one — none of the scenarios above set keda.worker.triggers, so they never
+# one; none of the scenarios above set keda.worker.triggers, so they never
 # exercise the branch this bump actually changed for our config.
 helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
   --set secretRefs.existingSecret=test-core \
@@ -144,3 +144,39 @@ helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
 console <<< "jsonencode(yamldecode(file(\"$tmp/deployment-worker-keda.yaml\")))" > "$tmp/deployment-worker-keda.json"
 jq -e '.spec | has("replicas") | not' "$tmp/deployment-worker-keda.json" >/dev/null
 echo "PASS: chart $chart_version, worker replicas left to KEDA with real triggers"
+
+# keda.worker.pause / pausedReplicaCount (n8n-io/n8n-hosting#177, shipped
+# 1.12.0): the chart only renders the autoscaling.keda.sh/paused* annotations
+# while pause=true. Assert both the default (absent) and paused (present,
+# including a zero hold count) shapes against the real chart, not just the
+# variable contract tftest.hcl pins under mocks.
+helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
+  --set secretRefs.existingSecret=test-core \
+  --set license.enabled=true --set license.existingSecret.name=test-license \
+  --set queueMode.enabled=true --set webhookProcessor.enabled=true \
+  --set keda.enabled=true --set taskRunners.enabled=true \
+  --set 'keda.worker.triggers[0].type=redis' \
+  --set 'keda.worker.triggers[0].metadata.address=redis:6379' \
+  --set 'keda.worker.triggers[0].metadata.listName=bull:jobs:wait' \
+  --set 'keda.worker.triggers[0].metadata.listLength=1' \
+  --show-only templates/scaledobject-worker.yaml > "$tmp/scaledobject-worker-default.yaml"
+console <<< "jsonencode(yamldecode(file(\"$tmp/scaledobject-worker-default.yaml\")))" > "$tmp/scaledobject-worker-default.json"
+jq -e '(.metadata.annotations // {}) | to_entries | map(select(.key | startswith("autoscaling.keda.sh/paused"))) | length == 0' \
+  "$tmp/scaledobject-worker-default.json" >/dev/null
+
+helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
+  --set secretRefs.existingSecret=test-core \
+  --set license.enabled=true --set license.existingSecret.name=test-license \
+  --set queueMode.enabled=true --set webhookProcessor.enabled=true \
+  --set keda.enabled=true --set taskRunners.enabled=true \
+  --set 'keda.worker.triggers[0].type=redis' \
+  --set 'keda.worker.triggers[0].metadata.address=redis:6379' \
+  --set 'keda.worker.triggers[0].metadata.listName=bull:jobs:wait' \
+  --set 'keda.worker.triggers[0].metadata.listLength=1' \
+  --set keda.worker.pause=true \
+  --set keda.worker.pausedReplicaCount=0 \
+  --show-only templates/scaledobject-worker.yaml > "$tmp/scaledobject-worker-paused.yaml"
+console <<< "jsonencode(yamldecode(file(\"$tmp/scaledobject-worker-paused.yaml\")))" > "$tmp/scaledobject-worker-paused.json"
+jq -e '.metadata.annotations["autoscaling.keda.sh/paused"] == "true" and .metadata.annotations["autoscaling.keda.sh/paused-replicas"] == "0"' \
+  "$tmp/scaledobject-worker-paused.json" >/dev/null
+echo "PASS: chart $chart_version, worker KEDA pause/pausedReplicaCount render"

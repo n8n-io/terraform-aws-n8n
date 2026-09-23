@@ -7,6 +7,22 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+### Added
+
+- **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
+  (chart `keda.worker.pause` / `pausedReplicaCount`, n8n-hosting#177, shipped
+  in chart 1.12.0). `pause = true` annotates the worker `ScaledObject` with
+  `autoscaling.keda.sh/paused` so workers hold their current count; a
+  `paused_replica_count` (0 included) adds `paused-replicas` and drains to
+  that count while jobs wait in Redis. A count set without `pause` draws a
+  plan-time warning (`check.worker_keda_paused_replica_count_requires_pause`)
+  since the chart ignores it. Same input names and semantics as
+  terraform-azurerm-n8n and terraform-google-n8n. The chart's matching
+  `keda.webhookProcessor.pause` is deliberately not exposed: this module
+  scales webhook processors with its own HPA (`scaling.tf`), so no webhook
+  `ScaledObject` exists for the annotation to land on. Both new inputs
+  default to the chart's own off state, so this is purely additive.
+
 ### Changed
 
 - Default n8n chart `1.12.0` to `1.13.0`. `n8n_image_tag = null` still uses

@@ -3186,6 +3186,24 @@ variable "n8n_worker_keda_jobs_per_replica" {
   }
 }
 
+variable "n8n_worker_keda_pause" {
+  description = "Pause KEDA autoscaling of the worker Deployment (sets autoscaling.keda.sh/paused on the worker ScaledObject, chart's keda.worker.pause, n8n-io/n8n-hosting#177). While paused, KEDA stops reconciling and workers hold their current replica count, or n8n_worker_keda_paused_replica_count when that is also set. Use for a maintenance window or to drain the queue ahead of a migration without disabling KEDA outright. Shipped in chart 1.12.0, so both this module's default (1.13.0) and any chart pinned at 1.12.0 or newer render it."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "n8n_worker_keda_paused_replica_count" {
+  description = "Replica count the worker Deployment holds while n8n_worker_keda_pause is true (sets autoscaling.keda.sh/paused-replicas, the chart's keda.worker.pausedReplicaCount). Null (the default) freezes workers at whatever count they had when paused. 0 scales workers to zero, e.g. to stop consuming jobs while they queue in Redis ahead of a migration. Ignored, with a plan-time warning, when n8n_worker_keda_pause is false."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.n8n_worker_keda_paused_replica_count == null ? true : (var.n8n_worker_keda_paused_replica_count == floor(var.n8n_worker_keda_paused_replica_count) && var.n8n_worker_keda_paused_replica_count >= 0)
+    error_message = "n8n_worker_keda_paused_replica_count must be a whole number of 0 or more, or null to freeze workers at their current count."
+  }
+}
+
 # ── Pod DNS ───────────────────────────────────────────────────────────────────
 
 variable "n8n_dns_config" {
