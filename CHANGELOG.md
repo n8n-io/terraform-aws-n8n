@@ -59,7 +59,9 @@ this project adheres to the stability contract in
   metadata), reducing default peak requests from `16,600m` to `15,400m`.
   Older, preview, future unverified, and custom charts keep conservative
   accounting. No autoscaler ceilings change; worker-pool guards remain in
-  place and the new chart KEDA pause settings are not exposed.
+  place. The chart's KEDA worker pause settings shipped in this same
+  release; see the **Added** section above for how this module now
+  exposes them.
 - CI Terraform pin `1.16.2` to `1.16.3` and Checkov `3.3.17` to `3.3.19`.
   The Terraform requirement remains `>= 1.11`. The new `CKV_AWS_394`
   findings have scoped exceptions on all eleven examples' dynamic

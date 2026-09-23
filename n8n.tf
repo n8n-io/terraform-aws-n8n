@@ -1498,6 +1498,40 @@ check "worker_keda_paused_replica_count_requires_pause" {
   }
 }
 
+locals {
+  # keda.worker.pause/pausedReplicaCount is a feature flag the chart has
+  # carried since 1.12.0 (n8n-io/n8n-hosting#177) with no reason to remove,
+  # so "any release at or after 1.12.0" is the right test here, not a fixed
+  # allowlist like n8n_chart_has_worker_only_runners in scaling.tf (which
+  # needs per-release topology re-verification and would go stale every
+  # release if used for a plain feature-presence check like this one).
+  # Strips prerelease/build metadata first: a preview build off an older
+  # line (e.g. examples/worker-pools' "1.11.0-preview.workerpools.1") must
+  # not read as new enough just because its string sorts after "1.12.0";
+  # parsing major.minor as numbers avoids that.
+  n8n_worker_keda_pause_chart_version_core = split(".", split("+", split("-", var.n8n_chart_version)[0])[0])
+  n8n_worker_keda_pause_supported = var.n8n_chart_repository != "oci://ghcr.io/n8n-io/n8n-helm-chart" ? true : (
+    tonumber(local.n8n_worker_keda_pause_chart_version_core[0]) > 1 ||
+    (
+      tonumber(local.n8n_worker_keda_pause_chart_version_core[0]) == 1 &&
+      tonumber(local.n8n_worker_keda_pause_chart_version_core[1]) >= 12
+    )
+  )
+}
+
+# A chart older than 1.12.0 has no keda.worker.pause key at all, so the
+# ScaledObject template simply never reads it: the release applies clean,
+# KEDA keeps scaling normally, and nothing signals that the requested
+# maintenance-window pause never took effect. Skipped for a custom
+# n8n_chart_repository, whose version numbering this module cannot verify
+# against upstream (same reasoning as n8n_chart_has_worker_only_runners).
+check "worker_keda_pause_requires_a_supported_chart" {
+  assert {
+    condition     = (var.n8n_worker_keda_pause || var.n8n_worker_keda_paused_replica_count != null) ? local.n8n_worker_keda_pause_supported : true
+    error_message = "n8n_worker_keda_pause or n8n_worker_keda_paused_replica_count is set, but n8n_chart_version predates 1.12.0, the release that added keda.worker.pause/pausedReplicaCount (n8n-io/n8n-hosting#177). An older chart's ScaledObject template does not read these keys at all, so the requested pause silently never takes effect. Bump n8n_chart_version to 1.12.0 or newer, or clear these inputs."
+  }
+}
+
 # ── Custom image guards ───────────────────────────────────────────────────────
 # Six plan-time warnings for custom-image, extra-volume and pull-secret
 # configurations that are accepted but almost certainly not what the caller

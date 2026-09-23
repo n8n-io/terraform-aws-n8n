@@ -10432,10 +10432,9 @@ run "worker_keda_pause_accepts_zero_hold_count" {
     n8n_worker_keda_paused_replica_count = 0
   }
 
-  assert {
-    condition     = var.n8n_worker_keda_pause && var.n8n_worker_keda_paused_replica_count == 0
-    error_message = "A zero hold count (scale workers to zero while paused) must be accepted."
-  }
+  # No assert: a successful plan is the coverage. Zero is not "unset" or
+  # negative, and this run's only job is to prove it clears validation; an
+  # assert here would only reassert the variables just set above.
 }
 
 run "worker_keda_paused_replica_count_rejects_negative" {
@@ -10468,6 +10467,34 @@ run "worker_keda_paused_replica_count_warns_when_inert" {
   }
 
   expect_failures = [check.worker_keda_paused_replica_count_requires_pause]
+}
+
+# keda.worker.pause has no effect on a chart that predates 1.12.0
+# (n8n-io/n8n-hosting#177): the ScaledObject template does not read the key,
+# so a caller requesting a pause on an old pin gets no error and no pause.
+run "worker_keda_pause_warns_on_a_chart_that_predates_it" {
+  command = plan
+
+  variables {
+    n8n_chart_version     = "1.11.0"
+    n8n_worker_keda_pause = true
+  }
+
+  expect_failures = [check.worker_keda_pause_requires_a_supported_chart]
+}
+
+# A custom chart repository's version numbering is not verifiable against
+# upstream, so the guard stays silent there rather than guessing.
+run "worker_keda_pause_allowed_on_a_custom_chart_repository" {
+  command = plan
+
+  variables {
+    n8n_chart_repository  = "oci://registry.example.com/charts"
+    n8n_chart_version     = "1.11.0"
+    n8n_worker_keda_pause = true
+  }
+
+  # No expect_failures: the whole point is that this must NOT warn.
 }
 
 # node_min, node_max and node_desired were each floored at 1 on their own, but

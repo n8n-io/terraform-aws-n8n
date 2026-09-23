@@ -64,8 +64,9 @@ custom charts retain the conservative main-runner allowance. Default peak
 requests fall from `16,600m` to `15,400m`; no autoscaler ceiling changes.
 
 Chart `1.12.0` does not include worker pools. Keep using a suitable preview
-or verified custom chart for `n8n_worker_pools`. The chart's new KEDA pause
-settings remain at their defaults and are not exposed by this module.
+or verified custom chart for `n8n_worker_pools`. The chart's KEDA worker
+pause settings shipped in this same release; see `n8n_worker_keda_pause`
+in the next section for how this module exposes them.
 
 ## Moving from chart 1.12.0 to 1.13.0
 
