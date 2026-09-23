@@ -3147,7 +3147,7 @@ variable "n8n_external_secrets_aws_secret_names" {
 # ── KEDA: worker pods ─────────────────────────────────────────────────────────
 
 variable "n8n_worker_keda_min_replicas" {
-  description = "Minimum worker replicas. KEDA keeps at least this many workers running even when the queue is empty. Chart >= 1.13.0 leaves the worker Deployment's replica count to the autoscaler once keda.worker.triggers is non-empty (always true here), so this value only sets the KEDA floor, not spec.replicas directly; a chart older than 1.13.0 still renders spec.replicas from this value unconditionally, so leaving it below the intended floor makes every helm upgrade scale down and then wait for the autoscaler to climb back."
+  description = "Minimum worker replicas. KEDA keeps at least this many workers running even when the queue is empty. Chart >= 1.13.0 leaves the worker Deployment's replica count to the autoscaler once keda.worker.triggers is non-empty (always true here), so this value only sets the KEDA floor, not spec.replicas directly; a chart older than 1.13.0 still renders spec.replicas from this value unconditionally, so an upgrade can reset a larger live worker count down to this configured minimum, and KEDA scales back above it only when queue demand requires it."
   type        = number
   default     = 1
   nullable    = false

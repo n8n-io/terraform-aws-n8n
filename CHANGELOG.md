@@ -17,10 +17,11 @@ this project adheres to the stability contract in
   (n8n-io/n8n-hosting#201), which is this module's real shape (KEDA always
   configured with non-empty queue-depth triggers): the first `helm upgrade`
   drops `spec.replicas` from the worker Deployment and Kubernetes defaults
-  it to 1 once. Since the module's own worker floor
-  (`n8n_worker_keda_min_replicas`) also defaults to 1, this is only a real
-  capacity dip when a deployment is actively scaled above the floor at
-  upgrade time; recovery from that dip is HPA-driven, not bounded by
+  it to 1 once. The reset target is a hard-coded 1, not this module's
+  configured floor, so this is a real capacity dip whenever the
+  pre-upgrade replica count exceeds 1, including at a configured floor
+  above 1 (the default floor is 1, so a default deployment sees no dip);
+  recovery from that dip is HPA-driven, not bounded by
   `keda.worker.pollingInterval` (which only governs how often KEDA
   refreshes the external metric, not the native HPA's own reconciliation
   cadence). No input changes. Webhook processors are unaffected: their

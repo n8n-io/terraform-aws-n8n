@@ -82,10 +82,11 @@ since `n8n_worker_keda_min_replicas`/`n8n_worker_keda_max_replicas` always
 configure `keda.enabled = true` with non-empty Redis queue-depth triggers.
 Kubernetes defaults the field to 1 on first create; because the field is
 *removed*, not changed, the very next `helm upgrade` to `1.13.0` triggers
-that default once. Since this module's own worker floor
-(`n8n_worker_keda_min_replicas`) also defaults to 1, this is only a real
-capacity dip when the deployment is actively scaled above the floor at
-upgrade time. Recovery from that dip is driven by the native HPA KEDA
+that default once. The reset target is a hard-coded 1, not this module's
+configured floor, so this is a real capacity dip whenever the pre-upgrade
+replica count exceeds 1, including a deployment sitting exactly at a
+configured floor above 1 (the default floor is 1, so a default deployment
+sees no dip). Recovery from that dip is driven by the native HPA KEDA
 manages behind the `ScaledObject` (visible as `kubectl get hpa
 keda-hpa-n8n-worker`), not bounded by `keda.worker.pollingInterval`
 (which only governs how often KEDA refreshes the external metric, not the

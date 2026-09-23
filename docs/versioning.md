@@ -114,10 +114,11 @@ counts to the autoscaler once one is actually configured
 This module's worker deployment always configures `keda.worker.triggers`
 non-empty, so it is affected: the first `helm upgrade` to `1.13.0` drops
 `spec.replicas` from the worker Deployment, Kubernetes defaults it to 1 on
-that one apply. Since this module's own worker floor
-(`n8n_worker_keda_min_replicas`) also defaults to 1, this is only a real
-capacity dip when a deployment is actively scaled above the floor at
-upgrade time; recovery is HPA-driven (the native HPA KEDA manages behind
+that one apply. The reset target is a hard-coded 1, not this module's
+configured floor, so this is a real capacity dip whenever the pre-upgrade
+replica count exceeds 1, including a deployment sitting exactly at a
+configured floor above 1 (the default floor is 1, so a default deployment
+sees no dip); recovery is HPA-driven (the native HPA KEDA manages behind
 the `ScaledObject`), not bounded by `keda.worker.pollingInterval`, which
 only governs how often KEDA refreshes the external metric rather than the
 HPA's own reconciliation cadence. No Terraform input
