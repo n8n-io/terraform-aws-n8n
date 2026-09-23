@@ -20,7 +20,7 @@ cp terraform.tfvars.example terraform.tfvars
 # cloudflare_api_token, and n8n_license_key
 
 terraform init
-terraform apply
+terraform apply -compact-warnings
 ```
 
 Terraform provisions the VPC, issues the ACM certificate (validating it automatically via Cloudflare DNS records), stands up EKS and everything on top, and creates the CNAME pointing `n8n_domain` at the ALB. Allow ~5 minutes after apply for the ALB to become reachable.

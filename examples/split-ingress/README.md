@@ -55,7 +55,7 @@ cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars and set n8n_domain, route53_zone_id, n8n_license_key
 
 terraform init
-terraform apply
+terraform apply -compact-warnings
 ```
 
 One apply provisions the VPC, issues and validates the certificate, stands up EKS and everything on top, creates both ALBs, and writes both alias records. Allow ~5 minutes after apply for the ALBs to become reachable.

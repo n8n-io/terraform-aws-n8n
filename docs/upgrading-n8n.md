@@ -128,7 +128,7 @@ numbers longer.
 ## Bumping
 
 1. Set `n8n_image_tag`, any required `n8n_chart_version`, and, when using a custom application tag, the matching `n8n_task_runner_image_tag`.
-2. `terraform plan` and review the diff. `atomic = true` rolls back Kubernetes resources after a failed rollout, not PostgreSQL migrations.
+2. `terraform plan` and review the diff and warnings. `atomic = true` rolls back Kubernetes resources after a failed rollout, not PostgreSQL migrations.
 3. `terraform apply`. Watch the main pods through the rollout:
 
    ```bash

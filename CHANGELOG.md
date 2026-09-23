@@ -34,6 +34,16 @@ this project adheres to the stability contract in
   are unchanged. Published-module consumers retain their own provider
   locks. These provider and toolchain updates do not change infrastructure
   defaults. See #139.
+- The `terraform apply` quickstarts in the examples other than
+  `worker-pools` now pass `-compact-warnings`, reducing multi-line
+  "Deprecated Resource" warnings on `kubernetes_namespace` and
+  `kubernetes_secret` (tracked in #138) to summaries. This also hides the
+  details of other warnings: rerun without the flag to read them.
+  `examples/worker-pools` and `docs/upgrading-n8n.md` keep full warnings
+  visible because their plan and apply instructions require them. See the
+  "Verification-required" tier in `docs/versioning.md` for why the
+  underlying rename is blocked on upstream
+  `hashicorp/terraform-provider-kubernetes#2812`.
 
 ## [0.5.0] - 2026-09-21
 

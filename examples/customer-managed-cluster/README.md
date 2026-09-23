@@ -57,7 +57,7 @@ cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars and set n8n_domain, route53_zone_id, n8n_license_key
 
 terraform init
-terraform apply
+terraform apply -compact-warnings
 ```
 
 After apply, see the root [`docs/post-deployment.md`](../../docs/post-deployment.md) for DNS propagation and license activation.
