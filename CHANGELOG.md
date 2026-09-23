@@ -9,6 +9,22 @@ this project adheres to the stability contract in
 
 ### Changed
 
+- Default n8n chart `1.12.0` to `1.13.0`. `n8n_image_tag = null` still uses
+  the selected chart's default, which moves from `appVersion: 2.39.6` to
+  `2.40.5`; pin the running application version first if it is not already
+  pinned, to avoid an unintended downgrade. Upstream stops templating a
+  worker Deployment's `replicas` once an autoscaler owns the count
+  (n8n-io/n8n-hosting#201), which is this module's real shape (KEDA always
+  configured with non-empty queue-depth triggers): the first `helm upgrade`
+  drops `spec.replicas` from the worker Deployment, Kubernetes defaults it
+  to 1 once, and the existing `ScaledObject` rescales it on its next poll
+  (`pollingInterval = 15s`). One-time, bounded, no input changes. Webhook
+  processors are unaffected — their autoscaling is the module's own
+  Terraform-managed HPA in `scaling.tf`, outside the chart's KEDA/HPA model.
+  The capacity model's worker-only-runner accounting now covers both
+  `1.12.0` and `1.13.0`. The new `keda.webhookProcessor` pause/scale-to-zero
+  values are not exposed by this module. See
+  `docs/upgrading-n8n.md#moving-from-chart-1120-to-1130`.
 - Default n8n chart `1.11.0` to `1.12.0`. This requires a minor module
   release: callers without an explicit chart pin receive a Helm upgrade and
   pod rollouts. `n8n_image_tag = null` still uses the selected chart's default,

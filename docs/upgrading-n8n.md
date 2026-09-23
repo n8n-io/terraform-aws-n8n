@@ -6,8 +6,8 @@ This covers bumping the deployed n8n version on an existing deployment. It does 
 
 | Variable | Controls | Default |
 | --- | --- | --- |
-| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.12.0"`, pinned |
-| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.39.6` in chart `1.12.0`) |
+| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.13.0"`, pinned |
+| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.40.5` in chart `1.13.0`) |
 | `n8n_task_runner_image_tag` | Task runner image tag; keep aligned with the underlying n8n version when using a custom application tag. | `null`, meaning the application image tag |
 
 Bumping the image tag alone gets you a new n8n version without changing the chart's templates or value schema. Bumping the chart version can also change what values the chart accepts, so treat it as the larger-blast-radius change of the two.
@@ -66,6 +66,40 @@ requests fall from `16,600m` to `15,400m`; no autoscaler ceiling changes.
 Chart `1.12.0` does not include worker pools. Keep using a suitable preview
 or verified custom chart for `n8n_worker_pools`. The chart's new KEDA pause
 settings remain at their defaults and are not exposed by this module.
+
+## Moving from chart 1.12.0 to 1.13.0
+
+**Pin `n8n_image_tag` before upgrading if it is still null.** The fallback
+moves with `appVersion`, `2.39.6` → `2.40.5`. If a deployment is already
+pinned (recommended, see above), this upgrade does not touch the running
+application version at all.
+
+**Worker pods lose their explicit `replicas` field on this upgrade, once.**
+Chart `1.13.0` stops setting `spec.replicas` on the worker Deployment
+wherever an autoscaler already owns the count
+(n8n-io/n8n-hosting#201) — true for every deployment from this module,
+since `n8n_worker_keda_min_replicas`/`n8n_worker_keda_max_replicas` always
+configure `keda.enabled = true` with non-empty Redis queue-depth triggers.
+Kubernetes defaults the field to 1 on first create; because the field is
+*removed*, not changed, the very next `helm upgrade` to `1.13.0` triggers
+that default once, and the existing KEDA `ScaledObject` (unchanged by this
+bump, still targeting the same Deployment) rescales it back up on its next
+poll (`pollingInterval = 15`s). Expect a brief, one-time dip in worker
+capacity during the upgrade window, not a lasting change — no Terraform
+input changes as a result, and no action is needed unless the deployment
+cannot tolerate any capacity dip, in which case scale main/worker headroom
+up first or upgrade during a low-traffic window.
+
+**Webhook processors are unaffected.** This module's webhook-processor
+autoscaling is a Terraform-managed `kubernetes_horizontal_pod_autoscaler_v2`
+created directly in `scaling.tf`, entirely outside the chart's own
+KEDA/HPA model (see `docs/helm-chart-coverage.md`'s `keda.webhookProcessor`
+row). The chart's new conditional never applies to it either before or
+after this bump.
+
+The new `keda.webhookProcessor.{pause,pausedReplicaCount}` values (pausing
+webhook processors and scaling them to zero) are not exposed by this
+module's inputs.
 
 ## Before bumping
 

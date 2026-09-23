@@ -95,10 +95,39 @@ its running version before changing the chart; see
 
 Rendering tests cover fallback and explicit image tags, custom repositories,
 and worker-only task runners in queue mode. The capacity model removes main
-runner requests only for upstream `1.12.0`, ignoring build metadata but not
-prerelease suffixes. Verify topology before extending that exception to any
-other release or repository. Worker pools still require their separate preview
-or verified custom chart; the new KEDA pause settings are not exposed.
+runner requests for upstream `1.12.0` and `1.13.0`, ignoring build metadata
+but not prerelease suffixes. Verify topology before extending that
+exception to any other release or repository. Worker pools still require
+their separate preview or verified custom chart.
+
+## Chart 1.13.0 upgrade requirements
+
+The default moves from `1.12.0` to `1.13.0`. `n8n_image_tag = null` still
+delegates to the selected chart, whose fallback moves from `appVersion:
+2.39.6` to `appVersion: 2.40.5`; inspect and pin the running application
+version first if it is not already pinned. See
+[Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1120-to-1130).
+
+Upstream leaves worker (and, where applicable, webhook-processor) replica
+counts to the autoscaler once one is actually configured
+(n8n-io/n8n-hosting#201) rather than templating `replicas` unconditionally.
+This module's worker deployment always configures `keda.worker.triggers`
+non-empty, so it is affected: the first `helm upgrade` to `1.13.0` drops
+`spec.replicas` from the worker Deployment, Kubernetes defaults it to 1 on
+that one apply, and the existing `ScaledObject` rescales it on its next
+poll. One-time, bounded by `pollingInterval = 15`s, no Terraform input
+changes. Webhook processors are unaffected: their autoscaling is a
+Terraform-managed HPA in `scaling.tf`, outside the chart's KEDA/HPA model
+entirely (`keda.webhookProcessor.enabled` is never set by this module).
+`tests/scripts/check-main-chart.sh` renders the worker Deployment with real
+(non-empty) KEDA triggers and asserts `replicas` is omitted, matching this
+module's actual shape rather than the chart's bare default.
+
+The new `keda.webhookProcessor.{pause,pausedReplicaCount,pollingInterval,
+cooldownPeriod,minReplicaCount,maxReplicaCount,triggers}` values (pausing
+webhook processors, including scale-to-zero) are not exposed by this
+module. Worker pools still require their separate preview or verified
+custom chart; this release carries no worker-pools change either way.
 
 ## What this policy deliberately does not force
 

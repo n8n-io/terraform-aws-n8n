@@ -37,7 +37,7 @@ chart_version=$(console <<< 'var.n8n_chart_version')
 chart_repository=$(console <<< 'var.n8n_chart_repository')
 helm pull "$chart_repository/n8n" --version "$chart_version" --untar --untardir "$tmp"
 app_version=$(console <<< "yamldecode(file(\"$tmp/n8n/Chart.yaml\")).appVersion")
-[[ "$app_version" == "2.39.6" ]] || { echo "Review image fallback tests for appVersion=$app_version" >&2; exit 1; }
+[[ "$app_version" == "2.40.5" ]] || { echo "Review image fallback tests for appVersion=$app_version" >&2; exit 1; }
 
 # Include a larger multi-main floor, plus an explicitly high ceiling for the
 # single-main case. Expected results below are independent of the locals.
@@ -91,13 +91,18 @@ done
 
 # Explicit app tags must override appVersion; runner tags follow the app unless
 # explicitly set. Custom repositories must not reset either explicit tag.
+# The explicit scenario deliberately picks a tag other than the pinned
+# chart's appVersion (2.40.5): using the same value would make "explicit tag
+# wins" indistinguishable from "fallback to appVersion" wins by coincidence.
 for scenario in explicit custom; do
-  args=(--set-string image.tag=2.40.5)
+  args=(--set-string image.tag=2.39.6)
   repository=docker.n8n.io/n8nio/n8n
-  tag=2.40.5
+  tag=2.39.6
+  runner_tag=2.39.6
   if [[ "$scenario" == custom ]]; then
     repository=registry.example.com/n8n
     tag=2.40.5-custom
+    runner_tag=2.40.5
     args=(--set-string "image.repository=$repository" --set-string "image.tag=$tag"
       --set-string taskRunners.image.tag=2.40.5)
   fi
@@ -113,7 +118,29 @@ for scenario in explicit custom; do
       '[.spec.template.spec.containers[] | select(.name != "task-runner") | .image] == [$image]' \
       "$tmp/$template.json" >/dev/null
   done
-  jq -e '[.spec.template.spec.containers[] | select(.name == "task-runner") | .image] == ["n8nio/runners:2.40.5"]' \
+  jq -e --arg image "n8nio/runners:$runner_tag" \
+    '[.spec.template.spec.containers[] | select(.name == "task-runner") | .image] == [$image]' \
     "$tmp/deployment-worker.json" >/dev/null
   echo "PASS: chart $chart_version, $scenario image overrides"
 done
+
+# Chart 1.13.0 stops templating a worker Deployment's replicas once KEDA
+# actually scales it (n8n-io/n8n-hosting#201): only true when keda.enabled
+# and queueMode.enabled are both set and keda.worker.triggers is non-empty.
+# The module always sets keda.enabled=true with two non-empty Redis
+# triggers (n8n.tf), so this is this module's real shape, not a synthetic
+# one — none of the scenarios above set keda.worker.triggers, so they never
+# exercise the branch this bump actually changed for our config.
+helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
+  --set secretRefs.existingSecret=test-core \
+  --set license.enabled=true --set license.existingSecret.name=test-license \
+  --set queueMode.enabled=true --set webhookProcessor.enabled=true \
+  --set keda.enabled=true --set taskRunners.enabled=true \
+  --set 'keda.worker.triggers[0].type=redis' \
+  --set 'keda.worker.triggers[0].metadata.address=redis:6379' \
+  --set 'keda.worker.triggers[0].metadata.listName=bull:jobs:wait' \
+  --set 'keda.worker.triggers[0].metadata.listLength=1' \
+  --show-only templates/deployment-worker.yaml > "$tmp/deployment-worker-keda.yaml"
+console <<< "jsonencode(yamldecode(file(\"$tmp/deployment-worker-keda.yaml\")))" > "$tmp/deployment-worker-keda.json"
+jq -e '.spec | has("replicas") | not' "$tmp/deployment-worker-keda.json" >/dev/null
+echo "PASS: chart $chart_version, worker replicas left to KEDA with real triggers"

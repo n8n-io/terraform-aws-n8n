@@ -125,12 +125,15 @@ locals {
     worker      = var.n8n_worker_cpu_request
   }
 
-  # Verified upstream 1.12.0 removes runners from queue-mode mains. Strip build
-  # metadata only: previews, older/future releases and custom repositories keep
-  # the conservative main-sidecar allowance until their topology is verified.
+  # Verified upstream 1.12.0 removes runners from queue-mode mains, unchanged
+  # through 1.13.0 (that release only reworks worker/webhook-processor
+  # replica ownership and bumps appVersion; deployment-main.yaml's runner
+  # placement is untouched). Strip build metadata only: previews, older/future
+  # releases and custom repositories keep the conservative main-sidecar
+  # allowance until their topology is verified.
   n8n_chart_has_worker_only_runners = (
     var.n8n_chart_repository == "oci://ghcr.io/n8n-io/n8n-helm-chart" &&
-    split("+", var.n8n_chart_version)[0] == "1.12.0"
+    contains(["1.12.0", "1.13.0"], split("+", var.n8n_chart_version)[0])
   )
   n8n_main_task_runner_cpu_millis = local.n8n_chart_has_worker_only_runners ? 0 : local.n8n_cpu_request_millis["task_runner"]
 

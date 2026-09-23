@@ -8498,8 +8498,8 @@ run "autoscaling_defaults_fit_the_default_node_group" {
   command = plan
 
   assert {
-    condition     = var.n8n_chart_version == "1.12.0" && local.n8n_peak_cpu_request_millis == 15400
-    error_message = "Upstream chart 1.12.0 must count runners only on workers: 15400m at default ceilings."
+    condition     = var.n8n_chart_version == "1.13.0" && local.n8n_peak_cpu_request_millis == 15400
+    error_message = "Upstream chart 1.13.0 must count runners only on workers: 15400m at default ceilings."
   }
 
   # No expect_failures: a warning from the capacity check would fail this run,
@@ -8619,6 +8619,19 @@ run "main_maximum_of_thirteen_fits_without_task_runners" {
   }
 }
 
+run "explicit_1_12_0_keeps_worker_only_accounting" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.12.0"
+  }
+
+  assert {
+    condition     = local.n8n_peak_cpu_request_millis == 15400
+    error_message = "1.12.0 is independently verified worker-only-runner accounting, not just via the current default."
+  }
+}
+
 run "verified_chart_build_metadata_keeps_worker_only_accounting" {
   command = plan
 
@@ -8662,7 +8675,7 @@ run "future_chart_keeps_conservative_runner_accounting" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.13.0"
+    n8n_chart_version = "1.14.0"
   }
 
   assert {
@@ -11497,7 +11510,7 @@ run "worker_pools_fail_the_plan_when_the_default_chart_predates_them" {
 
   variables {
     # No n8n_chart_version: the module default, which is a numbered release
-    # (1.12.0 at the time of writing) and so never passes the guard, whatever
+    # (1.13.0 at the time of writing) and so never passes the guard, whatever
     # the number is.
     n8n_worker_pools = [{ name = "gpu" }]
   }
