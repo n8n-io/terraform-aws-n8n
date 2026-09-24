@@ -97,9 +97,13 @@ defaults it to 1. This happens once, on the first `helm upgrade` to
 - A terminated worker gets SIGTERM, stops taking new jobs and waits for
   its running executions, but only up to its shutdown window. The chart
   sets `N8N_GRACEFUL_SHUTDOWN_TIMEOUT` from `redis.worker.timeout`, 30
-  seconds by default and not configurable through this module, and the
-  pod is also bounded by `n8n_termination_grace_period`. Executions still
-  running after that can be interrupted.
+  seconds by default. This module does not expose `redis.worker.timeout`,
+  and setting the variable through `n8n_extra_env` or `n8n_worker_extra_env`
+  is not a safe workaround: the chart always renders it on workers as a
+  ConfigMap reference, so a second entry with the same name hits the
+  duplicate-env failure described for `n8n_queue_worker_lock_duration`.
+  The pod is also bounded by `n8n_termination_grace_period`. Executions
+  still running after that can be interrupted.
 - On a healthy, unpaused installation, the HPA that KEDA manages behind
   the `ScaledObject` (`kubectl get hpa keda-hpa-n8n-worker`) is expected
   to restore the floor, and scale above it as queue demand requires.
@@ -145,8 +149,10 @@ module's inputs.
 **New inputs.** `n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`
 expose the chart's `keda.worker.pause` / `pausedReplicaCount`:
 `pause = true` holds the default worker Deployment at its current count for
-a maintenance window, and a `paused_replica_count` of `0` scales it to zero
-while jobs wait in Redis. `n8n_worker_pools` pools are not paused; they keep
+a maintenance window. Setting `paused_replica_count` as well holds it at that
+count instead: `0` scales it to zero while jobs wait in Redis. The count only
+takes effect together with `pause = true`; on its own it does nothing and the
+plan warns. `n8n_worker_pools` pools are not paused; they keep
 scaling on their own queues. Pause needs chart `1.13.0` or newer and
 `n8n_worker_keda_min_replicas` of 1 or more, and a plan-time warning fires
 otherwise. The key shipped in chart `1.12.0`, but that release still sets

@@ -116,7 +116,7 @@ module's worker deployment meets that condition whenever
 Kubernetes defaults it to 1. The target is always 1, not the configured
 floor, so for a deployment running more than 1 worker, surplus pods start
 terminating and running executions can be interrupted once a pod's
-shutdown window ends. On a healthy installation, the HPA that KEDA
+shutdown window ends. On a healthy, unpaused installation, the HPA that KEDA
 manages is expected to restore the floor; `keda.worker.pollingInterval`
 does not set that HPA's reconciliation interval. This is a release-note item, not a
 Terraform input change; see
