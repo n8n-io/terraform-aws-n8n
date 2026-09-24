@@ -137,6 +137,38 @@ locals {
   )
   n8n_main_task_runner_cpu_millis = local.n8n_chart_has_worker_only_runners ? 0 : local.n8n_cpu_request_millis["task_runner"]
 
+  # keda.worker.pause/pausedReplicaCount shipped in chart 1.12.0
+  # (n8n-io/n8n-hosting#177), but 1.12.0 still renders the worker's
+  # spec.replicas on every upgrade, which overrides a held count (see
+  # check.worker_keda_pause_requires_a_supported_chart in n8n.tf). 1.13.0
+  # (n8n-io/n8n-hosting#201) stops rendering it, so "1.13.0 or later" is the
+  # test. That is a version floor, not an allowlist like the one above: this
+  # is a feature-presence check with nothing to re-verify per release.
+  # Prerelease and build metadata are stripped and major.minor compared as
+  # numbers, so a preview off an older line (e.g. examples/worker-pools'
+  # "1.11.0-preview.workerpools.1") does not pass just because its string
+  # sorts after "1.13.0".
+  n8n_worker_keda_pause_chart_version_core = split(".", split("+", split("-", var.n8n_chart_version)[0])[0])
+  n8n_worker_keda_pause_supported = var.n8n_chart_repository != "oci://ghcr.io/n8n-io/n8n-helm-chart" ? true : (
+    tonumber(local.n8n_worker_keda_pause_chart_version_core[0]) > 1 ||
+    (
+      tonumber(local.n8n_worker_keda_pause_chart_version_core[0]) == 1 &&
+      tonumber(local.n8n_worker_keda_pause_chart_version_core[1]) >= 13
+    )
+  )
+
+  # Merged into keda.worker in n8n.tf. Empty while pause is off, so a caller
+  # who never uses the feature sees no change to the Helm values string.
+  # pausedReplicaCount is omitted when null, since the chart's own default is
+  # already null. Written as a merge of two conditionals, the shape queueMode
+  # uses in n8n.tf: a single `pause ? merge(...) : {}` is a type error, since
+  # the true branch is an object with differently typed attributes (a bool and
+  # a number) that Terraform cannot unify with the empty false branch.
+  n8n_worker_keda_pause_values = merge(
+    var.n8n_worker_keda_pause ? { pause = true } : {},
+    var.n8n_worker_keda_pause && var.n8n_worker_keda_paused_replica_count != null ? { pausedReplicaCount = var.n8n_worker_keda_paused_replica_count } : {}
+  )
+
   # Every worker pool is a fourth claim on the same nodes. Each pool carries its
   # own KEDA ScaledObject and can reach its own max_replicas independently of
   # the default worker deployment, and a pool that overrides nothing inherits

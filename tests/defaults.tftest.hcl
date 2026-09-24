@@ -10411,16 +10411,39 @@ run "keda_jobs_per_replica_rejects_zero" {
 
 # ── Worker KEDA pause (chart keda.worker.pause / pausedReplicaCount) ─────────
 # helm_release.n8n.values is unknown at plan time under the mock providers
-# (see AGENTS.md's "Known mock provider limitations"), so the wiring into
-# keda.worker.pause/pausedReplicaCount itself is proven by
-# tests/scripts/check-main-chart.sh's paused render instead. These runs pin
-# the variable contract and the advisory check.
+# (see AGENTS.md's "Known mock provider limitations"), so these runs assert on
+# local.n8n_worker_keda_pause_values, the map n8n.tf merges into keda.worker.
+# tests/scripts/check-main-chart.sh renders that same local against the real
+# chart. The one line that merges the local into helm_release.n8n is the only
+# part neither can reach; verify it with a real `terraform plan` or
+# `helm get values` on a live release.
 run "worker_keda_pause_defaults_off" {
   command = plan
 
   assert {
     condition     = var.n8n_worker_keda_pause == false && var.n8n_worker_keda_paused_replica_count == null
     error_message = "Worker KEDA autoscaling must not be paused by default, with no held replica count."
+  }
+
+  # An existing release that never uses pause must see no change to its Helm
+  # values: an always-present `pause: false` would still trigger a Helm
+  # upgrade, which on a chart older than 1.13.0 resets autoscaled replicas.
+  assert {
+    condition     = length(local.n8n_worker_keda_pause_values) == 0
+    error_message = "With pause off, no pause keys may reach keda.worker, or every existing release sees a Helm values diff."
+  }
+}
+
+run "worker_keda_pause_without_count_sets_only_pause" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause = true
+  }
+
+  assert {
+    condition     = local.n8n_worker_keda_pause_values == { pause = true }
+    error_message = "Pause without a held count must send only pause = true, leaving pausedReplicaCount at the chart's null default."
   }
 }
 
@@ -10432,9 +10455,11 @@ run "worker_keda_pause_accepts_zero_hold_count" {
     n8n_worker_keda_paused_replica_count = 0
   }
 
-  # No assert: a successful plan is the coverage. Zero is not "unset" or
-  # negative, and this run's only job is to prove it clears validation; an
-  # assert here would only reassert the variables just set above.
+  # Zero must survive as a real value, not be dropped as falsy or unset.
+  assert {
+    condition     = local.n8n_worker_keda_pause_values == { pause = true, pausedReplicaCount = 0 }
+    error_message = "A held count of 0 must reach keda.worker as pausedReplicaCount = 0."
+  }
 }
 
 run "worker_keda_paused_replica_count_rejects_negative" {
@@ -10481,6 +10506,47 @@ run "worker_keda_pause_warns_on_a_chart_that_predates_it" {
   }
 
   expect_failures = [check.worker_keda_pause_requires_a_supported_chart]
+}
+
+# Chart 1.12.0 reads keda.worker.pause but still renders the worker's
+# spec.replicas, so a later Helm upgrade while paused overrides the held count.
+run "worker_keda_pause_warns_on_chart_1_12_0" {
+  command = plan
+
+  variables {
+    n8n_chart_version     = "1.12.0"
+    n8n_worker_keda_pause = true
+  }
+
+  expect_failures = [check.worker_keda_pause_requires_a_supported_chart]
+}
+
+# A preview off the 1.13 line is new enough; the prerelease suffix is ignored.
+run "worker_keda_pause_allowed_on_a_1_13_preview" {
+  command = plan
+
+  variables {
+    n8n_chart_version     = "1.13.0-preview.1"
+    n8n_worker_keda_pause = true
+  }
+
+  assert {
+    condition     = local.n8n_worker_keda_pause_supported
+    error_message = "A 1.13.x prerelease must count as pause-capable."
+  }
+}
+
+# At a floor of 0 the chart renders no worker ScaledObject, so there is
+# nothing for the pause annotations to land on.
+run "worker_keda_pause_warns_at_a_worker_floor_of_zero" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_min_replicas = 0
+    n8n_worker_keda_pause        = true
+  }
+
+  expect_failures = [check.worker_keda_pause_requires_a_worker_floor]
 }
 
 # A custom chart repository's version numbering is not verifiable against

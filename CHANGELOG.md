@@ -10,39 +10,47 @@ this project adheres to the stability contract in
 ### Added
 
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
-  (chart `keda.worker.pause` / `pausedReplicaCount`, n8n-hosting#177, shipped
-  in chart 1.12.0). `pause = true` annotates the worker `ScaledObject` with
+  (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
+  annotates the default worker `ScaledObject` with
   `autoscaling.keda.sh/paused` so workers hold their current count; a
-  `paused_replica_count` (0 included) adds `paused-replicas` and drains to
-  that count while jobs wait in Redis. A count set without `pause` draws a
-  plan-time warning (`check.worker_keda_paused_replica_count_requires_pause`)
-  since the chart ignores it. Same input names and semantics as
-  terraform-azurerm-n8n and terraform-google-n8n. The chart's matching
-  `keda.webhookProcessor.pause` is deliberately not exposed: this module
-  scales webhook processors with its own HPA (`scaling.tf`), so no webhook
-  `ScaledObject` exists for the annotation to land on. Both new inputs
-  default to the chart's own off state, so this is purely additive.
+  `paused_replica_count` (0 included) adds `paused-replicas` and scales to
+  that count while jobs wait in Redis. `n8n_worker_pools` pools are not
+  paused. Supported from chart `1.13.0`: the key shipped in `1.12.0`, but
+  that release still sets the worker's `spec.replicas` on every Helm
+  upgrade and would override a held count. Three plan-time warnings cover
+  the inert cases: a count without `pause`
+  (`check.worker_keda_paused_replica_count_requires_pause`), a chart older
+  than `1.13.0` (`check.worker_keda_pause_requires_a_supported_chart`), and
+  `n8n_worker_keda_min_replicas = 0`, where the chart renders no worker
+  `ScaledObject` (`check.worker_keda_pause_requires_a_worker_floor`). Same
+  input names and semantics as terraform-azurerm-n8n and
+  terraform-google-n8n. The chart's matching `keda.webhookProcessor.pause` is
+  not exposed: this module scales webhook processors with its own HPA
+  (`scaling.tf`), so no webhook `ScaledObject` exists for the annotation to
+  land on. While both inputs are unset the module sends no pause keys to the
+  chart, so existing releases see no Helm values change from this addition.
 
 ### Changed
 
 - Default n8n chart `1.12.0` to `1.13.0`. `n8n_image_tag = null` still uses
   the selected chart's default, which moves from `appVersion: 2.39.6` to
   `2.40.5`; pin the running application version first if it is not already
-  pinned, to avoid an unintended downgrade. Upstream stops templating a
-  worker Deployment's `replicas` once an autoscaler owns the count
-  (n8n-io/n8n-hosting#201), which is this module's real shape (KEDA always
-  configured with non-empty queue-depth triggers): the first `helm upgrade`
-  drops `spec.replicas` from the worker Deployment and Kubernetes defaults
-  it to 1 once. The reset target is a hard-coded 1, not this module's
-  configured floor, so this is a real capacity dip whenever the
-  pre-upgrade replica count exceeds 1, including at a configured floor
-  above 1 (the default floor is 1, so a default deployment sees no dip);
-  recovery from that dip is HPA-driven, not bounded by
-  `keda.worker.pollingInterval` (which only governs how often KEDA
-  refreshes the external metric, not the native HPA's own reconciliation
-  cadence). No input changes. Webhook processors are unaffected: their
-  autoscaling is the module's own Terraform-managed HPA in `scaling.tf`,
-  outside the chart's KEDA/HPA model.
+  pinned, to avoid an unintended downgrade. **The first upgrade can
+  interrupt running worker pods.** Upstream stops setting a worker
+  Deployment's `replicas` once an autoscaler owns the count
+  (n8n-io/n8n-hosting#201), which this module meets whenever
+  `n8n_worker_keda_min_replicas` is 1 or more. On the first `helm upgrade`,
+  Helm removes the field and Kubernetes defaults it to 1, whatever the
+  configured floor. For a deployment running more than 1 worker (for
+  example `examples/medium` at a floor of 5, `examples/large` at 20),
+  surplus pods start terminating, and executions still running when a
+  pod's shutdown window ends (30 seconds by default) can be interrupted.
+  On a healthy installation, KEDA's HPA is expected to restore the floor.
+  This case was not tested live; the live validation ran at a floor of 1.
+  Upgrade in a low-traffic window and let running work drain first;
+  raising the floor beforehand does not help. No input changes.
+  Webhook processors are unaffected: their autoscaling is the module's own
+  Terraform-managed HPA in `scaling.tf`, outside the chart's KEDA/HPA model.
   The capacity model's worker-only-runner accounting now covers both
   `1.12.0` and `1.13.0`. The new `keda.webhookProcessor` pause/scale-to-zero
   values are not exposed by this module. See
@@ -60,8 +68,8 @@ this project adheres to the stability contract in
   Older, preview, future unverified, and custom charts keep conservative
   accounting. No autoscaler ceilings change; worker-pool guards remain in
   place. The chart's KEDA worker pause settings shipped in this same
-  release; see the **Added** section above for how this module now
-  exposes them.
+  release; the module supports them from chart `1.13.0` (see **Added**
+  above).
 - CI Terraform pin `1.16.2` to `1.16.3` and Checkov `3.3.17` to `3.3.19`.
   The Terraform requirement remains `>= 1.11`. The new `CKV_AWS_394`
   findings have scoped exceptions on all eleven examples' dynamic
