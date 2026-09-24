@@ -746,7 +746,7 @@ variable "keda_chart_repository" {
 variable "n8n_chart_version" {
   description = "n8n Helm chart version to deploy. Must be an exact version, not a constraint: the Helm provider resolves this literally."
   type        = string
-  default     = "1.12.0"
+  default     = "1.13.0"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version))
@@ -799,7 +799,7 @@ variable "keda_chart_version" {
 }
 
 variable "n8n_image_tag" {
-  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). When it is null (the default), the selected Helm chart's own default applies: chart 1.12.0 uses its appVersion, 2.39.6, while 1.11.0 used the floating `stable` tag. A chart upgrade can therefore downgrade an unpinned application. Inspect and pin the currently running n8n version before upgrading the chart; see docs/upgrading-n8n.md. Keep a concrete tag for reproducible, incremental upgrades. See <https://docs.n8n.io/2-0-breaking-changes/> for the n8n 2.x migration guide."
+  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). When it is null (the default), the selected Helm chart's own default applies: chart 1.13.0 uses its appVersion, 2.40.5, while 1.11.0 used the floating `stable` tag. A chart upgrade can therefore downgrade an unpinned application. Inspect and pin the currently running n8n version before upgrading the chart; see docs/upgrading-n8n.md. Keep a concrete tag for reproducible, incremental upgrades. See <https://docs.n8n.io/2-0-breaking-changes/> for the n8n 2.x migration guide."
   type        = string
   default     = null
 
@@ -1435,14 +1435,14 @@ variable "n8n_prestop_sleep" {
 # ── Task runners ──────────────────────────────────────────────────────────────
 
 variable "n8n_task_runners_enabled" {
-  description = "Enable task runner sidecars for isolated JavaScript and Python code execution. In queue mode, upstream chart 1.12.0 places them on workers only, not main or webhook pods."
+  description = "Enable task runner sidecars for isolated JavaScript and Python code execution. In queue mode, upstream chart 1.13.0 places them on workers only, not main or webhook pods."
   type        = bool
   default     = true
   nullable    = false
 }
 
 variable "n8n_task_runner_image_tag" {
-  description = "Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 1.12.0 queue mode). Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n_task_runners_enabled = false."
+  description = "Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 1.13.0 queue mode). Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n_task_runners_enabled = false."
   type        = string
   default     = null
 
@@ -1566,7 +1566,7 @@ variable "n8n_task_runner_custom_config" {
 
       kubectl rollout restart deploy/n8n-worker -n <namespace>
 
-    Upstream chart 1.12.0 mounts this config only on workers in queue mode.
+    Upstream chart 1.13.0 mounts this config only on workers in queue mode.
     For older or custom charts that also place runners on mains, restart
     deploy/n8n-main too. Each n8n_worker_pools pool on a suitable preview or
     verified custom chart also mounts it; roll those by label:
@@ -3147,7 +3147,7 @@ variable "n8n_external_secrets_aws_secret_names" {
 # ── KEDA: worker pods ─────────────────────────────────────────────────────────
 
 variable "n8n_worker_keda_min_replicas" {
-  description = "Minimum worker replicas. KEDA keeps at least this many workers running even when the queue is empty. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back."
+  description = "Minimum worker replicas. KEDA keeps at least this many workers running even when the queue is empty. Chart >= 1.13.0 leaves the worker Deployment's replica count to the autoscaler whenever this value is 1 or more (the module always sets non-empty keda.worker.triggers), so this value only sets the KEDA floor, not spec.replicas directly. At 0, every supported chart version renders no worker Deployment and no worker ScaledObject at all, because the chart gates both on a worker replica count above 0. A chart older than 1.13.0 still renders spec.replicas from this value unconditionally, so an upgrade can reset a larger live worker count down to this configured minimum, and KEDA scales back above it only when queue demand requires it."
   type        = number
   default     = 1
   nullable    = false
@@ -3159,7 +3159,7 @@ variable "n8n_worker_keda_min_replicas" {
 
   validation {
     condition     = var.n8n_worker_keda_min_replicas == floor(var.n8n_worker_keda_min_replicas) && var.n8n_worker_keda_min_replicas >= 0
-    error_message = "n8n_worker_keda_min_replicas must be a whole number of replicas, 0 or greater. 0 is allowed here, unlike the two HPA floors: KEDA scales a ScaledObject to zero natively."
+    error_message = "n8n_worker_keda_min_replicas must be a whole number of replicas, 0 or greater. 0 is allowed here, unlike the two HPA floors, but it does not mean KEDA scales workers to zero: the chart renders no default worker Deployment and no worker ScaledObject when the worker replica count is 0."
   }
 }
 
@@ -3183,6 +3183,24 @@ variable "n8n_worker_keda_jobs_per_replica" {
   validation {
     condition     = var.n8n_worker_keda_jobs_per_replica == floor(var.n8n_worker_keda_jobs_per_replica) && var.n8n_worker_keda_jobs_per_replica >= 1
     error_message = "n8n_worker_keda_jobs_per_replica must be a whole number of jobs, 1 or greater. KEDA divides the queue depth by this value, so 0 is not a threshold it can act on."
+  }
+}
+
+variable "n8n_worker_keda_pause" {
+  description = "Pause KEDA autoscaling of the worker Deployment (sets autoscaling.keda.sh/paused on the worker ScaledObject, chart's keda.worker.pause, n8n-io/n8n-hosting#177). While paused, KEDA stops reconciling and workers hold their current replica count, or n8n_worker_keda_paused_replica_count when that is also set. Use for a maintenance window or to drain the queue ahead of a migration without disabling KEDA outright. Applies to the chart's default worker Deployment only: n8n_worker_pools pools have their own ScaledObjects and keep scaling on their own queues. Requires chart 1.13.0 or newer (the module default) and n8n_worker_keda_min_replicas >= 1; a plan-time warning fires otherwise. The key shipped in chart 1.12.0, but that release still sets the worker's spec.replicas on every Helm upgrade, so a later apply while paused can write the floor back over the held count."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "n8n_worker_keda_paused_replica_count" {
+  description = "Replica count the worker Deployment holds while n8n_worker_keda_pause is true (sets autoscaling.keda.sh/paused-replicas, the chart's keda.worker.pausedReplicaCount). Null (the default) freezes workers at whatever count they had when paused. 0 scales workers to zero, e.g. to stop consuming jobs while they queue in Redis ahead of a migration. Ignored, with a plan-time warning, when n8n_worker_keda_pause is false."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.n8n_worker_keda_paused_replica_count == null ? true : (var.n8n_worker_keda_paused_replica_count == floor(var.n8n_worker_keda_paused_replica_count) && var.n8n_worker_keda_paused_replica_count >= 0)
+    error_message = "n8n_worker_keda_paused_replica_count must be a whole number of 0 or more, or null to freeze workers at their current count."
   }
 }
 

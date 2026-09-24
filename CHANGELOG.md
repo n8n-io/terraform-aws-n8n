@@ -7,8 +7,54 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+### Added
+
+- **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
+  (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
+  annotates the default worker `ScaledObject` with
+  `autoscaling.keda.sh/paused` so workers hold their current count; a
+  `paused_replica_count` (0 included) adds `paused-replicas` and scales to
+  that count while jobs wait in Redis. `n8n_worker_pools` pools are not
+  paused. Supported from chart `1.13.0`: the key shipped in `1.12.0`, but
+  that release still sets the worker's `spec.replicas` on every Helm
+  upgrade and would override a held count. Three plan-time warnings cover
+  the inert cases: a count without `pause`
+  (`check.worker_keda_paused_replica_count_requires_pause`), a chart older
+  than `1.13.0` (`check.worker_keda_pause_requires_a_supported_chart`), and
+  `n8n_worker_keda_min_replicas = 0`, where the chart renders no worker
+  `ScaledObject` (`check.worker_keda_pause_requires_a_worker_floor`). Same
+  input names and semantics as terraform-azurerm-n8n and
+  terraform-google-n8n. The chart's matching `keda.webhookProcessor.pause` is
+  not exposed: this module scales webhook processors with its own HPA
+  (`scaling.tf`), so no webhook `ScaledObject` exists for the annotation to
+  land on. While both inputs are unset the module sends no pause keys to the
+  chart, so existing releases see no Helm values change from this addition.
+
 ### Changed
 
+- Default n8n chart `1.12.0` to `1.13.0`. `n8n_image_tag = null` still uses
+  the selected chart's default, which moves from `appVersion: 2.39.6` to
+  `2.40.5`; pin the running application version first if it is not already
+  pinned, to avoid an unintended downgrade. **The first upgrade can
+  interrupt running worker pods.** Upstream stops setting a worker
+  Deployment's `replicas` once an autoscaler owns the count
+  (n8n-io/n8n-hosting#201), which this module meets whenever
+  `n8n_worker_keda_min_replicas` is 1 or more. On the first `helm upgrade`,
+  Helm removes the field and Kubernetes defaults it to 1, whatever the
+  configured floor. For a deployment running more than 1 worker (for
+  example `examples/medium` at a floor of 5, `examples/large` at 20),
+  surplus pods start terminating, and executions still running when a
+  pod's shutdown window ends (30 seconds by default) can be interrupted.
+  On a healthy installation, KEDA's HPA is expected to restore the floor.
+  This case was not tested live; the live validation ran at a floor of 1.
+  Upgrade in a low-traffic window and let running work drain first;
+  raising the floor beforehand does not help. No input changes.
+  Webhook processors are unaffected: their autoscaling is the module's own
+  Terraform-managed HPA in `scaling.tf`, outside the chart's KEDA/HPA model.
+  The capacity model's worker-only-runner accounting now covers both
+  `1.12.0` and `1.13.0`. The new `keda.webhookProcessor` pause/scale-to-zero
+  values are not exposed by this module. See
+  `docs/upgrading-n8n.md#moving-from-chart-1120-to-1130`.
 - Default n8n chart `1.11.0` to `1.12.0`. This requires a minor module
   release: callers without an explicit chart pin receive a Helm upgrade and
   pod rollouts. `n8n_image_tag = null` still uses the selected chart's default,
@@ -21,7 +67,9 @@ this project adheres to the stability contract in
   metadata), reducing default peak requests from `16,600m` to `15,400m`.
   Older, preview, future unverified, and custom charts keep conservative
   accounting. No autoscaler ceilings change; worker-pool guards remain in
-  place and the new chart KEDA pause settings are not exposed.
+  place. The chart's KEDA worker pause settings shipped in this same
+  release; the module supports them from chart `1.13.0` (see **Added**
+  above).
 - CI Terraform pin `1.16.2` to `1.16.3` and Checkov `3.3.17` to `3.3.19`.
   The Terraform requirement remains `>= 1.11`. The new `CKV_AWS_394`
   findings have scoped exceptions on all eleven examples' dynamic

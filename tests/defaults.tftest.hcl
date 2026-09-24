@@ -8498,8 +8498,8 @@ run "autoscaling_defaults_fit_the_default_node_group" {
   command = plan
 
   assert {
-    condition     = var.n8n_chart_version == "1.12.0" && local.n8n_peak_cpu_request_millis == 15400
-    error_message = "Upstream chart 1.12.0 must count runners only on workers: 15400m at default ceilings."
+    condition     = var.n8n_chart_version == "1.13.0" && local.n8n_peak_cpu_request_millis == 15400
+    error_message = "Upstream chart 1.13.0 must count runners only on workers: 15400m at default ceilings."
   }
 
   # No expect_failures: a warning from the capacity check would fail this run,
@@ -8619,6 +8619,19 @@ run "main_maximum_of_thirteen_fits_without_task_runners" {
   }
 }
 
+run "explicit_1_12_0_keeps_worker_only_accounting" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.12.0"
+  }
+
+  assert {
+    condition     = local.n8n_peak_cpu_request_millis == 15400
+    error_message = "1.12.0 is independently verified worker-only-runner accounting, not just via the current default."
+  }
+}
+
 run "verified_chart_build_metadata_keeps_worker_only_accounting" {
   command = plan
 
@@ -8662,7 +8675,7 @@ run "future_chart_keeps_conservative_runner_accounting" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.13.0"
+    n8n_chart_version = "1.14.0"
   }
 
   assert {
@@ -10396,6 +10409,160 @@ run "keda_jobs_per_replica_rejects_zero" {
   expect_failures = [var.n8n_worker_keda_jobs_per_replica]
 }
 
+# ── Worker KEDA pause (chart keda.worker.pause / pausedReplicaCount) ─────────
+# helm_release.n8n.values is unknown at plan time under the mock providers
+# (see AGENTS.md's "Known mock provider limitations"), so these runs assert on
+# local.n8n_worker_keda_pause_values, the map n8n.tf merges into keda.worker.
+# tests/scripts/check-main-chart.sh renders that same local against the real
+# chart. The one line that merges the local into helm_release.n8n is the only
+# part neither can reach; verify it with a real `terraform plan` or
+# `helm get values` on a live release.
+run "worker_keda_pause_defaults_off" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_worker_keda_pause == false && var.n8n_worker_keda_paused_replica_count == null
+    error_message = "Worker KEDA autoscaling must not be paused by default, with no held replica count."
+  }
+
+  # An existing release that never uses pause must see no change to its Helm
+  # values: an always-present `pause: false` would still trigger a Helm
+  # upgrade, which on a chart older than 1.13.0 resets autoscaled replicas.
+  assert {
+    condition     = length(local.n8n_worker_keda_pause_values) == 0
+    error_message = "With pause off, no pause keys may reach keda.worker, or every existing release sees a Helm values diff."
+  }
+}
+
+run "worker_keda_pause_without_count_sets_only_pause" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause = true
+  }
+
+  assert {
+    condition     = local.n8n_worker_keda_pause_values == { pause = true }
+    error_message = "Pause without a held count must send only pause = true, leaving pausedReplicaCount at the chart's null default."
+  }
+}
+
+run "worker_keda_pause_accepts_zero_hold_count" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause                = true
+    n8n_worker_keda_paused_replica_count = 0
+  }
+
+  # Zero must survive as a real value, not be dropped as falsy or unset.
+  assert {
+    condition     = local.n8n_worker_keda_pause_values == { pause = true, pausedReplicaCount = 0 }
+    error_message = "A held count of 0 must reach keda.worker as pausedReplicaCount = 0."
+  }
+}
+
+run "worker_keda_paused_replica_count_rejects_negative" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause                = true
+    n8n_worker_keda_paused_replica_count = -1
+  }
+
+  expect_failures = [var.n8n_worker_keda_paused_replica_count]
+}
+
+run "worker_keda_paused_replica_count_rejects_fractional" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause                = true
+    n8n_worker_keda_paused_replica_count = 1.5
+  }
+
+  expect_failures = [var.n8n_worker_keda_paused_replica_count]
+}
+
+run "worker_keda_paused_replica_count_warns_when_inert" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_paused_replica_count = 2
+  }
+
+  expect_failures = [check.worker_keda_paused_replica_count_requires_pause]
+}
+
+# keda.worker.pause has no effect on a chart that predates 1.12.0
+# (n8n-io/n8n-hosting#177): the ScaledObject template does not read the key,
+# so a caller requesting a pause on an old pin gets no error and no pause.
+run "worker_keda_pause_warns_on_a_chart_that_predates_it" {
+  command = plan
+
+  variables {
+    n8n_chart_version     = "1.11.0"
+    n8n_worker_keda_pause = true
+  }
+
+  expect_failures = [check.worker_keda_pause_requires_a_supported_chart]
+}
+
+# Chart 1.12.0 reads keda.worker.pause but still renders the worker's
+# spec.replicas, so a later Helm upgrade while paused overrides the held count.
+run "worker_keda_pause_warns_on_chart_1_12_0" {
+  command = plan
+
+  variables {
+    n8n_chart_version     = "1.12.0"
+    n8n_worker_keda_pause = true
+  }
+
+  expect_failures = [check.worker_keda_pause_requires_a_supported_chart]
+}
+
+# A preview off the 1.13 line is new enough; the prerelease suffix is ignored.
+run "worker_keda_pause_allowed_on_a_1_13_preview" {
+  command = plan
+
+  variables {
+    n8n_chart_version     = "1.13.0-preview.1"
+    n8n_worker_keda_pause = true
+  }
+
+  assert {
+    condition     = local.n8n_worker_keda_pause_supported
+    error_message = "A 1.13.x prerelease must count as pause-capable."
+  }
+}
+
+# At a floor of 0 the chart renders no worker ScaledObject, so there is
+# nothing for the pause annotations to land on.
+run "worker_keda_pause_warns_at_a_worker_floor_of_zero" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_min_replicas = 0
+    n8n_worker_keda_pause        = true
+  }
+
+  expect_failures = [check.worker_keda_pause_requires_a_worker_floor]
+}
+
+# A custom chart repository's version numbering is not verifiable against
+# upstream, so the guard stays silent there rather than guessing.
+run "worker_keda_pause_allowed_on_a_custom_chart_repository" {
+  command = plan
+
+  variables {
+    n8n_chart_repository  = "oci://registry.example.com/charts"
+    n8n_chart_version     = "1.11.0"
+    n8n_worker_keda_pause = true
+  }
+
+  # No expect_failures: the whole point is that this must NOT warn.
+}
+
 # node_min, node_max and node_desired were each floored at 1 on their own, but
 # never checked against each other. AWS rejects the resulting scaling config.
 run "node_max_below_node_min_is_rejected" {
@@ -11497,7 +11664,7 @@ run "worker_pools_fail_the_plan_when_the_default_chart_predates_them" {
 
   variables {
     # No n8n_chart_version: the module default, which is a numbered release
-    # (1.12.0 at the time of writing) and so never passes the guard, whatever
+    # (1.13.0 at the time of writing) and so never passes the guard, whatever
     # the number is.
     n8n_worker_pools = [{ name = "gpu" }]
   }

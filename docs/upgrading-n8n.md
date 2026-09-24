@@ -6,8 +6,8 @@ This covers bumping the deployed n8n version on an existing deployment. It does 
 
 | Variable | Controls | Default |
 | --- | --- | --- |
-| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.12.0"`, pinned |
-| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.39.6` in chart `1.12.0`) |
+| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.13.0"`, pinned |
+| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.40.5` in chart `1.13.0`) |
 | `n8n_task_runner_image_tag` | Task runner image tag; keep aligned with the underlying n8n version when using a custom application tag. | `null`, meaning the application image tag |
 
 Bumping the image tag alone gets you a new n8n version without changing the chart's templates or value schema. Bumping the chart version can also change what values the chart accepts, so treat it as the larger-blast-radius change of the two.
@@ -64,8 +64,104 @@ custom charts retain the conservative main-runner allowance. Default peak
 requests fall from `16,600m` to `15,400m`; no autoscaler ceiling changes.
 
 Chart `1.12.0` does not include worker pools. Keep using a suitable preview
-or verified custom chart for `n8n_worker_pools`. The chart's new KEDA pause
-settings remain at their defaults and are not exposed by this module.
+or verified custom chart for `n8n_worker_pools`. The chart's KEDA worker
+pause settings shipped in this same release, but this module only
+supports them from chart `1.13.0`; see `n8n_worker_keda_pause` in the next
+section.
+
+## Moving from chart 1.12.0 to 1.13.0
+
+**Pin `n8n_image_tag` before upgrading if it is still null.** The fallback
+moves with `appVersion`, `2.39.6` → `2.40.5`. If a deployment is already
+pinned (recommended, see above), this upgrade does not touch the running
+application version at all.
+
+**The first upgrade to `1.13.0` can interrupt running worker pods.**
+Chart `1.13.0` stops setting `spec.replicas` on the worker Deployment once
+KEDA owns the count (n8n-io/n8n-hosting#201). This module meets that
+condition whenever `n8n_worker_keda_min_replicas` is 1 or more, because it
+always configures `keda.enabled = true` with non-empty Redis queue-depth
+triggers.
+
+Helm compares the previous release's manifest, which had `replicas`, with
+the new one, which does not, and removes the field. Kubernetes then
+defaults it to 1. This happens once, on the first `helm upgrade` to
+`1.13.0`, and the target is always 1, not the configured floor:
+
+- The worker Deployment's desired count drops to 1 whenever it was above
+  1. That includes one sitting exactly at a floor above 1.
+  `examples/medium` sets a floor of 5 and `examples/large` sets 20.
+- Kubernetes starts terminating the surplus pods. The KEDA-managed HPA
+  may raise the count again before all of them are gone, so how many are
+  actually terminated depends on timing.
+- A terminated worker gets SIGTERM, stops taking new jobs and waits for
+  its running executions, but only up to its shutdown window. The chart
+  sets `N8N_GRACEFUL_SHUTDOWN_TIMEOUT` from `redis.worker.timeout`, 30
+  seconds by default. This module does not expose `redis.worker.timeout`,
+  and setting the variable through `n8n_extra_env` or `n8n_worker_extra_env`
+  is not a safe workaround: the chart always renders it on workers as a
+  ConfigMap reference, so a second entry with the same name hits the
+  duplicate-env failure described for `n8n_queue_worker_lock_duration`.
+  The pod is also bounded by `n8n_termination_grace_period`. Executions
+  still running after that can be interrupted.
+- On a healthy, unpaused installation, the HPA that KEDA manages behind
+  the `ScaledObject` (`kubectl get hpa keda-hpa-n8n-worker`) is expected
+  to restore the floor, and scale above it as queue demand requires.
+  `keda.worker.pollingInterval` does not set the HPA's reconciliation
+  interval, so it does not guarantee recovery within 15 seconds.
+- A deployment at the default floor of 1 that has not scaled above 1 sees
+  no change.
+
+This behavior follows from the chart templates and from how Helm and
+Kubernetes handle a removed field. The live validation of this release
+ran at a worker floor of 1, where the reset cannot be observed, so the
+case with more than 1 worker has not been tested on a live cluster.
+
+Raising the floor or adding headroom before the upgrade does not help,
+because the reset goes to 1 either way. Scaling the live Deployment with
+`kubectl` or removing `spec.replicas` from it beforehand does not help
+either: neither changes the manifest Helm stored for the previous release,
+which is what Helm compares against. For a deployment that runs more than
+1 worker:
+
+1. Upgrade in a low-traffic window.
+2. Pause or reduce the work arriving (schedules, webhooks and upstream
+   producers) and let running executions finish before you apply.
+3. After the apply, confirm the worker count is back at the floor
+   (`kubectl get deploy n8n-worker -n <namespace>`) and check for
+   interrupted executions in the n8n execution list.
+
+A floor of 0 is a separate case, unchanged by this release: every
+supported chart version renders no worker Deployment and no worker
+`ScaledObject` when the worker replica count is 0.
+
+**Webhook processors are unaffected.** This module's webhook-processor
+autoscaling is a Terraform-managed `kubernetes_horizontal_pod_autoscaler_v2`
+created directly in `scaling.tf`, entirely outside the chart's own
+KEDA/HPA model (see `docs/helm-chart-coverage.md`'s `keda.webhookProcessor`
+row). The chart's new conditional never applies to it either before or
+after this bump.
+
+The new `keda.webhookProcessor.{pause,pausedReplicaCount}` values (pausing
+webhook processors and scaling them to zero) are not exposed by this
+module's inputs.
+
+**New inputs.** `n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`
+expose the chart's `keda.worker.pause` / `pausedReplicaCount`:
+`pause = true` holds the default worker Deployment at its current count for
+a maintenance window. Setting `paused_replica_count` as well holds it at that
+count instead: `0` scales it to zero while jobs wait in Redis. The count only
+takes effect together with `pause = true`; on its own it does nothing and the
+plan warns. `n8n_worker_pools` pools are not paused; they keep
+scaling on their own queues. Pause needs chart `1.13.0` or newer and
+`n8n_worker_keda_min_replicas` of 1 or more, and a plan-time warning fires
+otherwise. The key shipped in chart `1.12.0`, but that release still sets
+the worker's `spec.replicas` on every Helm upgrade, so any later apply
+while paused could write the floor back over the held count. While both
+inputs are unset, the module sends no pause keys to the chart, so the Helm
+values do not change. The chart's matching `keda.webhookProcessor.pause`
+is not exposed, for the same reason `keda.webhookProcessor` itself is not:
+no webhook `ScaledObject` exists here for the annotation to land on.
 
 ## Before bumping
 

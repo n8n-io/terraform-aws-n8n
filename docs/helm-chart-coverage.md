@@ -2,7 +2,7 @@
 
 This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) via `helm_release.n8n` (`n8n.tf`) and sets a large fixed subset of the chart's `values.yaml` directly, driven by typed Terraform variables. This doc catalogs which chart values this module exposes, which it hardcodes, and which it leaves entirely untouched (chart defaults apply), so you know when you've hit the edge of what the module can do for you today.
 
-**Verified against chart version `1.12.0`**, the module's `n8n_chart_version` default (`variables.tf`). The coverage table below reflects that version's `values.yaml` keys; the chart can add, rename, or remove keys between releases, so a row here can silently go stale if you bump `n8n_chart_version` without re-checking it. Before you bump the default, diff the two versions' `values.yaml` (`task chart-diff CANDIDATE=<new>`, or `tests/scripts/chart-values-diff.sh <new>`; it reads the current pin from `variables.tf`, runs `helm show values` for the pinned and candidate versions and prints a unified diff, needing only Helm) and update this doc's version line plus any affected rows in the same PR. `tests/scripts/check-helm-chart-coverage.sh` (`task chart-coverage`, CI-gated) fails the build when this line's version disagrees with `n8n_chart_version`'s default, or when the pinned chart's `values.yaml` gained a top-level key this table does not mention — it cannot verify a row's *content* is still accurate, only that the version claim and top-level key set are not stale.
+**Verified against chart version `1.13.0`**, the module's `n8n_chart_version` default (`variables.tf`). The coverage table below reflects that version's `values.yaml` keys; the chart can add, rename, or remove keys between releases, so a row here can silently go stale if you bump `n8n_chart_version` without re-checking it. Before you bump the default, diff the two versions' `values.yaml` (`task chart-diff CANDIDATE=<new>`, or `tests/scripts/chart-values-diff.sh <new>`; it reads the current pin from `variables.tf`, runs `helm show values` for the pinned and candidate versions and prints a unified diff, needing only Helm) and update this doc's version line plus any affected rows in the same PR. `tests/scripts/check-helm-chart-coverage.sh` (`task chart-coverage`) fails CI when this line disagrees with the pin or the pinned chart adds a top-level key missing from this table or the "Not currently configurable" list; it cannot verify whether existing rows remain accurate.
 
 **There is no generic raw-values passthrough.** The only general escape hatch is `n8n_extra_env` (`config.extraEnv`), and it only reaches environment variables, not arbitrary chart values. If you need a chart key this module doesn't set and isn't an environment variable, you cannot reach it through this module's inputs: see [Not currently configurable](#not-currently-configurable) below.
 
@@ -10,7 +10,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 
 | Chart key(s) | Module coverage |
 | --- | --- |
-| `image.tag` | `n8n_image_tag` (null = selected chart default; `appVersion: 2.39.6` in `1.12.0`). Pin the running version before a chart upgrade to avoid a downgrade; see [Upgrading n8n](./upgrading-n8n.md) |
+| `image.tag` | `n8n_image_tag` (null = selected chart default; `appVersion: 2.40.5` in `1.13.0`). Pin the running version before a chart upgrade to avoid a downgrade; see [Upgrading n8n](./upgrading-n8n.md) |
 | `image.repository` | `n8n_image_repository` (null = chart default) |
 | `image.pullPolicy` | Not exposed; chart default used |
 | `nameOverride`, `fullnameOverride` | Not exposed; chart default (both `""`, deriving names from the release name) used |
@@ -21,7 +21,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `webhookProcessor.enabled/replicaCount/disableProductionWebhooksOnMainProcess` | Hardcoded `true` / `n8n_webhook_hpa_min_replicas` / hardcoded `true` |
 | `multiMain.enabled/replicas/antiAffinity.type`, top-level `replicaCount` | `n8n_main_hpa_min_replicas > 1` / `n8n_main_hpa_min_replicas` / hardcoded `"preferred"` / `n8n_main_hpa_min_replicas`. `deployment-main.yaml` reads `multiMain.replicas` only while `multiMain.enabled`; the top-level `replicaCount` key is what single-main mode actually uses, set explicitly rather than left to the chart's own default (see `n8n.tf`) |
 | `multiMain.topologySpreadConstraints`, `multiMain.setup.keyTtl/checkInterval` | Not exposed; chart default used |
-| `taskRunners.enabled/nativePythonRunner/launcher.autoShutdownTimeout/resources` | `n8n_task_runners_enabled` / `n8n_task_runner_python_enabled` / `n8n_task_runner_auto_shutdown_timeout` / `n8n_task_runner_*_request`/`*_limit`. In this module's queue mode, `1.12.0` places runners on workers only; main and webhook pods have none |
+| `taskRunners.enabled/nativePythonRunner/launcher.autoShutdownTimeout/resources` | `n8n_task_runners_enabled` / `n8n_task_runner_python_enabled` / `n8n_task_runner_auto_shutdown_timeout` / `n8n_task_runner_*_request`/`*_limit`. In this module's queue mode, `1.13.0` places runners on workers only; main and webhook pods have none |
 | `taskRunners.image.tag` | `n8n_task_runner_image_tag` (null = application image tag) |
 | `taskRunners.customConfig` | `n8n_task_runner_custom_config` (null = image's baked-in launcher config). The only route to the runner allow-lists, incl. `N8N_RUNNERS_STDLIB_ALLOW` for the native Python runner |
 | `taskRunners.image.repository/pullPolicy` | Not exposed; chart default used |
@@ -47,7 +47,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `hpa.worker` | Not used; the module scales workers via `keda.worker` instead |
 | `keda.enabled/worker.{minReplicaCount,maxReplicaCount,triggers}` | Hardcoded `true` / `n8n_worker_keda_{min,max}_replicas` / two hardcoded Redis-queue-depth triggers sized by `n8n_worker_keda_jobs_per_replica`. These cover the chart's own unlabelled worker deployment only. Each pool in `n8n_worker_pools` gets its own scaler on its own `jobs-<name>` queue, from the group's `keda` block |
 | `keda.worker.pollingInterval/cooldownPeriod` | Hardcoded `15` / `60` |
-| `keda.worker.pause/pausedReplicaCount` | Not exposed; chart defaults `false` / `null` used |
+| `keda.worker.pause/pausedReplicaCount` | `n8n_worker_keda_pause` (default `false`) / `n8n_worker_keda_paused_replica_count` (default `null`). Sent to the chart only while pause is on, so an unused feature causes no values diff. Supported from chart `1.13.0`, and only with `n8n_worker_keda_min_replicas` of 1 or more; plan-time warnings cover both |
 | `keda.webhookProcessor` | Not used; the module creates the webhook HPA externally in `scaling.tf` instead (the chart skips its own webhook HPA when `keda.enabled = true`) |
 | `pdb.enabled/minAvailable` | Hardcoded `true` / `1` for multi-main, `0` for single-main to allow voluntary eviction with downtime |
 | `webhook.url` | Not set via this chart key; the module sets the equivalent `WEBHOOK_URL` environment variable directly (from `n8n_webhook_url`) |

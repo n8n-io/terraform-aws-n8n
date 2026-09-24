@@ -95,10 +95,53 @@ its running version before changing the chart; see
 
 Rendering tests cover fallback and explicit image tags, custom repositories,
 and worker-only task runners in queue mode. The capacity model removes main
-runner requests only for upstream `1.12.0`, ignoring build metadata but not
-prerelease suffixes. Verify topology before extending that exception to any
-other release or repository. Worker pools still require their separate preview
-or verified custom chart; the new KEDA pause settings are not exposed.
+runner requests for upstream `1.12.0` and `1.13.0`, ignoring build metadata
+but not prerelease suffixes. Verify topology before extending that
+exception to any other release or repository. Worker pools still require
+their separate preview or verified custom chart.
+
+## Chart 1.13.0 upgrade requirements
+
+The default moves from `1.12.0` to `1.13.0`. `n8n_image_tag = null` still
+delegates to the selected chart, whose fallback moves from `appVersion:
+2.39.6` to `appVersion: 2.40.5`; inspect and pin the running application
+version first if it is not already pinned. See
+[Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1120-to-1130).
+
+Upstream stops setting worker (and, where configured, webhook-processor)
+`replicas` once an autoscaler owns the count (n8n-io/n8n-hosting#201). This
+module's worker deployment meets that condition whenever
+`n8n_worker_keda_min_replicas` is 1 or more. The first `helm upgrade` to
+`1.13.0` therefore removes `spec.replicas` from the worker Deployment, and
+Kubernetes defaults it to 1. The target is always 1, not the configured
+floor, so for a deployment running more than 1 worker, surplus pods start
+terminating and running executions can be interrupted once a pod's
+shutdown window ends. On a healthy, unpaused installation, the HPA that KEDA
+manages is expected to restore the floor; `keda.worker.pollingInterval`
+does not set that HPA's reconciliation interval. This is a release-note item, not a
+Terraform input change; see
+[Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1120-to-1130) for the
+mitigations. This behavior is derived from the chart templates and from how
+Helm and Kubernetes handle a removed field. The live validation of this
+bump ran at a floor of 1, where the reset is not observable. Webhook
+processors are unaffected: their autoscaling is a Terraform-managed HPA in
+`scaling.tf`, outside the chart's KEDA/HPA model
+(`keda.webhookProcessor.enabled` is never set by this module).
+`tests/scripts/check-main-chart.sh` renders the worker Deployment with real
+(non-empty) KEDA triggers and asserts `replicas` is omitted, matching this
+module's actual shape rather than the chart's bare default.
+
+`n8n_worker_keda_pause` is supported from chart `1.13.0`, not `1.12.0` where
+the key first shipped, because `1.12.0` still sets the worker's
+`spec.replicas` on every upgrade and would override a held count. The
+version floor is a numeric major.minor compare in `scaling.tf`, so it does
+not need editing on future bumps.
+
+The new `keda.webhookProcessor.{pause,pausedReplicaCount,pollingInterval,
+cooldownPeriod,minReplicaCount,maxReplicaCount,triggers}` values (pausing
+webhook processors, including scale-to-zero) are not exposed by this
+module. Worker pools still require their separate preview or verified
+custom chart; this release carries no worker-pools change either way.
 
 ## What this policy deliberately does not force
 

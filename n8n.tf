@@ -48,7 +48,7 @@ locals {
 
 # ── Task runner auth token ─────────────────────────────────────────────────────
 # Generated once and stored in state. Used as the shared secret between the n8n
-# task broker (port 5679) and runner sidecars (workers only with chart 1.12.0).
+# task broker (port 5679) and runner sidecars (workers only with chart 1.13.0).
 # Only active when n8n_task_runners_enabled = true.
 
 resource "random_password" "task_runner_token" {
@@ -285,28 +285,50 @@ resource "helm_release" "n8n" {
 
     # ── Deployment replica counts ─────────────────────────────────────────────
     # Each of these is wired to its autoscaler's floor rather than left at a
-    # constant, because the chart renders spec.replicas unconditionally:
-    # deployment-main.yaml is `ternary .Values.multiMain.replicas .Values.replicaCount
-    # .Values.multiMain.enabled`, so multi-main reads multiMain.replicas but
-    # single-main reads the chart's own top-level replicaCount instead, not
-    # multiMain.replicas. deployment-worker.yaml uses queueMode.workerReplicaCount,
-    # and deployment-webhook-processor.yaml uses webhookProcessor.replicaCount, with
-    # no regard for whether an HPA or a KEDA ScaledObject also owns the field.
+    # constant, because deployment-main.yaml renders spec.replicas
+    # unconditionally: it is `ternary .Values.multiMain.replicas
+    # .Values.replicaCount .Values.multiMain.enabled`, so multi-main reads
+    # multiMain.replicas but single-main reads the chart's own top-level
+    # replicaCount instead, not multiMain.replicas. That is still true on
+    # every chart version this module supports, main included.
     #
-    # A constant here fights the autoscaler on every helm upgrade. Helm writes
-    # spec.replicas back to the constant, the deployment scales down to it, and
-    # the autoscaler then has to scale back up to its floor, which erases the warm
-    # floor at exactly the moment a rollout needs it. Setting each to its floor
+    # Chart >= 1.13.0 (n8n-io/n8n-hosting#201) fixed this for
+    # deployment-worker.yaml: it now omits spec.replicas entirely once an
+    # autoscaler owns the count, which this module's worker deployment
+    # satisfies whenever n8n_worker_keda_min_replicas >= 1 (keda.enabled =
+    # true with non-empty keda.worker.triggers below), so workerReplicaCount
+    # only still takes effect as the literal spec.replicas value on an older,
+    # preview, or unverified chart (see n8n_chart_has_worker_only_runners in
+    # scaling.tf for the same version gate applied to task-runner
+    # placement). A floor of 0 is different on every chart version: the
+    # chart gates both deployment-worker.yaml and scaledobject-worker.yaml
+    # on workerReplicaCount > 0, so it renders no worker Deployment and no
+    # ScaledObject at all. deployment-webhook-processor.yaml carries the identical
+    # chart-side guard from the same release, but this module never
+    # satisfies it: keda.webhookProcessor.enabled is never set, and
+    # keda.enabled = true (needed for worker autoscaling) blocks the
+    # "built-in HPA owns it" branch too, so webhookProcessor.replicaCount
+    # still renders unconditionally on every chart version, regardless of
+    # this module's own externally-managed webhook HPA in scaling.tf.
+    #
+    # A constant here fights the autoscaler on every helm upgrade wherever
+    # the chart still renders the field unconditionally (main always;
+    # webhook processors always, given this module's config; workers only
+    # on a chart older than 1.13.0). Helm writes spec.replicas back to the
+    # constant, the deployment scales down to it, and the autoscaler then
+    # has to scale back up to its floor, which erases the warm floor at
+    # exactly the moment a rollout needs it. Setting each to its floor
     # makes Helm's write a no-op while the deployment sits at that floor.
     #
-    # It does not preserve an active scale-up. A deployment the autoscaler has
-    # taken above its floor is still written down to the floor on the next
-    # upgrade, and the autoscaler has to climb again. Bounding the drop at the
-    # floor is the most a caller of this chart can do: the field is rendered
-    # unconditionally, so no value omits it, and reading the live replica count
-    # back into the plan would make every plan depend on current cluster state.
-    # Fixing it properly means the chart guarding spec.replicas on whether an
-    # autoscaler owns the deployment.
+    # It does not preserve an active scale-up. A deployment the autoscaler
+    # has taken above its floor is still written down to the floor on the
+    # next upgrade (main and webhook processors always; workers only
+    # pre-1.13.0), and the autoscaler has to climb again. Bounding the drop
+    # at the floor is the most a caller of an unguarded chart path can do.
+    # Where the chart already guards the field (workers, from 1.13.0), the
+    # value is inert, and reading the live replica count back into the plan
+    # to do better for main and webhook processors would make every plan
+    # depend on current cluster state.
     #
     # replicaCount only takes effect while multiMain.enabled = false
     # (n8n_main_hpa_min_replicas == 1, the only value that disables multi-main),
@@ -519,7 +541,12 @@ resource "helm_release" "n8n" {
     # through /apis/external.metrics.k8s.io even when TARGETS says otherwise.
     keda = {
       enabled = true
-      worker = {
+      # The pause keys are merged in only while pause is on, for the same
+      # reason queueMode's optional keys are: an always-present
+      # `pause: false` still changes the values string, and that is a Helm
+      # upgrade every existing release would see for a feature it does not
+      # use. See local.n8n_worker_keda_pause_values in scaling.tf.
+      worker = merge({
         pollingInterval = 15
         cooldownPeriod  = 60
         minReplicaCount = var.n8n_worker_keda_min_replicas
@@ -544,7 +571,7 @@ resource "helm_release" "n8n" {
             authenticationRef = { name = "" }
           }
         ]
-      }
+      }, local.n8n_worker_keda_pause_values)
     }
 
     resources = {
@@ -902,7 +929,7 @@ resource "helm_release" "n8n" {
     }
 
     # ── Task runners ─────────────────────────────────────────────────────────
-    # When enabled, upstream chart 1.12.0 adds a runner sidecar to worker pods
+    # When enabled, upstream chart 1.13.0 adds a runner sidecar to worker pods
     # only in queue mode, isolating JavaScript and Python from the n8n process.
     # The worker's n8n container runs a task broker on port 5679; its sidecar
     # connects over localhost using the auto-generated auth token.
@@ -974,7 +1001,7 @@ resource "helm_release" "n8n" {
     extraVolumeMounts = local.n8n_extra_volume_mounts
     },
     # Override the app image only where the caller asks for it; otherwise the
-    # selected chart defaults apply untouched (1.12.0 uses appVersion). Repository
+    # selected chart defaults apply untouched (1.13.0 uses appVersion). Repository
     # and tag are merged key by key rather than as a whole `image` map so setting
     # one does not blank the other: yamlencode would emit `repository: null`,
     # which the chart renders into an unpullable `null:2.27.4` reference.
@@ -1467,6 +1494,44 @@ check "log_streaming_destinations_require_managed_by_env" {
   }
 }
 
+# Same pattern again: the chart only renders autoscaling.keda.sh/paused-replicas
+# while the worker ScaledObject is paused (templates/_helpers.tpl,
+# n8n.kedaAnnotations), so a held count set without pause is silently inert.
+check "worker_keda_paused_replica_count_requires_pause" {
+  assert {
+    condition     = var.n8n_worker_keda_paused_replica_count != null ? var.n8n_worker_keda_pause : true
+    error_message = "n8n_worker_keda_paused_replica_count is set while n8n_worker_keda_pause is false. The chart only renders autoscaling.keda.sh/paused-replicas while the worker ScaledObject is paused, so the count is inert. Set n8n_worker_keda_pause = true or clear the count."
+  }
+}
+
+# Pause is only reliable from chart 1.13.0 (local.n8n_worker_keda_pause_supported
+# in scaling.tf). A chart older than 1.12.0 does not read keda.worker.pause at
+# all, so the pause silently never takes effect. Chart 1.12.0 reads it, but
+# still renders the worker's spec.replicas on every upgrade: while paused, any
+# later values change makes Helm write the floor back over KEDA's held count.
+# Normal autoscaling is stopped while paused, and KEDA may not restore the
+# held count without another ScaledObject reconciliation, so workers can keep
+# taking jobs while the ScaledObject still reads as paused. Skipped for a custom
+# n8n_chart_repository, whose version numbering this module cannot verify
+# against upstream (same reasoning as n8n_chart_has_worker_only_runners).
+check "worker_keda_pause_requires_a_supported_chart" {
+  assert {
+    condition     = (var.n8n_worker_keda_pause || var.n8n_worker_keda_paused_replica_count != null) ? local.n8n_worker_keda_pause_supported : true
+    error_message = "n8n_worker_keda_pause or n8n_worker_keda_paused_replica_count is set, but n8n_chart_version predates 1.13.0. Charts older than 1.12.0 do not read keda.worker.pause at all. Chart 1.12.0 reads it but still sets the worker Deployment's spec.replicas on every Helm upgrade, so any later apply that changes the release while paused can write the replica floor back over the held count, and KEDA may not restore it without another ScaledObject reconciliation. Bump n8n_chart_version to 1.13.0 or newer, or clear these inputs."
+  }
+}
+
+# The chart gates the worker Deployment and its ScaledObject on
+# queueMode.workerReplicaCount > 0, and n8n.tf sets that from
+# n8n_worker_keda_min_replicas. At a floor of 0 there is no ScaledObject for
+# the pause annotations to land on, so the pause is silently inert.
+check "worker_keda_pause_requires_a_worker_floor" {
+  assert {
+    condition     = (var.n8n_worker_keda_pause || var.n8n_worker_keda_paused_replica_count != null) ? var.n8n_worker_keda_min_replicas > 0 : true
+    error_message = "n8n_worker_keda_pause or n8n_worker_keda_paused_replica_count is set, but n8n_worker_keda_min_replicas is 0. The chart renders no worker Deployment and no worker ScaledObject when the worker replica count is 0, so there is nothing to pause. Set n8n_worker_keda_min_replicas to 1 or more, or clear these inputs."
+  }
+}
+
 # ── Custom image guards ───────────────────────────────────────────────────────
 # Six plan-time warnings for custom-image, extra-volume and pull-secret
 # configurations that are accepted but almost certainly not what the caller
@@ -1479,7 +1544,7 @@ check "log_streaming_destinations_require_managed_by_env" {
 check "custom_image_repository_needs_an_explicit_tag" {
   assert {
     condition     = var.n8n_image_repository != null ? var.n8n_image_tag != null : true
-    error_message = "n8n_image_repository is set but n8n_image_tag is null, so the chart appends its own default tag (appVersion 2.39.6 in upstream chart 1.12.0). If this tag is absent from the custom repository, the pods fail with ImagePullBackOff. Set n8n_image_tag to a tag that exists in this repository. Ignore this warning only if the repository publishes the selected chart's default tag."
+    error_message = "n8n_image_repository is set but n8n_image_tag is null, so the chart appends its own default tag (appVersion 2.40.5 in upstream chart 1.13.0). If this tag is absent from the custom repository, the pods fail with ImagePullBackOff. Set n8n_image_tag to a tag that exists in this repository. Ignore this warning only if the repository publishes the selected chart's default tag."
   }
 }
 
@@ -1490,7 +1555,7 @@ check "custom_image_tag_needs_a_task_runner_tag" {
         var.n8n_image_tag == null || var.n8n_task_runner_image_tag != null
       ) : true
     ) : true
-    error_message = "A custom n8n image (n8n_image_repository + n8n_image_tag) is set with task runners enabled, but n8n_task_runner_image_tag is null. The chart tags the runner sidecar from the app image, so the sidecar resolves to n8nio/runners:<n8n_image_tag> and every pod carrying a runner sidecar (workers only in upstream chart 1.12.0 queue mode) fails with ImagePullBackOff unless that exact tag exists upstream, which fails the apply rather than completing with broken pods. Set n8n_task_runner_image_tag to the n8n version the custom image is built from. Ignore this warning if the custom image's tag is itself a published n8n version."
+    error_message = "A custom n8n image (n8n_image_repository + n8n_image_tag) is set with task runners enabled, but n8n_task_runner_image_tag is null. The chart tags the runner sidecar from the app image, so the sidecar resolves to n8nio/runners:<n8n_image_tag> and every pod carrying a runner sidecar (workers only in upstream chart 1.13.0 queue mode) fails with ImagePullBackOff unless that exact tag exists upstream, which fails the apply rather than completing with broken pods. Set n8n_task_runner_image_tag to the n8n version the custom image is built from. Ignore this warning if the custom image's tag is itself a published n8n version."
   }
 }
 
