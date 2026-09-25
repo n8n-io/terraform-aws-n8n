@@ -3147,7 +3147,7 @@ variable "n8n_external_secrets_aws_secret_names" {
 # ── KEDA: worker pods ─────────────────────────────────────────────────────────
 
 variable "n8n_worker_keda_min_replicas" {
-  description = "Minimum worker replicas. KEDA keeps at least this many workers running even when the queue is empty. Chart >= 1.13.0 leaves the worker Deployment's replica count to the autoscaler whenever this value is 1 or more (the module always sets non-empty keda.worker.triggers), so this value only sets the KEDA floor, not spec.replicas directly. At 0, every supported chart version renders no worker Deployment and no worker ScaledObject at all, because the chart gates both on a worker replica count above 0. A chart older than 1.13.0 still renders spec.replicas from this value unconditionally, so an upgrade can reset a larger live worker count down to this configured minimum, and KEDA scales back above it only when queue demand requires it."
+  description = "Minimum worker replicas. KEDA keeps at least this many workers running even when the queue is empty, including 0 (KEDA scales the worker Deployment to zero natively). The chart's own queueMode.workerReplicaCount is floored at 1 by n8n.tf regardless of this value, so the worker Deployment and its ScaledObject always render; this value only feeds keda.worker.minReplicaCount, KEDA's own floor. Chart >= 1.13.0 leaves the worker Deployment's replica count to the autoscaler once it owns it (the module always sets non-empty keda.worker.triggers), so the workerReplicaCount floor only sets spec.replicas directly on a chart older than 1.13.0."
   type        = number
   default     = 1
   nullable    = false
@@ -3159,7 +3159,7 @@ variable "n8n_worker_keda_min_replicas" {
 
   validation {
     condition     = var.n8n_worker_keda_min_replicas == floor(var.n8n_worker_keda_min_replicas) && var.n8n_worker_keda_min_replicas >= 0
-    error_message = "n8n_worker_keda_min_replicas must be a whole number of replicas, 0 or greater. 0 is allowed here, unlike the two HPA floors, but it does not mean KEDA scales workers to zero: the chart renders no default worker Deployment and no worker ScaledObject when the worker replica count is 0."
+    error_message = "n8n_worker_keda_min_replicas must be a whole number of replicas, 0 or greater. 0 is allowed here, unlike the two HPA floors: KEDA scales the worker Deployment to zero natively, and the chart still renders the worker Deployment and ScaledObject because n8n.tf floors queueMode.workerReplicaCount at 1 independently of this value."
   }
 }
 
@@ -3187,7 +3187,7 @@ variable "n8n_worker_keda_jobs_per_replica" {
 }
 
 variable "n8n_worker_keda_pause" {
-  description = "Pause KEDA autoscaling of the worker Deployment (sets autoscaling.keda.sh/paused on the worker ScaledObject, chart's keda.worker.pause, n8n-io/n8n-hosting#177). While paused, KEDA stops reconciling and workers hold their current replica count, or n8n_worker_keda_paused_replica_count when that is also set. Use for a maintenance window or to drain the queue ahead of a migration without disabling KEDA outright. Applies to the chart's default worker Deployment only: n8n_worker_pools pools have their own ScaledObjects and keep scaling on their own queues. Requires chart 1.13.0 or newer (the module default) and n8n_worker_keda_min_replicas >= 1; a plan-time warning fires otherwise. The key shipped in chart 1.12.0, but that release still sets the worker's spec.replicas on every Helm upgrade, so a later apply while paused can write the floor back over the held count."
+  description = "Pause KEDA autoscaling of the worker Deployment (sets autoscaling.keda.sh/paused on the worker ScaledObject, chart's keda.worker.pause, n8n-io/n8n-hosting#177). While paused, KEDA stops reconciling and workers hold their current replica count, or n8n_worker_keda_paused_replica_count when that is also set. Use for a maintenance window or to drain the queue ahead of a migration without disabling KEDA outright. Applies to the chart's default worker Deployment only: n8n_worker_pools pools have their own ScaledObjects and keep scaling on their own queues. Requires chart 1.13.0 or newer (the module default); a plan-time warning fires otherwise. The worker Deployment and its ScaledObject always render regardless of n8n_worker_keda_min_replicas, since n8n.tf floors queueMode.workerReplicaCount at 1 independently of that value, so there is always a ScaledObject for these annotations to land on. The key shipped in chart 1.12.0, but that release still sets the worker's spec.replicas on every Helm upgrade, so a later apply while paused can write the floor back over the held count."
   type        = bool
   default     = false
   nullable    = false

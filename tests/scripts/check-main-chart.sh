@@ -175,3 +175,26 @@ jq -e '(.metadata.annotations // {}) | to_entries | map(select(.key | startswith
 jq -e '.metadata.annotations["autoscaling.keda.sh/paused"] == "true" and .metadata.annotations["autoscaling.keda.sh/paused-replicas"] == "0"' \
   "$tmp/scaledobject-worker-paused.json" >/dev/null
 echo "PASS: chart $chart_version, worker KEDA pause/pausedReplicaCount render"
+
+# n8n_worker_keda_min_replicas = 0 (issue #146): n8n.tf floors
+# queueMode.workerReplicaCount at max(1, var.n8n_worker_keda_min_replicas)
+# while keda.worker.minReplicaCount stays at the raw floor. Both templates
+# gate on workerReplicaCount > 0, so a caller's floor of 0 must still render
+# the worker Deployment and its ScaledObject, with KEDA's own floor at 0.
+worker_replica_count=$(console -var='n8n_worker_keda_min_replicas=0' <<< 'max(1, var.n8n_worker_keda_min_replicas)')
+[[ "$worker_replica_count" == "1" ]] || { echo "workerReplicaCount floor: expected 1, got $worker_replica_count" >&2; exit 1; }
+helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
+  --set secretRefs.existingSecret=test-core \
+  --set license.enabled=true --set license.existingSecret.name=test-license \
+  --set queueMode.enabled=true --set "queueMode.workerReplicaCount=$worker_replica_count" \
+  --set webhookProcessor.enabled=true \
+  --set keda.enabled=true --set keda.worker.minReplicaCount=0 --set taskRunners.enabled=true \
+  --set 'keda.worker.triggers[0].type=redis' \
+  --set 'keda.worker.triggers[0].metadata.address=redis:6379' \
+  --set 'keda.worker.triggers[0].metadata.listName=bull:jobs:wait' \
+  --set 'keda.worker.triggers[0].metadata.listLength=1' \
+  --show-only templates/deployment-worker.yaml --show-only templates/scaledobject-worker.yaml \
+  > "$tmp/worker-floor-zero.yaml"
+grep -q '^kind: Deployment$' "$tmp/worker-floor-zero.yaml"
+grep -q '^kind: ScaledObject$' "$tmp/worker-floor-zero.yaml"
+echo "PASS: chart $chart_version, worker floor of 0 still renders Deployment+ScaledObject"
