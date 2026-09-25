@@ -44,17 +44,6 @@ this project adheres to the stability contract in
   before still plan. The warning is skipped for a custom
   `n8n_chart_repository`, whose default the module cannot verify. See #147.
 
-### Fixed
-
-- `n8n_worker_keda_min_replicas = 0` no longer renders no worker Deployment
-  and no worker `ScaledObject`. `queueMode.workerReplicaCount` is now
-  floored at `max(1, n8n_worker_keda_min_replicas)`, decoupled from
-  `keda.worker.minReplicaCount`, which still gets the caller's real floor
-  including `0`. Previously a floor of `0` removed the default workers
-  entirely, since the chart gates both templates on `workerReplicaCount >
-  0`, leaving jobs on the default queue with no consumer and no autoscaler
-  to bring one up (#146).
-
 ### Changed
 
 - Default n8n chart `1.12.0` to `1.13.0`. `n8n_image_tag = null` still uses
@@ -141,6 +130,15 @@ this project adheres to the stability contract in
   and the value plus `n8n_prestop_sleep` must stay below
   `n8n_termination_grace_period`, which the old `extra_env` route never
   checked. See #147.
+
+- `n8n_worker_keda_min_replicas = 0` no longer renders no worker Deployment
+  and no worker `ScaledObject`. `queueMode.workerReplicaCount` is now
+  floored at `max(1, n8n_worker_keda_min_replicas)`, decoupled from
+  `keda.worker.minReplicaCount`, which still gets the caller's real floor
+  including `0`. Previously a floor of `0` removed the default workers
+  entirely, since the chart gates both templates on `workerReplicaCount >
+  0`, leaving jobs on the default queue with no consumer and no autoscaler
+  to bring one up (#146).
 
 ## [0.5.0] - 2026-09-21
 
