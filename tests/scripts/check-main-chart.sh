@@ -193,8 +193,20 @@ helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
   --set 'keda.worker.triggers[0].metadata.address=redis:6379' \
   --set 'keda.worker.triggers[0].metadata.listName=bull:jobs:wait' \
   --set 'keda.worker.triggers[0].metadata.listLength=1' \
-  --show-only templates/deployment-worker.yaml --show-only templates/scaledobject-worker.yaml \
-  > "$tmp/worker-floor-zero.yaml"
-grep -q '^kind: Deployment$' "$tmp/worker-floor-zero.yaml"
-grep -q '^kind: ScaledObject$' "$tmp/worker-floor-zero.yaml"
-echo "PASS: chart $chart_version, worker floor of 0 still renders Deployment+ScaledObject"
+  --show-only templates/deployment-worker.yaml > "$tmp/worker-floor-zero-deployment.yaml"
+helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
+  --set secretRefs.existingSecret=test-core \
+  --set license.enabled=true --set license.existingSecret.name=test-license \
+  --set queueMode.enabled=true --set "queueMode.workerReplicaCount=$worker_replica_count" \
+  --set webhookProcessor.enabled=true \
+  --set keda.enabled=true --set keda.worker.minReplicaCount=0 --set taskRunners.enabled=true \
+  --set 'keda.worker.triggers[0].type=redis' \
+  --set 'keda.worker.triggers[0].metadata.address=redis:6379' \
+  --set 'keda.worker.triggers[0].metadata.listName=bull:jobs:wait' \
+  --set 'keda.worker.triggers[0].metadata.listLength=1' \
+  --show-only templates/scaledobject-worker.yaml > "$tmp/worker-floor-zero-scaledobject.yaml"
+grep -q '^kind: Deployment$' "$tmp/worker-floor-zero-deployment.yaml"
+grep -q '^kind: ScaledObject$' "$tmp/worker-floor-zero-scaledobject.yaml"
+console <<< "jsonencode(yamldecode(file(\"$tmp/worker-floor-zero-scaledobject.yaml\")))" > "$tmp/worker-floor-zero-scaledobject.json"
+jq -e '.spec.minReplicaCount == 0' "$tmp/worker-floor-zero-scaledobject.json" >/dev/null
+echo "PASS: chart $chart_version, worker floor of 0 still renders Deployment+ScaledObject with KEDA minReplicaCount=0"

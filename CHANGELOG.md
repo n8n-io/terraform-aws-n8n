@@ -28,17 +28,6 @@ this project adheres to the stability contract in
   land on. While both inputs are unset the module sends no pause keys to the
   chart, so existing releases see no Helm values change from this addition.
 
-### Fixed
-
-- `n8n_worker_keda_min_replicas = 0` no longer renders no worker Deployment
-  and no worker `ScaledObject`. `queueMode.workerReplicaCount` is now
-  floored at `max(1, n8n_worker_keda_min_replicas)`, decoupled from
-  `keda.worker.minReplicaCount`, which still gets the caller's real floor
-  including `0`. Previously a floor of `0` removed the default workers
-  entirely, since the chart gates both templates on `workerReplicaCount >
-  0`, leaving jobs on the default queue with no consumer and no autoscaler
-  to bring one up (#146).
-
 ### Changed
 
 - Default n8n chart `1.12.0` to `1.13.0`. `n8n_image_tag = null` still uses
@@ -101,6 +90,17 @@ this project adheres to the stability contract in
   "Verification-required" tier in `docs/versioning.md` for why the
   underlying rename is blocked on upstream
   `hashicorp/terraform-provider-kubernetes#2812`.
+
+### Fixed
+
+- `n8n_worker_keda_min_replicas = 0` no longer renders no worker Deployment
+  and no worker `ScaledObject`. `queueMode.workerReplicaCount` is now
+  floored at `max(1, n8n_worker_keda_min_replicas)`, decoupled from
+  `keda.worker.minReplicaCount`, which still gets the caller's real floor
+  including `0`. Previously a floor of `0` removed the default workers
+  entirely, since the chart gates both templates on `workerReplicaCount >
+  0`, leaving jobs on the default queue with no consumer and no autoscaler
+  to bring one up (#146).
 
 ## [0.5.0] - 2026-09-21
 

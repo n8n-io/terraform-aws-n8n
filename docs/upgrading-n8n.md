@@ -131,9 +131,13 @@ which is what Helm compares against. For a deployment that runs more than
    (`kubectl get deploy n8n-worker -n <namespace>`) and check for
    interrupted executions in the n8n execution list.
 
-A floor of 0 is a separate case, unchanged by this release: every
-supported chart version renders no worker Deployment and no worker
-`ScaledObject` when the worker replica count is 0.
+A floor of 0 was a separate case, unchanged by this release: every
+supported chart version rendered no worker Deployment and no worker
+`ScaledObject` when the worker replica count was 0. A later fix
+(`n8n-io/terraform-aws-n8n#146`) changed this: `queueMode.workerReplicaCount`
+is now floored at 1 independently of `n8n_worker_keda_min_replicas`, so both
+templates always render, and `n8n_worker_keda_min_replicas = 0` only sets
+KEDA's own floor, which it scales to zero natively.
 
 **Webhook processors are unaffected.** This module's webhook-processor
 autoscaling is a Terraform-managed `kubernetes_horizontal_pod_autoscaler_v2`
