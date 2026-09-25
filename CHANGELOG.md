@@ -29,6 +29,21 @@ this project adheres to the stability contract in
   (`scaling.tf`), so no webhook `ScaledObject` exists for the annotation to
   land on. While both inputs are unset the module sends no pause keys to the
   chart, so existing releases see no Helm values change from this addition.
+- **`n8n_graceful_shutdown_timeout`** (chart `redis.worker.timeout`, renders
+  `N8N_GRACEFUL_SHUTDOWN_TIMEOUT`). Seconds n8n waits for in-flight
+  executions to finish on SIGTERM before exiting on its own. Must go through
+  this input rather than `n8n_extra_env` / `n8n_worker_extra_env`: chart
+  `1.13.0` renders this ConfigMap key unconditionally on every n8n container,
+  and `extraEnv` is appended after it, so a caller duplicate doesn't fail,
+  Kubernetes silently keeps the extraEnv copy instead of the chart's real
+  value, with no warning (see **Fixed** below). Validated against
+  `n8n_termination_grace_period` and `n8n_prestop_sleep`: this value (or the
+  chart's 30s default, if left null) plus the prestop sleep must leave a
+  strict margin under the termination grace period, or Kubernetes SIGKILLs
+  the pod before n8n finishes shutting down. Left `null`, the module sends no
+  override and the chart keeps its own 30s default, so existing releases see
+  no Helm values change from this addition. Closes the follow-up left open
+  in #147.
 
 ### Changed
 
@@ -92,6 +107,20 @@ this project adheres to the stability contract in
   "Verification-required" tier in `docs/versioning.md` for why the
   underlying rename is blocked on upstream
   `hashicorp/terraform-provider-kubernetes#2812`.
+
+### Fixed
+
+- `n8n_extra_env` and `n8n_worker_extra_env` now reject
+  `N8N_GRACEFUL_SHUTDOWN_TIMEOUT` at plan time. Chart `1.13.0` renders that
+  ConfigMap key unconditionally on every n8n container from
+  `redis.worker.timeout`, and `extraEnv` is appended after it in every
+  deployment template, so a caller-supplied duplicate previously passed
+  `terraform plan` with no error at all: Kubernetes does not reject
+  duplicate env names, it silently keeps the last entry in the list, so the
+  caller's raw value would replace the chart's real one with no plan- or
+  apply-time warning. The same guard already existed for
+  `n8n_queue_worker_lock_duration` and its siblings; this closes the gap for
+  the graceful shutdown timeout. See #147.
 
 ## [0.5.0] - 2026-09-21
 
