@@ -17,13 +17,11 @@ this project adheres to the stability contract in
   that count while jobs wait in Redis. `n8n_worker_pools` pools are not
   paused. Supported from chart `1.13.0`: the key shipped in `1.12.0`, but
   that release still sets the worker's `spec.replicas` on every Helm
-  upgrade and would override a held count. Three plan-time warnings cover
+  upgrade and would override a held count. Two plan-time warnings cover
   the inert cases: a count without `pause`
-  (`check.worker_keda_paused_replica_count_requires_pause`), a chart older
-  than `1.13.0` (`check.worker_keda_pause_requires_a_supported_chart`), and
-  `n8n_worker_keda_min_replicas = 0`, where the chart renders no worker
-  `ScaledObject` (`check.worker_keda_pause_requires_a_worker_floor`). Same
-  input names and semantics as terraform-azurerm-n8n and
+  (`check.worker_keda_paused_replica_count_requires_pause`) and a chart
+  older than `1.13.0` (`check.worker_keda_pause_requires_a_supported_chart`).
+  Same input names and semantics as terraform-azurerm-n8n and
   terraform-google-n8n. The chart's matching `keda.webhookProcessor.pause` is
   not exposed: this module scales webhook processors with its own HPA
   (`scaling.tf`), so no webhook `ScaledObject` exists for the annotation to
@@ -92,6 +90,17 @@ this project adheres to the stability contract in
   "Verification-required" tier in `docs/versioning.md` for why the
   underlying rename is blocked on upstream
   `hashicorp/terraform-provider-kubernetes#2812`.
+
+### Fixed
+
+- `n8n_worker_keda_min_replicas = 0` no longer renders no worker Deployment
+  and no worker `ScaledObject`. `queueMode.workerReplicaCount` is now
+  floored at `max(1, n8n_worker_keda_min_replicas)`, decoupled from
+  `keda.worker.minReplicaCount`, which still gets the caller's real floor
+  including `0`. Previously a floor of `0` removed the default workers
+  entirely, since the chart gates both templates on `workerReplicaCount >
+  0`, leaving jobs on the default queue with no consumer and no autoscaler
+  to bring one up (#146).
 
 ## [0.5.0] - 2026-09-21
 

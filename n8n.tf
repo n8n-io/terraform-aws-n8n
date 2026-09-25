@@ -300,10 +300,18 @@ resource "helm_release" "n8n" {
     # only still takes effect as the literal spec.replicas value on an older,
     # preview, or unverified chart (see n8n_chart_has_worker_only_runners in
     # scaling.tf for the same version gate applied to task-runner
-    # placement). A floor of 0 is different on every chart version: the
-    # chart gates both deployment-worker.yaml and scaledobject-worker.yaml
-    # on workerReplicaCount > 0, so it renders no worker Deployment and no
-    # ScaledObject at all. deployment-webhook-processor.yaml carries the identical
+    # placement). A floor of 0 on n8n_worker_keda_min_replicas is different on
+    # every chart version: the chart gates both deployment-worker.yaml and
+    # scaledobject-worker.yaml on workerReplicaCount > 0, so a literal pass-
+    # through at a floor of 0 rendered no worker Deployment and no
+    # ScaledObject at all (n8n-io/terraform-aws-n8n#146): jobs on the
+    # default queue then waited with no consumer and no autoscaler to bring
+    # one up. workerReplicaCount is therefore floored at 1 here so the chart
+    # always renders both templates; keda.worker.minReplicaCount just below
+    # still gets the caller's real floor, including 0, so KEDA itself can
+    # still scale the rendered Deployment down to zero when its own floor
+    # is 0.
+    # deployment-webhook-processor.yaml carries the identical
     # chart-side guard from the same release, but this module never
     # satisfies it: keda.webhookProcessor.enabled is never set, and
     # keda.enabled = true (needed for worker autoscaling) blocks the
@@ -355,7 +363,7 @@ resource "helm_release" "n8n" {
     queueMode = merge(
       {
         enabled            = true
-        workerReplicaCount = var.n8n_worker_keda_min_replicas
+        workerReplicaCount = max(1, var.n8n_worker_keda_min_replicas)
         workerConcurrency  = var.n8n_worker_concurrency
       },
 
@@ -1518,17 +1526,6 @@ check "worker_keda_pause_requires_a_supported_chart" {
   assert {
     condition     = (var.n8n_worker_keda_pause || var.n8n_worker_keda_paused_replica_count != null) ? local.n8n_worker_keda_pause_supported : true
     error_message = "n8n_worker_keda_pause or n8n_worker_keda_paused_replica_count is set, but n8n_chart_version predates 1.13.0. Charts older than 1.12.0 do not read keda.worker.pause at all. Chart 1.12.0 reads it but still sets the worker Deployment's spec.replicas on every Helm upgrade, so any later apply that changes the release while paused can write the replica floor back over the held count, and KEDA may not restore it without another ScaledObject reconciliation. Bump n8n_chart_version to 1.13.0 or newer, or clear these inputs."
-  }
-}
-
-# The chart gates the worker Deployment and its ScaledObject on
-# queueMode.workerReplicaCount > 0, and n8n.tf sets that from
-# n8n_worker_keda_min_replicas. At a floor of 0 there is no ScaledObject for
-# the pause annotations to land on, so the pause is silently inert.
-check "worker_keda_pause_requires_a_worker_floor" {
-  assert {
-    condition     = (var.n8n_worker_keda_pause || var.n8n_worker_keda_paused_replica_count != null) ? var.n8n_worker_keda_min_replicas > 0 : true
-    error_message = "n8n_worker_keda_pause or n8n_worker_keda_paused_replica_count is set, but n8n_worker_keda_min_replicas is 0. The chart renders no worker Deployment and no worker ScaledObject when the worker replica count is 0, so there is nothing to pause. Set n8n_worker_keda_min_replicas to 1 or more, or clear these inputs."
   }
 }
 
