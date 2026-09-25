@@ -10392,23 +10392,19 @@ run "keda_min_replicas_accepts_zero" {
 }
 
 # The combination this fix enables: a floor of 0 no longer starves pause of a
-# ScaledObject to land on. Must plan cleanly (no expect_failures) and the
-# chart-side floor (queueMode.workerReplicaCount, computed inline in n8n.tf
-# as max(1, n8n_worker_keda_min_replicas)) must still resolve to 1, so the
-# worker Deployment and its ScaledObject render for the pause annotations to
-# attach to. A regression back to gating pause on n8n_worker_keda_min_replicas
-# > 0 would fail this run's plan outright.
+# ScaledObject to land on. Must plan cleanly (no expect_failures), and pause
+# must still take effect. The chart-side floor itself (workerReplicaCount
+# actually resolving to 1 in the rendered Helm values) is not assertable
+# here: helm_release.n8n.values is unknown under plan mocks, so that
+# coverage lives in tests/scripts/check-main-chart.sh instead. A regression
+# back to gating pause on n8n_worker_keda_min_replicas > 0 would fail this
+# run's plan outright.
 run "worker_keda_pause_allowed_at_a_worker_floor_of_zero" {
   command = plan
 
   variables {
     n8n_worker_keda_min_replicas = 0
     n8n_worker_keda_pause        = true
-  }
-
-  assert {
-    condition     = max(1, var.n8n_worker_keda_min_replicas) == 1
-    error_message = "queueMode.workerReplicaCount must still floor at 1 when n8n_worker_keda_min_replicas is 0, so the worker Deployment and ScaledObject render for pause to act on."
   }
 
   assert {

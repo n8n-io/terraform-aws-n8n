@@ -157,11 +157,11 @@ a maintenance window. Setting `paused_replica_count` as well holds it at that
 count instead: `0` scales it to zero while jobs wait in Redis. The count only
 takes effect together with `pause = true`; on its own it does nothing and the
 plan warns. `n8n_worker_pools` pools are not paused; they keep
-scaling on their own queues. Pause needs chart `1.13.0` or newer and
-`n8n_worker_keda_min_replicas` of 1 or more, and a plan-time warning fires
-otherwise. The key shipped in chart `1.12.0`, but that release still sets
-the worker's `spec.replicas` on every Helm upgrade, so any later apply
-while paused could write the floor back over the held count. While both
+scaling on their own queues. Pause needs chart `1.13.0` or newer, and a
+plan-time warning fires otherwise. The key shipped in chart `1.12.0`, but
+that release still sets the worker's `spec.replicas` on every Helm upgrade,
+so any later apply while paused could write the floor back over the held
+count. While both
 inputs are unset, the module sends no pause keys to the chart, so the Helm
 values do not change. The chart's matching `keda.webhookProcessor.pause`
 is not exposed, for the same reason `keda.webhookProcessor` itself is not:
