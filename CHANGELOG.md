@@ -34,11 +34,12 @@ this project adheres to the stability contract in
   executions to finish on SIGTERM before exiting on its own. Must go through
   this input rather than `n8n_extra_env` / `n8n_worker_extra_env`: chart
   `1.13.0` renders this ConfigMap key unconditionally on every n8n container,
-  so a caller duplicate produces a container env entry carrying both `value`
-  and `valueFrom`, which the Kubernetes API rejects (see **Fixed** below).
-  Validated against `n8n_termination_grace_period` and `n8n_prestop_sleep`:
-  this value (or the chart's 30s default, if left null) plus the prestop
-  sleep must not exceed the termination grace period, or Kubernetes SIGKILLs
+  and `extraEnv` is appended after it, so a caller duplicate doesn't fail,
+  Kubernetes silently keeps the extraEnv copy instead of the chart's real
+  value, with no warning (see **Fixed** below). Validated against
+  `n8n_termination_grace_period` and `n8n_prestop_sleep`: this value (or the
+  chart's 30s default, if left null) plus the prestop sleep must leave a
+  strict margin under the termination grace period, or Kubernetes SIGKILLs
   the pod before n8n finishes shutting down. Left `null`, the module sends no
   override and the chart keeps its own 30s default, so existing releases see
   no Helm values change from this addition. Closes the follow-up left open
@@ -112,10 +113,12 @@ this project adheres to the stability contract in
 - `n8n_extra_env` and `n8n_worker_extra_env` now reject
   `N8N_GRACEFUL_SHUTDOWN_TIMEOUT` at plan time. Chart `1.13.0` renders that
   ConfigMap key unconditionally on every n8n container from
-  `redis.worker.timeout`, so a caller-supplied duplicate previously passed
-  `terraform plan` and only failed at `apply`, with Kubernetes rejecting the
-  container spec for carrying both `value` and `valueFrom` on the same env
-  entry. The same guard already existed for
+  `redis.worker.timeout`, and `extraEnv` is appended after it in every
+  deployment template, so a caller-supplied duplicate previously passed
+  `terraform plan` with no error at all: Kubernetes does not reject
+  duplicate env names, it silently keeps the last entry in the list, so the
+  caller's raw value would replace the chart's real one with no plan- or
+  apply-time warning. The same guard already existed for
   `n8n_queue_worker_lock_duration` and its siblings; this closes the gap for
   the graceful shutdown timeout. See #147.
 

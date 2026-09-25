@@ -447,13 +447,18 @@ resource "helm_release" "n8n" {
       # QUEUE_WORKER_LOCK_DURATION, QUEUE_WORKER_LOCK_RENEW_TIME,
       # QUEUE_WORKER_STALLED_INTERVAL and N8N_GRACEFUL_SHUTDOWN_TIMEOUT are all
       # chart-templated from redis.worker.* (values.yaml), and are NOT names
-      # config.extraEnv can safely set: the chart's own ConfigMap entries for
-      # these keys render unconditionally, so an extraEnv duplicate produces a
-      # container env entry with both `value` and a `valueFrom.configMapKeyRef`
-      # set, which the Kubernetes API rejects outright ("may not be specified
-      # when value is not empty"). The whole `worker` key is omitted when none
-      # of the four is set, leaving the chart's own defaults (60000 / 10000 /
-      # 30000 ms / 30s).
+      # config.extraEnv can safely set. The three QUEUE_WORKER_* ConfigMap
+      # entries only render when their own redis.worker.* value is set (and
+      # are separately blocked by the "QUEUE_" prefix in
+      # n8n_managed_env_prefixes regardless of whether a collision could
+      # occur); N8N_GRACEFUL_SHUTDOWN_TIMEOUT's entry always renders. Either
+      # way, config.extraEnv is appended after these entries in every
+      # deployment template, and Kubernetes does not reject a duplicate env
+      # name: it silently keeps the last entry in the list, so an extraEnv
+      # duplicate here would override the chart's real value with no warning
+      # rather than fail. The whole `worker` key is omitted when none of the
+      # four is set, leaving the chart's own defaults (60000 / 10000 / 30000
+      # ms / 30s).
       #
       # local.n8n_queue_worker_settings, not the variables directly: this
       # merge is shallow, so four separate `worker` entries would overwrite

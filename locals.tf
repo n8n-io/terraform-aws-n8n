@@ -670,17 +670,17 @@ locals {
     "TZ",
     "N8N_DISABLED_MODULES",
     "N8N_EXTERNAL_SECRETS_UPDATE_INTERVAL",
-    # Chart-rendered from redis.worker.timeout (values.yaml), like the three
-    # QUEUE_WORKER_* names above it, and not a name config.extraEnv or
-    # queueMode.workerExtraEnv can safely set for the same reason: chart
-    # 1.13.0's templates/_configmap-env.tpl (n8n.sharedConfigMapEnv, gated
-    # only on queueMode.enabled, which this module always sets) renders this
-    # key's ConfigMap entry unconditionally on every n8n container, so a
-    # caller duplicate produces a container env entry carrying both `value`
-    # and `valueFrom.configMapKeyRef`, which the Kubernetes API rejects
-    # outright. var.n8n_graceful_shutdown_timeout is the supported way to
-    # change this value; this reservation just turns a caller duplicate into
-    # a plan-time error instead of a silent apply-time one.
+    # Chart-rendered from redis.worker.timeout (values.yaml). Unlike the
+    # three QUEUE_WORKER_* names above it, whose ConfigMap entries only
+    # appear when their own redis.worker.* value is set, this key's entry
+    # (templates/configmap.yaml, gated only on queueMode.enabled, which this
+    # module always sets) has no per-setting guard and always renders.
+    # config.extraEnv is appended after it in every deployment template, and
+    # Kubernetes does not reject duplicate env names outright: it silently
+    # keeps the last of the two same-named entries. That would replace the
+    # chart's real value with whatever a caller wrote here, with no plan- or
+    # apply-time warning. var.n8n_graceful_shutdown_timeout is the supported
+    # way to change this value.
     "N8N_GRACEFUL_SHUTDOWN_TIMEOUT",
     ],
     # NODE_OPTIONS is reserved ONLY while n8n_node_max_old_space_size_mb is

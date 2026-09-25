@@ -97,11 +97,12 @@ defaults it to 1. This happens once, on the first `helm upgrade` to
 - A terminated worker gets SIGTERM, stops taking new jobs and waits for
   its running executions, but only up to its shutdown window. The chart
   sets `N8N_GRACEFUL_SHUTDOWN_TIMEOUT` from `redis.worker.timeout`, 30
-  seconds by default; `n8n_graceful_shutdown_timeout` raises it. Setting
+  seconds by default; `n8n_graceful_shutdown_timeout` overrides it. Setting
   the value through `n8n_extra_env` or `n8n_worker_extra_env` is not a safe
   workaround: the chart always renders it on workers as a ConfigMap
-  reference, so a second entry with the same name hits the duplicate-env
-  failure described for `n8n_queue_worker_lock_duration`. The pod is also
+  reference, and `extraEnv` is appended after it, so a second entry with
+  the same name does not fail, Kubernetes silently keeps the extraEnv copy
+  and ignores the chart's real value with no warning. The pod is also
   bounded by `n8n_termination_grace_period`, which
   `n8n_graceful_shutdown_timeout`'s validation requires to cover this
   timeout plus `n8n_prestop_sleep`. Executions still running after that can

@@ -4568,18 +4568,34 @@ run "graceful_shutdown_timeout_rejects_when_it_plus_prestop_sleep_exceeds_grace_
   expect_failures = [var.n8n_graceful_shutdown_timeout]
 }
 
-run "graceful_shutdown_timeout_accepts_when_it_plus_prestop_sleep_equals_grace_period" {
+run "graceful_shutdown_timeout_rejects_when_it_plus_prestop_sleep_equals_grace_period" {
   command = plan
 
   variables {
     # 50 + the default 10s prestop sleep exactly equals the default 60s
-    # grace period: the ceiling is inclusive (<=), so this must pass.
+    # grace period. The check requires a strict gap (<), not just meeting
+    # the ceiling: Kubernetes starts the terminationGracePeriodSeconds
+    # countdown when it invokes preStop, not after preStop finishes, so a
+    # sum equal to the ceiling leaves n8n's own shutdown handler no margin
+    # between preStop finishing and SIGKILL.
     n8n_graceful_shutdown_timeout = 50
   }
 
+  expect_failures = [var.n8n_graceful_shutdown_timeout]
+}
+
+run "graceful_shutdown_timeout_accepts_when_it_plus_prestop_sleep_is_strictly_below_grace_period" {
+  command = plan
+
+  variables {
+    # 49 + the default 10s prestop sleep leaves a 1s margin under the
+    # default 60s grace period.
+    n8n_graceful_shutdown_timeout = 49
+  }
+
   assert {
-    condition     = var.n8n_graceful_shutdown_timeout == 50
-    error_message = "n8n_graceful_shutdown_timeout should accept a value whose sum with n8n_prestop_sleep exactly equals n8n_termination_grace_period."
+    condition     = jsonencode(local.n8n_queue_worker_settings) == jsonencode({ timeout = 49 })
+    error_message = "n8n_graceful_shutdown_timeout should accept, and local.n8n_queue_worker_settings should carry, a value whose sum with n8n_prestop_sleep is strictly below n8n_termination_grace_period."
   }
 }
 
