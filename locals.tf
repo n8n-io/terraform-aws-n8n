@@ -670,6 +670,18 @@ locals {
     "TZ",
     "N8N_DISABLED_MODULES",
     "N8N_EXTERNAL_SECRETS_UPDATE_INTERVAL",
+    # Chart-rendered from redis.worker.timeout (values.yaml), like the three
+    # QUEUE_WORKER_* names above it, and not a name config.extraEnv or
+    # queueMode.workerExtraEnv can safely set for the same reason: chart
+    # 1.13.0's templates/_configmap-env.tpl (n8n.sharedConfigMapEnv, gated
+    # only on queueMode.enabled, which this module always sets) renders this
+    # key's ConfigMap entry unconditionally on every n8n container, so a
+    # caller duplicate produces a container env entry carrying both `value`
+    # and `valueFrom.configMapKeyRef`, which the Kubernetes API rejects
+    # outright. var.n8n_graceful_shutdown_timeout is the supported way to
+    # change this value; this reservation just turns a caller duplicate into
+    # a plan-time error instead of a silent apply-time one.
+    "N8N_GRACEFUL_SHUTDOWN_TIMEOUT",
     ],
     # NODE_OPTIONS is reserved ONLY while n8n_node_max_old_space_size_mb is
     # set, unlike every entry above. The distinction matters because it is a
@@ -708,20 +720,28 @@ locals {
     var.n8n_external_secrets_enabled ? [] : ["external-secrets"],
   )
 
-  # The chart's redis.worker.* block, assembled once from three independent
+  # The chart's redis.worker.* block, assembled once from four independent
   # variables. Built here rather than inline in n8n.tf because the
-  # surrounding merge() in that file is SHALLOW: three separate
-  # `{ worker = {...} }` entries would silently overwrite one another and
-  # only the last would survive, so setting lock duration and stalled
-  # interval together would quietly drop one of them. Assembling the inner
-  # map first is what makes them composable.
+  # surrounding merge() in that file is SHALLOW: separate `{ worker = {...} }`
+  # entries would silently overwrite one another and only the last would
+  # survive, so setting lock duration and stalled interval together would
+  # quietly drop one of them. Assembling the inner map first is what makes
+  # them composable.
   #
-  # All three values are passed through as plain integers. The chart's
-  # values.schema.json types every one of them as `{"type": "integer",
-  # "minimum": 1000}`, so a quoted string is rejected outright ("got string,
-  # want integer") and so is any value below 1000. The matching >= 1000
-  # validations on the variables exist to surface that as a plan-time error
-  # rather than a Helm schema failure at apply.
+  # All four values are passed through as plain integers. The chart's
+  # values.schema.json types every one of them as `{"type": "integer"}` with
+  # a `minimum`, 1000 for the three QUEUE_WORKER_* settings and 1 for
+  # timeout, so a quoted string is rejected outright ("got string, want
+  # integer") and so is any value below that floor. The matching validations
+  # on the variables exist to surface that as a plan-time error rather than a
+  # Helm schema failure at apply.
+  #
+  # Unlike the other three, timeout has no per-setting `{{- if }}` guard in
+  # the chart: templates/configmap.yaml renders N8N_GRACEFUL_SHUTDOWN_TIMEOUT
+  # unconditionally, so omitting this key when n8n_graceful_shutdown_timeout
+  # is null does not disable anything, Helm just falls back to the chart's
+  # own values.yaml default (30s) for redis.worker.timeout, identical to
+  # today's rendered output.
   n8n_queue_worker_settings = merge(
     var.n8n_queue_worker_lock_duration != null ? {
       lockDuration = var.n8n_queue_worker_lock_duration
@@ -731,6 +751,9 @@ locals {
     } : {},
     var.n8n_queue_worker_stalled_interval != null ? {
       stalledInterval = var.n8n_queue_worker_stalled_interval
+    } : {},
+    var.n8n_graceful_shutdown_timeout != null ? {
+      timeout = var.n8n_graceful_shutdown_timeout
     } : {},
   )
 

@@ -97,13 +97,15 @@ defaults it to 1. This happens once, on the first `helm upgrade` to
 - A terminated worker gets SIGTERM, stops taking new jobs and waits for
   its running executions, but only up to its shutdown window. The chart
   sets `N8N_GRACEFUL_SHUTDOWN_TIMEOUT` from `redis.worker.timeout`, 30
-  seconds by default. This module does not expose `redis.worker.timeout`,
-  and setting the variable through `n8n_extra_env` or `n8n_worker_extra_env`
-  is not a safe workaround: the chart always renders it on workers as a
-  ConfigMap reference, so a second entry with the same name hits the
-  duplicate-env failure described for `n8n_queue_worker_lock_duration`.
-  The pod is also bounded by `n8n_termination_grace_period`. Executions
-  still running after that can be interrupted.
+  seconds by default; `n8n_graceful_shutdown_timeout` raises it. Setting
+  the value through `n8n_extra_env` or `n8n_worker_extra_env` is not a safe
+  workaround: the chart always renders it on workers as a ConfigMap
+  reference, so a second entry with the same name hits the duplicate-env
+  failure described for `n8n_queue_worker_lock_duration`. The pod is also
+  bounded by `n8n_termination_grace_period`, which
+  `n8n_graceful_shutdown_timeout`'s validation requires to cover this
+  timeout plus `n8n_prestop_sleep`. Executions still running after that can
+  be interrupted.
 - On a healthy, unpaused installation, the HPA that KEDA manages behind
   the `ScaledObject` (`kubectl get hpa keda-hpa-n8n-worker`) is expected
   to restore the floor, and scale above it as queue demand requires.

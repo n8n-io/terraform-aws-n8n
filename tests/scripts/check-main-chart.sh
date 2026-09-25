@@ -175,3 +175,30 @@ jq -e '(.metadata.annotations // {}) | to_entries | map(select(.key | startswith
 jq -e '.metadata.annotations["autoscaling.keda.sh/paused"] == "true" and .metadata.annotations["autoscaling.keda.sh/paused-replicas"] == "0"' \
   "$tmp/scaledobject-worker-paused.json" >/dev/null
 echo "PASS: chart $chart_version, worker KEDA pause/pausedReplicaCount render"
+
+# redis.worker.timeout -> N8N_GRACEFUL_SHUTDOWN_TIMEOUT: the module builds
+# this into local.n8n_queue_worker_settings (locals.tf) and merges it into
+# the `redis.worker` Helm value only when n8n_graceful_shutdown_timeout (or a
+# sibling) is set (n8n.tf); helm_release.values is unknown at plan time under
+# the mock provider, so the tftest.hcl runs assert only the local's shape.
+# This renders the real chart's configmap.yaml to prove an override actually
+# reaches the ConfigMap key, and that leaving it unset still resolves to the
+# chart's own 30s default, closing the loop the mock provider cannot.
+for scenario in default overridden; do
+  timeout_vars=()
+  if [[ "$scenario" == overridden ]]; then
+    timeout_vars=(-var='n8n_graceful_shutdown_timeout=45')
+  fi
+  console ${timeout_vars[@]+"${timeout_vars[@]}"} <<< 'jsonencode({redis={worker=local.n8n_queue_worker_settings}})' \
+    > "$tmp/graceful-shutdown-timeout-$scenario.json"
+  helm template n8n "$tmp/n8n" -f "$tmp/values.json" -f "$tmp/graceful-shutdown-timeout-$scenario.json" \
+    --set secretRefs.existingSecret=test-core \
+    --set license.enabled=true --set license.existingSecret.name=test-license \
+    --set queueMode.enabled=true --set webhookProcessor.enabled=true \
+    --set keda.enabled=true --set taskRunners.enabled=true \
+    --show-only templates/configmap.yaml > "$tmp/configmap-$scenario.yaml"
+  console <<< "jsonencode(yamldecode(file(\"$tmp/configmap-$scenario.yaml\")))" > "$tmp/configmap-$scenario.json"
+done
+jq -e '.data.N8N_GRACEFUL_SHUTDOWN_TIMEOUT == "30"' "$tmp/configmap-default.json" >/dev/null
+jq -e '.data.N8N_GRACEFUL_SHUTDOWN_TIMEOUT == "45"' "$tmp/configmap-overridden.json" >/dev/null
+echo "PASS: chart $chart_version, n8n_graceful_shutdown_timeout reaches N8N_GRACEFUL_SHUTDOWN_TIMEOUT in the ConfigMap"

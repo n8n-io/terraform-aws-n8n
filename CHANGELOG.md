@@ -29,6 +29,20 @@ this project adheres to the stability contract in
   (`scaling.tf`), so no webhook `ScaledObject` exists for the annotation to
   land on. While both inputs are unset the module sends no pause keys to the
   chart, so existing releases see no Helm values change from this addition.
+- **`n8n_graceful_shutdown_timeout`** (chart `redis.worker.timeout`, renders
+  `N8N_GRACEFUL_SHUTDOWN_TIMEOUT`). Seconds n8n waits for in-flight
+  executions to finish on SIGTERM before exiting on its own. Must go through
+  this input rather than `n8n_extra_env` / `n8n_worker_extra_env`: chart
+  `1.13.0` renders this ConfigMap key unconditionally on every n8n container,
+  so a caller duplicate produces a container env entry carrying both `value`
+  and `valueFrom`, which the Kubernetes API rejects (see **Fixed** below).
+  Validated against `n8n_termination_grace_period` and `n8n_prestop_sleep`:
+  this value (or the chart's 30s default, if left null) plus the prestop
+  sleep must not exceed the termination grace period, or Kubernetes SIGKILLs
+  the pod before n8n finishes shutting down. Left `null`, the module sends no
+  override and the chart keeps its own 30s default, so existing releases see
+  no Helm values change from this addition. Closes the follow-up left open
+  in #147.
 
 ### Changed
 
@@ -92,6 +106,18 @@ this project adheres to the stability contract in
   "Verification-required" tier in `docs/versioning.md` for why the
   underlying rename is blocked on upstream
   `hashicorp/terraform-provider-kubernetes#2812`.
+
+### Fixed
+
+- `n8n_extra_env` and `n8n_worker_extra_env` now reject
+  `N8N_GRACEFUL_SHUTDOWN_TIMEOUT` at plan time. Chart `1.13.0` renders that
+  ConfigMap key unconditionally on every n8n container from
+  `redis.worker.timeout`, so a caller-supplied duplicate previously passed
+  `terraform plan` and only failed at `apply`, with Kubernetes rejecting the
+  container spec for carrying both `value` and `valueFrom` on the same env
+  entry. The same guard already existed for
+  `n8n_queue_worker_lock_duration` and its siblings; this closes the gap for
+  the graceful shutdown timeout. See #147.
 
 ## [0.5.0] - 2026-09-21
 
