@@ -1453,7 +1453,8 @@ variable "n8n_graceful_shutdown_timeout" {
     explicit value that breaks this rule fails validation. When this input is
     null, the same rule applied to the chart's default only raises a warning
     (the graceful_shutdown_fits_grace_period check), so existing
-    configurations keep planning.
+    configurations keep planning. That warning is skipped for a custom
+    n8n_chart_repository, whose default the module cannot verify.
   EOT
   type        = number
   default     = null

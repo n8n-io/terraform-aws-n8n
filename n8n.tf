@@ -1543,10 +1543,14 @@ check "worker_keda_pause_requires_a_worker_floor" {
 # that variable. Left null, the chart still renders its own default, which must
 # fit the same way, but this was never checked before that input existed, so a
 # hard error here would break configurations that already plan. A warning
-# surfaces the risk without failing the plan.
+# surfaces the risk without failing the plan. Skipped for a custom
+# n8n_chart_repository, whose values.yaml default this module cannot verify
+# (same reasoning as n8n_worker_keda_pause_supported in scaling.tf); the
+# explicit-value validation still applies there, because it does not depend on
+# the chart's default.
 check "graceful_shutdown_fits_grace_period" {
   assert {
-    condition     = var.n8n_graceful_shutdown_timeout == null ? local.n8n_chart_default_graceful_shutdown_timeout + var.n8n_prestop_sleep < var.n8n_termination_grace_period : true
+    condition     = local.n8n_graceful_shutdown_default_applies ? local.n8n_chart_default_graceful_shutdown_timeout + var.n8n_prestop_sleep < var.n8n_termination_grace_period : true
     error_message = "n8n_graceful_shutdown_timeout is unset, so n8n uses the chart's default shutdown timeout of ${local.n8n_chart_default_graceful_shutdown_timeout}s. That plus n8n_prestop_sleep (${var.n8n_prestop_sleep}s) does not stay below n8n_termination_grace_period (${var.n8n_termination_grace_period}s), so Kubernetes can SIGKILL a pod before n8n finishes shutting down and interrupt running executions. Set n8n_graceful_shutdown_timeout to a value that fits, lower n8n_prestop_sleep, or raise n8n_termination_grace_period."
   }
 }

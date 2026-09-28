@@ -4628,6 +4628,36 @@ run "graceful_shutdown_timeout_null_default_warns_at_the_exact_ceiling" {
   expect_failures = [check.graceful_shutdown_fits_grace_period]
 }
 
+run "graceful_shutdown_timeout_null_default_check_skips_a_custom_chart_repository" {
+  command = plan
+
+  variables {
+    # Would warn on the upstream chart (30 + 31 = 61 > 60), but a custom
+    # repository's default is unverifiable, so the check must stay quiet.
+    # No expect_failures, so the run fails if the check fires.
+    n8n_chart_repository = "oci://registry.example.com/charts"
+    n8n_prestop_sleep    = 31
+  }
+
+  assert {
+    condition     = !local.n8n_graceful_shutdown_default_applies
+    error_message = "local.n8n_graceful_shutdown_default_applies must be false for a custom n8n_chart_repository, so the null-default check does not compare against an unverified default."
+  }
+}
+
+run "graceful_shutdown_timeout_explicit_value_is_validated_on_a_custom_chart_repository" {
+  command = plan
+
+  variables {
+    # The explicit-value validation does not depend on the chart's default,
+    # so it still applies to a custom repository: 50 + 10 = 60, not below 60.
+    n8n_chart_repository          = "oci://registry.example.com/charts"
+    n8n_graceful_shutdown_timeout = 50
+  }
+
+  expect_failures = [var.n8n_graceful_shutdown_timeout]
+}
+
 run "graceful_shutdown_timeout_null_default_is_silent_when_it_fits" {
   command = plan
 

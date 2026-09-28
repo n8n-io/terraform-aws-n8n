@@ -43,7 +43,8 @@ this project adheres to the stability contract in
   and existing releases see no Helm values change. In that case the same rule
   applied to the 30s default is only a warning, the new
   `graceful_shutdown_fits_grace_period` check, so configurations that planned
-  before still plan. See #147.
+  before still plan. The warning is skipped for a custom
+  `n8n_chart_repository`, whose default the module cannot verify. See #147.
 
 ### Changed
 

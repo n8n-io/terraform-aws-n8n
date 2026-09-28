@@ -202,7 +202,7 @@ for scenario in default overridden; do
     --show-only templates/configmap.yaml > "$tmp/configmap-$scenario.yaml"
   console <<< "jsonencode(yamldecode(file(\"$tmp/configmap-$scenario.yaml\")))" > "$tmp/configmap-$scenario.json"
 done
-default_timeout=$(console <<< 'jsonencode(tostring(local.n8n_chart_default_graceful_shutdown_timeout))')
-jq -e --argjson want "$default_timeout" '.data.N8N_GRACEFUL_SHUTDOWN_TIMEOUT == $want' "$tmp/configmap-default.json" >/dev/null
+default_timeout=$(console <<< 'local.n8n_chart_default_graceful_shutdown_timeout')
+jq -e --arg want "$default_timeout" '.data.N8N_GRACEFUL_SHUTDOWN_TIMEOUT == $want' "$tmp/configmap-default.json" >/dev/null
 jq -e '.data.N8N_GRACEFUL_SHUTDOWN_TIMEOUT == "45"' "$tmp/configmap-overridden.json" >/dev/null
 echo "PASS: chart $chart_version, n8n_graceful_shutdown_timeout reaches N8N_GRACEFUL_SHUTDOWN_TIMEOUT in the ConfigMap"

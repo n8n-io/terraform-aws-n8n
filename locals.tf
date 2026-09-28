@@ -765,6 +765,15 @@ locals {
   # this value together with that assertion on a chart bump.
   n8n_chart_default_graceful_shutdown_timeout = 30
 
+  # True only when that default is known to be what the pods run: the input is
+  # unset and the chart comes from the upstream repository. A custom
+  # n8n_chart_repository may carry a different default, so the check stays
+  # quiet there rather than warn on a number it cannot verify.
+  n8n_graceful_shutdown_default_applies = (
+    var.n8n_graceful_shutdown_timeout == null &&
+    var.n8n_chart_repository == "oci://ghcr.io/n8n-io/n8n-helm-chart"
+  )
+
   # var.n8n_dns_config with unset keys removed.
   #
   # Necessary because the variable's optional() attributes materialise as null
