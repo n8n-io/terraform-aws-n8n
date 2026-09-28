@@ -401,7 +401,32 @@ check_deployment() {
   fi
   ready="${ready:-0}"
 
-  if [[ "$ready" -ge "$min_replicas" && "$ready" -eq "$desired" ]]; then
+  # At a KEDA floor of 0, 0/N ready means a worker is starting from zero
+  # (a job arrived just before or during this check), which is normal, not
+  # broken. Wait for it the way the execution test does, re-reading both
+  # counts, since KEDA may also scale back to 0 in the meantime.
+  if [[ "$min_replicas" -eq 0 && "$ready" -eq 0 && "$desired" -gt 0 ]]; then
+    info "$label: 0/$desired ready at a KEDA floor of 0, so one is starting from zero; waiting up to 180s"
+    local waited=0
+    while [[ "$waited" -lt 180 && "$ready" -eq 0 && "$desired" -gt 0 ]]; do
+      sleep 10
+      waited=$((waited + 10))
+      if ! ready=$(kubectl get deployment "$name" -n "$NAMESPACE" \
+          -o jsonpath='{.status.readyReplicas}' 2>/dev/null) \
+        || ! desired=$(kubectl get deployment "$name" -n "$NAMESPACE" \
+          -o jsonpath='{.spec.replicas}' 2>/dev/null) \
+        || [[ -z "$desired" ]]; then
+        fail "$label: cannot read replica counts of Deployment '$name'"
+        return
+      fi
+      ready="${ready:-0}"
+    done
+  fi
+
+  if [[ "$min_replicas" -eq 0 && "$ready" -eq 0 && "$desired" -gt 0 ]]; then
+    warn "$label: 0/$desired pods ready after 180s, still starting from zero"
+    info "Check: kubectl get pods -n $NAMESPACE -l app.kubernetes.io/component=worker, and pending pods or node scale-up"
+  elif [[ "$ready" -ge "$min_replicas" && "$ready" -eq "$desired" ]]; then
     pass "$label: $ready/$desired pods ready"
   elif [[ "$ready" -gt 0 ]]; then
     warn "$label: only $ready/$desired pods ready (minimum $min_replicas)"
@@ -439,6 +464,24 @@ worker_scaled_to_zero() {
   replicas=$(kubectl get deployment n8n-worker -n "$NAMESPACE" \
     -o jsonpath='{.spec.replicas}' 2>/dev/null) || return 1
   [[ "$replicas" == 0 ]]
+}
+
+# Whether the worker ScaledObject can start a worker right now: "ready",
+# "not_ready" (a broken scaler), or "paused" (n8n_worker_keda_pause). Read
+# live, like worker_scaled_to_zero, and checked in that order.
+worker_scaler_state() {
+  local ready paused
+  ready=$(kubectl get scaledobject n8n-worker -n "$NAMESPACE" \
+    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+  paused=$(kubectl get scaledobject n8n-worker -n "$NAMESPACE" \
+    -o jsonpath='{.metadata.annotations.autoscaling\.keda\.sh/paused}' 2>/dev/null || true)
+  if [[ "$ready" != "True" ]]; then
+    echo not_ready
+  elif [[ "$paused" == "true" ]]; then
+    echo paused
+  else
+    echo ready
+  fi
 }
 
 if worker_scaled_to_zero; then
@@ -613,12 +656,11 @@ if kubectl get scaledobject n8n-worker -n "$NAMESPACE" &>/dev/null 2>&1; then
     -o jsonpath='{.spec.maxReplicaCount}' 2>/dev/null || echo "?")
   ready=$(kubectl get scaledobject n8n-worker -n "$NAMESPACE" \
     -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "?")
-  paused=$(kubectl get scaledobject n8n-worker -n "$NAMESPACE" \
-    -o jsonpath='{.metadata.annotations.autoscaling\.keda\.sh/paused}' 2>/dev/null || true)
-  if worker_scaled_to_zero && [[ "$ready" != "True" ]]; then
+  scaler_state=$(worker_scaler_state)
+  if worker_scaled_to_zero && [[ "$scaler_state" == not_ready ]]; then
     fail "Worker KEDA ScaledObject: min=$min max=$max ready=$ready. Workers are at zero and the scaler is not Ready, so nothing will start a worker when jobs arrive"
     info "Diagnose: kubectl describe scaledobject n8n-worker -n $NAMESPACE"
-  elif worker_scaled_to_zero && [[ "$paused" == "true" ]]; then
+  elif worker_scaled_to_zero && [[ "$scaler_state" == paused ]]; then
     # A deliberate pause (n8n_worker_keda_pause) is an operator choice, not
     # a broken scaler, so warn rather than fail. Jobs wait in Redis.
     warn "Worker KEDA ScaledObject is paused with workers at zero: jobs wait in Redis until n8n_worker_keda_pause is cleared"
@@ -642,8 +684,18 @@ worker_pod=$(kubectl get pods -n "$NAMESPACE" \
 
 if [[ -z "$worker_pod" ]] && worker_scaled_to_zero; then
   skip "Redis connectivity from a worker pod (workers are scaled to zero)"
-  info "The Ready ScaledObject above already reads queue depth from Redis."
-  info "The workflow execution test below starts a worker from zero."
+  case "$(worker_scaler_state)" in
+    ready)
+      info "The Ready ScaledObject above already reads queue depth from Redis."
+      info "The workflow execution test below starts a worker from zero."
+      ;;
+    paused)
+      info "Unverified: the ScaledObject is paused, so no worker starts to probe from."
+      ;;
+    *)
+      info "Unverified: the ScaledObject is not Ready (see the failure above)."
+      ;;
+  esac
 elif [[ -z "$worker_pod" ]]; then
   fail "No running worker pod found to probe Redis connectivity"
 else
@@ -864,8 +916,22 @@ else
   header "Workflow Execution via Queue"
 fi
 
+# With workers at zero and a scaler that cannot start one (not Ready, or
+# paused on purpose), a queued execution can only time out. The Autoscaler
+# section already reported which, so skip rather than spend the full poll
+# budget on a warning that reads like a slow execution.
+exec_blocked_reason=""
+if [[ "$DEPLOY_MODE" == "multi" ]] && worker_scaled_to_zero; then
+  case "$(worker_scaler_state)" in
+    paused)    exec_blocked_reason="workers are at zero and the worker ScaledObject is paused" ;;
+    not_ready) exec_blocked_reason="workers are at zero and the worker ScaledObject is not Ready" ;;
+  esac
+fi
+
 if [[ -z "$N8N_URL" || -z "$N8N_API_KEY" ]]; then
   skip "Workflow execution test (requires N8N_URL and N8N_API_KEY)"
+elif [[ -n "$exec_blocked_reason" ]]; then
+  skip "Workflow execution test ($exec_blocked_reason, so no worker can start)"
 else
   webhook_path="smoke-test-$$"
 

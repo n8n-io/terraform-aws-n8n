@@ -154,10 +154,12 @@ this project adheres to the stability contract in
   should not run. `tests/scripts/smoke-test.sh` now accepts workers scaled
   to zero when the worker `ScaledObject` has a floor of `0` and is Ready. It
   fails when the scaler is not Ready, warns when it is paused, skips the
-  in-pod Redis probe in that state, and polls the test execution 90 times
-  instead of 30, 2s apart (about 180s instead of 60s), so KEDA can start a
-  worker. A Deployment whose replica
-  counts cannot be read now fails instead of reading as `0`. A missing
+  in-pod Redis probe in that state, skips the test execution when the scaler
+  is paused or not Ready at zero, waits up to 180s for a worker that is
+  starting from zero during the pod health check, and polls the test
+  execution 90 times instead of 30, 2s apart (about 180s instead of 60s), so
+  KEDA can start a worker. A Deployment whose replica counts cannot be read
+  now fails instead of reading as `0`. A missing
   `n8n-worker` Deployment now fails too, instead of silently switching the
   script to its single-instance checks: this module always runs queue mode
   and always renders that Deployment, so its absence means a broken

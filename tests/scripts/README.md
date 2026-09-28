@@ -17,7 +17,7 @@ Post-deployment smoke test for `terraform-aws-n8n`. Verifies the multi-main depl
 |---|---|
 | kubectl cluster connectivity | kubectl can reach the EKS cluster |
 | Namespace exists | The configured namespace is present |
-| Main / worker / webhook-processor pod health | Each deployment exists and is at the expected ready replica count. A missing worker Deployment fails. Workers scaled to zero pass when the worker `ScaledObject` floor is `0` |
+| Main / worker / webhook-processor pod health | Each deployment exists and is at the expected ready replica count. A missing worker Deployment fails. Workers scaled to zero pass when the worker `ScaledObject` floor is `0`. At that floor, a worker still starting from zero is given up to 180s before the check warns |
 | Task runner sidecar (workers) | Runner sidecar is present on worker pods and connected to the broker |
 | Multi-main leader election | `N8N_MULTI_MAIN_SETUP_ENABLED=true` and leadership activity in main logs |
 | Autoscalers | KEDA `ScaledObject` (workers, queue-depth) and HPAs (main, webhook-processor). With workers at zero, a `ScaledObject` that is not Ready fails and a paused one warns |
@@ -25,7 +25,7 @@ Post-deployment smoke test for `terraform-aws-n8n`. Verifies the multi-main depl
 | HTTPS reachability | `/healthz` returns HTTP 200 over the ALB hostname |
 | HTTP → HTTPS redirect | Port 80 redirects to HTTPS |
 | API connectivity (if API key set) | `/api/v1/workflows` responds with 200 |
-| Workflow execution (if API key set) | Creates a webhook → set workflow, fires it, confirms success, deletes it. Polls for about 180s instead of 60s (90 polls instead of 30, 2s apart) when workers start from zero; running out of polls warns, it does not fail |
+| Workflow execution (if API key set) | Creates a webhook → set workflow, fires it, confirms success, deletes it. Polls for about 180s instead of 60s (90 polls instead of 30, 2s apart) when workers start from zero; running out of polls warns, it does not fail. Skipped when workers are at zero and the worker `ScaledObject` is paused or not Ready, since no worker can start |
 | Worker scaling (opt-in) | Queues CPU-burning executions and confirms workers scale up |
 
 ### Quick start
