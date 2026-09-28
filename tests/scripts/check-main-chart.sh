@@ -183,7 +183,10 @@ echo "PASS: chart $chart_version, worker KEDA pause/pausedReplicaCount render"
 # the mock provider, so the tftest.hcl runs assert only the local's shape.
 # This renders the real chart's configmap.yaml to prove an override actually
 # reaches the ConfigMap key, and that leaving it unset still resolves to the
-# chart's own 30s default, closing the loop the mock provider cannot.
+# chart's own default, closing the loop the mock provider cannot. The default
+# is compared against local.n8n_chart_default_graceful_shutdown_timeout, which
+# the graceful_shutdown_fits_grace_period check relies on, so a chart bump that
+# moves the default fails here until that local is updated.
 for scenario in default overridden; do
   timeout_vars=()
   if [[ "$scenario" == overridden ]]; then
@@ -199,6 +202,7 @@ for scenario in default overridden; do
     --show-only templates/configmap.yaml > "$tmp/configmap-$scenario.yaml"
   console <<< "jsonencode(yamldecode(file(\"$tmp/configmap-$scenario.yaml\")))" > "$tmp/configmap-$scenario.json"
 done
-jq -e '.data.N8N_GRACEFUL_SHUTDOWN_TIMEOUT == "30"' "$tmp/configmap-default.json" >/dev/null
+default_timeout=$(console <<< 'jsonencode(tostring(local.n8n_chart_default_graceful_shutdown_timeout))')
+jq -e --argjson want "$default_timeout" '.data.N8N_GRACEFUL_SHUTDOWN_TIMEOUT == $want' "$tmp/configmap-default.json" >/dev/null
 jq -e '.data.N8N_GRACEFUL_SHUTDOWN_TIMEOUT == "45"' "$tmp/configmap-overridden.json" >/dev/null
 echo "PASS: chart $chart_version, n8n_graceful_shutdown_timeout reaches N8N_GRACEFUL_SHUTDOWN_TIMEOUT in the ConfigMap"

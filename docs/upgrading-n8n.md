@@ -98,15 +98,16 @@ defaults it to 1. This happens once, on the first `helm upgrade` to
   its running executions, but only up to its shutdown window. The chart
   sets `N8N_GRACEFUL_SHUTDOWN_TIMEOUT` from `redis.worker.timeout`, 30
   seconds by default; `n8n_graceful_shutdown_timeout` overrides it. Setting
-  the value through `n8n_extra_env` or `n8n_worker_extra_env` is not a safe
-  workaround: the chart always renders it on workers as a ConfigMap
-  reference, and `extraEnv` is appended after it, so a second entry with
-  the same name does not fail, Kubernetes silently keeps the extraEnv copy
-  and ignores the chart's real value with no warning. The pod is also
-  bounded by `n8n_termination_grace_period`, which
-  `n8n_graceful_shutdown_timeout`'s validation requires to cover this
-  timeout plus `n8n_prestop_sleep`. Executions still running after that can
-  be interrupted.
+  the value through `n8n_extra_env`, `n8n_worker_extra_env` or a worker
+  pool's `extra_env` is rejected at plan time: the chart always renders it
+  on every n8n container as a ConfigMap reference, and `extraEnv` is
+  appended after it, so a second entry with the same name would silently
+  replace the chart's value. The pod is also bounded by
+  `n8n_termination_grace_period`: the timeout plus `n8n_prestop_sleep` must
+  stay below it. An explicit `n8n_graceful_shutdown_timeout` that does not
+  fit fails validation; with the input unset, the chart's 30-second default
+  that does not fit only raises a plan-time warning. Executions still
+  running after that can be interrupted.
 - On a healthy, unpaused installation, the HPA that KEDA manages behind
   the `ScaledObject` (`kubectl get hpa keda-hpa-n8n-worker`) is expected
   to restore the floor, and scale above it as queue demand requires.

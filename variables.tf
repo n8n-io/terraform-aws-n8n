@@ -1176,7 +1176,7 @@ variable "n8n_worker_concurrency" {
 }
 
 variable "n8n_queue_worker_lock_duration" {
-  description = "Milliseconds a worker holds a Bull job lock before it must renew it. Maps to the chart's redis.worker.lockDuration value (QUEUE_WORKER_LOCK_DURATION on the pods); must go through this chart value rather than config.extraEnv, because the chart's ConfigMap entry for this key renders unconditionally and a duplicate produces a container env entry carrying both value and valueFrom, which the Kubernetes API rejects. Leave null for n8n's own default (60000ms). Lowering it to 10000ms or less additionally requires setting n8n_queue_worker_lock_renew_time explicitly below it: the chart's renewal default is 10000ms, so an unset renewal interval would otherwise outlast the lock. That pairing is validated on n8n_queue_worker_lock_renew_time, because Terraform forbids two variables' validations from referencing each other, so a violation is reported against that variable."
+  description = "Milliseconds a worker holds a Bull job lock before it must renew it. Maps to the chart's redis.worker.lockDuration value (QUEUE_WORKER_LOCK_DURATION on the pods); must go through this chart value rather than config.extraEnv: once set, the chart renders its own env entry for this key, config.extraEnv is appended after it, and Kubernetes silently keeps the last of two same-named entries, so a duplicate would override this value with no warning. n8n_extra_env rejects every QUEUE_ name at plan time for that reason. Leave null for n8n's own default (60000ms). Lowering it to 10000ms or less additionally requires setting n8n_queue_worker_lock_renew_time explicitly below it: the chart's renewal default is 10000ms, so an unset renewal interval would otherwise outlast the lock. That pairing is validated on n8n_queue_worker_lock_renew_time, because Terraform forbids two variables' validations from referencing each other, so a violation is reported against that variable."
   type        = number
   default     = null
 
@@ -1192,7 +1192,7 @@ variable "n8n_queue_worker_lock_duration" {
 }
 
 variable "n8n_queue_worker_lock_renew_time" {
-  description = "Milliseconds between a worker's renewals of its Bull job lock. Maps to the chart's redis.worker.lockRenewTime value (QUEUE_WORKER_LOCK_RENEW_TIME on the pods); like n8n_queue_worker_lock_duration it must go through the chart value rather than config.extraEnv, because the chart's ConfigMap entry for this key renders unconditionally and a duplicate produces a container env entry carrying both value and valueFrom, which the Kubernetes API rejects. Leave null for n8n's own default (10000ms). This must stay comfortably below n8n_queue_worker_lock_duration: the worker renews on a timer, so a renew interval at or above the lock duration guarantees the lock expires before the next renewal ever fires, and every job then looks stalled to Bull's stalled-job check no matter how healthy the worker is. Lowering it increases Redis command volume proportionally to in-flight jobs, which is a real cost on a single-threaded Redis near saturation, so it is a diagnostic knob as much as a tuning one: if stalls get WORSE when you shorten it, the constraint is Redis throughput rather than missed timers on a busy worker event loop."
+  description = "Milliseconds between a worker's renewals of its Bull job lock. Maps to the chart's redis.worker.lockRenewTime value (QUEUE_WORKER_LOCK_RENEW_TIME on the pods); like n8n_queue_worker_lock_duration it must go through the chart value rather than config.extraEnv, for the same silent last-entry-wins override reason. Leave null for n8n's own default (10000ms). This must stay comfortably below n8n_queue_worker_lock_duration: the worker renews on a timer, so a renew interval at or above the lock duration guarantees the lock expires before the next renewal ever fires, and every job then looks stalled to Bull's stalled-job check no matter how healthy the worker is. Lowering it increases Redis command volume proportionally to in-flight jobs, which is a real cost on a single-threaded Redis near saturation, so it is a diagnostic knob as much as a tuning one: if stalls get WORSE when you shorten it, the constraint is Redis throughput rather than missed timers on a busy worker event loop."
   type        = number
   default     = null
 
@@ -1222,8 +1222,8 @@ variable "n8n_queue_worker_stalled_interval" {
   description = <<-EOT
     Milliseconds between Bull's checks for stalled jobs. Maps to the chart's
     redis.worker.stalledInterval value (QUEUE_WORKER_STALLED_INTERVAL on the
-    pods), not to config.extraEnv, for the same unconditional-ConfigMap-render
-    reason as the two lock variables. Leave null for n8n's own default (30000ms).
+    pods), not to config.extraEnv, for the same silent last-entry-wins
+    override reason as the two lock variables. Leave null for n8n's own default (30000ms).
 
     n8n itself documents 0 as "disable stall checking", but THAT IS NOT REACHABLE
     THROUGH THIS CHART and this variable cannot offer it. The chart's
@@ -1433,7 +1433,28 @@ variable "n8n_prestop_sleep" {
 }
 
 variable "n8n_graceful_shutdown_timeout" {
-  description = "Seconds n8n gives in-flight executions to finish once it receives SIGTERM, before it exits on its own rather than waiting for Kubernetes to force-kill it. Maps to the chart's redis.worker.timeout value (N8N_GRACEFUL_SHUTDOWN_TIMEOUT on every n8n container); must go through this chart value rather than config.extraEnv or queueMode.workerExtraEnv: chart 1.13.0's ConfigMap entry for this key (templates/configmap.yaml, gated only on queueMode.enabled, which this module always sets) renders unconditionally, and extraEnv is appended after it in every deployment template, so a caller duplicate does not fail the deployment, Kubernetes silently keeps the last of the two same-named entries. That would replace the chart's real value with whatever the caller wrote, with no plan- or apply-time warning, which would make this variable's own validation meaningless. Unlike the QUEUE_WORKER_* settings, this key has no per-setting `{{- if }}` guard in the chart, so leaving this null does not disable anything: Helm just keeps rendering the chart's own values.yaml default of 30s, identical to today's output. n8n_termination_grace_period is a hard ceiling on top of this: Kubernetes force-kills the pod terminationGracePeriodSeconds after SIGTERM no matter what n8n or the preStop hook are still doing inside it, so this value plus n8n_prestop_sleep must leave a strict margin under that ceiling, or n8n's own shutdown window gets cut short by SIGKILL before it can finish. See the validation below."
+  description = <<-EOT
+    Seconds n8n gives in-flight executions to finish after it receives
+    SIGTERM, before it exits on its own. Maps to the chart's
+    redis.worker.timeout value (N8N_GRACEFUL_SHUTDOWN_TIMEOUT on every n8n
+    container). Leave null to keep the chart's own default of 30 seconds; the
+    module then sends no override.
+
+    Set it here, not through n8n_extra_env, n8n_worker_extra_env or a worker
+    pool's extra_env, which all reject this name at plan time. The chart
+    always renders its own entry for this key, and a caller duplicate would
+    silently replace it.
+
+    n8n_termination_grace_period is a hard ceiling. Kubernetes starts that
+    countdown when termination begins: the preStop hook
+    (n8n_prestop_sleep) runs inside it, and SIGTERM follows the hook. So this
+    value plus n8n_prestop_sleep must stay strictly below
+    n8n_termination_grace_period, or SIGKILL cuts n8n's shutdown short. An
+    explicit value that breaks this rule fails validation. When this input is
+    null, the same rule applied to the chart's default only raises a warning
+    (the graceful_shutdown_fits_grace_period check), so existing
+    configurations keep planning.
+  EOT
   type        = number
   default     = null
 
@@ -1447,9 +1468,14 @@ variable "n8n_graceful_shutdown_timeout" {
     error_message = "n8n_graceful_shutdown_timeout must be a whole number of seconds, so this value is rejected at plan time. The chart's values.schema.json declares redis.worker.timeout as {\"type\": \"integer\"}, so a fractional value that slipped past this check would only fail later, during Helm schema validation at apply time."
   }
 
+  # Only an explicit value is a hard error. The same rule for the chart's
+  # default (null here) is a warning in n8n.tf's
+  # graceful_shutdown_fits_grace_period check, because callers who never set
+  # this input could already plan with a preStop sleep that leaves less than
+  # 30 seconds, and a new plan-time error would break them on upgrade.
   validation {
-    condition     = coalesce(var.n8n_graceful_shutdown_timeout, 30) + var.n8n_prestop_sleep < var.n8n_termination_grace_period
-    error_message = "n8n_graceful_shutdown_timeout (or the chart's 30s default, if this is left null) plus n8n_prestop_sleep must leave a strict margin under n8n_termination_grace_period, not just meet it. Kubernetes starts the terminationGracePeriodSeconds countdown when it invokes preStop, not after preStop finishes, so a sum equal to the ceiling leaves n8n's own shutdown handler no margin between preStop finishing and SIGKILL."
+    condition     = var.n8n_graceful_shutdown_timeout == null ? true : var.n8n_graceful_shutdown_timeout + var.n8n_prestop_sleep < var.n8n_termination_grace_period
+    error_message = "n8n_graceful_shutdown_timeout plus n8n_prestop_sleep must stay strictly below n8n_termination_grace_period. Kubernetes starts the terminationGracePeriodSeconds countdown when it invokes preStop, not after preStop finishes, so a sum equal to or above the ceiling leaves n8n's own shutdown no margin before SIGKILL. Lower this value or n8n_prestop_sleep, or raise n8n_termination_grace_period."
   }
 }
 

@@ -32,18 +32,18 @@ this project adheres to the stability contract in
 - **`n8n_graceful_shutdown_timeout`** (chart `redis.worker.timeout`, renders
   `N8N_GRACEFUL_SHUTDOWN_TIMEOUT`). Seconds n8n waits for in-flight
   executions to finish on SIGTERM before exiting on its own. Must go through
-  this input rather than `n8n_extra_env` / `n8n_worker_extra_env`: chart
-  `1.13.0` renders this ConfigMap key unconditionally on every n8n container,
-  and `extraEnv` is appended after it, so a caller duplicate doesn't fail,
-  Kubernetes silently keeps the extraEnv copy instead of the chart's real
-  value, with no warning (see **Fixed** below). Validated against
-  `n8n_termination_grace_period` and `n8n_prestop_sleep`: this value (or the
-  chart's 30s default, if left null) plus the prestop sleep must leave a
-  strict margin under the termination grace period, or Kubernetes SIGKILLs
-  the pod before n8n finishes shutting down. Left `null`, the module sends no
-  override and the chart keeps its own 30s default, so existing releases see
-  no Helm values change from this addition. Closes the follow-up left open
-  in #147.
+  this input rather than any `extra_env` input: chart `1.13.0` renders this
+  ConfigMap key unconditionally on every n8n container, and `extraEnv` is
+  appended after it, so a caller duplicate doesn't fail, Kubernetes silently
+  keeps the extraEnv copy instead of the chart's real value, with no warning
+  (see **Fixed** below). An explicit value plus `n8n_prestop_sleep` must stay
+  strictly below `n8n_termination_grace_period`, or validation fails, because
+  Kubernetes would SIGKILL the pod before n8n finishes shutting down. Left
+  `null`, the module sends no override, the chart keeps its own 30s default,
+  and existing releases see no Helm values change. In that case the same rule
+  applied to the 30s default is only a warning, the new
+  `graceful_shutdown_fits_grace_period` check, so configurations that planned
+  before still plan. See #147.
 
 ### Changed
 
@@ -120,7 +120,17 @@ this project adheres to the stability contract in
   caller's raw value would replace the chart's real one with no plan- or
   apply-time warning. The same guard already existed for
   `n8n_queue_worker_lock_duration` and its siblings; this closes the gap for
-  the graceful shutdown timeout. See #147.
+  the graceful shutdown timeout. `n8n_worker_pools[*].extra_env` rejects the
+  name too, through the same reserved list. **Breaking for callers who set
+  this name through any of these inputs:** their `terraform plan` now fails.
+  Remove the `extra_env` entry and set `n8n_graceful_shutdown_timeout` (a
+  number of seconds) instead. Two differences to check first: the input
+  applies to every n8n container, so a value that was set only on workers
+  (`n8n_worker_extra_env`) or only on one pool now also reaches mains and
+  webhook processors, and different values per pool can no longer be kept;
+  and the value plus `n8n_prestop_sleep` must stay below
+  `n8n_termination_grace_period`, which the old `extra_env` route never
+  checked. See #147.
 
 ## [0.5.0] - 2026-09-21
 

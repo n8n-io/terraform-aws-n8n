@@ -757,6 +757,14 @@ locals {
     } : {},
   )
 
+  # The chart's values.yaml default for redis.worker.timeout, in seconds, as of
+  # the pinned n8n_chart_version (1.13.0). Used only by n8n.tf's
+  # graceful_shutdown_fits_grace_period check, for callers who leave
+  # n8n_graceful_shutdown_timeout null. tests/scripts/check-main-chart.sh
+  # renders the real chart and fails if its default drifts from 30, so update
+  # this value together with that assertion on a chart bump.
+  n8n_chart_default_graceful_shutdown_timeout = 30
+
   # var.n8n_dns_config with unset keys removed.
   #
   # Necessary because the variable's optional() attributes materialise as null
