@@ -78,10 +78,10 @@ application version at all.
 
 **The first upgrade to `1.13.0` can interrupt running worker pods.**
 Chart `1.13.0` stops setting `spec.replicas` on the worker Deployment once
-KEDA owns the count (n8n-io/n8n-hosting#201). This module meets that
-condition whenever `n8n_worker_keda_min_replicas` is 1 or more, because it
-always configures `keda.enabled = true` with non-empty Redis queue-depth
-triggers.
+KEDA owns the count (n8n-io/n8n-hosting#201). This module always meets
+that condition: it configures `keda.enabled = true` with non-empty Redis
+queue-depth triggers, and it floors `queueMode.workerReplicaCount` at 1,
+so the chart always renders the worker `ScaledObject`.
 
 Helm compares the previous release's manifest, which had `replicas`, with
 the new one, which does not, and removes the field. Kubernetes then
@@ -135,13 +135,17 @@ which is what Helm compares against. For a deployment that runs more than
    (`kubectl get deploy n8n-worker -n <namespace>`) and check for
    interrupted executions in the n8n execution list.
 
-A floor of 0 was a separate case, unchanged by this release: every
-supported chart version rendered no worker Deployment and no worker
-`ScaledObject` when the worker replica count was 0. A later fix
-(`n8n-io/terraform-aws-n8n#146`) changed this: `queueMode.workerReplicaCount`
-is now floored at 1 independently of `n8n_worker_keda_min_replicas`, so both
-templates always render, and `n8n_worker_keda_min_replicas = 0` only sets
-KEDA's own floor, which it scales to zero natively.
+A floor of 0 behaves differently. The chart renders the worker Deployment
+and the worker `ScaledObject` only when `queueMode.workerReplicaCount` is
+above 0. This module sets `queueMode.workerReplicaCount` to
+`max(1, n8n_worker_keda_min_replicas)`, so both always render, and
+`n8n_worker_keda_min_replicas = 0` sets only KEDA's own floor. KEDA then
+scales the worker Deployment to zero while the queue is empty. Earlier
+module versions passed the floor through unchanged, so a floor of 0
+rendered no default workers at all (`n8n-io/terraform-aws-n8n#146`). If
+you were running at a floor of 0, the first apply with this release
+creates the worker Deployment. It starts at 1 replica and processes any
+jobs already waiting on the default queue before KEDA scales it to zero.
 
 **Webhook processors are unaffected.** This module's webhook-processor
 autoscaling is a Terraform-managed `kubernetes_horizontal_pod_autoscaler_v2`
@@ -165,9 +169,8 @@ scaling on their own queues. Pause needs chart `1.13.0` or newer, and a
 plan-time warning fires otherwise. The key shipped in chart `1.12.0`, but
 that release still sets the worker's `spec.replicas` on every Helm upgrade,
 so any later apply while paused could write the floor back over the held
-count. While both
-inputs are unset, the module sends no pause keys to the chart, so the Helm
-values do not change. The chart's matching `keda.webhookProcessor.pause`
+count. While both inputs are unset, the module sends no pause keys to the
+chart, so the Helm values do not change. The chart's matching `keda.webhookProcessor.pause`
 is not exposed, for the same reason `keda.webhookProcessor` itself is not:
 no webhook `ScaledObject` exists here for the annotation to land on.
 

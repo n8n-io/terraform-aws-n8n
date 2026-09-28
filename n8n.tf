@@ -294,23 +294,13 @@ resource "helm_release" "n8n" {
     #
     # Chart >= 1.13.0 (n8n-io/n8n-hosting#201) fixed this for
     # deployment-worker.yaml: it now omits spec.replicas entirely once an
-    # autoscaler owns the count, which this module's worker deployment
-    # satisfies whenever n8n_worker_keda_min_replicas >= 1 (keda.enabled =
-    # true with non-empty keda.worker.triggers below), so workerReplicaCount
-    # only still takes effect as the literal spec.replicas value on an older,
-    # preview, or unverified chart (see n8n_chart_has_worker_only_runners in
-    # scaling.tf for the same version gate applied to task-runner
-    # placement). A floor of 0 on n8n_worker_keda_min_replicas is different on
-    # every chart version: the chart gates both deployment-worker.yaml and
-    # scaledobject-worker.yaml on workerReplicaCount > 0, so a literal pass-
-    # through at a floor of 0 rendered no worker Deployment and no
-    # ScaledObject at all (n8n-io/terraform-aws-n8n#146): jobs on the
-    # default queue then waited with no consumer and no autoscaler to bring
-    # one up. workerReplicaCount is therefore floored at 1 here so the chart
-    # always renders both templates; keda.worker.minReplicaCount just below
-    # still gets the caller's real floor, including 0, so KEDA itself can
-    # still scale the rendered Deployment down to zero when its own floor
-    # is 0.
+    # autoscaler owns the count, which this module's worker deployment always
+    # satisfies (keda.enabled = true with non-empty keda.worker.triggers
+    # below, and workerReplicaCount is never 0; see below), so
+    # workerReplicaCount only still takes effect as the literal spec.replicas
+    # value on an older, preview, or unverified chart (see
+    # n8n_chart_has_worker_only_runners in scaling.tf for the same version
+    # gate applied to task-runner placement).
     # deployment-webhook-processor.yaml carries the identical
     # chart-side guard from the same release, but this module never
     # satisfies it: keda.webhookProcessor.enabled is never set, and
@@ -344,6 +334,16 @@ resource "helm_release" "n8n" {
     # default. Set explicitly anyway rather than left to that coincidence: a
     # future chart release changing its default would otherwise silently change
     # the single-main replica count with no line in this module to fail on.
+    #
+    # workerReplicaCount is local.n8n_worker_replica_count (scaling.tf), not
+    # n8n_worker_keda_min_replicas itself. On every chart version, both
+    # deployment-worker.yaml and scaledobject-worker.yaml are gated on
+    # workerReplicaCount > 0, so passing a floor of 0 straight through
+    # rendered no worker Deployment and no ScaledObject at all, and jobs on
+    # the default queue waited with no consumer and no autoscaler to bring
+    # one up (#146). The local floors it at 1 so both templates always
+    # render. keda.worker.minReplicaCount below still gets the caller's real
+    # floor, including 0, so KEDA itself scales the Deployment to zero.
 
     multiMain = {
       enabled  = local.n8n_multi_main_enabled
@@ -363,7 +363,7 @@ resource "helm_release" "n8n" {
     queueMode = merge(
       {
         enabled            = true
-        workerReplicaCount = max(1, var.n8n_worker_keda_min_replicas)
+        workerReplicaCount = local.n8n_worker_replica_count
         workerConcurrency  = var.n8n_worker_concurrency
       },
 

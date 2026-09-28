@@ -138,7 +138,20 @@ this project adheres to the stability contract in
   including `0`. Previously a floor of `0` removed the default workers
   entirely, since the chart gates both templates on `workerReplicaCount >
   0`, leaving jobs on the default queue with no consumer and no autoscaler
-  to bring one up (#146).
+  to bring one up (#146). **Behavior change for callers already at a floor
+  of `0`:** the next apply creates a worker Deployment and a worker
+  `ScaledObject` where there were none. On chart `1.13.0` or newer the new
+  Deployment has no `spec.replicas`, so Kubernetes starts it at 1 replica.
+  That worker processes any backlog that built up on the default `jobs`
+  queue while it had no consumer, and KEDA then scales it to zero once the
+  queue stays empty for its cooldown period. On a chart older than `1.13.0`,
+  the chart still renders `spec.replicas: 1`, so every apply that updates
+  the Helm release can reset a Deployment KEDA scaled to zero back to 1
+  replica until KEDA reconciles it again. A floor of `0` can no longer be used to run without
+  default workers, for example beside `n8n_worker_pools`: the default
+  Deployment now always exists, and KEDA starts it whenever jobs arrive on
+  the default queue. Check that queue before you apply if old jobs in it
+  should not run.
 
 ## [0.5.0] - 2026-09-21
 

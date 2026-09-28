@@ -157,6 +157,15 @@ locals {
     )
   )
 
+  # queueMode.workerReplicaCount in n8n.tf. The chart gates both
+  # deployment-worker.yaml and scaledobject-worker.yaml on
+  # workerReplicaCount > 0, so passing n8n_worker_keda_min_replicas straight
+  # through rendered no default workers and no autoscaler at a floor of 0
+  # (#146). Floored at 1 so both templates always render;
+  # keda.worker.minReplicaCount keeps the raw input, so KEDA itself can still
+  # scale the Deployment to zero.
+  n8n_worker_replica_count = max(1, var.n8n_worker_keda_min_replicas)
+
   # Merged into keda.worker in n8n.tf. Empty while pause is off, so a caller
   # who never uses the feature sees no change to the Helm values string.
   # pausedReplicaCount is omitted when null, since the chart's own default is

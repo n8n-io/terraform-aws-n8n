@@ -10643,14 +10643,43 @@ run "keda_min_replicas_accepts_zero" {
   }
 }
 
-# The combination this fix enables: a floor of 0 no longer starves pause of a
-# ScaledObject to land on. Must plan cleanly (no expect_failures), and pause
-# must still take effect. The chart-side floor itself (workerReplicaCount
-# actually resolving to 1 in the rendered Helm values) is not assertable
-# here: helm_release.n8n.values is unknown under plan mocks, so that
-# coverage lives in tests/scripts/check-main-chart.sh instead. A regression
-# back to gating pause on n8n_worker_keda_min_replicas > 0 would fail this
-# run's plan outright.
+# The chart gates the worker Deployment and its ScaledObject on
+# queueMode.workerReplicaCount > 0 (#146), so n8n.tf feeds it
+# local.n8n_worker_replica_count, floored at 1, rather than the raw KEDA
+# floor. helm_release.n8n.values is unknown under plan mocks, so these two
+# runs assert the local that n8n.tf reads; tests/scripts/check-main-chart.sh
+# reads the same local and renders the real chart with it.
+run "worker_replica_count_floored_at_one_when_keda_floor_is_zero" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_min_replicas = 0
+  }
+
+  assert {
+    condition     = local.n8n_worker_replica_count == 1
+    error_message = "queueMode.workerReplicaCount must be floored at 1 at a KEDA floor of 0, or the chart renders no worker Deployment and no ScaledObject (#146)."
+  }
+}
+
+run "worker_replica_count_tracks_keda_floor_above_one" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_min_replicas = 5
+    n8n_worker_keda_max_replicas = 10
+  }
+
+  assert {
+    condition     = local.n8n_worker_replica_count == 5
+    error_message = "queueMode.workerReplicaCount must equal n8n_worker_keda_min_replicas when it is 1 or more, so Helm's spec.replicas write on a pre-1.13.0 chart stays a no-op at the floor."
+  }
+}
+
+# A floor of 0 no longer starves pause of a ScaledObject to land on. Must
+# plan cleanly (no expect_failures), and pause must still take effect. A
+# regression back to gating pause on n8n_worker_keda_min_replicas > 0 would
+# fail this run's plan outright.
 run "worker_keda_pause_allowed_at_a_worker_floor_of_zero" {
   command = plan
 

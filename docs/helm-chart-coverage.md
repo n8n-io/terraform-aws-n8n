@@ -15,7 +15,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `image.pullPolicy` | Not exposed; chart default used |
 | `nameOverride`, `fullnameOverride` | Not exposed; chart default (both `""`, deriving names from the release name) used |
 | `commonLabels`, `commonAnnotations`, `podLabels` | Not exposed |
-| `queueMode.enabled/workerReplicaCount/workerConcurrency` | Hardcoded `true` / `n8n_worker_keda_min_replicas` / `n8n_worker_concurrency` |
+| `queueMode.enabled/workerReplicaCount/workerConcurrency` | Hardcoded `true` / `max(1, n8n_worker_keda_min_replicas)`, so the chart always renders the worker Deployment and `ScaledObject` (KEDA's own floor, `keda.worker.minReplicaCount`, keeps the raw value, including `0`) / `n8n_worker_concurrency` |
 | `queueMode.workerExtraEnv` | `n8n_worker_extra_env` (worker-only env; `n8n_extra_env` is the equivalent for *all* pods) |
 | `queueMode.workerGroups` | `n8n_worker_pools` (**Early Alpha, subject to change without notice**), one group per pool with `poolName` set to the pool's name. Per-pool sizing falls back to the module-wide `n8n_worker_*` values rather than the chart's, and pool names are validated at plan time. **Not in any released chart yet**: the key (n8n-io/n8n-hosting#189) is merged to the chart's `preview/worker-pools` branch, publishable as an official prerelease build via that repo's `Preview chart` GitHub Action; a chart that predates it accepts and ignores the key, so a precondition on the Helm release fails the plan when `n8n_chart_version` is a numbered release, since no numbered release carries the feature yet (prerelease versions are exempt) |
 | `webhookProcessor.enabled/replicaCount/disableProductionWebhooksOnMainProcess` | Hardcoded `true` / `n8n_webhook_hpa_min_replicas` / hardcoded `true` |
@@ -47,7 +47,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `hpa.worker` | Not used; the module scales workers via `keda.worker` instead |
 | `keda.enabled/worker.{minReplicaCount,maxReplicaCount,triggers}` | Hardcoded `true` / `n8n_worker_keda_{min,max}_replicas` / two hardcoded Redis-queue-depth triggers sized by `n8n_worker_keda_jobs_per_replica`. These cover the chart's own unlabelled worker deployment only. Each pool in `n8n_worker_pools` gets its own scaler on its own `jobs-<name>` queue, from the group's `keda` block |
 | `keda.worker.pollingInterval/cooldownPeriod` | Hardcoded `15` / `60` |
-| `keda.worker.pause/pausedReplicaCount` | `n8n_worker_keda_pause` (default `false`) / `n8n_worker_keda_paused_replica_count` (default `null`). Sent to the chart only while pause is on, so an unused feature causes no values diff. Supported from chart `1.13.0`, and only with `n8n_worker_keda_min_replicas` of 1 or more; plan-time warnings cover both |
+| `keda.worker.pause/pausedReplicaCount` | `n8n_worker_keda_pause` (default `false`) / `n8n_worker_keda_paused_replica_count` (default `null`). Sent to the chart only while pause is on, so an unused feature causes no values diff. Supported from chart `1.13.0`; a plan-time warning covers older charts |
 | `keda.webhookProcessor` | Not used; the module creates the webhook HPA externally in `scaling.tf` instead (the chart skips its own webhook HPA when `keda.enabled = true`) |
 | `pdb.enabled/minAvailable` | Hardcoded `true` / `1` for multi-main, `0` for single-main to allow voluntary eviction with downtime |
 | `webhook.url` | Not set via this chart key; the module sets the equivalent `WEBHOOK_URL` environment variable directly (from `n8n_webhook_url`) |

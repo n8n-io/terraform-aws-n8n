@@ -110,8 +110,8 @@ version first if it is not already pinned. See
 
 Upstream stops setting worker (and, where configured, webhook-processor)
 `replicas` once an autoscaler owns the count (n8n-io/n8n-hosting#201). This
-module's worker deployment meets that condition whenever
-`n8n_worker_keda_min_replicas` is 1 or more. The first `helm upgrade` to
+module's worker deployment always meets that condition, because the module
+floors `queueMode.workerReplicaCount` at 1. The first `helm upgrade` to
 `1.13.0` therefore removes `spec.replicas` from the worker Deployment, and
 Kubernetes defaults it to 1. The target is always 1, not the configured
 floor, so for a deployment running more than 1 worker, surplus pods start
