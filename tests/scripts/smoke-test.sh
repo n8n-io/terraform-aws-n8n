@@ -381,6 +381,9 @@ check_deployment() {
   local name="$1"
   local min_replicas="$2"
   local label="$3"
+  # Pods carry the chart's component label without the release prefix
+  # (main, worker, webhook-processor), not the Deployment name.
+  local component="${name#n8n-}"
 
   if ! kubectl get deployment "$name" -n "$NAMESPACE" &>/dev/null; then
     fail "Deployment '$name' not found"
@@ -424,8 +427,28 @@ check_deployment() {
   fi
 
   if [[ "$min_replicas" -eq 0 && "$ready" -eq 0 && "$desired" -gt 0 ]]; then
-    warn "$label: 0/$desired pods ready after 180s, still starting from zero"
-    info "Check: kubectl get pods -n $NAMESPACE -l app.kubernetes.io/component=worker, and pending pods or node scale-up"
+    # Still 0 ready after the wait. Only one cause is a slow start rather
+    # than breakage: every pod Pending and unschedulable, i.e. waiting for
+    # the Cluster Autoscaler to add a node. Anything else (CrashLoopBackOff,
+    # an image pull error, no pods created, Running but never Ready) means
+    # the worker will not process jobs, so it fails.
+    local pod_states
+    if ! pod_states=$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/component=$component" \
+        -o jsonpath='{range .items[*]}{.metadata.name}{" phase="}{.status.phase}{" scheduled="}{.status.conditions[?(@.type=="PodScheduled")].reason}{" waiting="}{.status.containerStatuses[*].state.waiting.reason}{"\n"}{end}' \
+        2>/dev/null); then
+      fail "$label: 0/$desired pods ready after 180s, and its pods cannot be read"
+      return
+    fi
+    if [[ -z "$pod_states" ]]; then
+      fail "$label: 0/$desired pods ready after 180s, and no pods were created"
+      info "Check: kubectl describe deployment $name -n $NAMESPACE (quota, admission, or ReplicaSet errors)"
+    elif ! grep -qv 'phase=Pending scheduled=Unschedulable' <<< "$pod_states"; then
+      warn "$label: 0/$desired pods ready after 180s, all Pending and unschedulable (waiting for a node)"
+      info "Check: kubectl get events -n $NAMESPACE --field-selector reason=TriggeredScaleUp"
+    else
+      fail "$label: 0/$desired pods ready after 180s, and the worker is not just waiting for a node"
+      while IFS= read -r line; do info "$line"; done <<< "$pod_states"
+    fi
   elif [[ "$ready" -ge "$min_replicas" && "$ready" -eq "$desired" ]]; then
     pass "$label: $ready/$desired pods ready"
   elif [[ "$ready" -gt 0 ]]; then
@@ -435,7 +458,7 @@ check_deployment() {
   fi
 
   local bad_pods
-  bad_pods=$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/component=$name" \
+  bad_pods=$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/component=$component" \
     --no-headers 2>/dev/null \
     | awk '{print $1, $3}' \
     | grep -v "Running\|Completed" || true)

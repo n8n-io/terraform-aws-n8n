@@ -156,7 +156,8 @@ this project adheres to the stability contract in
   fails when the scaler is not Ready, warns when it is paused, skips the
   in-pod Redis probe in that state, skips the test execution when the scaler
   is paused or not Ready at zero, waits up to 180s for a worker that is
-  starting from zero during the pod health check, and polls the test
+  starting from zero during the pod health check (then warns only when every
+  worker pod is waiting for a node, and fails otherwise), and polls the test
   execution 90 times instead of 30, 2s apart (about 180s instead of 60s), so
   KEDA can start a worker. A Deployment whose replica counts cannot be read
   now fails instead of reading as `0`. A missing
@@ -164,6 +165,10 @@ this project adheres to the stability contract in
   script to its single-instance checks: this module always runs queue mode
   and always renders that Deployment, so its absence means a broken
   deployment. The single-instance checks run only with `DEPLOY_MODE=single`.
+  The unhealthy-pod listing in the pod health check now selects pods by
+  their `app.kubernetes.io/component` label (`main`, `worker`,
+  `webhook-processor`); it used the Deployment name before and never
+  matched any pod.
 
 ## [0.5.0] - 2026-09-21
 
