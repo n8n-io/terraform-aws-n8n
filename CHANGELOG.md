@@ -151,7 +151,17 @@ this project adheres to the stability contract in
   default workers, for example beside `n8n_worker_pools`: the default
   Deployment now always exists, and KEDA starts it whenever jobs arrive on
   the default queue. Check that queue before you apply if old jobs in it
-  should not run.
+  should not run. `tests/scripts/smoke-test.sh` now accepts workers scaled
+  to zero when the worker `ScaledObject` has a floor of `0` and is Ready. It
+  fails when the scaler is not Ready, warns when it is paused, skips the
+  in-pod Redis probe in that state, and polls the test execution 90 times
+  instead of 30, 2s apart (about 180s instead of 60s), so KEDA can start a
+  worker. A Deployment whose replica
+  counts cannot be read now fails instead of reading as `0`. A missing
+  `n8n-worker` Deployment now fails too, instead of silently switching the
+  script to its single-instance checks: this module always runs queue mode
+  and always renders that Deployment, so its absence means a broken
+  deployment. The single-instance checks run only with `DEPLOY_MODE=single`.
 
 ## [0.5.0] - 2026-09-21
 

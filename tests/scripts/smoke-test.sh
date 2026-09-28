@@ -2,8 +2,8 @@
 # smoke-test.sh — post-deployment smoke test for terraform-aws-n8n.
 #
 # This module deploys queue mode (main + worker + webhook-processor pods,
-# PostgreSQL, Redis, KEDA). The script auto-detects the deployment by probing
-# the namespace; for this module that is always the queue-mode path —
+# PostgreSQL, Redis, KEDA). The script always runs the queue-mode path and
+# fails if the worker Deployment is missing —
 # main/worker/webhook-processor pod health, queue mode, Redis connectivity,
 # KEDA ScaledObject, HTTPS, API, and end-to-end execution. Within it, the
 # main topology is detected from N8N_MULTI_MAIN_SETUP_ENABLED on the main
@@ -24,8 +24,9 @@
 #   cp tests/scripts/.env.example tests/scripts/.env
 #   # edit .env, then run the script.
 #
-#   # Force mode (skip auto-detection):
-#   DEPLOY_MODE=multi ./tests/scripts/smoke-test.sh
+#   # Force the legacy single-instance checks (not a topology this module
+#   # deploys; kept only until that branch is removed):
+#   DEPLOY_MODE=single ./tests/scripts/smoke-test.sh
 #
 # Priority: .env explicit values > Terraform outputs > built-in defaults.
 
@@ -82,7 +83,7 @@ fi
 NAMESPACE="${NAMESPACE:-${N8N_NAMESPACE:-n8n}}"
 N8N_URL="${N8N_URL:-}"
 N8N_API_KEY="${N8N_API_KEY:-}"
-DEPLOY_MODE="${DEPLOY_MODE:-}"        # set to 'single' or 'multi' to skip auto-detect
+DEPLOY_MODE="${DEPLOY_MODE:-}"        # defaults to 'multi' (this module is always queue mode); 'single' only by forcing it
 MAIN_TOPOLOGY="multi-main"            # 'single-main' when N8N_MULTI_MAIN_SETUP_ENABLED is unset (detected below)
 
 # Multi-mode optional load test settings
@@ -165,16 +166,26 @@ fi
 
 header "Deployment Mode"
 
+# This module always runs queue mode (n8n.tf hardcodes queueMode.enabled =
+# true) and always renders the worker Deployment, even at
+# n8n_worker_keda_min_replicas = 0 (#146). A missing n8n-worker is therefore
+# a broken deployment, not a different kind of install: it fails here and the
+# queue-mode checks still run, rather than silently switching to the
+# single-instance branch below. That branch is only reachable by forcing
+# DEPLOY_MODE=single.
 if [[ -n "$DEPLOY_MODE" ]]; then
   info "Mode forced via DEPLOY_MODE=$DEPLOY_MODE"
-elif kubectl get deployment n8n-worker -n "$NAMESPACE" &>/dev/null 2>&1; then
-  DEPLOY_MODE="multi"
 else
-  DEPLOY_MODE="single"
+  DEPLOY_MODE="multi"
+  if kubectl get deployment n8n-worker -n "$NAMESPACE" &>/dev/null; then
+    pass "Queue-mode deployment detected (n8n-worker present)"
+  else
+    fail "Deployment 'n8n-worker' not found: this module always renders it, so the deployment is broken"
+    info "Check: helm status n8n -n $NAMESPACE, and kubectl get deploy -n $NAMESPACE"
+  fi
 fi
 
 if [[ "$DEPLOY_MODE" == "multi" ]]; then
-  pass "Queue-mode deployment detected (n8n-worker present)"
   # The module runs one main pod without leader election when
   # n8n_main_hpa_min_replicas = 1 (Business-tier path). The topology signal
   # is the switch itself, N8N_MULTI_MAIN_SETUP_ENABLED on the main Deployment
@@ -376,14 +387,19 @@ check_deployment() {
     return
   fi
 
-  local ready
-  ready=$(kubectl get deployment "$name" -n "$NAMESPACE" \
-    -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+  # A failed read must not become 0: with a worker floor of 0, "0/0 ready"
+  # is a pass, so an unreadable Deployment would otherwise pass silently.
+  # An absent readyReplicas on a successful read does mean 0.
+  local ready desired
+  if ! ready=$(kubectl get deployment "$name" -n "$NAMESPACE" \
+      -o jsonpath='{.status.readyReplicas}' 2>/dev/null) \
+    || ! desired=$(kubectl get deployment "$name" -n "$NAMESPACE" \
+      -o jsonpath='{.spec.replicas}' 2>/dev/null) \
+    || [[ -z "$desired" ]]; then
+    fail "$label: cannot read replica counts of Deployment '$name'"
+    return
+  fi
   ready="${ready:-0}"
-
-  local desired
-  desired=$(kubectl get deployment "$name" -n "$NAMESPACE" \
-    -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "0")
 
   if [[ "$ready" -ge "$min_replicas" && "$ready" -eq "$desired" ]]; then
     pass "$label: $ready/$desired pods ready"
@@ -403,6 +419,31 @@ check_deployment() {
     while IFS= read -r line; do info "$line"; done <<< "$bad_pods"
   fi
 }
+
+# n8n_worker_keda_min_replicas = 0 is a supported floor (#146): the module
+# still renders the worker Deployment and its ScaledObject, and KEDA scales
+# the Deployment to zero while the queue is empty. Read the floor from the
+# ScaledObject so an idle deployment at 0 workers is not reported as broken.
+# At 0 workers, a healthy state needs a Ready, unpaused ScaledObject: that
+# is what brings a worker back when jobs arrive, so it is checked below.
+worker_keda_min=$(kubectl get scaledobject n8n-worker -n "$NAMESPACE" \
+  -o jsonpath='{.spec.minReplicaCount}' 2>/dev/null || true)
+[[ "$worker_keda_min" == "0" ]] && WORKER_MIN=0
+
+# Read live on every call, not once: KEDA can scale 1 -> 0 while the script
+# runs, and a stale answer would fail the Redis probe or shorten the
+# execution wait. A failed read answers "no", which keeps the stricter path.
+worker_scaled_to_zero() {
+  [[ "$WORKER_MIN" == 0 ]] || return 1
+  local replicas
+  replicas=$(kubectl get deployment n8n-worker -n "$NAMESPACE" \
+    -o jsonpath='{.spec.replicas}' 2>/dev/null) || return 1
+  [[ "$replicas" == 0 ]]
+}
+
+if worker_scaled_to_zero; then
+  info "Worker KEDA floor is 0 and the worker Deployment is scaled to zero"
+fi
 
 check_deployment "n8n-main"              "$MAIN_MIN"    "Main pods"
 check_deployment "n8n-worker"            "$WORKER_MIN"  "Worker pods"
@@ -572,7 +613,18 @@ if kubectl get scaledobject n8n-worker -n "$NAMESPACE" &>/dev/null 2>&1; then
     -o jsonpath='{.spec.maxReplicaCount}' 2>/dev/null || echo "?")
   ready=$(kubectl get scaledobject n8n-worker -n "$NAMESPACE" \
     -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "?")
-  pass "Worker KEDA ScaledObject: min=$min max=$max ready=$ready (queue-depth autoscaling)"
+  paused=$(kubectl get scaledobject n8n-worker -n "$NAMESPACE" \
+    -o jsonpath='{.metadata.annotations.autoscaling\.keda\.sh/paused}' 2>/dev/null || true)
+  if worker_scaled_to_zero && [[ "$ready" != "True" ]]; then
+    fail "Worker KEDA ScaledObject: min=$min max=$max ready=$ready. Workers are at zero and the scaler is not Ready, so nothing will start a worker when jobs arrive"
+    info "Diagnose: kubectl describe scaledobject n8n-worker -n $NAMESPACE"
+  elif worker_scaled_to_zero && [[ "$paused" == "true" ]]; then
+    # A deliberate pause (n8n_worker_keda_pause) is an operator choice, not
+    # a broken scaler, so warn rather than fail. Jobs wait in Redis.
+    warn "Worker KEDA ScaledObject is paused with workers at zero: jobs wait in Redis until n8n_worker_keda_pause is cleared"
+  else
+    pass "Worker KEDA ScaledObject: min=$min max=$max ready=$ready (queue-depth autoscaling)"
+  fi
 elif kubectl get hpa n8n-worker -n "$NAMESPACE" &>/dev/null 2>&1; then
   check_hpa "n8n-worker" "Worker"
 else
@@ -588,7 +640,11 @@ worker_pod=$(kubectl get pods -n "$NAMESPACE" \
   --field-selector=status.phase=Running \
   -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 
-if [[ -z "$worker_pod" ]]; then
+if [[ -z "$worker_pod" ]] && worker_scaled_to_zero; then
+  skip "Redis connectivity from a worker pod (workers are scaled to zero)"
+  info "The Ready ScaledObject above already reads queue depth from Redis."
+  info "The workflow execution test below starts a worker from zero."
+elif [[ -z "$worker_pod" ]]; then
   fail "No running worker pod found to probe Redis connectivity"
 else
   info "Using worker pod: $worker_pod"
@@ -945,6 +1001,11 @@ else
       if [[ "$DEPLOY_MODE" == "multi" ]]; then
         info "Waiting 5s for webhook-processor to register the new webhook..."
         sleep 5
+        # Captured before the webhook fires: once the job is queued, KEDA may
+        # already have moved the Deployment 0 -> 1 by the time the poll
+        # budget is chosen, and that worker still has a cold start ahead.
+        worker_was_zero=false
+        worker_scaled_to_zero && worker_was_zero=true
         info "Triggering execution via webhook — will be queued to a worker"
 
         trigger_status=$(curl -sk -o /dev/null -w "%{http_code}" \
@@ -986,7 +1047,12 @@ else
         # ~30-40s on a brand-new cluster even though the job itself is
         # trivial, so the old 15 x 2s = 30s budget produced a false warning
         # on an execution that in fact went on to succeed seconds later.
-        for i in $(seq 1 30); do
+        # Workers scaled to zero add KEDA's polling interval, pod scheduling
+        # (possibly a new node) and pod startup on top, so allow 180s there.
+        exec_polls=30
+        [[ "${worker_was_zero:-false}" == true ]] && exec_polls=90
+        [[ "$exec_polls" -gt 30 ]] && info "Workers are scaled to zero: waiting up to $((exec_polls * 2))s for KEDA to start one"
+        for i in $(seq 1 "$exec_polls"); do
           sleep 2
           exec_state=$(curl -sk \
             --max-time 10 \
@@ -1004,8 +1070,8 @@ else
               info "Check logs: kubectl logs $N8N_POD -n $NAMESPACE -c n8n --tail=50"
             fi
             break
-          elif [[ "$i" -eq 30 ]]; then
-            warn "Execution still in state '$exec_state' after 60s"
+          elif [[ "$i" -eq "$exec_polls" ]]; then
+            warn "Execution still in state '$exec_state' after $((exec_polls * 2))s"
             if [[ "$DEPLOY_MODE" == "multi" ]]; then
               info "May be slow to process — check: kubectl logs -n $NAMESPACE -l app.kubernetes.io/component=worker --tail=50"
             fi

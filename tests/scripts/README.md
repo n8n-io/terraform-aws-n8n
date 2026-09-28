@@ -17,15 +17,15 @@ Post-deployment smoke test for `terraform-aws-n8n`. Verifies the multi-main depl
 |---|---|
 | kubectl cluster connectivity | kubectl can reach the EKS cluster |
 | Namespace exists | The configured namespace is present |
-| Main / worker / webhook-processor pod health | Each deployment is at the expected ready replica count |
+| Main / worker / webhook-processor pod health | Each deployment exists and is at the expected ready replica count. A missing worker Deployment fails. Workers scaled to zero pass when the worker `ScaledObject` floor is `0` |
 | Task runner sidecar (workers) | Runner sidecar is present on worker pods and connected to the broker |
 | Multi-main leader election | `N8N_MULTI_MAIN_SETUP_ENABLED=true` and leadership activity in main logs |
-| Autoscalers | KEDA `ScaledObject` (workers, queue-depth) and HPAs (main, webhook-processor) |
-| Redis connectivity | Worker pods see `QUEUE_BULL_REDIS_HOST` and queue-related log activity |
+| Autoscalers | KEDA `ScaledObject` (workers, queue-depth) and HPAs (main, webhook-processor). With workers at zero, a `ScaledObject` that is not Ready fails and a paused one warns |
+| Redis connectivity | Worker pods see `QUEUE_BULL_REDIS_HOST` and queue-related log activity. Skipped while workers are scaled to zero |
 | HTTPS reachability | `/healthz` returns HTTP 200 over the ALB hostname |
 | HTTP → HTTPS redirect | Port 80 redirects to HTTPS |
 | API connectivity (if API key set) | `/api/v1/workflows` responds with 200 |
-| Workflow execution (if API key set) | Creates a webhook → set workflow, fires it, confirms success, deletes it |
+| Workflow execution (if API key set) | Creates a webhook → set workflow, fires it, confirms success, deletes it. Polls for about 180s instead of 60s (90 polls instead of 30, 2s apart) when workers start from zero; running out of polls warns, it does not fail |
 | Worker scaling (opt-in) | Queues CPU-burning executions and confirms workers scale up |
 
 ### Quick start
@@ -77,7 +77,7 @@ All settings can be overridden via environment variables or a `.env` file.
 | `N8N_URL` | *(from `terraform output`)* | Base URL of the n8n deployment |
 | `NAMESPACE` | *(from `terraform output`)* | Kubernetes namespace |
 | `N8N_API_KEY` | — | API key for API and workflow execution tests |
-| `DEPLOY_MODE` | *(auto-detect)* | Force `multi` (or `single`) and skip detection |
+| `DEPLOY_MODE` | `multi` | This module always runs queue mode. `single` forces legacy single-instance checks for a topology the module does not deploy |
 | `LOAD_TEST` | `false` | Set to `true` to run the worker scaling test |
 | `LOAD_REQUESTS` | `100` | Webhook executions to fire during the load test |
 | `LOAD_CONCURRENCY` | `20` | Concurrent in-flight webhook calls |
