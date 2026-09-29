@@ -489,7 +489,7 @@ elif [[ -n "$main_pod" ]]; then
   leader_log=""
   for mp in $(kubectl get pods -n "$NAMESPACE" -o name 2>/dev/null | grep -E "/n8n-main-"); do
     leader_log+=$(kubectl logs "$mp" -n "$NAMESPACE" -c n8n-main --tail=300 2>/dev/null \
-      | grep -iE "leader is now|became leader" || true)
+      | grep -F "Leader is now this instance" || true)
   done
   if [[ -n "$leader_log" ]]; then
     pass "Leader election activity found in logs"
@@ -561,6 +561,8 @@ if kubectl get scaledobject n8n-worker -n "$NAMESPACE" &>/dev/null 2>&1; then
   fi
 elif kubectl get hpa n8n-worker -n "$NAMESPACE" &>/dev/null 2>&1; then
   check_hpa "n8n-worker" "Worker"
+elif [[ "$worker_unavailable" == true ]]; then
+  skip "Worker autoscaler check (n8n-worker Deployment unavailable, reported above)"
 else
   warn "No autoscaler found for n8n-worker — expected KEDA ScaledObject or CPU-based HPA"
 fi
