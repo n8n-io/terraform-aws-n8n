@@ -176,10 +176,12 @@ custom chart; this release carries no worker-pools change either way.
   available June 2, 2026 (see AWS's own "what's new" announcement and
   `docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html`), so
   this is not a currency gap in the sense the other rows in this doc mean
-  it. It is a gate-compatibility gap instead: the pinned `checkov` 3.3.19
+  it. It is a gate-compatibility gap instead: the pinned `checkov` 3.3.20
   still hardcodes `CKV_AWS_339`'s allow-list at `["1.29", …, "1.35"]` with
-  no `1.36` entry (verified in that release's
-  [check source](https://github.com/bridgecrewio/checkov/blob/3.3.19/checkov/terraform/checks/resource/aws/EKSPlatformVersion.py)), so bumping today would
+  no `1.36` entry (re-verified against 3.3.20's
+  [check source](https://github.com/bridgecrewio/checkov/blob/3.3.20/checkov/terraform/checks/resource/aws/EKSPlatformVersion.py)
+  when `CHECKOV_VERSION` moved from 3.3.19 to 3.3.20; the allow-list was
+  unchanged between those two releases), so bumping today would
   add a curated-finding suppression for a version this repo's own security
   gate cannot yet vouch for, while `1.35` remains inside AWS's 14-month
   standard-support window. Revisit once a `checkov` release adds `1.36` to

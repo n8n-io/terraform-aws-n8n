@@ -84,12 +84,17 @@ this project adheres to the stability contract in
   place. The chart's KEDA worker pause settings shipped in this same
   release; the module supports them from chart `1.13.0` (see **Added**
   above).
-- CI Terraform pin `1.16.2` to `1.16.3` and Checkov `3.3.17` to `3.3.19`.
+- CI Terraform pin `1.16.2` to `1.16.4` and Checkov `3.3.17` to `3.3.20`.
   The Terraform requirement remains `>= 1.11`. The new `CKV_AWS_394`
-  findings have scoped exceptions on all eleven examples' dynamic
-  Availability Zone lookups to preserve their region-portable behavior.
-  Zone identities can still change between plans; pin them in long-lived
-  VPC configurations before applying. No checks are suppressed repo-wide.
+  findings (from Checkov `3.3.19`) have scoped exceptions on all eleven
+  examples' dynamic Availability Zone lookups to preserve their
+  region-portable behavior. Zone identities can still change between
+  plans; pin them in long-lived VPC configurations before applying. No
+  checks are suppressed repo-wide. Checkov `3.3.20` adds no new checks.
+  Its only change is a plan-parser fix for `forget`-action resources.
+  `CKV_AWS_339`'s allow-list still ends at `1.35`, which keeps
+  `kubernetes_version` at `1.35` per `docs/versioning.md`. See #139 and
+  #150.
 - AWS provider locks `6.64.0` to `6.65.0` in the root, all eleven examples,
   and `modules/controllers`, with checksums for Linux amd64, Linux arm64,
   and macOS arm64. The `~> 6.0` constraint and all other provider selections
