@@ -166,10 +166,12 @@ header "Queue Mode and Main Topology"
 # n8n_worker_keda_min_replicas = 0 (#146). A missing n8n-worker is therefore
 # a broken deployment, not a different kind of install: it fails here and the
 # rest of the queue-mode checks still run instead of skipping.
+worker_missing_reported=false
 if worker_get_err=$(kubectl get deployment n8n-worker -n "$NAMESPACE" 2>&1 >/dev/null); then
   pass "Queue-mode deployment detected (n8n-worker present)"
 elif [[ "$worker_get_err" == *"NotFound"* ]]; then
   fail "Deployment 'n8n-worker' not found: this module always renders it, so the deployment is broken"
+  worker_missing_reported=true
   info "Check: helm status n8n -n $NAMESPACE, and kubectl get deploy -n $NAMESPACE"
 else
   fail "Cannot read Deployment n8n-worker in namespace $NAMESPACE"
@@ -225,6 +227,10 @@ check_deployment() {
   local component="${name#n8n-}"
 
   if ! kubectl get deployment "$name" -n "$NAMESPACE" &>/dev/null; then
+    # A missing worker was already failed once at the mode guard.
+    if [[ "$name" == n8n-worker && "$worker_missing_reported" == true ]]; then
+      return
+    fi
     fail "Deployment '$name' not found"
     return
   fi
@@ -360,6 +366,9 @@ header "Task Runner Sidecars"
 
 # In queue mode, Code nodes execute on worker pods — the task runner sidecar
 # belongs on workers, not on main or webhook-processor pods.
+if [[ "$worker_missing_reported" == true ]]; then
+  skip "Task runner sidecar checks (n8n-worker Deployment missing, reported above)"
+else
 worker_containers=$(kubectl get deployment n8n-worker -n "$NAMESPACE" \
   -o jsonpath='{.spec.template.spec.containers[*].name}' 2>/dev/null || echo "")
 
@@ -376,8 +385,14 @@ if echo "$worker_containers" | grep -qiE "runner"; then
   if [[ -n "$worker_pod" ]]; then
     runner_logs=$(kubectl logs "$worker_pod" -n "$NAMESPACE" -c "$runner_container" \
       --tail=50 2>/dev/null || true)
-    if echo "$runner_logs" | grep -qiE "connected|ready|broker|listening"; then
-      connected_line=$(echo "$runner_logs" | grep -iE "connected|ready|broker|listening" | tail -1)
+    # "Waiting for task broker to be ready..." means NOT connected yet. The
+    # launcher logs nothing on connect; the first sign is "Waiting for
+    # launcher's task offer to be accepted..." (offer only sent once the
+    # broker is reachable), then "[runner:js]" lines once a task runs. The
+    # end-to-end Code node run below is the authoritative runner check.
+    connected_line=$(echo "$runner_logs" \
+      | grep -iE "task offer|\[runner:(js|py)\]" | tail -1 || true)
+    if [[ -n "$connected_line" ]]; then
       pass "Worker runner sidecar connected to broker"
       info "$connected_line"
     else
@@ -388,6 +403,7 @@ if echo "$worker_containers" | grep -qiE "runner"; then
 else
   warn "Task runner sidecar not found on n8n-worker — task runners may be disabled"
   info "Set n8n_task_runners_enabled = true in terraform.tfvars and re-apply"
+fi
 fi
 
 # ── Main topology ─────────────────────────────────────────────────────────────
@@ -466,13 +482,18 @@ elif [[ -n "$main_pod" ]]; then
     info "Expected when main replica count > 1"
   fi
 
-  leader_log=$(kubectl logs "$main_pod" -n "$NAMESPACE" -c n8n-main --tail=100 2>/dev/null \
-    | grep -iE "leader|leadership" | tail -3 || true)
+  # Real line (n8n 2.x): "[Instance ID main-...] Leader is now this instance".
+  # Only the leader logs it, so scan every main pod, not just one.
+  leader_log=""
+  for mp in $(kubectl get pods -n "$NAMESPACE" -o name 2>/dev/null | grep -E "/n8n-main-"); do
+    leader_log+=$(kubectl logs "$mp" -n "$NAMESPACE" -c n8n-main --tail=300 2>/dev/null \
+      | grep -iE "leader is now|became leader" || true)
+  done
   if [[ -n "$leader_log" ]]; then
     pass "Leader election activity found in logs"
     while IFS= read -r line; do info "$line"; done <<< "$leader_log"
   else
-    info "No leadership log lines yet — normal if recently started"
+    warn "No pod logged 'Leader is now this instance' in the last 300 lines — no leader elected, or logs rotated"
   fi
 else
   warn "No running main pod found to check leader election"
@@ -527,7 +548,14 @@ if kubectl get scaledobject n8n-worker -n "$NAMESPACE" &>/dev/null 2>&1; then
     # a broken scaler, so warn rather than fail. Jobs wait in Redis.
     warn "Worker KEDA ScaledObject is paused with workers at zero: jobs wait in Redis until n8n_worker_keda_pause is cleared"
   else
-    pass "Worker KEDA ScaledObject: min=$min max=$max ready=$ready (queue-depth autoscaling)"
+    if [[ "$scaler_state" == not_ready && "$worker_missing_reported" == true ]]; then
+      info "Worker KEDA ScaledObject not Ready (n8n-worker Deployment missing, reported above)"
+    elif [[ "$scaler_state" == not_ready ]]; then
+      fail "Worker KEDA ScaledObject: min=$min max=$max ready=$ready. KEDA cannot scale workers"
+      info "Diagnose: kubectl describe scaledobject n8n-worker -n $NAMESPACE"
+    else
+      pass "Worker KEDA ScaledObject: min=$min max=$max ready=$ready (queue-depth autoscaling)"
+    fi
   fi
 elif kubectl get hpa n8n-worker -n "$NAMESPACE" &>/dev/null 2>&1; then
   check_hpa "n8n-worker" "Worker"
@@ -558,6 +586,8 @@ if [[ -z "$worker_pod" ]] && worker_scaled_to_zero; then
       info "Unverified: the ScaledObject is not Ready (see the failure above)."
       ;;
   esac
+elif [[ -z "$worker_pod" && "$worker_missing_reported" == true ]]; then
+  skip "Redis connectivity probe (n8n-worker Deployment missing, reported above)"
 elif [[ -z "$worker_pod" ]]; then
   fail "No running worker pod found to probe Redis connectivity"
 else
@@ -782,6 +812,20 @@ if worker_scaled_to_zero; then
   esac
 fi
 
+smoke_js_runner=false
+smoke_py_runner=false
+if [[ "$worker_missing_reported" != true ]] \
+  && kubectl get deployment n8n-worker -n "$NAMESPACE" \
+       -o jsonpath='{.spec.template.spec.containers[*].name}' 2>/dev/null | grep -qi runner; then
+  smoke_js_runner=true
+  # nativePythonRunner lives only in chart values; needs helm.
+  if command -v helm &>/dev/null \
+    && [[ "$(helm get values n8n -n "$NAMESPACE" -a -o json 2>/dev/null \
+         | python3 -c "import sys,json; print(str(json.load(sys.stdin).get('taskRunners',{}).get('nativePythonRunner',False)).lower())" 2>/dev/null)" == true ]]; then
+    smoke_py_runner=true
+  fi
+fi
+
 if [[ -z "$N8N_URL" || -z "$N8N_API_KEY" ]]; then
   skip "Workflow execution test (requires N8N_URL and N8N_API_KEY)"
 elif [[ -n "$exec_blocked_reason" ]]; then
@@ -789,45 +833,43 @@ elif [[ -n "$exec_blocked_reason" ]]; then
 else
   webhook_path="smoke-test-$$"
 
-  # Webhook → Set (lightweight queue-mode test)
-  workflow_payload="{
-    \"name\": \"__smoke-test__\",
-    \"nodes\": [
-      {
-        \"id\": \"a1b2c3d4-0001-0001-0001-000000000001\",
-        \"name\": \"Webhook\",
-        \"type\": \"n8n-nodes-base.webhook\",
-        \"typeVersion\": 1,
-        \"position\": [250, 300],
-        \"webhookId\": \"${webhook_path}\",
-        \"parameters\": {
-          \"httpMethod\": \"POST\",
-          \"path\": \"${webhook_path}\",
-          \"responseMode\": \"onReceived\"
-        }
-      },
-      {
-        \"id\": \"a1b2c3d4-0002-0002-0002-000000000002\",
-        \"name\": \"Set\",
-        \"type\": \"n8n-nodes-base.set\",
-        \"typeVersion\": 3.4,
-        \"position\": [450, 300],
-        \"parameters\": {
-          \"assignments\": {
-            \"assignments\": [
-              { \"id\": \"1\", \"name\": \"smoke_test\", \"value\": \"passed\", \"type\": \"string\" }
-            ]
-          }
-        }
-      }
-    ],
-    \"connections\": {
-      \"Webhook\": {
-        \"main\": [[{ \"node\": \"Set\", \"type\": \"main\", \"index\": 0 }]]
-      }
-    },
-    \"settings\": {}
-  }"
+  # Webhook → Set, plus JS/Python Code nodes when the matching task runner
+  # is enabled on the workers (Code nodes run on workers in queue mode, so
+  # this is the only end-to-end runner check).
+  workflow_payload=$(WEBHOOK_PATH="$webhook_path" RUN_JS="$smoke_js_runner" RUN_PY="$smoke_py_runner" python3 - <<'PYEOF'
+import json, os
+p = os.environ["WEBHOOK_PATH"]
+nodes = [
+    {"id": "a1b2c3d4-0001-0001-0001-000000000001", "name": "Webhook",
+     "type": "n8n-nodes-base.webhook", "typeVersion": 1, "position": [250, 300],
+     "webhookId": p,
+     "parameters": {"httpMethod": "POST", "path": p, "responseMode": "onReceived"}},
+    {"id": "a1b2c3d4-0002-0002-0002-000000000002", "name": "Set",
+     "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [450, 300],
+     "parameters": {"assignments": {"assignments": [
+         {"id": "1", "name": "smoke_test", "value": "passed", "type": "string"}]}}},
+]
+chain = ["Set"]
+if os.environ["RUN_JS"] == "true":
+    nodes.append({"id": "a1b2c3d4-0003-0003-0003-000000000003", "name": "JS Code",
+        "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300],
+        "parameters": {"jsCode": "return [{ json: { js_runner: 'passed' } }];"}})
+    chain.append("JS Code")
+if os.environ["RUN_PY"] == "true":
+    nodes.append({"id": "a1b2c3d4-0004-0004-0004-000000000004", "name": "Python Code",
+        "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [850, 300],
+        "parameters": {"language": "python",
+                       "pythonCode": "return [{'json': {'python_runner': 'passed'}}]"}})
+    chain.append("Python Code")
+conns = {"Webhook": {"main": [[{"node": "Set", "type": "main", "index": 0}]]}}
+for a, b in zip(chain, chain[1:]):
+    conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
+print(json.dumps({"name": "__smoke-test__", "nodes": nodes, "connections": conns, "settings": {}}))
+PYEOF
+)
+  exec_success_msg="Execution completed successfully, queue mode is working"
+  [[ "$smoke_js_runner" == true ]] && exec_success_msg="$exec_success_msg (JS runner exercised)"
+  [[ "$smoke_py_runner" == true ]] && exec_success_msg="$exec_success_msg (Python runner exercised)"
 
   # Create workflow
   create_response=$(curl -sk -w "\n%{http_code}" \
@@ -902,14 +944,23 @@ else
             || echo "unknown")
 
           if [[ "$exec_state" == "success" ]]; then
-            pass "Execution completed successfully — queue mode is working"
+            pass "$exec_success_msg"
             break
           elif [[ "$exec_state" == "error" || "$exec_state" == "crashed" ]]; then
             fail "Execution ended with status: $exec_state"
             break
           elif [[ "$i" -eq "$exec_polls" ]]; then
-            warn "Execution still in state '$exec_state' after $((exec_polls * 2))s"
-            info "May be slow to process — check: kubectl logs -n $NAMESPACE -l app.kubernetes.io/component=worker --tail=50"
+            if [[ "$worker_missing_reported" == true ]]; then
+              info "Execution never left state '$exec_state' (n8n-worker Deployment missing, reported above)"
+            elif [[ "$exec_state" == "new" || "$exec_state" == "pending" || "$exec_state" == "waiting" ]]; then
+              # Never picked up: nothing consumed the queued job. A slow
+              # run would be 'running' by now.
+              fail "Execution never left state '$exec_state' after $((exec_polls * 2))s: no worker picked it up"
+              info "Check: kubectl get pods -n $NAMESPACE -l app.kubernetes.io/component=worker; kubectl logs -n $NAMESPACE -l app.kubernetes.io/component=worker --tail=50"
+            else
+              warn "Execution still in state '$exec_state' after $((exec_polls * 2))s"
+              info "May be slow to process, check: kubectl logs -n $NAMESPACE -l app.kubernetes.io/component=worker --tail=50"
+            fi
           fi
         done
       else

@@ -126,6 +126,16 @@ this project adheres to the stability contract in
 
 ### Fixed
 
+- **`tests/scripts/smoke-test.sh` no longer passes on a broken deployment**
+  (#154). A not-Ready worker `ScaledObject` fails at any floor; an execution
+  that never leaves `new` fails instead of warning; the runner check counts
+  only `task offer` or `[runner:js|py]` lines, not "Waiting for task broker";
+  the leader check needs `Leader is now this instance` in any main pod's
+  logs; a missing `n8n-worker` is reported once instead of three times; the
+  queue workflow now runs a JS Code node when the runner sidecar exists and
+  a Python Code node when `taskRunners.nativePythonRunner` is set (needs
+  `helm`).
+
 - `n8n_extra_env` and `n8n_worker_extra_env` now reject
   `N8N_GRACEFUL_SHUTDOWN_TIMEOUT` at plan time. Chart `1.13.0` renders that
   ConfigMap key unconditionally on every n8n container from
