@@ -107,6 +107,18 @@ this project adheres to the stability contract in
   underlying rename is blocked on upstream
   `hashicorp/terraform-provider-kubernetes#2812`.
 
+### Removed
+
+- The single-instance code path from `tests/scripts/smoke-test.sh` (the
+  SQLite PVC check, task runner sidecar and Python runner checks on
+  `n8n-main`, and the JS + Python execution workflow), the `DEPLOY_MODE`
+  variable, and every mode branch. This module always deploys queue mode
+  (`queueMode.enabled = true`, RDS or customer-managed PostgreSQL), so the
+  branch tested a topology the module never creates. Worse, a broken
+  deployment missing its `n8n-worker` Deployment was silently tested as
+  that other topology instead of failing. The script now has one code
+  path and fails when `n8n-worker` is absent. See #151.
+
 ### Fixed
 
 - `n8n_extra_env` and `n8n_worker_extra_env` now reject
@@ -164,7 +176,7 @@ this project adheres to the stability contract in
   `n8n-worker` Deployment now fails too, instead of silently switching the
   script to its single-instance checks: this module always runs queue mode
   and always renders that Deployment, so its absence means a broken
-  deployment. The single-instance checks run only with `DEPLOY_MODE=single`.
+  deployment.
   The unhealthy-pod listing in the pod health check now selects pods by
   their `app.kubernetes.io/component` label (`main`, `worker`,
   `webhook-processor`); it used the Deployment name before and never

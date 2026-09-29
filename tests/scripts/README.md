@@ -9,7 +9,7 @@ Two manual verification scripts. Neither runs in CI: both need a live cluster, w
 
 ## Smoke test
 
-Post-deployment smoke test for `terraform-aws-n8n`. Verifies the multi-main deployment is healthy end to end — pod health, queue mode, KEDA, HTTPS, API, and a full webhook → worker execution.
+Post-deployment smoke test for `terraform-aws-n8n`. Verifies the queue-mode deployment (multi-main or single-main) is healthy end to end — pod health, queue mode, KEDA, HTTPS, API, and a full webhook → worker execution.
 
 ### What it covers
 
@@ -77,7 +77,6 @@ All settings can be overridden via environment variables or a `.env` file.
 | `N8N_URL` | *(from `terraform output`)* | Base URL of the n8n deployment |
 | `NAMESPACE` | *(from `terraform output`)* | Kubernetes namespace |
 | `N8N_API_KEY` | — | API key for API and workflow execution tests |
-| `DEPLOY_MODE` | `multi` | This module always runs queue mode. `single` forces legacy single-instance checks for a topology the module does not deploy |
 | `LOAD_TEST` | `false` | Set to `true` to run the worker scaling test |
 | `LOAD_REQUESTS` | `100` | Webhook executions to fire during the load test |
 | `LOAD_CONCURRENCY` | `20` | Concurrent in-flight webhook calls |
