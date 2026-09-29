@@ -164,17 +164,19 @@ header "Queue Mode and Main Topology"
 # This module always runs queue mode (n8n.tf hardcodes queueMode.enabled =
 # true) and always renders the worker Deployment, even at
 # n8n_worker_keda_min_replicas = 0 (#146). A missing n8n-worker is therefore
-# a broken deployment, not a different kind of install: it fails here and the
-# rest of the queue-mode checks still run instead of skipping.
-worker_missing_reported=false
+# a broken deployment, not a different kind of install. It fails here once
+# (missing or unreadable), and checks that need a worker skip below with
+# "reported above" instead of failing again.
+worker_unavailable=false
 if worker_get_err=$(kubectl get deployment n8n-worker -n "$NAMESPACE" 2>&1 >/dev/null); then
   pass "Queue-mode deployment detected (n8n-worker present)"
 elif [[ "$worker_get_err" == *"NotFound"* ]]; then
   fail "Deployment 'n8n-worker' not found: this module always renders it, so the deployment is broken"
-  worker_missing_reported=true
+  worker_unavailable=true
   info "Check: helm status n8n -n $NAMESPACE, and kubectl get deploy -n $NAMESPACE"
 else
   fail "Cannot read Deployment n8n-worker in namespace $NAMESPACE"
+  worker_unavailable=true
   info "$worker_get_err"
 fi
 
@@ -227,8 +229,8 @@ check_deployment() {
   local component="${name#n8n-}"
 
   if ! kubectl get deployment "$name" -n "$NAMESPACE" &>/dev/null; then
-    # A missing worker was already failed once at the mode guard.
-    if [[ "$name" == n8n-worker && "$worker_missing_reported" == true ]]; then
+    # An unavailable worker was already failed once at the mode guard.
+    if [[ "$name" == n8n-worker && "$worker_unavailable" == true ]]; then
       return
     fi
     fail "Deployment '$name' not found"
@@ -366,8 +368,8 @@ header "Task Runner Sidecars"
 
 # In queue mode, Code nodes execute on worker pods — the task runner sidecar
 # belongs on workers, not on main or webhook-processor pods.
-if [[ "$worker_missing_reported" == true ]]; then
-  skip "Task runner sidecar checks (n8n-worker Deployment missing, reported above)"
+if [[ "$worker_unavailable" == true ]]; then
+  skip "Task runner sidecar checks (n8n-worker Deployment unavailable, reported above)"
 else
 worker_containers=$(kubectl get deployment n8n-worker -n "$NAMESPACE" \
   -o jsonpath='{.spec.template.spec.containers[*].name}' 2>/dev/null || echo "")
@@ -493,7 +495,7 @@ elif [[ -n "$main_pod" ]]; then
     pass "Leader election activity found in logs"
     while IFS= read -r line; do info "$line"; done <<< "$leader_log"
   else
-    warn "No pod logged 'Leader is now this instance' in the last 300 lines — no leader elected, or logs rotated"
+    warn "No pod logged 'Leader is now this instance' in the last 300 lines: no leader elected, or logs rotated"
   fi
 else
   warn "No running main pod found to check leader election"
@@ -548,8 +550,8 @@ if kubectl get scaledobject n8n-worker -n "$NAMESPACE" &>/dev/null 2>&1; then
     # a broken scaler, so warn rather than fail. Jobs wait in Redis.
     warn "Worker KEDA ScaledObject is paused with workers at zero: jobs wait in Redis until n8n_worker_keda_pause is cleared"
   else
-    if [[ "$scaler_state" == not_ready && "$worker_missing_reported" == true ]]; then
-      info "Worker KEDA ScaledObject not Ready (n8n-worker Deployment missing, reported above)"
+    if [[ "$scaler_state" == not_ready && "$worker_unavailable" == true ]]; then
+      info "Worker KEDA ScaledObject not Ready (n8n-worker Deployment unavailable, reported above)"
     elif [[ "$scaler_state" == not_ready ]]; then
       fail "Worker KEDA ScaledObject: min=$min max=$max ready=$ready. KEDA cannot scale workers"
       info "Diagnose: kubectl describe scaledobject n8n-worker -n $NAMESPACE"
@@ -586,8 +588,8 @@ if [[ -z "$worker_pod" ]] && worker_scaled_to_zero; then
       info "Unverified: the ScaledObject is not Ready (see the failure above)."
       ;;
   esac
-elif [[ -z "$worker_pod" && "$worker_missing_reported" == true ]]; then
-  skip "Redis connectivity probe (n8n-worker Deployment missing, reported above)"
+elif [[ -z "$worker_pod" && "$worker_unavailable" == true ]]; then
+  skip "Redis connectivity probe (n8n-worker Deployment unavailable, reported above)"
 elif [[ -z "$worker_pod" ]]; then
   fail "No running worker pod found to probe Redis connectivity"
 else
@@ -814,20 +816,23 @@ fi
 
 smoke_js_runner=false
 smoke_py_runner=false
-if [[ "$worker_missing_reported" != true ]] \
-  && kubectl get deployment n8n-worker -n "$NAMESPACE" \
-       -o jsonpath='{.spec.template.spec.containers[*].name}' 2>/dev/null | grep -qi runner; then
+if kubectl get deployment n8n-worker -n "$NAMESPACE" \
+     -o jsonpath='{.spec.template.spec.containers[*].name}' 2>/dev/null | grep -qi runner; then
   smoke_js_runner=true
   # nativePythonRunner lives only in chart values; needs helm.
-  if command -v helm &>/dev/null \
-    && [[ "$(helm get values n8n -n "$NAMESPACE" -a -o json 2>/dev/null \
-         | python3 -c "import sys,json; print(str(json.load(sys.stdin).get('taskRunners',{}).get('nativePythonRunner',False)).lower())" 2>/dev/null)" == true ]]; then
+  if ! command -v helm &>/dev/null; then
+    info "helm not found: cannot read taskRunners.nativePythonRunner, Python runner not exercised"
+  elif ! helm_values=$(helm get values n8n -n "$NAMESPACE" -a -o json 2>/dev/null); then
+    info "helm get values n8n failed: cannot read taskRunners.nativePythonRunner, Python runner not exercised"
+  elif [[ "$(python3 -c "import sys,json; print(str(json.load(sys.stdin).get('taskRunners',{}).get('nativePythonRunner',False)).lower())" <<<"$helm_values" 2>/dev/null)" == true ]]; then
     smoke_py_runner=true
   fi
 fi
 
 if [[ -z "$N8N_URL" || -z "$N8N_API_KEY" ]]; then
   skip "Workflow execution test (requires N8N_URL and N8N_API_KEY)"
+elif [[ "$worker_unavailable" == true ]]; then
+  skip "Workflow execution test (n8n-worker Deployment unavailable, reported above)"
 elif [[ -n "$exec_blocked_reason" ]]; then
   skip "Workflow execution test ($exec_blocked_reason, so no worker can start)"
 else
@@ -950,9 +955,7 @@ PYEOF
             fail "Execution ended with status: $exec_state"
             break
           elif [[ "$i" -eq "$exec_polls" ]]; then
-            if [[ "$worker_missing_reported" == true ]]; then
-              info "Execution never left state '$exec_state' (n8n-worker Deployment missing, reported above)"
-            elif [[ "$exec_state" == "new" || "$exec_state" == "pending" || "$exec_state" == "waiting" ]]; then
+            if [[ "$exec_state" == "new" || "$exec_state" == "pending" || "$exec_state" == "waiting" ]]; then
               # Never picked up: nothing consumed the queued job. A slow
               # run would be 'running' by now.
               fail "Execution never left state '$exec_state' after $((exec_polls * 2))s: no worker picked it up"

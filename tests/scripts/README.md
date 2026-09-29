@@ -17,7 +17,7 @@ Post-deployment smoke test for `terraform-aws-n8n`. Verifies the queue-mode depl
 |---|---|
 | kubectl cluster connectivity | kubectl can reach the EKS cluster |
 | Namespace exists | The configured namespace is present |
-| Main / worker / webhook-processor pod health | Each deployment exists and is at the expected ready replica count. A missing worker Deployment fails. Workers scaled to zero pass when the worker `ScaledObject` floor is `0`. At that floor, a worker still starting from zero is given up to 180s. After that the check warns only if every worker pod is Pending and unschedulable (waiting for a node), and fails otherwise |
+| Main / worker / webhook-processor pod health | Each deployment exists and is at the expected ready replica count. A missing or unreadable worker Deployment fails once, and the checks that need a worker skip with "reported above". Workers scaled to zero pass when the worker `ScaledObject` floor is `0`. At that floor, a worker still starting from zero is given up to 180s. After that the check warns only if every worker pod is Pending and unschedulable (waiting for a node), and fails otherwise |
 | Task runner sidecar (workers) | Runner sidecar is present on worker pods and has offered to the broker (`task offer` or `[runner:js\|py]` log lines; `Waiting for task broker` does not count) |
 | Multi-main leader election | `N8N_MULTI_MAIN_SETUP_ENABLED=true` and a `Leader is now this instance` line in any main pod's logs; none warns |
 | Autoscalers | KEDA `ScaledObject` (workers, queue-depth) and HPAs (main, webhook-processor). A worker `ScaledObject` that is not Ready fails at any floor; a paused one with workers at zero warns |
@@ -25,7 +25,7 @@ Post-deployment smoke test for `terraform-aws-n8n`. Verifies the queue-mode depl
 | HTTPS reachability | `/healthz` returns HTTP 200 over the ALB hostname |
 | HTTP → HTTPS redirect | Port 80 redirects to HTTPS |
 | API connectivity (if API key set) | `/api/v1/workflows` responds with 200 |
-| Workflow execution (if API key set) | Creates a webhook → set workflow, fires it, confirms success, deletes it. Adds a JS Code node when the worker runner sidecar exists and a Python Code node when `taskRunners.nativePythonRunner` is set (read with `helm`). Polls for about 180s instead of 60s (90 polls instead of 30, 2s apart) when workers start from zero. An execution still in `new`/`waiting` when polls run out fails (no worker picked it up); one still `running` warns. Skipped when workers are at zero and the worker `ScaledObject` is paused or not Ready, since no worker can start |
+| Workflow execution (if API key set) | Creates a webhook → set workflow, fires it, confirms success, deletes it. Adds a JS Code node when the worker runner sidecar exists and a Python Code node when `taskRunners.nativePythonRunner` is set (read with `helm`; without `helm`, or if the read fails, an info line says Python is not exercised). Polls for about 180s instead of 60s (90 polls instead of 30, 2s apart) when workers start from zero. An execution still in `new`/`pending`/`waiting` when polls run out fails (no worker picked it up); one still `running` warns. Skipped when the worker Deployment is missing or unreadable, or when workers are at zero and the worker `ScaledObject` is paused or not Ready, since no worker can start |
 | Worker scaling (opt-in) | Queues CPU-burning executions and confirms workers scale up |
 
 ### Quick start

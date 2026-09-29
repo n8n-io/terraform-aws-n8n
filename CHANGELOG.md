@@ -130,11 +130,13 @@ this project adheres to the stability contract in
   (#154). A not-Ready worker `ScaledObject` fails at any floor; an execution
   that never leaves `new` fails instead of warning; the runner check counts
   only `task offer` or `[runner:js|py]` lines, not "Waiting for task broker";
-  the leader check needs `Leader is now this instance` in any main pod's
-  logs; a missing `n8n-worker` is reported once instead of three times; the
-  queue workflow now runs a JS Code node when the runner sidecar exists and
-  a Python Code node when `taskRunners.nativePythonRunner` is set (needs
-  `helm`).
+  the leader check scans every main pod's logs for `Leader is now this
+  instance` and warns (does not fail) when none has it; a missing or
+  unreadable `n8n-worker` is reported once instead of three times, and the
+  checks that need a worker, including the queue workflow, skip; the queue
+  workflow now runs a JS Code node when the runner sidecar exists and a
+  Python Code node when `taskRunners.nativePythonRunner` is set (needs
+  `helm`; an info line says when Python is not exercised).
 
 - `n8n_extra_env` and `n8n_worker_extra_env` now reject
   `N8N_GRACEFUL_SHUTDOWN_TIMEOUT` at plan time. Chart `1.13.0` renders that
