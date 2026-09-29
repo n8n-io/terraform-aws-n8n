@@ -224,8 +224,8 @@ module it finds (the examples call this module with `source = "../.."`),
 then answers every check on a count-0 resource with `UNKNOWN` and omits it
 from the report. An opt-in resource whose toggle is `false` in the module
 defaults and in every example is therefore never checked, and **a green
-default scan asserts nothing about it.** Measured on the CI-pinned checkov
-3.3.17: `kubernetes_deployment_v1.redis_exporter` draws 0 results with
+default scan asserts nothing about it.** Measured on checkov 3.3.17, the CI
+pin at the time: `kubernetes_deployment_v1.redis_exporter` draws 0 results with
 defaults and 27 checks with `redis_exporter_enabled = true` (the same 27 that
 `examples/large/pgbouncer.tf`'s always-on `kubernetes_deployment` draws). The
 `_v1`/`_v2` resource names are *not* the cause, despite what

@@ -23,8 +23,8 @@
 # kubernetes_deployment), but because the resource is opt-in:
 # redis_exporter_enabled defaults to false and no example turns it on, and
 # checkov answers every check on a count-0 resource with UNKNOWN, which it
-# then omits from the report. Measured on the pinned 3.3.17: zero results
-# with defaults, the full 27 checks with the toggle on. Two things cover the
+# then omits from the report. Measured on 3.3.17, the pin at the time: zero
+# results with defaults, the full 27 checks with the toggle on. Two things cover the
 # gap. tests/scripts/check-checkov.sh runs a second scan with
 # tests/checkov/opt-in.tfvars, which is where the one checkov:skip below was
 # curated and where a new finding here fails CI. And
