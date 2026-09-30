@@ -940,7 +940,7 @@ PYEOF
         pass "Webhook triggered (HTTP $trigger_status)"
 
         info "Waiting for execution to complete..."
-        exec_state="unknown"
+        exec_state="unreadable"
         # 30 x 2s = 60s. A freshly booted worker's first job pays a one-time
         # cold-start cost connecting to Redis/the broker; observed taking
         # ~30-40s on a brand-new cluster even though the job itself is
@@ -953,8 +953,12 @@ PYEOF
         [[ "$exec_polls" -gt 30 ]] && info "Workers are scaled to zero: waiting up to $((exec_polls * 2))s for KEDA to start one"
         # 'no_record' only for a well-formed response with an empty 'data'
         # list. An error body (401/403/5xx JSON without 'data') or a failed
-        # request is 'unknown', so an API error cannot pass as "no record".
-        exec_read_ok=false
+        # request is 'unreadable', so an API error cannot pass as "no record".
+        # 'unreadable' is not an n8n status; 'unknown' is one (n8n
+        # packages/workflow/src/execution-status.ts), so it is not reused as
+        # the sentinel. exec_last keeps the last status the API returned, so
+        # one failed read on the final poll does not hide it.
+        exec_last=""
         for i in $(seq 1 "$exec_polls"); do
           sleep 2
           exec_state=$(curl -sk \
@@ -962,8 +966,8 @@ PYEOF
             -H "X-N8N-API-KEY: $N8N_API_KEY" \
             "${N8N_URL%/}/api/v1/executions?workflowId=${workflow_id}&limit=1" 2>/dev/null \
             | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get('data') if isinstance(d,dict) else None; sys.exit(1) if not isinstance(e,list) else print(e[0]['status'] if e else 'no_record')" 2>/dev/null \
-            || echo "unknown")
-          [[ "$exec_state" != "unknown" ]] && exec_read_ok=true
+            || echo "unreadable")
+          [[ "$exec_state" != "unreadable" ]] && exec_last="$exec_state"
 
           if [[ "$exec_state" == "success" ]]; then
             pass "$exec_success_msg"
@@ -972,6 +976,7 @@ PYEOF
             fail "Execution ended with status: $exec_state"
             break
           elif [[ "$i" -eq "$exec_polls" ]]; then
+            exec_state="${exec_last:-unreadable}"
             if [[ "$exec_state" == "new" ]]; then
               # Never picked up: nothing consumed the queued job. A slow
               # run would be 'running' by now.
@@ -989,7 +994,12 @@ PYEOF
               # an execution that is still running.
               warn "No execution record returned for the test workflow after $((exec_polls * 2))s: outcome unverified (not created, still running, or deleted by n8n_executions_data_save_on_success = \"none\")"
               info "Check: kubectl logs -n $NAMESPACE -l app.kubernetes.io/component=worker --tail=50"
-            elif [[ "$exec_state" == "unknown" && "$exec_read_ok" == false ]]; then
+            elif [[ "$exec_state" == "unknown" ]]; then
+              # A real n8n status: indeterminate, typically an execution
+              # interrupted by a restart. Recovery may later mark it crashed.
+              warn "Execution in indeterminate state 'unknown' after $((exec_polls * 2))s: likely interrupted (worker or main restart); n8n recovery may mark it crashed"
+              info "Check restarts: kubectl get pods -n $NAMESPACE; kubectl logs -n $NAMESPACE -l app.kubernetes.io/component=worker --tail=50"
+            elif [[ "$exec_state" == "unreadable" ]]; then
               fail "Could not read execution status from ${N8N_URL%/}/api/v1/executions in $((exec_polls * 2))s (request failed or error response)"
               info "Check: curl -sk -H 'X-N8N-API-KEY: ...' '${N8N_URL%/}/api/v1/executions?workflowId=${workflow_id}&limit=1'"
             else
