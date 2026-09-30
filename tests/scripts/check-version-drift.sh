@@ -164,8 +164,8 @@ else
 fi
 echo "eks/kubernetes_version: pinned $pinned_k8s (isEol: ${pinned_eol:-unknown}), latest $latest_k8s"
 
-# Known hold: kubernetes_version waits for the pinned checkov's CKV_AWS_339
-# allow-list to include the newer minor (docs/versioning.md). Read that list at
+# Known hold (#158): kubernetes_version waits for the pinned checkov's
+# CKV_AWS_339 allow-list to include the newer minor (docs/versioning.md). Read that list at
 # the exact CHECKOV_VERSION CI runs, so the note clears itself the moment a
 # CHECKOV_VERSION bump makes the Kubernetes bump actionable, instead of a
 # static "ignore this" line outliving its reason.
@@ -173,11 +173,11 @@ if [[ "$latest_k8s" != "unknown" && "$latest_k8s" != "$pinned_k8s" ]]; then
   pinned_checkov="$(sed -n 's/^[[:space:]]*CHECKOV_VERSION:[[:space:]]*"\([^"]*\)".*/\1/p' "$WORKFLOW" | head -1)"
   ckv_src="$(curl -sf --max-time 15 "https://raw.githubusercontent.com/bridgecrewio/checkov/${pinned_checkov}/checkov/terraform/checks/resource/aws/EKSPlatformVersion.py")" || ckv_src=""
   if [[ -z "$ckv_src" ]]; then
-    echo "  note: could not read CKV_AWS_339 at checkov $pinned_checkov; see docs/versioning.md for the hold."
+    echo "  note: could not read CKV_AWS_339 at checkov $pinned_checkov; see #158 for the hold."
   elif grep -q "\"$latest_k8s\"" <<<"$ckv_src"; then
-    echo "  ACTIONABLE: checkov $pinned_checkov's CKV_AWS_339 now allows $latest_k8s, so the hold in docs/versioning.md is lifted."
+    echo "  ACTIONABLE: checkov $pinned_checkov's CKV_AWS_339 now allows $latest_k8s, so the hold tracked in #158 is lifted."
   else
-    echo "  expected: held at $pinned_k8s. checkov $pinned_checkov's CKV_AWS_339 does not allow $latest_k8s yet; see docs/versioning.md. Not actionable until a CHECKOV_VERSION bump adds it."
+    echo "  expected: held at $pinned_k8s. checkov $pinned_checkov's CKV_AWS_339 does not allow $latest_k8s yet; tracked in #158. Not actionable until a CHECKOV_VERSION bump adds it."
   fi
 fi
 

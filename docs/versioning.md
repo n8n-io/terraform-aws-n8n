@@ -185,7 +185,8 @@ custom chart; this release carries no worker-pools change either way.
   add a curated-finding suppression for a version this repo's own security
   gate cannot yet vouch for, while `1.35` remains inside AWS's 14-month
   standard-support window. Revisit once a `checkov` release adds `1.36` to
-  that list.
+  that list; tracked in
+  [#158](https://github.com/n8n-io/terraform-aws-n8n/issues/158).
   `tests/scripts/check-version-drift.sh` reads that allow-list at the pinned
   `CHECKOV_VERSION` and annotates the `eks/kubernetes_version` line as
   `expected: held` while it lacks the newer minor, or `ACTIONABLE` once a
