@@ -691,7 +691,9 @@ if [[ -z "$ingress_paths" ]]; then
   info "Verify your own route all of: ${WEBHOOK_PREFIXES[*]} → $WEBHOOK_SVC"
 else
   for prefix in "${WEBHOOK_PREFIXES[@]}"; do
-    backend=$(echo "$ingress_paths" | grep -E "^${prefix}/?=" | head -1 | cut -d= -f2)
+    # `|| true`: grep exits 1 on a missing route, which pipefail would turn
+    # into a silent abort before the FAIL line below could report it.
+    backend=$(echo "$ingress_paths" | grep -E "^${prefix}/?=" | head -1 | cut -d= -f2 || true)
 
     if [[ -z "$backend" ]]; then
       fail "$prefix is not routed, so requests fall through to the main pods and 404"
@@ -702,7 +704,7 @@ else
     fi
   done
 
-  root_backend=$(echo "$ingress_paths" | grep -E '^/=' | head -1 | cut -d= -f2)
+  root_backend=$(echo "$ingress_paths" | grep -E '^/=' | head -1 | cut -d= -f2 || true)
   if [[ "$root_backend" == "n8n-main" ]]; then
     pass "/ → $root_backend"
   elif [[ -n "$root_backend" ]]; then

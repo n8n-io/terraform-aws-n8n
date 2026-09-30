@@ -126,6 +126,12 @@ this project adheres to the stability contract in
 
 ### Fixed
 
+- **`tests/scripts/smoke-test.sh` reports a missing Ingress route instead of
+  exiting silently** (#156). Under `set -euo pipefail`, the no-match `grep` in
+  the Ingress routing lookups aborted the script before the "is not routed"
+  FAIL or the missing catch-all `/` WARN could print, skipping the summary and
+  every later check. Both lookups now tolerate no match with `|| true`.
+
 - **`tests/scripts/smoke-test.sh` no longer passes on a broken deployment**
   (#154). A not-Ready worker `ScaledObject` fails at any floor; an execution
   still `new` or `waiting` when polls run out, or whose status the API never
