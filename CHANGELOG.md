@@ -50,6 +50,9 @@ this project adheres to the stability contract in
   `modules/controllers`). KEDA 2.21 supports Kubernetes `1.34` to `1.36`, so a
   caller on `create_eks = false` with an older cluster must pin
   `keda_chart_version = "2.20.2"` or set `install_keda = false`. See #150.
+- `tests/scripts/check-version-drift.sh` marks the `kubernetes_version` hold
+  as `expected` while the pinned checkov's `CKV_AWS_339` does not allow the
+  newer EKS minor, and as `ACTIONABLE` once it does. See #150.
 - Default n8n chart `1.12.0` to `1.13.0`. `n8n_image_tag = null` still uses
   the selected chart's default, which moves from `appVersion: 2.39.6` to
   `2.40.5`; pin the running application version first if it is not already

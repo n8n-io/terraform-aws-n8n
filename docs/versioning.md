@@ -186,6 +186,11 @@ custom chart; this release carries no worker-pools change either way.
   gate cannot yet vouch for, while `1.35` remains inside AWS's 14-month
   standard-support window. Revisit once a `checkov` release adds `1.36` to
   that list.
+  `tests/scripts/check-version-drift.sh` reads that allow-list at the pinned
+  `CHECKOV_VERSION` and annotates the `eks/kubernetes_version` line as
+  `expected: held` while it lacks the newer minor, or `ACTIONABLE` once a
+  checkov bump adds it, so the weekly report stops flagging this hold as new
+  drift.
 
 ## Provider locks and toolchain updates
 
