@@ -240,11 +240,11 @@ variable "keda_chart_repository" {
 variable "keda_chart_version" {
   description = "KEDA Helm chart version. Ignored when install_keda = false."
   type        = string
-  default     = "2.20.2"
+  default     = "2.21.0"
   nullable    = false
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.keda_chart_version))
-    error_message = "keda_chart_version must be an exact SemVer 2 version such as \"2.20.2\"."
+    error_message = "keda_chart_version must be an exact SemVer 2 version such as \"2.21.0\"."
   }
 }

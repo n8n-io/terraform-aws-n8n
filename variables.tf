@@ -788,13 +788,13 @@ variable "metrics_server_chart_version" {
 }
 
 variable "keda_chart_version" {
-  description = "KEDA Helm chart version. Defaults to 2.20.2. KEDA ships its CRDs in this chart, and the n8n chart always emits a ScaledObject (n8n.tf sets keda.enabled = true unconditionally), so a downgrade far enough to drop the ScaledObject API version the n8n chart renders fails helm_release.n8n outright rather than degrading. Ignored when install_keda = false."
+  description = "KEDA Helm chart version. Defaults to 2.21.0. KEDA ships its CRDs in this chart, and the n8n chart always emits a ScaledObject (n8n.tf sets keda.enabled = true unconditionally), so a downgrade far enough to drop the ScaledObject API version the n8n chart renders fails helm_release.n8n outright rather than degrading. Ignored when install_keda = false."
   type        = string
-  default     = "2.20.2"
+  default     = "2.21.0"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.keda_chart_version))
-    error_message = "keda_chart_version must be an exact SemVer 2 version such as \"2.20.2\". Helm resolves chart versions literally here, so a range (\">= 2.20\", \"~2.20.0\"), a leading \"v\", or a floating tag is not accepted."
+    error_message = "keda_chart_version must be an exact SemVer 2 version such as \"2.21.0\". Helm resolves chart versions literally here, so a range (\">= 2.21\", \"~2.21.0\"), a leading \"v\", or a floating tag is not accepted."
   }
 }
 
