@@ -51,7 +51,7 @@ this project adheres to the stability contract in
   caller on `create_eks = false` with an older cluster must pin
   `keda_chart_version = "2.20.2"` or set `install_keda = false`. See #150.
 - `tests/scripts/check-version-drift.sh` moves `kubernetes_version` out of
-  the drift list into a "Known false positives" section linking #158 while
+  the drift list into a "Known and expected" section linking open issue #158 while
   the pinned checkov's `CKV_AWS_339` does not allow the newer EKS minor, and
   back to drift plus `ACTIONABLE` once it does. See #150 and #158.
 - Default n8n chart `1.12.0` to `1.13.0`. `n8n_image_tag = null` still uses
