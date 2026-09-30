@@ -162,24 +162,26 @@ else
   latest_k8s="unknown"
   pinned_eol=""
 fi
-echo "eks/kubernetes_version: pinned $pinned_k8s (isEol: ${pinned_eol:-unknown}), latest $latest_k8s"
+k8s_line="eks/kubernetes_version: pinned $pinned_k8s (isEol: ${pinned_eol:-unknown}), latest $latest_k8s"
 
 # Known hold (#158): kubernetes_version waits for the pinned checkov's
-# CKV_AWS_339 allow-list to include the newer minor (docs/versioning.md). Read that list at
-# the exact CHECKOV_VERSION CI runs, so the note clears itself the moment a
-# CHECKOV_VERSION bump makes the Kubernetes bump actionable, instead of a
-# static "ignore this" line outliving its reason.
+# CKV_AWS_339 allow-list to include the newer minor (docs/versioning.md). Read
+# that list at the exact CHECKOV_VERSION CI runs. While the hold applies, the
+# line reports the hold instead of the drift, so the weekly issue does not
+# re-flag a known false positive; it flips back to drift + ACTIONABLE the
+# moment a CHECKOV_VERSION bump allows the newer minor.
 if [[ "$latest_k8s" != "unknown" && "$latest_k8s" != "$pinned_k8s" ]]; then
   pinned_checkov="$(sed -n 's/^[[:space:]]*CHECKOV_VERSION:[[:space:]]*"\([^"]*\)".*/\1/p' "$WORKFLOW" | head -1)"
   ckv_src="$(curl -sf --max-time 15 "https://raw.githubusercontent.com/bridgecrewio/checkov/${pinned_checkov}/checkov/terraform/checks/resource/aws/EKSPlatformVersion.py")" || ckv_src=""
   if [[ -z "$ckv_src" ]]; then
-    echo "  note: could not read CKV_AWS_339 at checkov $pinned_checkov; see #158 for the hold."
+    k8s_line+=$'\n'"  note: could not read CKV_AWS_339 at checkov $pinned_checkov to confirm the #158 hold."
   elif grep -q "\"$latest_k8s\"" <<<"$ckv_src"; then
-    echo "  ACTIONABLE: checkov $pinned_checkov's CKV_AWS_339 now allows $latest_k8s, so the hold tracked in #158 is lifted."
+    k8s_line+=$'\n'"  ACTIONABLE: checkov $pinned_checkov's CKV_AWS_339 now allows $latest_k8s, so the hold tracked in #158 is lifted."
   else
-    echo "  expected: held at $pinned_k8s. checkov $pinned_checkov's CKV_AWS_339 does not allow $latest_k8s yet; tracked in #158. Not actionable until a CHECKOV_VERSION bump adds it."
+    k8s_line="eks/kubernetes_version: pinned $pinned_k8s (isEol: ${pinned_eol:-unknown}), known hold, not drift: $latest_k8s is blocked until checkov's CKV_AWS_339 allows it (checkov $pinned_checkov does not). Tracked in #158."
   fi
 fi
+echo "$k8s_line"
 
 echo
 echo "See docs/versioning.md for the bump policy and what this report cannot see."
