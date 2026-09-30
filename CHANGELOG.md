@@ -79,6 +79,36 @@ this project adheres to the stability contract in
   unreadable or unparseable EKS release list, `isEol` flag, or pinned
   allow-list keeps the line in the drift list with a note. See #150 and
   #158.
+- Default n8n chart `1.13.0` to `1.14.0`.
+  - `n8n_image_tag = null` moves from `appVersion: 2.40.5` to `2.41.4`; pin
+    the running application version first if it is not already pinned. n8n
+    2.41.0 through 2.41.4 list no breaking changes.
+  - No changes to the chart's replica, KEDA or task-runner templates.
+    Worker-only task-runner capacity accounting now covers `1.14.0`.
+  - n8n-io/n8n-hosting#185: the chart stops rendering the deprecated
+    `N8N_AVAILABLE_BINARY_DATA_MODES`, and the module no longer sends
+    `s3.storage.availableModes`, so n8n's deprecation warning on every start
+    is gone. `n8n_extra_env`, `n8n_worker_extra_env` and
+    `n8n_worker_pools[*].extra_env` now reject it at plan time
+    (`local.n8n_deprecated_env_names`), and `tests/scripts/check-main-chart.sh`
+    fails if it is ever rendered. **A caller that sets it through one of those
+    inputs gets a plan-time error until the entry is removed.**
+  - n8n-io/n8n-hosting#184 (missing from the upstream release notes): the
+    chart's ConfigMap emits `N8N_WEBHOOK_URL` instead of `WEBHOOK_URL`. No
+    effect here: the chart only emits it from its own `webhook.url` or
+    Ingress, and the module sets neither. The module itself now stops setting
+    the deprecated `WEBHOOK_URL`, which also warned on every start, and
+    `N8N_WEBHOOK_URL` carries the same value. It is still sent to an image
+    older than n8n `2.30.0`, the first release that reads `N8N_WEBHOOK_URL`,
+    judged from `n8n_image_tag` or, for a custom tag without a version,
+    `n8n_task_runner_image_tag`. `WEBHOOK_URL` moves onto the same
+    deprecated-names list, so the three env inputs reject it with the
+    deprecation error instead of the module-managed one. The unread
+    `WEBHOOK_URL` key is dropped from `kubernetes_secret.n8n` (an in-place
+    Secret update on apply).
+  - n8n-io/n8n-hosting#209: chart validation reports every failure in one
+    render.
+  - See `docs/upgrading-n8n.md#moving-from-chart-1130-to-1140`.
 - Default n8n chart `1.12.0` to `1.13.0`. `n8n_image_tag = null` still uses
   the selected chart's default, which moves from `appVersion: 2.39.6` to
   `2.40.5`; pin the running application version first if it is not already

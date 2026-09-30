@@ -601,7 +601,7 @@ locals {
     "N8N_UNVERIFIED_PACKAGES_ENABLED",
     "N8N_COMPRESSION_NODE_MAX_DECOMPRESSED_SIZE_BYTES",
     "N8N_COMPRESSION_NODE_MAX_ZIP_ENTRIES",
-    "WEBHOOK_URL",
+    # WEBHOOK_URL is deliberately absent: it is in n8n_deprecated_env_names.
     "N8N_WEBHOOK_URL",
     "N8N_TEMPLATES_ENABLED",
     "N8N_PERSONALIZATION_ENABLED",
@@ -643,7 +643,6 @@ locals {
     "EXECUTIONS_MODE",
     "OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS",
     "N8N_DEFAULT_BINARY_DATA_MODE",
-    "N8N_AVAILABLE_BINARY_DATA_MODES",
     "N8N_LICENSE_ACTIVATION_KEY",
     # Owned by var.n8n_worker_pools. N8N_WORKER_POOLS_ENABLED is emitted only
     # when pools are declared, and N8N_WORKER_POOL_NAME is set per worker group
@@ -697,6 +696,19 @@ locals {
     # collision that cannot occur.
     var.n8n_node_max_old_space_size_mb != null ? ["NODE_OPTIONS"] : [],
   )
+
+  # Env vars n8n has deprecated and logs a warning for on every start, even
+  # though it otherwise ignores them. The module never sets these, and the
+  # n8n_extra_env/n8n_worker_extra_env/pool extra_env inputs reject them so a
+  # caller cannot bring the warning back either.
+  n8n_deprecated_env_names = [
+    "N8N_AVAILABLE_BINARY_DATA_MODES",
+    # AWS-only so far. Superseded by N8N_WEBHOOK_URL in n8n 2.30.0. The one
+    # exception to "never sets": n8n.tf still emits it for an image older than
+    # 2.30.0 (local.n8n_needs_legacy_webhook_url_env), which cannot read the
+    # successor.
+    "WEBHOOK_URL",
+  ]
 
   # Whole env-var families the module/chart owns, matched by prefix so the guard
   # stays correct when the chart adds new members. This intentionally fails
@@ -758,7 +770,7 @@ locals {
   )
 
   # The chart's values.yaml default for redis.worker.timeout, in seconds, as of
-  # the pinned n8n_chart_version (1.13.0). Used only by n8n.tf's
+  # the pinned n8n_chart_version (1.14.0). Used only by n8n.tf's
   # graceful_shutdown_fits_grace_period check, for callers who leave
   # n8n_graceful_shutdown_timeout null. tests/scripts/check-main-chart.sh
   # renders the real chart and fails if its default drifts from 30, so update

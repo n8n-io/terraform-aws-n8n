@@ -746,7 +746,7 @@ variable "keda_chart_repository" {
 variable "n8n_chart_version" {
   description = "n8n Helm chart version to deploy. Must be an exact version, not a constraint: the Helm provider resolves this literally."
   type        = string
-  default     = "1.13.0"
+  default     = "1.14.0"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version))
@@ -800,7 +800,7 @@ variable "keda_chart_version" {
 }
 
 variable "n8n_image_tag" {
-  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). When it is null (the default), the selected Helm chart's own default applies: chart 1.13.0 uses its appVersion, 2.40.5, while 1.11.0 used the floating `stable` tag. A chart upgrade can therefore downgrade an unpinned application. Inspect and pin the currently running n8n version before upgrading the chart; see docs/upgrading-n8n.md. Keep a concrete tag for reproducible, incremental upgrades. See <https://docs.n8n.io/2-0-breaking-changes/> for the n8n 2.x migration guide."
+  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). When it is null (the default), the selected Helm chart's own default applies: chart 1.14.0 uses its appVersion, 2.41.4, while 1.11.0 used the floating `stable` tag. A chart upgrade can therefore downgrade an unpinned application. Inspect and pin the currently running n8n version before upgrading the chart; see docs/upgrading-n8n.md. Keep a concrete tag for reproducible, incremental upgrades. See <https://docs.n8n.io/2-0-breaking-changes/> for the n8n 2.x migration guide."
   type        = string
   default     = null
 
@@ -1484,14 +1484,14 @@ variable "n8n_graceful_shutdown_timeout" {
 # ── Task runners ──────────────────────────────────────────────────────────────
 
 variable "n8n_task_runners_enabled" {
-  description = "Enable task runner sidecars for isolated JavaScript and Python code execution. In queue mode, upstream chart 1.13.0 places them on workers only, not main or webhook pods."
+  description = "Enable task runner sidecars for isolated JavaScript and Python code execution. In queue mode, upstream chart 1.14.0 places them on workers only, not main or webhook pods."
   type        = bool
   default     = true
   nullable    = false
 }
 
 variable "n8n_task_runner_image_tag" {
-  description = "Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 1.13.0 queue mode). Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n_task_runners_enabled = false."
+  description = "Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 1.14.0 queue mode). Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n_task_runners_enabled = false."
   type        = string
   default     = null
 
@@ -1615,7 +1615,7 @@ variable "n8n_task_runner_custom_config" {
 
       kubectl rollout restart deploy/n8n-worker -n <namespace>
 
-    Upstream chart 1.13.0 mounts this config only on workers in queue mode.
+    Upstream chart 1.14.0 mounts this config only on workers in queue mode.
     For older or custom charts that also place runners on mains, restart
     deploy/n8n-main too. Each n8n_worker_pools pool on a suitable preview or
     verified custom chart also mounts it; roll those by label:
@@ -3007,7 +3007,7 @@ variable "n8n_log_streaming_destinations" {
 }
 
 variable "n8n_extra_env" {
-  description = "Additional environment variables to inject into all n8n pods (main, worker, and webhook-processor) via the Helm chart's config.extraEnv list. Each entry is an object with name and value string attributes. config.extraEnv is appended last in every container's env list, so by Kubernetes' last-wins rule any name here overrides the chart's value for that name. To prevent silently breaking the deployment, an entry is rejected at plan time when its name collides with a connection, identity, storage, license, or topology variable the module manages: any name starting with DB_, QUEUE_, N8N_RUNNERS_, N8N_EXTERNAL_STORAGE_S3_, N8N_MULTI_MAIN_, or AWS_, plus names like N8N_ENCRYPTION_KEY, N8N_LICENSE_ACTIVATION_KEY, N8N_HOST, WEBHOOK_URL, and EXECUTIONS_MODE. NODE_OPTIONS is additionally reserved only while n8n_node_max_old_space_size_mb is set: it is a whole flag string rather than a single setting, so a caller entry would replace the module's --max-old-space-size wholesale instead of merging with it. With that input null the module emits no NODE_OPTIONS and callers may set it freely. Use the dedicated module inputs for those. Do not put secret values here, because they render into the Helm release and are stored in plaintext in Terraform state; instead pass a *_FILE companion (e.g. a name ending in _FILE) pointing at a mounted Kubernetes secret, or use n8n credentials. Example: [{name = \"N8N_DEFAULT_LOCALE\", value = \"de\"}]."
+  description = "Additional environment variables to inject into all n8n pods (main, worker, and webhook-processor) via the Helm chart's config.extraEnv list. Each entry is an object with name and value string attributes. config.extraEnv is appended last in every container's env list, so by Kubernetes' last-wins rule any name here overrides the chart's value for that name. To prevent silently breaking the deployment, an entry is rejected at plan time when its name collides with a connection, identity, storage, license, or topology variable the module manages: any name starting with DB_, QUEUE_, N8N_RUNNERS_, N8N_EXTERNAL_STORAGE_S3_, N8N_MULTI_MAIN_, or AWS_, plus names like N8N_ENCRYPTION_KEY, N8N_LICENSE_ACTIVATION_KEY, N8N_HOST, and EXECUTIONS_MODE. Env vars n8n has deprecated and warns about on every start (N8N_AVAILABLE_BINARY_DATA_MODES, WEBHOOK_URL) are rejected too, with their own error. NODE_OPTIONS is additionally reserved only while n8n_node_max_old_space_size_mb is set: it is a whole flag string rather than a single setting, so a caller entry would replace the module's --max-old-space-size wholesale instead of merging with it. With that input null the module emits no NODE_OPTIONS and callers may set it freely. Use the dedicated module inputs for those. Do not put secret values here, because they render into the Helm release and are stored in plaintext in Terraform state; instead pass a *_FILE companion (e.g. a name ending in _FILE) pointing at a mounted Kubernetes secret, or use n8n credentials. Example: [{name = \"N8N_DEFAULT_LOCALE\", value = \"de\"}]."
   type = list(object({
     name  = string
     value = string
@@ -3033,6 +3033,11 @@ variable "n8n_extra_env" {
       )
     ])
     error_message = "n8n_extra_env must not set module-managed variables. Reserved: any name starting with one of ${join(", ", local.n8n_managed_env_prefixes)} (connection/queue/runner/storage/topology/AWS families), plus the exact names ${join(", ", local.n8n_managed_env_names)}. config.extraEnv is appended last and would otherwise silently override these (Kubernetes last-wins). Use the dedicated module inputs (e.g. n8n_log_level, n8n_metrics_enabled) instead."
+  }
+
+  validation {
+    condition     = !anytrue([for e in var.n8n_extra_env : contains(local.n8n_deprecated_env_names, e.name)])
+    error_message = "n8n_extra_env must not set deprecated n8n variables (${join(", ", local.n8n_deprecated_env_names)}). n8n ignores them and logs a deprecation warning on every start; remove the entry."
   }
 }
 
@@ -3414,6 +3419,11 @@ variable "n8n_worker_extra_env" {
     ])
     error_message = "n8n_worker_extra_env must not set module-managed variables. Reserved: any name starting with one of ${join(", ", local.n8n_managed_env_prefixes)}, plus the exact names ${join(", ", local.n8n_managed_env_names)}. Use the dedicated module inputs instead."
   }
+
+  validation {
+    condition     = !anytrue([for e in var.n8n_worker_extra_env : contains(local.n8n_deprecated_env_names, e.name)])
+    error_message = "n8n_worker_extra_env must not set deprecated n8n variables (${join(", ", local.n8n_deprecated_env_names)}). n8n ignores them and logs a deprecation warning on every start; remove the entry."
+  }
 }
 
 variable "n8n_worker_pools" {
@@ -3489,6 +3499,15 @@ variable "n8n_worker_pools" {
       ]
     ]))
     error_message = "n8n_worker_pools extra_env must not set module-managed variables, and must not set N8N_WORKER_POOL_NAME: that name is owned by the pool's own `name` attribute, and overriding it would put the pool's workers on a different queue than the one this module creates a scaler for."
+  }
+
+  validation {
+    condition = !anytrue(flatten([
+      for p in var.n8n_worker_pools : [
+        for e in p.extra_env : contains(local.n8n_deprecated_env_names, e.name)
+      ]
+    ]))
+    error_message = "n8n_worker_pools extra_env must not set deprecated n8n variables (${join(", ", local.n8n_deprecated_env_names)}). n8n ignores them and logs a deprecation warning on every start; remove the entry."
   }
 
   validation {

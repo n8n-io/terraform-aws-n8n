@@ -37,7 +37,7 @@ chart_version=$(console <<< 'var.n8n_chart_version')
 chart_repository=$(console <<< 'var.n8n_chart_repository')
 helm pull "$chart_repository/n8n" --version "$chart_version" --untar --untardir "$tmp"
 app_version=$(console <<< "yamldecode(file(\"$tmp/n8n/Chart.yaml\")).appVersion")
-[[ "$app_version" == "2.40.5" ]] || { echo "Review image fallback tests for appVersion=$app_version" >&2; exit 1; }
+[[ "$app_version" == "2.41.4" ]] || { echo "Review image fallback tests for appVersion=$app_version" >&2; exit 1; }
 
 # Include a larger multi-main floor, plus an explicitly high ceiling for the
 # single-main case. Expected results below are independent of the locals.
@@ -92,7 +92,7 @@ done
 # Explicit app tags must override appVersion; runner tags follow the app unless
 # explicitly set. Custom repositories must not reset either explicit tag.
 # The explicit scenario deliberately picks a tag other than the pinned
-# chart's appVersion (2.40.5): using the same value would make "explicit tag
+# chart's appVersion (2.41.4): using the same value would make "explicit tag
 # wins" indistinguishable from "fallback to appVersion" wins by coincidence.
 for scenario in explicit custom; do
   args=(--set-string image.tag=2.39.6)
@@ -101,10 +101,10 @@ for scenario in explicit custom; do
   runner_tag=2.39.6
   if [[ "$scenario" == custom ]]; then
     repository=registry.example.com/n8n
-    tag=2.40.5-custom
-    runner_tag=2.40.5
+    tag=2.41.4-custom
+    runner_tag=2.41.4
     args=(--set-string "image.repository=$repository" --set-string "image.tag=$tag"
-      --set-string taskRunners.image.tag=2.40.5)
+      --set-string taskRunners.image.tag=2.41.4)
   fi
   for template in deployment-main deployment-worker deployment-webhook-processor; do
     helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
@@ -237,3 +237,28 @@ done
 jq -e '.kind == "Deployment"' "$tmp/worker-floor-zero-deployment-worker.json" >/dev/null
 jq -e '.kind == "ScaledObject" and .spec.minReplicaCount == 0' "$tmp/worker-floor-zero-scaledobject-worker.json" >/dev/null
 echo "PASS: chart $chart_version, worker floor of 0 still renders Deployment+ScaledObject with KEDA minReplicaCount=0"
+
+# n8n warns on every start while a deprecated env var is set
+# (local.n8n_deprecated_env_names). Render every n8n container with the
+# module's real S3 storage values (local.n8n_s3_storage_values) and fail if
+# N8N_AVAILABLE_BINARY_DATA_MODES reaches any of them. WEBHOOK_URL is not
+# checked here: at the default (null image tag) the module never emits it,
+# which tests/defaults.tftest.hcl pins on local.n8n_needs_legacy_webhook_url_env.
+console <<< 'jsonencode({s3={enabled=true,bucket={name="test-bucket",region="us-east-1"},auth={autoDetect=true},storage=local.n8n_s3_storage_values},serviceAccount={awsRoleArn="arn:aws:iam::123456789012:role/test"}})' \
+  > "$tmp/s3-values.json"
+RENDERED="$tmp/s3-rendered.yaml"
+helm template n8n "$tmp/n8n" -f "$tmp/values.json" -f "$tmp/s3-values.json" \
+  --set secretRefs.existingSecret=test-core \
+  --set license.enabled=true --set license.existingSecret.name=test-license \
+  --set queueMode.enabled=true --set webhookProcessor.enabled=true \
+  --set keda.enabled=true --set taskRunners.enabled=true \
+  --set 'keda.worker.triggers[0].type=redis' \
+  --set 'keda.worker.triggers[0].metadata.listName=bull:jobs:wait' \
+  > "$RENDERED"
+grep -q -- '- name: N8N_DEFAULT_BINARY_DATA_MODE$' "$RENDERED" \
+  || { echo "S3 fixture did not render N8N_DEFAULT_BINARY_DATA_MODE; the check below would pass vacuously" >&2; exit 1; }
+if awk '/- name: N8N_AVAILABLE_BINARY_DATA_MODES$/ { found = 1 } END { exit !found }' "$RENDERED"; then
+  echo "FAIL: chart $chart_version, N8N_AVAILABLE_BINARY_DATA_MODES is rendered; n8n deprecated it and warns on every start" >&2
+  exit 1
+fi
+echo "PASS: chart $chart_version, N8N_AVAILABLE_BINARY_DATA_MODES absent from every rendered container"

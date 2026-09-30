@@ -6,8 +6,8 @@ This covers bumping the deployed n8n version on an existing deployment. It does 
 
 | Variable | Controls | Default |
 | --- | --- | --- |
-| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.13.0"`, pinned |
-| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.40.5` in chart `1.13.0`) |
+| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.14.0"`, pinned |
+| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.41.4` in chart `1.14.0`) |
 | `n8n_task_runner_image_tag` | Task runner image tag; keep aligned with the underlying n8n version when using a custom application tag. | `null`, meaning the application image tag |
 
 Bumping the image tag alone gets you a new n8n version without changing the chart's templates or value schema. Bumping the chart version can also change what values the chart accepts, so treat it as the larger-blast-radius change of the two.
@@ -173,6 +173,34 @@ count. While both inputs are unset, the module sends no pause keys to the
 chart, so the Helm values do not change. The chart's matching `keda.webhookProcessor.pause`
 is not exposed, for the same reason `keda.webhookProcessor` itself is not:
 no webhook `ScaledObject` exists here for the annotation to land on.
+
+## Moving from chart 1.13.0 to 1.14.0
+
+**Pin `n8n_image_tag` before upgrading if it is still null.** The fallback
+moves with `appVersion`, `2.40.5` → `2.41.4`. This is a forward move, but
+it still runs that release's database migrations. A pinned deployment keeps
+its running application version.
+
+No other change affects this module's rendered workloads:
+
+- The chart no longer renders `N8N_AVAILABLE_BINARY_DATA_MODES`
+  (n8n-io/n8n-hosting#185). n8n ignored it and only logged a deprecation
+  warning on every start, so S3 binary storage is unaffected. The module no
+  longer sends `s3.storage.availableModes` either, and `n8n_extra_env`,
+  `n8n_worker_extra_env` and `n8n_worker_pools[*].extra_env` reject the name
+  at plan time. **Remove it from those inputs before upgrading.**
+- The chart renamed its own `WEBHOOK_URL` ConfigMap key to
+  `N8N_WEBHOOK_URL` (n8n-io/n8n-hosting#184, not in the release notes). The
+  module never sets the chart's `webhook.url` or enables the chart's
+  Ingress, so the chart renders neither. Separately, the module stops
+  sending the deprecated `WEBHOOK_URL` itself and the same three inputs
+  reject it. It is still sent when `n8n_image_tag` (or, for a custom tag
+  with no version, `n8n_task_runner_image_tag`) is below `2.30.0`, the first
+  n8n release that reads `N8N_WEBHOOK_URL`.
+- Chart validation now reports every failure in one render instead of
+  stopping at the first. Messages only.
+
+The worker-only task-runner capacity accounting covers `1.14.0`.
 
 ## Before bumping
 

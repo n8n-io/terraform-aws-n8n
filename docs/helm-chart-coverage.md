@@ -2,7 +2,7 @@
 
 This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) via `helm_release.n8n` (`n8n.tf`) and sets a large fixed subset of the chart's `values.yaml` directly, driven by typed Terraform variables. This doc catalogs which chart values this module exposes, which it hardcodes, and which it leaves entirely untouched (chart defaults apply), so you know when you've hit the edge of what the module can do for you today.
 
-**Verified against chart version `1.13.0`**, the module's `n8n_chart_version` default (`variables.tf`). The coverage table below reflects that version's `values.yaml` keys; the chart can add, rename, or remove keys between releases, so a row here can silently go stale if you bump `n8n_chart_version` without re-checking it. Before you bump the default, diff the two versions' `values.yaml` (`task chart-diff CANDIDATE=<new>`, or `tests/scripts/chart-values-diff.sh <new>`; it reads the current pin from `variables.tf`, runs `helm show values` for the pinned and candidate versions and prints a unified diff, needing only Helm) and update this doc's version line plus any affected rows in the same PR. `tests/scripts/check-helm-chart-coverage.sh` (`task chart-coverage`) fails CI when this line disagrees with the pin or the pinned chart adds a top-level key missing from this table or the "Not currently configurable" list; it cannot verify whether existing rows remain accurate.
+**Verified against chart version `1.14.0`**, the module's `n8n_chart_version` default (`variables.tf`). The coverage table below reflects that version's `values.yaml` keys; the chart can add, rename, or remove keys between releases, so a row here can silently go stale if you bump `n8n_chart_version` without re-checking it. Before you bump the default, diff the two versions' `values.yaml` (`task chart-diff CANDIDATE=<new>`, or `tests/scripts/chart-values-diff.sh <new>`; it reads the current pin from `variables.tf`, runs `helm show values` for the pinned and candidate versions and prints a unified diff, needing only Helm) and update this doc's version line plus any affected rows in the same PR. `tests/scripts/check-helm-chart-coverage.sh` (`task chart-coverage`) fails CI when this line disagrees with the pin or the pinned chart adds a top-level key missing from this table or the "Not currently configurable" list; it cannot verify whether existing rows remain accurate.
 
 **There is no generic raw-values passthrough.** The only general escape hatch is `n8n_extra_env` (`config.extraEnv`), and it only reaches environment variables, not arbitrary chart values. If you need a chart key this module doesn't set and isn't an environment variable, you cannot reach it through this module's inputs: see [Not currently configurable](#not-currently-configurable) below.
 
@@ -10,7 +10,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 
 | Chart key(s) | Module coverage |
 | --- | --- |
-| `image.tag` | `n8n_image_tag` (null = selected chart default; `appVersion: 2.40.5` in `1.13.0`). Pin the running version before a chart upgrade to avoid a downgrade; see [Upgrading n8n](./upgrading-n8n.md) |
+| `image.tag` | `n8n_image_tag` (null = selected chart default; `appVersion: 2.41.4` in `1.14.0`). Pin the running version before a chart upgrade to avoid a downgrade; see [Upgrading n8n](./upgrading-n8n.md) |
 | `image.repository` | `n8n_image_repository` (null = chart default) |
 | `image.pullPolicy` | Not exposed; chart default used |
 | `nameOverride`, `fullnameOverride` | Not exposed; chart default (both `""`, deriving names from the release name) used |
@@ -21,7 +21,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `webhookProcessor.enabled/replicaCount/disableProductionWebhooksOnMainProcess` | Hardcoded `true` / `n8n_webhook_hpa_min_replicas` / hardcoded `true` |
 | `multiMain.enabled/replicas/antiAffinity.type`, top-level `replicaCount` | `n8n_main_hpa_min_replicas > 1` / `n8n_main_hpa_min_replicas` / hardcoded `"preferred"` / `n8n_main_hpa_min_replicas`. `deployment-main.yaml` reads `multiMain.replicas` only while `multiMain.enabled`; the top-level `replicaCount` key is what single-main mode actually uses, set explicitly rather than left to the chart's own default (see `n8n.tf`) |
 | `multiMain.topologySpreadConstraints`, `multiMain.setup.keyTtl/checkInterval` | Not exposed; chart default used |
-| `taskRunners.enabled/nativePythonRunner/launcher.autoShutdownTimeout/resources` | `n8n_task_runners_enabled` / `n8n_task_runner_python_enabled` / `n8n_task_runner_auto_shutdown_timeout` / `n8n_task_runner_*_request`/`*_limit`. In this module's queue mode, `1.13.0` places runners on workers only; main and webhook pods have none |
+| `taskRunners.enabled/nativePythonRunner/launcher.autoShutdownTimeout/resources` | `n8n_task_runners_enabled` / `n8n_task_runner_python_enabled` / `n8n_task_runner_auto_shutdown_timeout` / `n8n_task_runner_*_request`/`*_limit`. In this module's queue mode, `1.14.0` places runners on workers only; main and webhook pods have none |
 | `taskRunners.image.tag` | `n8n_task_runner_image_tag` (null = application image tag) |
 | `taskRunners.customConfig` | `n8n_task_runner_custom_config` (null = image's baked-in launcher config). The only route to the runner allow-lists, incl. `N8N_RUNNERS_STDLIB_ALLOW` for the native Python runner |
 | `taskRunners.image.repository/pullPolicy` | Not exposed; chart default used |
@@ -50,7 +50,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `keda.worker.pause/pausedReplicaCount` | `n8n_worker_keda_pause` (default `false`) / `n8n_worker_keda_paused_replica_count` (default `null`). Sent to the chart only while pause is on, so an unused feature causes no values diff. Supported from chart `1.13.0`; a plan-time warning covers older charts |
 | `keda.webhookProcessor` | Not used; the module creates the webhook HPA externally in `scaling.tf` instead (the chart skips its own webhook HPA when `keda.enabled = true`) |
 | `pdb.enabled/minAvailable` | Hardcoded `true` / `1` for multi-main, `0` for single-main to allow voluntary eviction with downtime |
-| `webhook.url` | Not set via this chart key; the module sets the equivalent `WEBHOOK_URL` environment variable directly (from `n8n_webhook_url`) |
+| `webhook.url` | Not set via this chart key; the module sets the equivalent `N8N_WEBHOOK_URL` environment variable directly (from `n8n_webhook_url`), plus the deprecated `WEBHOOK_URL` only when the pinned image predates n8n `2.30.0` |
 | `webhook.enabled/timeout/extraEnv` | Not exposed; chart defaults used |
 | `executions.timeout/timeoutMax/concurrency.productionLimit` | `n8n_execution_timeout` / `n8n_execution_timeout_max` / `n8n_execution_concurrency_limit` |
 | `executions.pruning.enabled/maxAge/maxCount` | Hardcoded `true` / `n8n_pruning_max_age` / `n8n_pruning_max_count` |
@@ -80,7 +80,8 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `redis.worker.maxStalledCount` | Deliberately not exposed. The chart still renders it (default `1`), but n8n v2 removed `QUEUE_WORKER_MAX_STALLED_COUNT` and ships a breaking-change rule stating it is ignored; `scaling.service.ts` hardcodes Bull's `maxStalledCount` to `0`. Exposing it would offer control that does not exist |
 | `redis.database`, `redis.dualstack`, `redis.clusterNodes`, `redis.healthCheck` | Not exposed; chart defaults used |
 | *(no chart key)* Redis / Bull queue metrics | The chart ships no exporter and no `metrics`/`serviceMonitor` block, and n8n's own `/metrics` (`n8n_metrics_enabled`) does not report Bull queue depth usefully in multi-main, which is the topology this module deploys. `redis_exporter_enabled` deploys a `redis_exporter` beside the release instead (see `observability.tf`), reading the same endpoint and AUTH Secret the chart is given. Outside the chart entirely, like the module's Ingress and webhook HPA |
-| `s3.enabled/bucket.name/bucket.region/auth.autoDetect/storage.mode/storage.availableModes` | Hardcoded `true` / module-managed bucket / hardcoded `true` (Pod Identity) / hardcoded `"s3"` / hardcoded `"filesystem,s3"` |
+| `s3.enabled/bucket.name/bucket.region/auth.autoDetect/storage.mode` | Hardcoded `true` / module-managed bucket / hardcoded `true` (Pod Identity) / hardcoded `"s3"` |
+| `s3.storage.availableModes` | Removed in `1.14.0` (n8n-io/n8n-hosting#185). Never sent: n8n deprecated `N8N_AVAILABLE_BINARY_DATA_MODES` and warns on every start while it is set |
 | `s3.bucket.host`, `s3.storage.forcePathStyle`, `s3.storage.extraEnv`, `s3.auth.accessKeyId/secretAccessKeySecret` | Not exposed; not needed given `auth.autoDetect = true` |
 
 ## Not currently configurable

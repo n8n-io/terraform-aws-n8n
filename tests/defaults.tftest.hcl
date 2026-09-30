@@ -8750,8 +8750,8 @@ run "autoscaling_defaults_fit_the_default_node_group" {
   command = plan
 
   assert {
-    condition     = var.n8n_chart_version == "1.13.0" && local.n8n_peak_cpu_request_millis == 15400
-    error_message = "Upstream chart 1.13.0 must count runners only on workers: 15400m at default ceilings."
+    condition     = var.n8n_chart_version == "1.14.0" && local.n8n_peak_cpu_request_millis == 15400
+    error_message = "Upstream chart 1.14.0 must count runners only on workers: 15400m at default ceilings."
   }
 
   # No expect_failures: a warning from the capacity check would fail this run,
@@ -8927,7 +8927,7 @@ run "future_chart_keeps_conservative_runner_accounting" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.14.0"
+    n8n_chart_version = "1.16.0"
   }
 
   assert {
@@ -11627,6 +11627,53 @@ run "worker_pools_reject_extra_env_overriding_the_pool_name" {
   expect_failures = [var.n8n_worker_pools]
 }
 
+# local.n8n_deprecated_env_names: n8n warns on every start while one is set.
+run "extra_env_rejects_deprecated_binary_data_modes" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [{ name = "N8N_AVAILABLE_BINARY_DATA_MODES", value = "filesystem,s3" }]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "worker_extra_env_rejects_deprecated_binary_data_modes" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [{ name = "N8N_AVAILABLE_BINARY_DATA_MODES", value = "filesystem,s3" }]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
+
+run "worker_pools_reject_deprecated_binary_data_modes" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools = [{
+      name      = "gpu"
+      extra_env = [{ name = "N8N_AVAILABLE_BINARY_DATA_MODES", value = "filesystem,s3" }]
+    }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+# AWS-only list entry. WEBHOOK_URL is on no other reserved list, so only the
+# deprecated-names validation can fail this run.
+run "extra_env_rejects_deprecated_webhook_url" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [{ name = "WEBHOOK_URL", value = "https://n8n.example.com" }]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
 run "worker_pools_reject_extra_env_overriding_a_module_managed_variable" {
   command = plan
 
@@ -12189,4 +12236,65 @@ run "worker_extra_env_rejects_graceful_shutdown_timeout_name" {
   }
 
   expect_failures = [var.n8n_worker_extra_env]
+}
+
+# ── Legacy WEBHOOK_URL ────────────────────────────────────────────────────────
+# n8n logs a deprecation warning for WEBHOOK_URL from 2.30.0, the release that
+# added N8N_WEBHOOK_URL, so the module emits the legacy name only for an image
+# older than that. helm_release values are unknown under mocks (see AGENTS.md),
+# so these assert the gating local rather than the rendered env list.
+
+run "legacy_webhook_url_omitted_for_chart_default_image" {
+  command = plan
+
+  assert {
+    condition     = !local.n8n_needs_legacy_webhook_url_env
+    error_message = "A null n8n_image_tag runs the chart's default (2.30.0 or newer), which must not receive the deprecated WEBHOOK_URL"
+  }
+
+  assert {
+    condition     = !contains(keys(kubernetes_secret.n8n[0].data), "WEBHOOK_URL")
+    error_message = "kubernetes_secret.n8n must not carry WEBHOOK_URL: coreSecretsEnv never reads it"
+  }
+}
+
+run "legacy_webhook_url_omitted_from_2_30_0" {
+  command = plan
+
+  variables {
+    n8n_image_tag = "2.30.0"
+  }
+
+  assert {
+    condition     = !local.n8n_needs_legacy_webhook_url_env
+    error_message = "n8n 2.30.0 reads N8N_WEBHOOK_URL and must not receive the deprecated WEBHOOK_URL"
+  }
+}
+
+run "legacy_webhook_url_emitted_before_2_30_0" {
+  command = plan
+
+  variables {
+    n8n_image_tag = "2.29.8"
+  }
+
+  assert {
+    condition     = local.n8n_needs_legacy_webhook_url_env
+    error_message = "n8n 2.29.x only reads WEBHOOK_URL, so the module must still emit it"
+  }
+}
+
+run "legacy_webhook_url_uses_runner_tag_for_custom_image_tag" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "registry.example.com/n8n"
+    n8n_image_tag             = "mypackages"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = local.n8n_needs_legacy_webhook_url_env
+    error_message = "A custom tag with no version must fall back to n8n_task_runner_image_tag's version"
+  }
 }

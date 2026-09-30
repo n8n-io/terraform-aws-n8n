@@ -95,7 +95,7 @@ its running version before changing the chart; see
 
 Rendering tests cover fallback and explicit image tags, custom repositories,
 and worker-only task runners in queue mode. The capacity model removes main
-runner requests for upstream `1.12.0` and `1.13.0`, ignoring build metadata
+runner requests for upstream `1.12.0`, `1.13.0` and `1.14.0`, ignoring build metadata
 but not prerelease suffixes. Verify topology before extending that
 exception to any other release or repository. Worker pools still require
 their separate preview or verified custom chart.
@@ -142,6 +142,18 @@ cooldownPeriod,minReplicaCount,maxReplicaCount,triggers}` values (pausing
 webhook processors, including scale-to-zero) are not exposed by this
 module. Worker pools still require their separate preview or verified
 custom chart; this release carries no worker-pools change either way.
+
+## Chart 1.14.0 upgrade requirements
+
+The default moves from `1.13.0` to `1.14.0`. `n8n_image_tag = null` moves
+from `appVersion: 2.40.5` to `appVersion: 2.41.4`; pin first if unpinned. No
+Terraform input changes. The chart's removal of
+`N8N_AVAILABLE_BINARY_DATA_MODES` does not reach this module's pods, and
+1.13.0 → 1.14.0 also renamed the chart's `WEBHOOK_URL` ConfigMap key to
+`N8N_WEBHOOK_URL` without a release-note entry (n8n-io/n8n-hosting#184).
+The module sends neither deprecated name (except `WEBHOOK_URL` to an image
+older than n8n `2.30.0`) and rejects both in its env inputs; see
+[Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1130-to-1140).
 
 ## What this policy deliberately does not force
 
