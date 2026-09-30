@@ -788,7 +788,7 @@ variable "metrics_server_chart_version" {
 }
 
 variable "keda_chart_version" {
-  description = "KEDA Helm chart version. Defaults to 2.21.0. KEDA ships its CRDs in this chart, and the n8n chart always emits a ScaledObject (n8n.tf sets keda.enabled = true unconditionally), so a downgrade far enough to drop the ScaledObject API version the n8n chart renders fails helm_release.n8n outright rather than degrading. Ignored when install_keda = false."
+  description = "KEDA Helm chart version. Defaults to 2.21.0, which supports Kubernetes 1.34 through 1.36 per KEDA's compatibility matrix. On a 1.33 cluster pin \"2.20.2\" (supports 1.33 through 1.35) or set install_keda = false and manage it yourself. KEDA ships its CRDs in this chart, and the n8n chart always emits a ScaledObject (n8n.tf sets keda.enabled = true unconditionally), so a downgrade far enough to drop the ScaledObject API version the n8n chart renders fails helm_release.n8n outright rather than degrading. Ignored when install_keda = false."
   type        = string
   default     = "2.21.0"
 

@@ -166,21 +166,24 @@ known_holds=""
 k8s_line="eks/kubernetes_version: pinned $pinned_k8s (isEol: ${pinned_eol:-unknown}), latest $latest_k8s"
 
 # Known hold (#158): kubernetes_version waits for the pinned checkov's
-# CKV_AWS_339 allow-list to include the newer minor (docs/versioning.md). Read
-# that list at the exact CHECKOV_VERSION CI runs. While the hold applies, the
-# line reports the hold instead of the drift, so the weekly issue does not
-# re-flag a known false positive; it flips back to drift + ACTIONABLE the
-# moment a CHECKOV_VERSION bump allows the newer minor.
+# CKV_AWS_339 allow-list to include the next minor above the pin
+# (docs/versioning.md). Read that list at the exact CHECKOV_VERSION CI runs.
+# Check the next minor, not endoflife.date's latest: if upstream moves two
+# minors ahead first, testing the latest would miss the moment the next one
+# becomes allowed. While the hold applies, the line moves to the known-holds
+# section instead of the drift list; it flips back to drift + ACTIONABLE the
+# moment a CHECKOV_VERSION bump allows the next minor.
 if [[ "$latest_k8s" != "unknown" && "$latest_k8s" != "$pinned_k8s" ]]; then
+  next_k8s="${pinned_k8s%.*}.$(( ${pinned_k8s#*.} + 1 ))"
   pinned_checkov="$(sed -n 's/^[[:space:]]*CHECKOV_VERSION:[[:space:]]*"\([^"]*\)".*/\1/p' "$WORKFLOW" | head -1)"
   ckv_src="$(curl -sf --max-time 15 "https://raw.githubusercontent.com/bridgecrewio/checkov/${pinned_checkov}/checkov/terraform/checks/resource/aws/EKSPlatformVersion.py")" || ckv_src=""
   if [[ -z "$ckv_src" ]]; then
     k8s_line+=$'\n'"  note: could not read CKV_AWS_339 at checkov $pinned_checkov to confirm the #158 hold."
-  elif grep -q "\"$latest_k8s\"" <<<"$ckv_src"; then
-    k8s_line+=$'\n'"  ACTIONABLE: checkov $pinned_checkov's CKV_AWS_339 now allows $latest_k8s, so the hold tracked in #158 is lifted."
+  elif grep -q "\"$next_k8s\"" <<<"$ckv_src"; then
+    k8s_line+=$'\n'"  ACTIONABLE: checkov $pinned_checkov's CKV_AWS_339 now allows $next_k8s, so the hold tracked in #158 is lifted."
   else
     # Held: drop it from the drift list and report it under known holds.
-    known_holds+="- eks/kubernetes_version: pinned $pinned_k8s, latest $latest_k8s. Known and expected: checkov $pinned_checkov's CKV_AWS_339 does not allow $latest_k8s yet. Open issue: https://github.com/n8n-io/terraform-aws-n8n/issues/158"$'\n'
+    known_holds+="- eks/kubernetes_version: pinned $pinned_k8s (isEol: ${pinned_eol:-unknown}), latest $latest_k8s. Known and expected: checkov $pinned_checkov's CKV_AWS_339 does not allow $next_k8s yet. Open issue: https://github.com/n8n-io/terraform-aws-n8n/issues/158"$'\n'
     k8s_line=""
   fi
 fi

@@ -238,7 +238,7 @@ variable "keda_chart_repository" {
 }
 
 variable "keda_chart_version" {
-  description = "KEDA Helm chart version. Ignored when install_keda = false."
+  description = "KEDA Helm chart version. The 2.21.0 default supports Kubernetes 1.34 through 1.36; pin \"2.20.2\" (supports 1.33 through 1.35) on a 1.33 cluster. Ignored when install_keda = false."
   type        = string
   default     = "2.21.0"
   nullable    = false

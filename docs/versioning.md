@@ -188,10 +188,13 @@ custom chart; this release carries no worker-pools change either way.
   that list; tracked in
   [#158](https://github.com/n8n-io/terraform-aws-n8n/issues/158).
   `tests/scripts/check-version-drift.sh` reads that allow-list at the pinned
-  `CHECKOV_VERSION`. While that list lacks the newer minor, the report lists
-  `eks/kubernetes_version` under "Known and expected (not actionable)"
-  with a link to #158 instead of as drift. Once a checkov bump adds the
-  minor, it reverts to drift with an `ACTIONABLE` note.
+  `CHECKOV_VERSION` and checks it for the next minor above the pin. While
+  that minor is missing, the report lists `eks/kubernetes_version` under
+  "Known and expected (not actionable)" with its `isEol` flag and a link to
+  #158 instead of as drift. Once a checkov bump adds the minor, it reverts to
+  drift with an `ACTIONABLE` note. If the allow-list cannot be fetched, it
+  stays in the drift list with a `note: could not read CKV_AWS_339` line, so
+  a network failure never hides real drift.
 
 ## Provider locks and toolchain updates
 
