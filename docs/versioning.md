@@ -188,10 +188,10 @@ custom chart; this release carries no worker-pools change either way.
   that list; tracked in
   [#158](https://github.com/n8n-io/terraform-aws-n8n/issues/158).
   `tests/scripts/check-version-drift.sh` reads that allow-list at the pinned
-  `CHECKOV_VERSION`. While that list lacks the newer minor, the
-  `eks/kubernetes_version` line reports a known hold (not drift) referencing
-  #158, so the weekly report does not re-flag it. Once a checkov bump adds
-  the minor, the line reverts to drift with an `ACTIONABLE` note.
+  `CHECKOV_VERSION`. While that list lacks the newer minor, the report lists
+  `eks/kubernetes_version` under "Known false positives (not actionable)"
+  with a link to #158 instead of as drift. Once a checkov bump adds the
+  minor, it reverts to drift with an `ACTIONABLE` note.
 
 ## Provider locks and toolchain updates
 

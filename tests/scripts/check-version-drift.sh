@@ -162,6 +162,7 @@ else
   latest_k8s="unknown"
   pinned_eol=""
 fi
+known_holds=""
 k8s_line="eks/kubernetes_version: pinned $pinned_k8s (isEol: ${pinned_eol:-unknown}), latest $latest_k8s"
 
 # Known hold (#158): kubernetes_version waits for the pinned checkov's
@@ -178,10 +179,19 @@ if [[ "$latest_k8s" != "unknown" && "$latest_k8s" != "$pinned_k8s" ]]; then
   elif grep -q "\"$latest_k8s\"" <<<"$ckv_src"; then
     k8s_line+=$'\n'"  ACTIONABLE: checkov $pinned_checkov's CKV_AWS_339 now allows $latest_k8s, so the hold tracked in #158 is lifted."
   else
-    k8s_line="eks/kubernetes_version: pinned $pinned_k8s (isEol: ${pinned_eol:-unknown}), known hold, not drift: $latest_k8s is blocked until checkov's CKV_AWS_339 allows it (checkov $pinned_checkov does not). Tracked in #158."
+    # Held: drop it from the drift list and report it under known holds.
+    known_holds+="- eks/kubernetes_version: pinned $pinned_k8s, latest $latest_k8s. Known false positive: checkov $pinned_checkov's CKV_AWS_339 does not allow $latest_k8s yet. See https://github.com/n8n-io/terraform-aws-n8n/issues/158"$'\n'
+    k8s_line=""
   fi
 fi
-echo "$k8s_line"
+[[ -n "$k8s_line" ]] && echo "$k8s_line"
+
+if [[ -n "$known_holds" ]]; then
+  echo
+  echo "## Known false positives (not actionable)"
+  echo
+  printf '%s' "$known_holds"
+fi
 
 echo
 echo "See docs/versioning.md for the bump policy and what this report cannot see."
