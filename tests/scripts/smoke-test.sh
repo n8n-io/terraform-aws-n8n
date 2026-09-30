@@ -134,6 +134,7 @@ header "Preflight"
 
 require_cmd kubectl
 require_cmd curl
+require_cmd python3
 
 if ! kubectl cluster-info &>/dev/null; then
   echo -e "${RED}ERROR: kubectl cannot reach the cluster. Check your kubeconfig / credentials.${RESET}" >&2
@@ -371,41 +372,41 @@ header "Task Runner Sidecars"
 if [[ "$worker_unavailable" == true ]]; then
   skip "Task runner sidecar checks (n8n-worker Deployment unavailable, reported above)"
 else
-worker_containers=$(kubectl get deployment n8n-worker -n "$NAMESPACE" \
-  -o jsonpath='{.spec.template.spec.containers[*].name}' 2>/dev/null || echo "")
+  worker_containers=$(kubectl get deployment n8n-worker -n "$NAMESPACE" \
+    -o jsonpath='{.spec.template.spec.containers[*].name}' 2>/dev/null || echo "")
 
-if echo "$worker_containers" | grep -qiE "runner"; then
-  runner_container=$(echo "$worker_containers" | tr ' ' '\n' | grep -iE "runner" | head -1)
-  pass "Task runner sidecar present on n8n-worker pods: $runner_container"
+  if echo "$worker_containers" | grep -qiE "runner"; then
+    runner_container=$(echo "$worker_containers" | tr ' ' '\n' | grep -iE "runner" | head -1)
+    pass "Task runner sidecar present on n8n-worker pods: $runner_container"
 
-  # Confirm sidecar is connected to broker in a running worker pod
-  worker_pod=$(kubectl get pods -n "$NAMESPACE" \
-    -l "app.kubernetes.io/component=worker" \
-    --field-selector=status.phase=Running \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    # Confirm sidecar is connected to broker in a running worker pod
+    worker_pod=$(kubectl get pods -n "$NAMESPACE" \
+      -l "app.kubernetes.io/component=worker" \
+      --field-selector=status.phase=Running \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 
-  if [[ -n "$worker_pod" ]]; then
-    runner_logs=$(kubectl logs "$worker_pod" -n "$NAMESPACE" -c "$runner_container" \
-      --tail=50 2>/dev/null || true)
-    # "Waiting for task broker to be ready..." means NOT connected yet. The
-    # launcher logs nothing on connect; the first sign is "Waiting for
-    # launcher's task offer to be accepted..." (offer only sent once the
-    # broker is reachable), then "[runner:js]" lines once a task runs. The
-    # end-to-end Code node run below is the authoritative runner check.
-    connected_line=$(echo "$runner_logs" \
-      | grep -iE "task offer|\[runner:(js|py)\]" | tail -1 || true)
-    if [[ -n "$connected_line" ]]; then
-      pass "Worker runner sidecar connected to broker"
-      info "$connected_line"
-    else
-      warn "No broker connection confirmation in worker runner logs (last 50 lines)"
-      info "kubectl logs $worker_pod -n $NAMESPACE -c $runner_container"
+    if [[ -n "$worker_pod" ]]; then
+      runner_logs=$(kubectl logs "$worker_pod" -n "$NAMESPACE" -c "$runner_container" \
+        --tail=50 2>/dev/null || true)
+      # "Waiting for task broker to be ready..." means NOT connected yet. The
+      # launcher logs nothing on connect; the first sign is "Waiting for
+      # launcher's task offer to be accepted..." (offer only sent once the
+      # broker is reachable), then "[runner:js]" lines once a task runs. The
+      # end-to-end Code node run below is the authoritative runner check.
+      connected_line=$(echo "$runner_logs" \
+        | grep -iE "task offer|\[runner:(js|py)\]" | tail -1 || true)
+      if [[ -n "$connected_line" ]]; then
+        pass "Worker runner sidecar connected to broker"
+        info "$connected_line"
+      else
+        warn "No broker connection confirmation in worker runner logs (last 50 lines)"
+        info "kubectl logs $worker_pod -n $NAMESPACE -c $runner_container"
+      fi
     fi
+  else
+    warn "Task runner sidecar not found on n8n-worker — task runners may be disabled"
+    info "Set n8n_task_runners_enabled = true in terraform.tfvars and re-apply"
   fi
-else
-  warn "Task runner sidecar not found on n8n-worker — task runners may be disabled"
-  info "Set n8n_task_runners_enabled = true in terraform.tfvars and re-apply"
-fi
 fi
 
 # ── Main topology ─────────────────────────────────────────────────────────────
@@ -486,10 +487,16 @@ elif [[ -n "$main_pod" ]]; then
 
   # Real line (n8n 2.x): "[Instance ID main-...] Leader is now this instance".
   # Only the leader logs it, so scan every main pod, not just one.
+  # The line is logged once, on becoming leader, so a long-running leader
+  # may have rotated it out of --tail=300; that is why this only warns.
   leader_log=""
-  for mp in $(kubectl get pods -n "$NAMESPACE" -o name 2>/dev/null | grep -E "/n8n-main-"); do
-    leader_log+=$(kubectl logs "$mp" -n "$NAMESPACE" -c n8n-main --tail=300 2>/dev/null \
+  for mp in $(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/component=main" \
+      -o name 2>/dev/null); do
+    mp_line=$(kubectl logs "$mp" -n "$NAMESPACE" -c n8n-main --tail=300 2>/dev/null \
       | grep -F "Leader is now this instance" || true)
+    if [[ -n "$mp_line" ]]; then
+      leader_log+="${leader_log:+$'\n'}$mp_line"
+    fi
   done
   if [[ -n "$leader_log" ]]; then
     pass "Leader election activity found in logs"
@@ -797,10 +804,10 @@ fi
 
 # ── Workflow execution ────────────────────────────────────────────────────────
 #
-# Webhook → Set
-#   Lightweight: verifies queue routing only. No Code node runs here, so
-#   task runner execution (JS or Python) is not exercised end to end; the
-#   sidecar check above only confirms the runner container is present.
+# Webhook → Set, plus a JS Code node when the worker runner sidecar exists
+# and a Python Code node when taskRunners.nativePythonRunner is set. Code
+# nodes run on workers in queue mode, so this is the end-to-end runner check;
+# the sidecar check above only confirms the runner container and its logs.
 
 header "Workflow Execution via Queue"
 
@@ -863,6 +870,9 @@ if os.environ["RUN_JS"] == "true":
         "parameters": {"jsCode": "return [{ json: { js_runner: 'passed' } }];"}})
     chain.append("JS Code")
 if os.environ["RUN_PY"] == "true":
+    # language "python" runs on the native Python runner on n8n 2.x
+    # (Pyodide was removed in 2.0). Verified live on n8n 2.40.5, the
+    # chart 1.13.0 default.
     nodes.append({"id": "a1b2c3d4-0004-0004-0004-000000000004", "name": "Python Code",
         "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [850, 300],
         "parameters": {"language": "python",
@@ -941,14 +951,19 @@ PYEOF
         exec_polls=30
         [[ "${worker_was_zero:-false}" == true ]] && exec_polls=90
         [[ "$exec_polls" -gt 30 ]] && info "Workers are scaled to zero: waiting up to $((exec_polls * 2))s for KEDA to start one"
+        # 'no_record' only for a well-formed response with an empty 'data'
+        # list. An error body (401/403/5xx JSON without 'data') or a failed
+        # request is 'unknown', so an API error cannot pass as "no record".
+        exec_read_ok=false
         for i in $(seq 1 "$exec_polls"); do
           sleep 2
           exec_state=$(curl -sk \
             --max-time 10 \
             -H "X-N8N-API-KEY: $N8N_API_KEY" \
             "${N8N_URL%/}/api/v1/executions?workflowId=${workflow_id}&limit=1" 2>/dev/null \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); execs=d.get('data',[]); print(execs[0]['status'] if execs else 'pending')" 2>/dev/null \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get('data') if isinstance(d,dict) else None; sys.exit(1) if not isinstance(e,list) else print(e[0]['status'] if e else 'no_record')" 2>/dev/null \
             || echo "unknown")
+          [[ "$exec_state" != "unknown" ]] && exec_read_ok=true
 
           if [[ "$exec_state" == "success" ]]; then
             pass "$exec_success_msg"
@@ -957,11 +972,26 @@ PYEOF
             fail "Execution ended with status: $exec_state"
             break
           elif [[ "$i" -eq "$exec_polls" ]]; then
-            if [[ "$exec_state" == "new" || "$exec_state" == "pending" || "$exec_state" == "waiting" ]]; then
+            if [[ "$exec_state" == "new" ]]; then
               # Never picked up: nothing consumed the queued job. A slow
               # run would be 'running' by now.
-              fail "Execution never left state '$exec_state' after $((exec_polls * 2))s: no worker picked it up"
+              fail "Execution never left state 'new' after $((exec_polls * 2))s: no worker picked it up"
               info "Check: kubectl get pods -n $NAMESPACE -l app.kubernetes.io/component=worker; kubectl logs -n $NAMESPACE -l app.kubernetes.io/component=worker --tail=50"
+            elif [[ "$exec_state" == "waiting" ]]; then
+              # 'waiting' is a suspended run (normally a Wait node). This
+              # workflow has none, so it cannot finish from here.
+              fail "Execution suspended in state 'waiting' after $((exec_polls * 2))s, but the test workflow has no Wait node"
+              info "Check: kubectl logs -n $NAMESPACE -l app.kubernetes.io/component=worker --tail=50"
+            elif [[ "$exec_state" == "no_record" ]]; then
+              # An empty list proves neither failure nor success: with
+              # n8n_executions_data_save_on_success = "none", n8n deletes
+              # the record of a successful run, and the list may also omit
+              # an execution that is still running.
+              warn "No execution record returned for the test workflow after $((exec_polls * 2))s: outcome unverified (not created, still running, or deleted by n8n_executions_data_save_on_success = \"none\")"
+              info "Check: kubectl logs -n $NAMESPACE -l app.kubernetes.io/component=worker --tail=50"
+            elif [[ "$exec_state" == "unknown" && "$exec_read_ok" == false ]]; then
+              fail "Could not read execution status from ${N8N_URL%/}/api/v1/executions in $((exec_polls * 2))s (request failed or error response)"
+              info "Check: curl -sk -H 'X-N8N-API-KEY: ...' '${N8N_URL%/}/api/v1/executions?workflowId=${workflow_id}&limit=1'"
             else
               warn "Execution still in state '$exec_state' after $((exec_polls * 2))s"
               info "May be slow to process, check: kubectl logs -n $NAMESPACE -l app.kubernetes.io/component=worker --tail=50"

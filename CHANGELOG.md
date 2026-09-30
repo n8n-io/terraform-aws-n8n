@@ -128,8 +128,11 @@ this project adheres to the stability contract in
 
 - **`tests/scripts/smoke-test.sh` no longer passes on a broken deployment**
   (#154). A not-Ready worker `ScaledObject` fails at any floor; an execution
-  still `new`/`pending`/`waiting` when polls run out fails instead of
-  warning; the runner check counts only `task offer` or `[runner:js|py]`
+  still `new` or `waiting` when polls run out, or whose status the API never
+  returned, fails instead of warning (an empty execution list still warns,
+  since `n8n_executions_data_save_on_success = "none"` deletes successful
+  runs);
+  `python3` is now checked at preflight; the runner check counts only `task offer` or `[runner:js|py]`
   lines, not "Waiting for task broker";
   the leader check scans every main pod's logs for `Leader is now this
   instance` and warns (does not fail) when none has it; a missing or
