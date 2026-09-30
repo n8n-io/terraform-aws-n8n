@@ -194,9 +194,10 @@ No other change affects this module's rendered workloads:
   module never sets the chart's `webhook.url` or enables the chart's
   Ingress, so the chart renders neither. Separately, the module stops
   sending the deprecated `WEBHOOK_URL` itself and the same three inputs
-  reject it. It is still sent when `n8n_image_tag` (or, for a custom tag
-  with no version, `n8n_task_runner_image_tag`) is below `2.30.0`, the first
-  n8n release that reads `N8N_WEBHOOK_URL`.
+  reject it. It is still sent when `n8n_image_tag` (or, for a custom image
+  whose tag is not a version, `n8n_task_runner_image_tag`) is below
+  `2.30.0`, the first n8n release that reads `N8N_WEBHOOK_URL`. A null or
+  other non-version tag counts as current.
 - Chart validation now reports every failure in one render instead of
   stopping at the first. Messages only.
 

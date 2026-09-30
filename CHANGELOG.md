@@ -100,8 +100,8 @@ this project adheres to the stability contract in
     the deprecated `WEBHOOK_URL`, which also warned on every start, and
     `N8N_WEBHOOK_URL` carries the same value. It is still sent to an image
     older than n8n `2.30.0`, the first release that reads `N8N_WEBHOOK_URL`,
-    judged from `n8n_image_tag` or, for a custom tag without a version,
-    `n8n_task_runner_image_tag`. `WEBHOOK_URL` moves onto the same
+    judged from `n8n_image_tag` or, for a custom image whose tag is not a
+    version, `n8n_task_runner_image_tag`; a null tag counts as current. `WEBHOOK_URL` moves onto the same
     deprecated-names list, so the three env inputs reject it with the
     deprecation error instead of the module-managed one. The unread
     `WEBHOOK_URL` key is dropped from `kubernetes_secret.n8n` (an in-place

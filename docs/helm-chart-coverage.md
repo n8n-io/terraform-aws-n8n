@@ -50,7 +50,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `keda.worker.pause/pausedReplicaCount` | `n8n_worker_keda_pause` (default `false`) / `n8n_worker_keda_paused_replica_count` (default `null`). Sent to the chart only while pause is on, so an unused feature causes no values diff. Supported from chart `1.13.0`; a plan-time warning covers older charts |
 | `keda.webhookProcessor` | Not used; the module creates the webhook HPA externally in `scaling.tf` instead (the chart skips its own webhook HPA when `keda.enabled = true`) |
 | `pdb.enabled/minAvailable` | Hardcoded `true` / `1` for multi-main, `0` for single-main to allow voluntary eviction with downtime |
-| `webhook.url` | Not set via this chart key; the module sets the equivalent `N8N_WEBHOOK_URL` environment variable directly (from `n8n_webhook_url`), plus the deprecated `WEBHOOK_URL` only when the pinned image predates n8n `2.30.0` |
+| `webhook.url` | Not set via this chart key; the module sets the equivalent `N8N_WEBHOOK_URL` environment variable directly (from `n8n_webhook_url`), plus the deprecated `WEBHOOK_URL` only when `n8n_image_tag` is a version below `2.30.0`, or, for a custom image (`n8n_image_repository` set) whose tag is not a version, `n8n_task_runner_image_tag` is. A null tag (the chart default) or any other non-version tag is treated as current |
 | `webhook.enabled/timeout/extraEnv` | Not exposed; chart defaults used |
 | `executions.timeout/timeoutMax/concurrency.productionLimit` | `n8n_execution_timeout` / `n8n_execution_timeout_max` / `n8n_execution_concurrency_limit` |
 | `executions.pruning.enabled/maxAge/maxCount` | Hardcoded `true` / `n8n_pruning_max_age` / `n8n_pruning_max_count` |

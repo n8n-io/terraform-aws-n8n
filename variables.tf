@@ -3007,7 +3007,7 @@ variable "n8n_log_streaming_destinations" {
 }
 
 variable "n8n_extra_env" {
-  description = "Additional environment variables to inject into all n8n pods (main, worker, and webhook-processor) via the Helm chart's config.extraEnv list. Each entry is an object with name and value string attributes. config.extraEnv is appended last in every container's env list, so by Kubernetes' last-wins rule any name here overrides the chart's value for that name. To prevent silently breaking the deployment, an entry is rejected at plan time when its name collides with a connection, identity, storage, license, or topology variable the module manages: any name starting with DB_, QUEUE_, N8N_RUNNERS_, N8N_EXTERNAL_STORAGE_S3_, N8N_MULTI_MAIN_, or AWS_, plus names like N8N_ENCRYPTION_KEY, N8N_LICENSE_ACTIVATION_KEY, N8N_HOST, and EXECUTIONS_MODE. Env vars n8n has deprecated and warns about on every start (N8N_AVAILABLE_BINARY_DATA_MODES, WEBHOOK_URL) are rejected too, with their own error. NODE_OPTIONS is additionally reserved only while n8n_node_max_old_space_size_mb is set: it is a whole flag string rather than a single setting, so a caller entry would replace the module's --max-old-space-size wholesale instead of merging with it. With that input null the module emits no NODE_OPTIONS and callers may set it freely. Use the dedicated module inputs for those. Do not put secret values here, because they render into the Helm release and are stored in plaintext in Terraform state; instead pass a *_FILE companion (e.g. a name ending in _FILE) pointing at a mounted Kubernetes secret, or use n8n credentials. Example: [{name = \"N8N_DEFAULT_LOCALE\", value = \"de\"}]."
+  description = "Additional environment variables to inject into all n8n pods (main, worker, and webhook-processor) via the Helm chart's config.extraEnv list. Each entry is an object with name and value string attributes. config.extraEnv is appended last in every container's env list, so by Kubernetes' last-wins rule any name here overrides the chart's value for that name. To prevent silently breaking the deployment, an entry is rejected at plan time when its name collides with a connection, identity, storage, license, or topology variable the module manages: any name starting with DB_, QUEUE_, N8N_RUNNERS_, N8N_EXTERNAL_STORAGE_S3_, N8N_MULTI_MAIN_, or AWS_, plus names like N8N_ENCRYPTION_KEY, N8N_LICENSE_ACTIVATION_KEY, N8N_HOST, and EXECUTIONS_MODE. Env vars n8n has deprecated and warns about on every start (N8N_AVAILABLE_BINARY_DATA_MODES, and WEBHOOK_URL from n8n 2.30.0) are rejected too, with their own error; the module sets WEBHOOK_URL itself for an older image. NODE_OPTIONS is additionally reserved only while n8n_node_max_old_space_size_mb is set: it is a whole flag string rather than a single setting, so a caller entry would replace the module's --max-old-space-size wholesale instead of merging with it. With that input null the module emits no NODE_OPTIONS and callers may set it freely. Use the dedicated module inputs for those. Do not put secret values here, because they render into the Helm release and are stored in plaintext in Terraform state; instead pass a *_FILE companion (e.g. a name ending in _FILE) pointing at a mounted Kubernetes secret, or use n8n credentials. Example: [{name = \"N8N_DEFAULT_LOCALE\", value = \"de\"}]."
   type = list(object({
     name  = string
     value = string
@@ -3037,7 +3037,7 @@ variable "n8n_extra_env" {
 
   validation {
     condition     = !anytrue([for e in var.n8n_extra_env : contains(local.n8n_deprecated_env_names, e.name)])
-    error_message = "n8n_extra_env must not set deprecated n8n variables (${join(", ", local.n8n_deprecated_env_names)}). n8n ignores them and logs a deprecation warning on every start; remove the entry."
+    error_message = "n8n_extra_env must not set deprecated n8n variables (${join(", ", local.n8n_deprecated_env_names)}). n8n ignores them and logs a deprecation warning on every start; remove the entry. For WEBHOOK_URL, set n8n_webhook_url instead: the module renders it as N8N_WEBHOOK_URL, and adds WEBHOOK_URL itself for an image tagged below n8n 2.30.0, the only case that still reads it."
   }
 }
 
@@ -3422,7 +3422,7 @@ variable "n8n_worker_extra_env" {
 
   validation {
     condition     = !anytrue([for e in var.n8n_worker_extra_env : contains(local.n8n_deprecated_env_names, e.name)])
-    error_message = "n8n_worker_extra_env must not set deprecated n8n variables (${join(", ", local.n8n_deprecated_env_names)}). n8n ignores them and logs a deprecation warning on every start; remove the entry."
+    error_message = "n8n_worker_extra_env must not set deprecated n8n variables (${join(", ", local.n8n_deprecated_env_names)}). n8n ignores them and logs a deprecation warning on every start; remove the entry. For WEBHOOK_URL, set n8n_webhook_url instead: the module renders it as N8N_WEBHOOK_URL, and adds WEBHOOK_URL itself for an image tagged below n8n 2.30.0, the only case that still reads it."
   }
 }
 
@@ -3507,7 +3507,7 @@ variable "n8n_worker_pools" {
         for e in p.extra_env : contains(local.n8n_deprecated_env_names, e.name)
       ]
     ]))
-    error_message = "n8n_worker_pools extra_env must not set deprecated n8n variables (${join(", ", local.n8n_deprecated_env_names)}). n8n ignores them and logs a deprecation warning on every start; remove the entry."
+    error_message = "n8n_worker_pools extra_env must not set deprecated n8n variables (${join(", ", local.n8n_deprecated_env_names)}). n8n ignores them and logs a deprecation warning on every start; remove the entry. For WEBHOOK_URL, set n8n_webhook_url instead: the module renders it as N8N_WEBHOOK_URL, and adds WEBHOOK_URL itself for an image tagged below n8n 2.30.0, the only case that still reads it."
   }
 
   validation {

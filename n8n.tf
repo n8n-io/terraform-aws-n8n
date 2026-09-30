@@ -103,14 +103,24 @@ locals {
 
 locals {
   # Whether the running n8n predates N8N_WEBHOOK_URL (added in 2.30.0) and so
-  # still needs the legacy WEBHOOK_URL. The version comes from n8n_image_tag,
-  # else n8n_task_runner_image_tag, which carries the underlying n8n version
-  # when a custom image tag is not one (e.g. "2.27.4-mypackages" + "2.27.4").
-  # A null tag means the chart default (2.39.6 or newer from chart 1.12.0;
-  # floating `stable` before that), and a tag with no leading major.minor
-  # (`stable`, a digest-style tag) is treated as current: neither needs it.
-  n8n_image_version_match = try(regex("^v?([0-9]+)\\.([0-9]+)\\.", coalesce(var.n8n_image_tag, var.n8n_task_runner_image_tag, "-")), null)
-  n8n_image_version_core  = local.n8n_image_version_match == null ? try(regex("^v?([0-9]+)\\.([0-9]+)\\.", coalesce(var.n8n_task_runner_image_tag, "-")), null) : local.n8n_image_version_match
+  # still needs the legacy WEBHOOK_URL. Decided from the tags alone, since the
+  # module cannot see an image's real version:
+  #   - n8n_image_tag null: the chart default runs (2.39.6 or newer from chart
+  #     1.12.0), so no. n8n_task_runner_image_tag is not consulted, because it
+  #     only tags the sidecar and says nothing about the app image.
+  #   - n8n_image_tag starts with a version ("2.27.4", "2.27.4-mypackages"):
+  #     that version decides.
+  #   - n8n_image_tag is not a version (`stable`, a build label): only for a
+  #     custom image (n8n_image_repository set) is n8n_task_runner_image_tag
+  #     read, since that is where docs tell callers to put the underlying
+  #     n8n version. Otherwise, or when it is not a version either, the image
+  #     counts as current and gets no WEBHOOK_URL.
+  n8n_image_version_match = var.n8n_image_tag == null ? null : try(regex("^v?([0-9]+)\\.([0-9]+)\\.", var.n8n_image_tag), null)
+  n8n_image_version_core = local.n8n_image_version_match != null ? local.n8n_image_version_match : (
+    var.n8n_image_tag != null && var.n8n_image_repository != null && var.n8n_task_runner_image_tag != null
+    ? try(regex("^v?([0-9]+)\\.([0-9]+)\\.", var.n8n_task_runner_image_tag), null)
+    : null
+  )
   n8n_needs_legacy_webhook_url_env = local.n8n_image_version_core == null ? false : (
     tonumber(local.n8n_image_version_core[0]) < 2 ? true : (
       tonumber(local.n8n_image_version_core[0]) == 2 && tonumber(local.n8n_image_version_core[1]) < 30

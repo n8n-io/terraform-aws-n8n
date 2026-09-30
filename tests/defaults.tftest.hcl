@@ -12298,3 +12298,32 @@ run "legacy_webhook_url_uses_runner_tag_for_custom_image_tag" {
     error_message = "A custom tag with no version must fall back to n8n_task_runner_image_tag's version"
   }
 }
+
+# cubic on #160: n8n_task_runner_image_tag only tags the sidecar, so an old
+# runner tag must not pull the deprecated WEBHOOK_URL onto a current app image.
+run "legacy_webhook_url_ignores_runner_tag_when_image_tag_is_null" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = !local.n8n_needs_legacy_webhook_url_env
+    error_message = "A null n8n_image_tag runs the chart default, so a pre-2.30.0 runner tag must not emit WEBHOOK_URL"
+  }
+}
+
+run "legacy_webhook_url_ignores_runner_tag_without_a_custom_image" {
+  command = plan
+
+  variables {
+    n8n_image_tag             = "stable"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = !local.n8n_needs_legacy_webhook_url_env
+    error_message = "The runner-tag fallback is for custom images only; the upstream `stable` tag counts as current"
+  }
+}
