@@ -3721,14 +3721,17 @@ run "connection_budget_warns_when_pool_size_is_raised" {
 }
 
 # n8n_worker_pools ceilings must count toward the same budget. node_max is
-# raised so the unrelated node-capacity check has room and this run proves
-# only the connection-budget arithmetic.
+# raised so the unrelated node-capacity check has room, and the chart is
+# attested so the worker-pools chart precondition does not abort the plan;
+# this run proves only the connection-budget arithmetic.
 run "connection_budget_counts_worker_pools" {
   command = plan
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
     node_max          = 20
+
+    n8n_worker_pools_chart_verified = true
     n8n_worker_pools = [
       { name = "gpu", min_replicas = 1, max_replicas = 4 },
       { name = "sec-team", min_replicas = 1, max_replicas = 3 },
