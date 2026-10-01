@@ -863,7 +863,7 @@ run "license_cert_secret_ref_defaults_to_null_and_changes_nothing" {
   command = plan
 
   assert {
-    condition     = local.n8n_license_uses_cert == false && local.n8n_license_cert_env == []
+    condition     = local.n8n_license_uses_cert == false && length(local.n8n_license_cert_env) == 0
     error_message = "Leaving n8n_license_cert_secret_ref null must not enable the offline certificate path or emit an N8N_LICENSE_CERT env entry"
   }
 }
@@ -887,17 +887,12 @@ run "license_cert_secret_ref_drops_the_key_from_the_shared_secret_and_sets_extra
   }
 
   assert {
-    condition = local.n8n_license_cert_env == [
-      {
-        name = "N8N_LICENSE_CERT"
-        valueFrom = {
-          secretKeyRef = {
-            name = "caller-license-cert"
-            key  = "cert"
-          }
-        }
-      },
-    ]
+    condition = (
+      length(local.n8n_license_cert_env) == 1 &&
+      local.n8n_license_cert_env[0].name == "N8N_LICENSE_CERT" &&
+      local.n8n_license_cert_env[0].valueFrom.secretKeyRef.name == "caller-license-cert" &&
+      local.n8n_license_cert_env[0].valueFrom.secretKeyRef.key == "cert"
+    )
     error_message = "local.n8n_license_cert_env must carry exactly one N8N_LICENSE_CERT entry sourced from n8n_license_cert_secret_ref via secretKeyRef"
   }
 }
