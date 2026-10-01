@@ -1074,12 +1074,17 @@ resource "helm_release" "n8n" {
     # The worker's n8n container runs a task broker on port 5679; its sidecar
     # connects over localhost using the auto-generated auth token.
     #
-    # The sidecar's image tag is left to the chart, which defaults it to the n8n
-    # application image's resolved tag (including appVersion fallback).
-    # That is correct for a published n8n tag but wrong
-    # for a custom image tagged something like "2.27.4-mypackages", since no such
-    # `n8nio/runners` tag exists, hence the n8n_task_runner_image_tag override,
-    # merged in only when set so the chart's inheritance stays the default.
+    # The sidecar's image repository and tag are left to the chart by default,
+    # which defaults the repository to n8nio/runners and the tag to the n8n
+    # application image's resolved tag (including appVersion fallback). The
+    # tag default is correct for a published n8n tag but wrong for a custom
+    # image tagged something like "2.27.4-mypackages", since no such
+    # `n8nio/runners` tag exists, hence the n8n_task_runner_image_tag override.
+    # n8n_task_runner_image_repository lets the runner image itself be
+    # mirrored, independently of n8n_image_repository. Repository and tag are
+    # merged key by key, not as a whole `image` map, so setting one does not
+    # blank the other the same way the top-level image block below avoids it.
+    # Both merged in only when set so the chart's inheritance stays the default.
     taskRunners = merge({
       enabled = var.n8n_task_runners_enabled
       authToken = {
@@ -1099,7 +1104,12 @@ resource "helm_release" "n8n" {
         limits   = { cpu = var.n8n_task_runner_cpu_limit, memory = var.n8n_task_runner_memory_limit }
       }
       },
-      var.n8n_task_runner_image_tag == null ? {} : { image = { tag = var.n8n_task_runner_image_tag } },
+      var.n8n_task_runner_image_repository == null && var.n8n_task_runner_image_tag == null ? {} : {
+        image = merge(
+          var.n8n_task_runner_image_repository == null ? {} : { repository = var.n8n_task_runner_image_repository },
+          var.n8n_task_runner_image_tag == null ? {} : { tag = var.n8n_task_runner_image_tag },
+        )
+      },
 
       # Custom launcher config, mounted over the runner image's baked-in
       # /etc/n8n-task-runners.json from a ConfigMap the caller creates.
@@ -1712,7 +1722,7 @@ check "graceful_shutdown_fits_grace_period" {
 }
 
 # ── Custom image guards ───────────────────────────────────────────────────────
-# Six plan-time warnings for custom-image, extra-volume and pull-secret
+# Seven plan-time warnings for custom-image, extra-volume and pull-secret
 # configurations that are accepted but almost certainly not what the caller
 # meant. All are warnings rather than errors: each is legitimate in some
 # deployment, and none can be decided with certainty from the inputs alone.
@@ -1765,8 +1775,8 @@ check "extra_volumes_should_be_mounted" {
 
 check "image_pull_secrets_need_a_custom_image" {
   assert {
-    condition     = length(var.n8n_image_pull_secrets) > 0 ? var.n8n_image_repository != null : true
-    error_message = "n8n_image_pull_secrets is set but n8n_image_repository is null, so every image the pods pull comes from a public registry: the chart's docker.n8n.io/n8nio/n8n and, with task runners on, n8nio/runners. Neither needs credentials, so the secrets are attached and never used. The cost is not zero: setting this input moves ownership of the ServiceAccount from the chart to the module. Clear it to hand the account back, or set n8n_image_repository to the private image these credentials are for."
+    condition     = length(var.n8n_image_pull_secrets) > 0 ? var.n8n_image_repository != null || var.n8n_task_runner_image_repository != null : true
+    error_message = "n8n_image_pull_secrets is set while both n8n_image_repository and n8n_task_runner_image_repository are null, so every image the pods pull comes from a public registry: the chart's docker.n8n.io/n8nio/n8n and, with task runners on, n8nio/runners. Neither needs credentials, so the secrets are attached and never used. The cost is not zero: setting this input moves ownership of the ServiceAccount from the chart to the module. Clear it to hand the account back, or set one of the private custom repositories these credentials are for."
   }
 }
 
@@ -1774,5 +1784,12 @@ check "task_runner_image_tag_requires_task_runners" {
   assert {
     condition     = var.n8n_task_runner_image_tag != null ? var.n8n_task_runners_enabled : true
     error_message = "n8n_task_runner_image_tag is set, but n8n_task_runners_enabled is false, so no runner sidecar is deployed and the tag is ignored. Set n8n_task_runners_enabled = true to apply it, or clear the tag to silence this warning."
+  }
+}
+
+check "task_runner_image_repository_requires_task_runners" {
+  assert {
+    condition     = var.n8n_task_runner_image_repository != null ? var.n8n_task_runners_enabled : true
+    error_message = "n8n_task_runner_image_repository is set, but n8n_task_runners_enabled is false, so no runner sidecar is deployed and the repository is ignored. Set n8n_task_runners_enabled = true to apply it, or clear the repository to silence this warning."
   }
 }

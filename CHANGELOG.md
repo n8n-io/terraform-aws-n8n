@@ -195,6 +195,17 @@ this project adheres to the stability contract in
   `create_database = false`, alongside the other managed-instance sizing
   inputs.
 
+- **`n8n_task_runner_image_repository`** (default `null`, chart
+  `taskRunners.image.repository`). Overrides the task runner sidecar's image
+  repository (`n8nio/runners` by default), independently of
+  `n8n_image_repository`, so the application and runner images can live in
+  different repositories on the same private mirror. Same bare-repository
+  validation (no scheme, tag, or digest) as `n8n_image_repository`. Setting
+  it with `n8n_task_runners_enabled = false` now warns
+  (`check.task_runner_image_repository_requires_task_runners`), and
+  `check.image_pull_secrets_need_a_custom_image` no longer warns on
+  `n8n_image_pull_secrets` when only this repository, not
+  `n8n_image_repository`, is set.
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
   annotates the default worker `ScaledObject` with

@@ -23,8 +23,9 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `multiMain.topologySpreadConstraints`, `multiMain.setup.keyTtl/checkInterval` | Not exposed; chart default used |
 | `taskRunners.enabled/nativePythonRunner/launcher.autoShutdownTimeout/resources` | `n8n_task_runners_enabled` / `n8n_task_runner_python_enabled` / `n8n_task_runner_auto_shutdown_timeout` / `n8n_task_runner_*_request`/`*_limit`. In this module's queue mode, `1.14.0` places runners on workers only; main and webhook pods have none |
 | `taskRunners.image.tag` | `n8n_task_runner_image_tag` (null = application image tag) |
+| `taskRunners.image.repository` | `n8n_task_runner_image_repository` (null = chart default `n8nio/runners`) |
 | `taskRunners.customConfig` | `n8n_task_runner_custom_config` (null = image's baked-in launcher config). The only route to the runner allow-lists, incl. `N8N_RUNNERS_STDLIB_ALLOW` for the native Python runner |
-| `taskRunners.image.repository/pullPolicy` | Not exposed; chart default used |
+| `taskRunners.image.pullPolicy` | Not exposed; chart default used |
 | `strategy` | Main Deployment only: `Recreate` with `rollingUpdate: null` for single-main; chart default for multi-main |
 | `service.type/port` | Hardcoded `ClusterIP` / `5678` |
 | `service.annotations`, `service.main.annotations`, `service.webhookProcessor.annotations`, `service.sessionAffinity` | Not exposed |
