@@ -5188,11 +5188,53 @@ run "db_max_allocated_storage_rejects_value_at_or_below_allocated_storage" {
   expect_failures = [var.db_max_allocated_storage]
 }
 
+// AWS requires the ceiling to be at least 10% above db_allocated_storage,
+// not merely greater than it: 54 passes a strict `>` check against 50 but
+// is still below the 55 the 10% floor requires, and AWS rejects it at apply
+// with "Invalid max storage size" rather than at plan time.
+run "db_max_allocated_storage_rejects_value_below_the_ten_percent_floor" {
+  command = plan
+
+  variables {
+    db_allocated_storage     = 50
+    db_max_allocated_storage = 54
+  }
+
+  expect_failures = [var.db_max_allocated_storage]
+}
+
 run "db_max_allocated_storage_rejects_value_above_the_64_tib_ceiling" {
   command = plan
 
   variables {
     db_max_allocated_storage = 65537
+  }
+
+  expect_failures = [var.db_max_allocated_storage]
+}
+
+run "db_max_allocated_storage_accepts_the_64_tib_ceiling" {
+  command = plan
+
+  variables {
+    db_max_allocated_storage = 65536
+  }
+
+  # 65536 is exactly the allowed maximum; this would catch a regression that
+  # tightened the ceiling condition (e.g. from <= 65536 to < 65536), which
+  # the rejection test above cannot: it only pins the failure side.
+}
+
+// RDS's max_allocated_storage is integer GiB. Caught on the input so the
+// error names db_max_allocated_storage and the caller's own line, rather
+// than surfacing from aws_db_instance.n8n inside the module where the
+// attribute is called max_allocated_storage and the file is not one the
+// caller owns.
+run "fractional_db_max_allocated_storage_fails_validation" {
+  command = plan
+
+  variables {
+    db_max_allocated_storage = 400.5
   }
 
   expect_failures = [var.db_max_allocated_storage]

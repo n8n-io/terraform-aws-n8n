@@ -14,14 +14,19 @@ this project adheres to the stability contract in
   `max_allocated_storage` on `aws_db_instance.n8n`. `null` (the default)
   leaves it unset, so allocated storage stays fixed at `db_allocated_storage`
   exactly as before. When set, AWS grows `allocated_storage` automatically
-  as free space runs low, up to this ceiling. Must be greater than
-  `db_allocated_storage` and at most 65536 GB (RDS PostgreSQL's 64 TiB
-  ceiling). Unlike the Azure sibling module's storage-autogrow input, this
-  needs no drift-guard workaround: the AWS provider documents that it
-  automatically hides the resulting `allocated_storage` drift from the next
-  plan once `max_allocated_storage` is configured, so no
-  `lifecycle.ignore_changes` (conditional or otherwise) is required. Set to
-  `400` in the `medium` example. Triggers a non-blocking check warning when
+  as free space runs low, up to this ceiling. Must be a whole number of GB
+  at least 10% greater than `db_allocated_storage` (AWS's own floor for the
+  ceiling; anything less fails at apply with "Invalid max storage size")
+  and at most 65536 GB (RDS PostgreSQL's 64 TiB ceiling). Unlike the Azure
+  sibling module's storage-autogrow input, this needs no drift-guard
+  workaround: the AWS provider documents that it automatically hides the
+  resulting `allocated_storage` drift from the next plan once
+  `max_allocated_storage` is configured, so no `lifecycle.ignore_changes`
+  (conditional or otherwise) is required while autoscaling stays on.
+  Disabling it later by setting this input back to `null` ends that
+  suppression, so raise `db_allocated_storage` to the live size first or the
+  next plan proposes shrinking it back down. Set to `400` in the `medium`
+  example. Triggers a non-blocking check warning when
   `create_database = false`, alongside the other managed-instance sizing
   inputs.
 
