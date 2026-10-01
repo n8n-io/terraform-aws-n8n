@@ -397,6 +397,11 @@ run "eks_network_policy_enabled_renders_vpc_cni_addon_with_network_policy" {
     condition     = aws_eks_addon.vpc_cni[0].resolve_conflicts_on_create == "OVERWRITE"
     error_message = "resolve_conflicts_on_create must be OVERWRITE to adopt the self-managed vpc-cni EKS bootstraps at cluster creation"
   }
+
+  assert {
+    condition     = aws_eks_addon.vpc_cni[0].preserve == true
+    error_message = "preserve must be true: without it, flipping eks_network_policy_enabled back to false destroys this resource via DeleteAddon without preserving the aws-node DaemonSet, cutting off pod networking on a live cluster instead of leaving a self-managed vpc-cni behind"
+  }
 }
 
 run "eks_network_policy_enabled_without_create_eks_warns" {
@@ -420,6 +425,17 @@ run "eks_network_policy_enabled_without_create_eks_warns" {
     condition     = length(aws_eks_addon.vpc_cni) == 0
     error_message = "eks_network_policy_enabled = true while create_eks = false must still create no aws_eks_addon.vpc_cni: the module manages no vpc-cni addon on an existing cluster"
   }
+}
+
+run "eks_network_policy_enabled_requires_kubernetes_1_25" {
+  command = plan
+
+  variables {
+    eks_network_policy_enabled = true
+    kubernetes_version         = "1.24"
+  }
+
+  expect_failures = [var.eks_network_policy_enabled]
 }
 
 run "create_eks_false_requires_existing_eks_cluster_name" {

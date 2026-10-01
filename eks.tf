@@ -304,9 +304,21 @@ resource "aws_eks_addon" "pod_identity_agent" {
 # configuration_values.enableNetworkPolicy must be the string "true", not a
 # JSON boolean, the addon's schema rejects a boolean here. Requires VPC CNI
 # >= 1.14 and Kubernetes >= 1.25; this module leaves addon_version unpinned
-# (resolves AWS's current default, see docs/versioning.md) and defaults
-# kubernetes_version well above the floor, so both are satisfied out of the box.
+# (resolves AWS's current default, see docs/versioning.md) and
+# var.eks_network_policy_enabled's own validation rejects a kubernetes_version
+# below 1.25, so both floors are satisfied whenever this resource exists.
 # https://docs.aws.amazon.com/eks/latest/userguide/cni-network-policy.html
+#
+# preserve = true: flipping var.eks_network_policy_enabled back to false
+# destroys this resource, which otherwise calls EKS's DeleteAddon without
+# preserving anything, removing the aws-node DaemonSet from a live cluster and
+# cutting off pod networking for existing nodes and new ones alike. preserve
+# tells DeleteAddon to leave the running vpc-cni DaemonSet and its
+# configuration in place as a self-managed installation instead, which is
+# exactly the state the toggle's description promises opting out returns to:
+# only EKS's own management of the addon's settings and update notifications
+# goes away, not vpc-cni itself.
+# https://docs.aws.amazon.com/eks/latest/APIReference/API_DeleteAddon.html
 #
 # Skipped when create_eks = false: check.existing_eks_cluster_needs_its_own_network_policy_toggle
 # below warns if var.eks_network_policy_enabled is left true on that path.
@@ -318,6 +330,7 @@ resource "aws_eks_addon" "vpc_cni" {
   addon_name                  = "vpc-cni"
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
+  preserve                    = true
 
   configuration_values = jsonencode({
     enableNetworkPolicy = "true"

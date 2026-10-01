@@ -240,10 +240,12 @@ this project adheres to the stability contract in
   cluster creation) and sets `configuration_values` to turn on the VPC
   CNI's native Kubernetes NetworkPolicy enforcement
   (`enableNetworkPolicy = "true"`). Requires VPC CNI >= 1.14 and
-  Kubernetes >= 1.25, both already satisfied by every version this module
-  supports. Creates no Kubernetes NetworkPolicy objects itself (write your
-  own once enforcement is on); this is the port of terraform-azurerm-n8n PR
-  #44's `aks_network_policy` to EKS's addon-based equivalent. Default false
+  Kubernetes >= 1.25; a plan-time validation on the input itself rejects
+  an older `kubernetes_version` rather than letting the combination reach
+  an apply-time failure or a silently inert enforcement engine. Creates no
+  Kubernetes NetworkPolicy objects itself (write your own once enforcement
+  is on); this is the port of terraform-azurerm-n8n PR #44's
+  `aks_network_policy` to EKS's addon-based equivalent. Default false
   leaves EKS's own self-managed vpc-cni untouched, so every existing
   caller sees no plan diff. Ignored, with a plan-time warning
   (`check.existing_eks_cluster_needs_its_own_network_policy_toggle`),
@@ -251,7 +253,14 @@ this project adheres to the stability contract in
   existing cluster. Incompatible with a root module that already manages
   its own `aws_eks_addon` for the same cluster's vpc-cni (e.g.
   `examples/large`'s `WARM_ENI_TARGET`/`WARM_IP_TARGET` tuning); see the
-  variable's description.
+  variable's description. Adopting with `OVERWRITE` resets any existing
+  vpc-cni configuration, including hand-edited `aws-node` DaemonSet
+  settings that predate this addon, to the module's single key, and
+  `resolve_conflicts_on_update = "OVERWRITE"` repeats that reset on every
+  later apply while the toggle stays true. The addon sets `preserve =
+  true`, so flipping the toggle back to `false` leaves the running
+  vpc-cni DaemonSet in place as a self-managed installation instead of
+  EKS deleting it, avoiding a pod-networking outage on a live cluster.
 
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
