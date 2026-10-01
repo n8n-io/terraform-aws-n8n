@@ -13,7 +13,7 @@ This example is two things layered together, same shape as the single-layer exam
 1. **Stand-ins for infrastructure a platform team already has**, all plain Terraform, entirely independent of the `terraform-aws-n8n` module:
    - An `aws_eks_cluster` with its own node group, IAM roles, and `eks-pod-identity-agent` addon (same as `examples/customer-managed-cluster`).
    - An `aws_db_instance` (RDS PostgreSQL) with its own subnet group and security group.
-   - An `aws_elasticache_replication_group` with transit encryption required and an AUTH token (same as `examples/customer-managed-redis`).
+   - An `aws_elasticache_replication_group` with transit encryption required and an AUTH token, and an `aws_elasticache_parameter_group` (family `redis7`, `maxmemory-policy = noeviction`) (same as `examples/customer-managed-redis`).
    - An `aws_s3_bucket` with its own public-access block and SSE-S3 configuration (same as `examples/customer-managed-s3`).
    - A `kubernetes_ingress_v1` and its Route53 alias record, since `create_ingress = false` means the module itself owns none of that either; see "Why this example owns its own Ingress" below.
 2. **A direct `module "controllers"` call** (`source = "../../modules/controllers"`), installing the AWS Load Balancer Controller, Cluster Autoscaler, metrics-server, KEDA, and the EBS CSI driver against the stand-in cluster, standing in for whatever a platform team's own GitOps or IaC would install onto its shared cluster.

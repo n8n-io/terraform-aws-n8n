@@ -8,7 +8,7 @@ Use this when your organization already runs Redis/ElastiCache for other workloa
 
 This example is two things layered together:
 
-1. **A stand-in for infrastructure a customer already has.** `main.tf`'s "Customer-managed Redis (stand-in)" section provisions an `aws_elasticache_replication_group` (two nodes, automatic failover, transit encryption required, an AUTH token) with plain Terraform resources, entirely independent of the `terraform-aws-n8n` module. In a real deployment this section would not exist: your Redis would already be running, owned by whatever created it. The AUTH token is a plain variable (`customer_managed_redis_auth_token`), not a generated `random_password`, deliberately: the module gates a resource count on whether `redis_auth_token` is set, and a count can never depend on a value unknown until apply, which a fresh `random_password.result` always is on its first create. A real customer-managed Redis's token is already a known secret anyway, not something Terraform would generate in the same apply.
+1. **A stand-in for infrastructure a customer already has.** `main.tf`'s "Customer-managed Redis (stand-in)" section provisions an `aws_elasticache_replication_group` (two nodes, automatic failover, transit encryption required, an AUTH token) and an `aws_elasticache_parameter_group` (family `redis7`, `maxmemory-policy = noeviction`) with plain Terraform resources, entirely independent of the `terraform-aws-n8n` module. In a real deployment this section would not exist: your Redis would already be running, owned by whatever created it. The AUTH token is a plain variable (`customer_managed_redis_auth_token`), not a generated `random_password`, deliberately: the module gates a resource count on whether `redis_auth_token` is set, and a count can never depend on a value unknown until apply, which a fresh `random_password.result` always is on its first create. A real customer-managed Redis's token is already a known secret anyway, not something Terraform would generate in the same apply.
 2. **Everything the `terraform-aws-n8n` module creates, except its Redis tier** (`create_elasticache = false`): VPC, EKS cluster, node group, RDS PostgreSQL, S3 bucket, AWS Load Balancer Controller, Cluster Autoscaler, metrics-server, KEDA, and the n8n Helm release. The module is wired at the stand-in replication group's endpoint and AUTH token exactly as it would be at a real customer-managed Redis.
 
 ## Why AUTH and TLS specifically
@@ -19,7 +19,7 @@ The root README's "Bring your own Redis" section used to say the customer-manage
 
 To point this at a Redis you actually run instead of the stand-in:
 
-1. Delete the entire "Customer-managed Redis (stand-in)" section from `main.tf` (the security group, subnet group, and `aws_elasticache_replication_group` resources), and the `customer_managed_redis_auth_token` / `customer_managed_redis_node_type` variables it used.
+1. Delete the entire "Customer-managed Redis (stand-in)" section from `main.tf` (the security group, subnet group, parameter group, and `aws_elasticache_replication_group` resources), and the `customer_managed_redis_auth_token` / `customer_managed_redis_node_type` variables it used.
 2. In `module "n8n"`, replace the values wired to those deleted resources with your own Redis's coordinates:
    ```hcl
    create_elasticache               = false
