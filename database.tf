@@ -21,7 +21,8 @@ resource "random_password" "db_password" {
 # Gated on var.db_storage_encrypted so callers with existing unencrypted RDS
 # deployments can opt out and avoid the RDS replacement that enabling storage
 # encryption triggers (AWS does not support flipping storage_encrypted in
-# place — see README.md → "Upgrading from a pre-CMK apply").
+# place; to encrypt existing data, restore an encrypted snapshot copy through
+# var.db_snapshot_identifier).
 #
 # Also gated on var.create_db_kms_key: when a caller supplies their own KMS key
 # (e.g. a centrally-managed CMK a security team already owns), the module must
@@ -533,9 +534,10 @@ resource "aws_db_instance" "n8n" {
   # Storage encryption with the module CMK (clears CKV_AWS_16). Passing false /
   # null preserves the prior unencrypted default so existing applies see no
   # plan change. Flipping db_storage_encrypted from false to true on an
-  # existing instance forces a replacement — AWS does not support enabling
-  # storage encryption in place. See README.md → "Upgrading from a pre-CMK
-  # apply" for the snapshot → restore-with-encryption migration recipe.
+  # existing instance forces a replacement: AWS does not support enabling
+  # storage encryption in place. To keep the data, snapshot the instance, copy
+  # the snapshot with encryption enabled, and restore the copy through
+  # var.db_snapshot_identifier.
   storage_encrypted = var.db_storage_encrypted
   kms_key_id        = local.db_kms_key_arn
 
