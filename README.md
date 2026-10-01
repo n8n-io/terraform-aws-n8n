@@ -180,7 +180,9 @@ This module ships against specific provider majors. Notably:
   Kubernetes `1.34` or newer; on a `1.31` to `1.33` cluster pin it to
   `3.13.1` (0.8.x) or set `install_metrics_server = false`. The default
   `keda_chart_version` (`2.21.0`) is tested by KEDA on Kubernetes `1.34` to
-  `1.36`. The chart does not block other versions, so on a cluster outside
+  `1.36`. Callers that leave `keda_chart_version` unset get an in-place,
+  cluster-wide KEDA `helm upgrade` on their next apply after upgrading this
+  module, so read the guidance below first. The chart does not block other versions, so on a cluster outside
   that window pin a release whose
   [compatibility matrix](https://keda.sh/docs/2.21/operate/cluster/) covers
   it: `2.20.2` on `1.33`, `2.19.0` on `1.32`, `2.18.3` on `1.31`. Treat that
