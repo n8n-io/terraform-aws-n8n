@@ -467,8 +467,8 @@ resource "aws_db_instance" "n8n" {
   # apply also destroys random_password.db_password[0] and
   # kubernetes_secret.n8n_db[0], so there is no way back to the old
   # Terraform-known password afterward either. See README.md -> "Switching to
-  # the write-only RDS password" for the safe migration recipe: reset the live
-  # credential out of band before flipping this on.
+  # the write-only RDS password" for the safe migration recipe: migrate with
+  # db_admin_password_wo set to the instance's current password, then rotate.
   password            = var.db_password_write_only ? null : random_password.db_password[0].result
   password_wo         = var.db_password_write_only ? var.db_admin_password_wo : null
   password_wo_version = var.db_password_write_only ? var.db_admin_password_wo_version : null
