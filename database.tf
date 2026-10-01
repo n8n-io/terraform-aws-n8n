@@ -911,39 +911,21 @@ check "rds_tuning_requires_module_managed_database" {
 # different custom parameter group with its own max_connections override is
 # outside what a Terraform plan can see and is not modeled here.
 #
-# The table also leaves no margin for PostgreSQL's own
-# superuser_reserved_connections (default 3) or RDS's own
-# rds.rds_superuser_reserved_connections (default 2 from PostgreSQL 15
-# onward): those slots are carved out of max_connections, not added on top of
-# it, so treat the table's number as a hard ceiling with no headroom already
-# built in, not a budget safe to fill exactly.
+# The table holds each class's raw max_connections. PostgreSQL's own
+# superuser_reserved_connections and RDS's own
+# rds.rds_superuser_reserved_connections carve a few slots out of that
+# figure; db_max_connections_reserved below accounts for them before the
+# check compares against local.n8n_pg_peak_connections.
 locals {
   db_max_connections_by_instance_class = {
     # Burstable (T family). Memory doubles per size and is identical between
     # t3 and t4g at the same size.
-    #
-    # db.t3.small, the module's own shipped db_instance_class default, is
-    # deliberately left out of this table. Its true AWS-documented default
-    # (225, same formula as every other row here) sits below what this
-    # module's own default main/worker/webhook ceilings already request
-    # (6 + 10 + 8 = 24 pods x the default db_postgresdb_pool_size of 10 =
-    # 240) -- a real, pre-existing gap examples/worker-pools/README.md
-    # already flags in prose, not a mistake in this table. Every other check
-    # in this module stays silent against the module's own untouched
-    # defaults (see autoscaling_maxima_fit_node_group_capacity in
-    # scaling.tf, sized so the default node group fits the default
-    # ceilings); including db.t3.small here would make this one check the
-    # exception, firing on every default deployment the moment it is added
-    # rather than only on a caller's deliberate choice. Tightening the
-    # module's own defaults to close that gap is a separate, broader change
-    # than this advisory check. db.t4g.micro below is in the table: picking
-    # it deliberately, without adjusting anything else, is exactly the
-    # misconfiguration this check exists to catch.
     "db.t4g.micro"  = 112
     "db.t4g.small"  = 225
     "db.t4g.medium" = 450
     "db.t4g.large"  = 901
     "db.t3.micro"   = 112
+    "db.t3.small"   = 225
     "db.t3.medium"  = 450
     "db.t3.large"   = 901
     # General Purpose (M family). 4 GiB of memory per vCPU.
@@ -967,6 +949,14 @@ locals {
   }
   db_max_connections_known = lookup(local.db_max_connections_by_instance_class, var.db_instance_class, null)
 
+  # PostgreSQL's own superuser_reserved_connections (default 3) plus RDS's own
+  # rds.rds_superuser_reserved_connections (default 2 from PostgreSQL 15
+  # onward, which is what every db_engine_version this module ships defaults
+  # to) are carved out of max_connections, not added on top of it. Subtracted
+  # here so the check below compares against connections a non-superuser pool
+  # can actually use, not the raw max_connections figure.
+  db_max_connections_reserved = 5
+
   # sum()'s [0] seed keeps the no-pools default at 0 rather than erroring on
   # an empty list.
   n8n_worker_pool_max_replicas_sum = sum(concat([0], [for p in var.n8n_worker_pools : p.max_replicas]))
@@ -982,7 +972,7 @@ locals {
 check "db_postgresdb_pool_size_fits_known_max_connections" {
   assert {
     condition = (var.create_database && local.db_max_connections_known != null) ? (
-      local.n8n_pg_peak_connections <= local.db_max_connections_known
+      local.n8n_pg_peak_connections <= local.db_max_connections_known - local.db_max_connections_reserved
     ) : true
     error_message = join("", [
       "db_postgresdb_pool_size (${var.db_postgresdb_pool_size}) times the modeled pod ceiling (main ",
@@ -990,12 +980,12 @@ check "db_postgresdb_pool_size_fits_known_max_connections" {
       tostring(var.n8n_webhook_hpa_max_replicas),
       local.n8n_worker_pool_max_replicas_sum > 0 ? " + worker pools ${local.n8n_worker_pool_max_replicas_sum}" : "",
       ") requests up to ${local.n8n_pg_peak_connections} connections, more than the ",
-      "${coalesce(local.db_max_connections_known, 0)} default max_connections for db_instance_class = ",
-      "\"${var.db_instance_class}\" (LEAST(DBInstanceClassMemory/9531392, 5000); AWS RDS quotas and ",
-      "constraints). That figure already has no margin for PostgreSQL's own superuser_reserved_connections ",
-      "or RDS's rds.rds_superuser_reserved_connections, so real headroom is a few connections tighter still. ",
-      "Lower db_postgresdb_pool_size or the autoscaler maxima, or raise db_instance_class. This diagnostic is ",
-      "advisory and does not fail the plan.",
+      "${coalesce(local.db_max_connections_known, 0) - local.db_max_connections_reserved} connections usable for ",
+      "db_instance_class = \"${var.db_instance_class}\" (${coalesce(local.db_max_connections_known, 0)} default ",
+      "max_connections, LEAST(DBInstanceClassMemory/9531392, 5000); AWS RDS quotas and constraints -- minus ",
+      "${local.db_max_connections_reserved} reserved for PostgreSQL's own superuser_reserved_connections and ",
+      "RDS's own rds.rds_superuser_reserved_connections). Lower db_postgresdb_pool_size or the autoscaler ",
+      "maxima, or raise db_instance_class. This diagnostic is advisory and does not fail the plan.",
     ])
   }
 }
