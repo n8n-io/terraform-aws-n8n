@@ -129,7 +129,7 @@ variable "n8n_task_runner_image_tag" {
 }
 
 variable "n8n_task_runner_image_repository" {
-  description = "Container image repository for the task runner sidecar (n8nio/runners), without a tag or digest (e.g. \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners\"). Leave null to use the Helm chart's own repository (n8nio/runners). Set alongside n8n_image_repository when mirroring both images into the same private registry; the two are independent. Use n8n_task_runner_image_tag for the runner tag."
+  description = "Container image repository for the task runner sidecar (n8nio/runners), without a tag or digest (e.g. \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners\"). Leave null to use the Helm chart's own repository (n8nio/runners). Set alongside n8n_image_repository when mirroring both images into the same private registry; the two are independent. Use n8n_task_runner_image_tag for the runner tag. Private-registry pull access is granted the same way as n8n_image_repository, through n8n_image_pull_secrets on the module-managed ServiceAccount."
   type        = string
   default     = null
 
