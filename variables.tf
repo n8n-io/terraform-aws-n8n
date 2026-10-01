@@ -281,6 +281,14 @@ variable "create_ebs_csi" {
   nullable    = false
 }
 
+
+variable "eks_network_policy_enabled" {
+  description = "When true, the module adopts the cluster's vpc-cni into an EKS-managed aws_eks_addon (resolve_conflicts_on_create = \"OVERWRITE\", needed because EKS bootstraps vpc-cni as a self-managed workload at cluster creation) and sets configuration_values to enable the VPC CNI's native Kubernetes NetworkPolicy enforcement (enableNetworkPolicy = \"true\"). Requires VPC CNI >= 1.14 and Kubernetes >= 1.25; every version this module currently supports satisfies both (the addon version is left unpinned, like every other addon this module installs, see docs/versioning.md). This toggle only turns on the enforcement engine: it creates no Kubernetes NetworkPolicy objects, write your own once enabled, the same split terraform-azurerm-n8n's aks_network_policy documents. Default false leaves EKS's own self-managed vpc-cni untouched, matching current behavior with zero plan diff for every existing caller. Ignored when create_eks = false (check.existing_eks_cluster_needs_its_own_network_policy_toggle warns): the module manages no vpc-cni addon on an existing cluster. Also incompatible with any root module that already manages its own aws_eks_addon for the same cluster's vpc-cni, such as examples/large's WARM_ENI_TARGET/WARM_IP_TARGET tuning, AWS rejects two Terraform resources both claiming the same addon with a ResourceInUseException. If you already manage vpc-cni yourself, leave this false and fold enableNetworkPolicy = \"true\" into your own configuration_values instead."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "n8n_webhook_url" {
   description = "Public HTTPS base URL used for webhook callbacks (e.g. <https://webhooks.example.com>). Defaults to https://<n8n_domain> when not set. Override when webhooks are served from a different host than the n8n UI."
   type        = string

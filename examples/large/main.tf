@@ -242,6 +242,13 @@ module "n8n" {
 # WARM_IP_TARGET=2 limits the warm pool to 2 IPs per node — 10 nodes use
 # only 20 IPs instead of 2,400, leaving subnets viable at full scale.
 # This must be applied after the cluster exists — depends_on enforces ordering.
+#
+# Do not set module.n8n's own eks_network_policy_enabled = true alongside
+# this example: that input creates its own aws_eks_addon.vpc_cni inside the
+# module, and AWS rejects two Terraform resources both claiming the same
+# cluster's vpc-cni addon with a ResourceInUseException. Fold
+# enableNetworkPolicy = "true" into this resource's own configuration_values
+# instead if this example needs NetworkPolicy enforcement.
 
 resource "aws_eks_addon" "vpc_cni" {
   cluster_name                = module.n8n.cluster_name
