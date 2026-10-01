@@ -1846,7 +1846,12 @@ variable "db_max_allocated_storage" {
     # Integer-exact form of db_max_allocated_storage >= 1.1 * db_allocated_storage:
     # AWS requires the autoscaling ceiling to be at least 10% above the current
     # allocated storage and otherwise rejects it at apply with "Invalid max
-    # storage size", not at plan time.
+    # storage size", not at plan time. AWS enforces this floor against the
+    # live allocated_storage, not the configured db_allocated_storage: once
+    # autoscaling has already grown storage past the configured value, a
+    # ceiling that passes this plan-time check can still be rejected at apply
+    # for sitting below 1.1x the live size. Raise db_allocated_storage to
+    # match the live size before lowering the ceiling.
     condition = var.db_max_allocated_storage == null || (
       var.db_max_allocated_storage * 10 >= var.db_allocated_storage * 11 &&
       var.db_max_allocated_storage <= 65536

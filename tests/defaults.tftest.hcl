@@ -5203,6 +5203,20 @@ run "db_max_allocated_storage_rejects_value_below_the_ten_percent_floor" {
   expect_failures = [var.db_max_allocated_storage]
 }
 
+run "db_max_allocated_storage_accepts_the_ten_percent_floor" {
+  command = plan
+
+  variables {
+    db_allocated_storage     = 50
+    db_max_allocated_storage = 55
+  }
+
+  # 55 is exactly 1.1x db_allocated_storage; this would catch a regression
+  # that tightened the floor condition (e.g. from >= to >, or a rounding
+  # tolerance refactor), which the rejection test above cannot: it only
+  # pins the failure side.
+}
+
 run "db_max_allocated_storage_rejects_value_above_the_64_tib_ceiling" {
   command = plan
 
