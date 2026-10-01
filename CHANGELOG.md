@@ -9,6 +9,22 @@ this project adheres to the stability contract in
 
 ### Added
 
+- **`db_max_allocated_storage`** (number, default `null`) enables RDS
+  Storage Autoscaling on the managed PostgreSQL instance, mapped to
+  `max_allocated_storage` on `aws_db_instance.n8n`. `null` (the default)
+  leaves it unset, so allocated storage stays fixed at `db_allocated_storage`
+  exactly as before. When set, AWS grows `allocated_storage` automatically
+  as free space runs low, up to this ceiling. Must be greater than
+  `db_allocated_storage` and at most 65536 GB (RDS PostgreSQL's 64 TiB
+  ceiling). Unlike the Azure sibling module's storage-autogrow input, this
+  needs no drift-guard workaround: the AWS provider documents that it
+  automatically hides the resulting `allocated_storage` drift from the next
+  plan once `max_allocated_storage` is configured, so no
+  `lifecycle.ignore_changes` (conditional or otherwise) is required. Set to
+  `400` in the `medium` example. Triggers a non-blocking check warning when
+  `create_database = false`, alongside the other managed-instance sizing
+  inputs.
+
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
   annotates the default worker `ScaledObject` with

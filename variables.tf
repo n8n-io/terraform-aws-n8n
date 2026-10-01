@@ -1837,6 +1837,20 @@ variable "db_allocated_storage" {
   }
 }
 
+variable "db_max_allocated_storage" {
+  description = "Upper bound in GB for RDS Storage Autoscaling on the managed instance. null (the default) disables autoscaling entirely: allocated storage stays fixed at db_allocated_storage, and AWS never grows it on its own. When set, AWS grows allocated_storage automatically as free space runs low, up to this ceiling, and the AWS provider automatically hides the resulting allocated_storage drift from the next plan (no lifecycle.ignore_changes needed, unlike azurerm_postgresql_flexible_server's auto_grow_enabled in the Azure sibling module, which has no equivalent provider-side drift suppression). Must be greater than db_allocated_storage and at most 65536 GB, RDS PostgreSQL's 64 TiB storage ceiling. Ignored when create_database = false."
+  type        = number
+  default     = null
+
+  validation {
+    condition = var.db_max_allocated_storage == null || (
+      var.db_max_allocated_storage > var.db_allocated_storage &&
+      var.db_max_allocated_storage <= 65536
+    )
+    error_message = "db_max_allocated_storage must be null, or greater than db_allocated_storage (${var.db_allocated_storage}) and at most 65536 GB (RDS PostgreSQL's 64 TiB storage ceiling)."
+  }
+}
+
 variable "db_backup_retention_period" {
   description = "Number of days to retain automated RDS backups. 0 disables automated backups (not recommended, and it also disables point-in-time recovery). AWS allows up to 35 days. Ignored when create_database = false."
   type        = number

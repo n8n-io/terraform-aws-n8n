@@ -1561,6 +1561,12 @@ run "rds_hardened_defaults" {
   }
 
   assert {
+    condition     = aws_db_instance.n8n[0].max_allocated_storage == null
+    error_message = "db_max_allocated_storage should default to null: storage autoscaling off"
+  }
+
+
+  assert {
     condition     = aws_db_instance.n8n[0].multi_az == true
     error_message = "db_multi_az should default to true: HA is the point of the multi template"
   }
@@ -5158,6 +5164,40 @@ run "rds_deletion_controls_with_external_database_warn" {
   expect_failures = [check.rds_tuning_requires_module_managed_database]
 }
 
+run "rds_max_allocated_storage_with_external_database_warns" {
+  command = plan
+
+  variables {
+    create_database          = false
+    db_host                  = "db.internal.example.com"
+    db_password              = "external-db-password"
+    db_max_allocated_storage = 100
+  }
+
+  expect_failures = [check.rds_tuning_requires_module_managed_database]
+}
+
+run "db_max_allocated_storage_rejects_value_at_or_below_allocated_storage" {
+  command = plan
+
+  variables {
+    db_allocated_storage     = 50
+    db_max_allocated_storage = 50
+  }
+
+  expect_failures = [var.db_max_allocated_storage]
+}
+
+run "db_max_allocated_storage_rejects_value_above_the_64_tib_ceiling" {
+  command = plan
+
+  variables {
+    db_max_allocated_storage = 65537
+  }
+
+  expect_failures = [var.db_max_allocated_storage]
+}
+
 # The identifier's pairing rules only bite when the module manages the
 # database. With create_database = false the module creates no RDS instance,
 # so an identifier that would otherwise be rejected (set while
@@ -6284,10 +6324,11 @@ run "custom_database_sizing" {
   command = plan
 
   variables {
-    db_instance_class    = "db.r6g.large"
-    db_allocated_storage = 200
-    db_multi_az          = true
-    db_engine_version    = "16.13"
+    db_instance_class        = "db.r6g.large"
+    db_allocated_storage     = 200
+    db_max_allocated_storage = 500
+    db_multi_az              = true
+    db_engine_version        = "16.13"
   }
 
   assert {
@@ -6298,6 +6339,11 @@ run "custom_database_sizing" {
   assert {
     condition     = aws_db_instance.n8n[0].allocated_storage == 200
     error_message = "db_allocated_storage variable did not propagate"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].max_allocated_storage == 500
+    error_message = "db_max_allocated_storage variable did not propagate"
   }
 
   assert {
