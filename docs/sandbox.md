@@ -19,6 +19,7 @@ Every input below is a plain override on the root module:
 | `n8n_webhook_hpa_min_replicas` / `n8n_webhook_hpa_max_replicas` | `1` | One webhook processor. |
 | `n8n_worker_keda_min_replicas` / `n8n_worker_keda_max_replicas` | `1` | One worker. |
 | `node_min` | `1` | The Cluster Autoscaler's floor. |
+| `node_desired` | `1` | Matches `node_min`; only applies at creation (Cluster Autoscaler owns the count afterward), but `node_desired`'s own validation requires it to sit within `[node_min, node_max]`, and its module default of `3` would fail a fresh apply of this profile otherwise. |
 | `node_max` | `2` | Leaves headroom for a rolling node replacement without paying for a second steady-state node. |
 | `db_instance_class` | `db.t4g.micro` | Cheapest Graviton Burstable RDS class. Low `max_connections`; see the budget section below. |
 | `db_postgresdb_pool_size` | `3` or lower | See the budget section below. |
