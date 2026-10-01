@@ -9,6 +9,11 @@ this project adheres to the stability contract in
 
 ### Added
 
+- `docs/shared-responsibility.md`: a single table summarizing what the
+  module does versus what the caller owns across cluster security add-ons,
+  network egress and DNS, secrets and Terraform state custody, backup and
+  restore, upgrades, and monitoring/alerting, linked from the README
+  "Out of scope" section and the Usage section.
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
   annotates the default worker `ScaledObject` with

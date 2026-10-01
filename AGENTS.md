@@ -460,8 +460,9 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
 - Each example has its own `README.md` documenting the runnable example.
 - `docs/troubleshooting.md`, `docs/post-deployment.md`,
   `docs/destroy-cleanup.md`, `docs/upgrading-n8n.md`, `docs/pod-identity.md`,
-  `docs/helm-chart-coverage.md`, and `docs/istio-ingress.md` cover
-  operator-facing concerns that don't belong inline in `README.md`.
+  `docs/helm-chart-coverage.md`, `docs/istio-ingress.md`, and
+  `docs/shared-responsibility.md` cover operator-facing concerns that don't
+  belong inline in `README.md`.
   `docs/versioning.md` is the contributor-facing
   inventory of every pinned version and the bump tier each falls into; read
   it before bumping any provider, chart, engine, or CI tool version.
