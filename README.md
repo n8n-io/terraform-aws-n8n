@@ -1455,7 +1455,7 @@ db_postgresdb_ssl_ca_pem              = file("${path.module}/global-bundle.pem")
 - `db_postgresdb_ssl_ca_pem` supplies the CA bundle to trust. Download it
   from AWS's trust store endpoint, `https://truststore.pki.rds.amazonaws.com`
   (the combined `global-bundle.pem` covers every region; per-region bundles
-  are also published there) — the module never fetches it itself. When set,
+  are also published there), the module never fetches it itself. When set,
   the module renders it into a module-managed `kubernetes_config_map_v1`,
   mounted read-only at `/etc/n8n/postgres-ssl-ca/ca.pem` on the main, worker,
   and webhook-processor pods, and points `DB_POSTGRESDB_SSL_CA_FILE` at that

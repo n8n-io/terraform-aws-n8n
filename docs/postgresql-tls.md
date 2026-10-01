@@ -128,9 +128,9 @@ unverified connection once the setting is live).
 ## PgBouncer topologies (`examples/large`)
 
 When `db_host` points at an in-cluster connection pooler rather than RDS
-directly — the pattern `examples/large/pgbouncer.tf` uses, with
+directly, the pattern `examples/large/pgbouncer.tf` uses, with
 `db_postgresdb_ssl_enabled = false` because the n8n-to-PgBouncer leg is plain
-TCP inside the cluster — `db_postgresdb_ssl_reject_unauthorized` and
+TCP inside the cluster, `db_postgresdb_ssl_reject_unauthorized` and
 `db_postgresdb_ssl_ca_pem` are inert for that leg by design: the warning
 `check` above flags exactly this combination. This module only ever
 configures the connection between n8n and `db_host`, so it has no visibility
