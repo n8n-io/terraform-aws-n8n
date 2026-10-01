@@ -911,7 +911,7 @@ run "accepts_db_password_write_only_with_secret_ref" {
 
   assert {
     condition     = length(kubernetes_secret.n8n_db) == 0
-    error_message = "kubernetes_secret.n8n_db must not exist when db_password_write_only is set — the module cannot copy a write-only value into a Secret."
+    error_message = "kubernetes_secret.n8n_db must not exist when db_password_write_only is set, the module cannot copy a write-only value into a Secret."
   }
 
   assert {
@@ -926,7 +926,7 @@ run "accepts_db_password_write_only_with_secret_ref" {
 
   assert {
     condition     = output.db_password == null
-    error_message = "db_password output must be null when db_password_write_only is set — the value never leaves the write-only argument."
+    error_message = "db_password output must be null when db_password_write_only is set, the value never leaves the write-only argument."
   }
 }
 

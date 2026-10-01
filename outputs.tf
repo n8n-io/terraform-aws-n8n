@@ -48,7 +48,7 @@ output "n8n_encryption_key" {
 }
 
 output "db_password" {
-  description = "Database password — module-managed when create_database = true, or the value of var.db_password when using an external database. Explicitly null when db_password_write_only = true, because the password never leaves aws_db_instance.n8n's write-only password_wo argument for Terraform to expose. Retrieve with: terraform output -raw db_password"
+  description = "Database password, module-managed when create_database = true, or the value of var.db_password when using an external database. Explicitly null when db_password_write_only = true, because the password never leaves aws_db_instance.n8n's write-only password_wo argument for Terraform to expose. Retrieve with: terraform output -raw db_password"
   value       = var.create_database ? (var.db_password_write_only ? null : random_password.db_password[0].result) : var.db_password
   sensitive   = true
 }

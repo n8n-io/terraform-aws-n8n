@@ -1997,7 +1997,7 @@ variable "db_password_secret_ref" {
 }
 
 variable "db_password_write_only" {
-  description = "When true, the module writes the RDS master password through aws_db_instance.n8n's write-only password_wo argument (sourced from db_admin_password_wo) instead of generating a password with random_password.db_password and storing it in plain text in Terraform state. Requires db_admin_password_wo to be set and db_password_secret_ref to reference a Kubernetes Secret you populate yourself (for example, synced from AWS Secrets Manager via External Secrets Operator) — the module cannot copy a write-only value into kubernetes_secret.n8n_db, so it creates no managed Secret and the db_password output is null on this path. Ignored (must stay false) when create_database = false; the module never manages a password for an external database."
+  description = "When true, the module writes the RDS master password through aws_db_instance.n8n's write-only password_wo argument (sourced from db_admin_password_wo) instead of generating a password with random_password.db_password and storing it in plain text in Terraform state. Requires db_admin_password_wo to be set and db_password_secret_ref to reference a Kubernetes Secret you populate yourself (for example, synced from AWS Secrets Manager via External Secrets Operator), the module cannot copy a write-only value into kubernetes_secret.n8n_db, so it creates no managed Secret and the db_password output is null on this path. Ignored (must stay false) when create_database = false; the module never manages a password for an external database."
   type        = bool
   default     = false
   nullable    = false
@@ -2027,7 +2027,7 @@ variable "db_admin_password_wo" {
 }
 
 variable "db_admin_password_wo_version" {
-  description = "Version marker for db_admin_password_wo, forwarded to aws_db_instance.n8n's password_wo_version. Increment this value whenever you rotate db_admin_password_wo — Terraform only re-applies a write-only value when its version number changes. Ignored when db_password_write_only = false."
+  description = "Version marker for db_admin_password_wo, forwarded to aws_db_instance.n8n's password_wo_version. Increment this value whenever you rotate db_admin_password_wo, Terraform only re-applies a write-only value when its version number changes. Ignored when db_password_write_only = false."
   type        = number
   default     = 1
   nullable    = false
