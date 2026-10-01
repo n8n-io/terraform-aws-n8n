@@ -453,8 +453,22 @@ resource "aws_db_instance" "n8n" {
   instance_class    = var.db_instance_class
   allocated_storage = var.db_allocated_storage
 
-  db_name             = "n8n_enterprise"
-  username            = "n8n"
+  db_name  = "n8n_enterprise"
+  username = "n8n"
+
+  # UNSAFE to flip db_password_write_only from false to true on an EXISTING
+  # instance today. AWS provider ~> 6.0 (the floor this module pins) carries
+  # an open, unfixed bug in aws_db_instance's Update path: migrating from
+  # `password` to `password_wo`/`password_wo_version` can leave
+  # MasterUserPassword unset on the ModifyDBInstance call, so the live
+  # instance's actual credential silently stops tracking db_admin_password_wo
+  # (hashicorp/terraform-provider-aws#42582; fix proposed in provider PR
+  # #47904, not yet merged as of this module's pinned constraint). The same
+  # apply also destroys random_password.db_password[0] and
+  # kubernetes_secret.n8n_db[0], so there is no way back to the old
+  # Terraform-known password afterward either. See README.md -> "Switching to
+  # the write-only RDS password" for the safe migration recipe: reset the live
+  # credential out of band before flipping this on.
   password            = var.db_password_write_only ? null : random_password.db_password[0].result
   password_wo         = var.db_password_write_only ? var.db_admin_password_wo : null
   password_wo_version = var.db_password_write_only ? var.db_admin_password_wo_version : null

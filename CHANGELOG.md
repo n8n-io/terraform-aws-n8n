@@ -140,7 +140,12 @@ this project adheres to the stability contract in
   (`db_password_write_only = false`) behavior is unchanged, and no
   `versions.tf` floor changes: the required Terraform (`>= 1.11`) and AWS
   provider (`~> 6.0`) constraints already satisfy write-only arguments
-  (added in AWS provider `5.88.0`).
+  (added in AWS provider `5.88.0`). Safe to enable from the first apply of a
+  new deployment; **unsafe to flip on an existing password-managed instance**
+  until an open AWS provider bug is fixed
+  (hashicorp/terraform-provider-aws#42582, not yet merged as of the pinned
+  `~> 6.0` constraint). See README.md -> "Switching to the write-only RDS
+  password" for the hazard and the safe migration recipe.
 
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
