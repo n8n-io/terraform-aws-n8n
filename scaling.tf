@@ -128,8 +128,8 @@ locals {
   # Verified upstream 1.12.0 removes runners from queue-mode mains, unchanged
   # through 1.14.0 (1.13.0 only reworks worker/webhook-processor replica
   # ownership; 1.14.0 only touches env/configmap rendering and validation
-  # messages; neither changes deployment-main.yaml's runner
-  # placement). Strip build metadata only: previews, older/future
+  # messages; neither changes deployment-main.yaml's runner placement).
+  # Strip build metadata only: previews, older/future
   # releases and custom repositories keep the conservative main-sidecar
   # allowance until their topology is verified.
   n8n_chart_has_worker_only_runners = (

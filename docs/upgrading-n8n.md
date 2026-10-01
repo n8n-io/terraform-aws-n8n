@@ -181,7 +181,8 @@ moves with `appVersion`, `2.40.5` → `2.41.4`. This is a forward move, but
 it still runs that release's database migrations. A pinned deployment keeps
 its running application version.
 
-No other change affects this module's rendered workloads:
+The upgrade rolls every n8n pod once, because the module's env list changes
+(see the `WEBHOOK_URL` item below). Nothing else changes behavior:
 
 - The chart no longer renders `N8N_AVAILABLE_BINARY_DATA_MODES`
   (n8n-io/n8n-hosting#185). n8n ignored it and only logged a deprecation
@@ -194,10 +195,25 @@ No other change affects this module's rendered workloads:
   module never sets the chart's `webhook.url` or enables the chart's
   Ingress, so the chart renders neither. Separately, the module stops
   sending the deprecated `WEBHOOK_URL` itself and the same three inputs
-  reject it. It is still sent when `n8n_image_tag` (or, for a custom image
-  whose tag is not a version, `n8n_task_runner_image_tag`) is below
-  `2.30.0`, the first n8n release that reads `N8N_WEBHOOK_URL`. A null or
-  other non-version tag counts as current.
+  reject it. Before `2.30.0`, the first n8n release that reads
+  `N8N_WEBHOOK_URL`, n8n builds webhook URLs from `WEBHOOK_URL` or else
+  from `http://<n8n_domain>:5678/`, so the module drops it only when the
+  tags prove the image is current:
+  - `n8n_image_tag` is a version of `2.30.0` or newer. For a custom image
+    (`n8n_image_repository` set) whose tag is not a version, with task
+    runners enabled, `n8n_task_runner_image_tag` is read instead.
+  - `n8n_image_tag` is null on the default chart repository at chart
+    `1.12.0` or newer, whose `appVersion` is a concrete `2.39.6` or newer.
+
+  In every other case `WEBHOOK_URL` is still sent, and n8n logs its
+  deprecation warning. That includes floating tags such as `stable` or
+  `latest` (the chart pulls with `IfNotPresent`, so a node can keep running
+  an older cached image), a private chart mirror (`n8n_chart_repository`)
+  with a null `n8n_image_tag`, and a custom image whose tags carry no
+  version. To remove the warning, pin `n8n_image_tag` to a version of
+  `2.30.0` or newer. For a custom image whose tag is not a version, set
+  `n8n_task_runner_image_tag` to that version with task runners enabled.
+  An image older than `2.30.0` keeps `WEBHOOK_URL`, because it needs it.
 - Chart validation now reports every failure in one render instead of
   stopping at the first. Messages only.
 

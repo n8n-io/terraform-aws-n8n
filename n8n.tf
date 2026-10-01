@@ -102,29 +102,69 @@ locals {
 }
 
 locals {
-  # Whether the running n8n predates N8N_WEBHOOK_URL (added in 2.30.0) and so
-  # still needs the legacy WEBHOOK_URL. Decided from the tags alone, since the
-  # module cannot see an image's real version:
-  #   - n8n_image_tag null: the chart default runs (2.39.6 or newer from chart
-  #     1.12.0), so no. n8n_task_runner_image_tag is not consulted, because it
-  #     only tags the sidecar and says nothing about the app image.
+  # Whether the running n8n may predate N8N_WEBHOOK_URL (added in 2.30.0) and
+  # so still needs the legacy WEBHOOK_URL. Below 2.30.0, n8n builds webhook
+  # URLs from WEBHOOK_URL or else from N8N_PROTOCOL://N8N_HOST:N8N_PORT, which
+  # here is http://<n8n_domain>:5678/. Leaving WEBHOOK_URL out of an old image
+  # therefore breaks webhook URLs silently, while sending it to a current one
+  # only costs a deprecation warning. So the module drops it only when the
+  # tags prove the image is current, and sends it whenever they cannot.
+  #
+  # The version, when one can be read:
   #   - n8n_image_tag starts with a version ("2.27.4", "2.27.4-mypackages"):
   #     that version decides.
-  #   - n8n_image_tag is not a version (`stable`, a build label): only for a
-  #     custom image (n8n_image_repository set) is n8n_task_runner_image_tag
-  #     read, since that is where docs tell callers to put the underlying
-  #     n8n version. Otherwise, or when it is not a version either, the image
-  #     counts as current and gets no WEBHOOK_URL.
-  n8n_image_version_match = var.n8n_image_tag == null ? null : try(regex("^v?([0-9]+)\\.([0-9]+)\\.", var.n8n_image_tag), null)
-  n8n_image_version_core = local.n8n_image_version_match != null ? local.n8n_image_version_match : (
-    var.n8n_image_tag != null && var.n8n_image_repository != null && var.n8n_task_runner_image_tag != null
-    ? try(regex("^v?([0-9]+)\\.([0-9]+)\\.", var.n8n_task_runner_image_tag), null)
+  #   - Otherwise, for a custom image (n8n_image_repository set) with a
+  #     non-null tag and task runners enabled, n8n_task_runner_image_tag,
+  #     since that is where docs tell callers to put the underlying n8n
+  #     version. It is never read for a null n8n_image_tag (it only tags the
+  #     sidecar and says nothing about the chart's default app image), nor
+  #     with task runners disabled, where the input is documented as ignored.
+  #
+  # With no readable version, the image counts as current only when
+  # n8n_image_tag is null on the default chart repository at chart 1.12.0 or
+  # newer, whose appVersion is a concrete 2.39.6 or newer. A floating tag
+  # proves nothing: the chart pulls with IfNotPresent, so `stable`, `latest`,
+  # or the `stable` default of charts 1.4.0 to 1.11.x can run an older image
+  # a node cached earlier. Charts 1.0.0 to 1.3.x pin 2.9.0 to 2.12.2, and a
+  # custom n8n_chart_repository's appVersion cannot be verified. An
+  # n8n_image_repository override with a null tag still counts as current:
+  # the chart then tags it with that same concrete appVersion.
+  # Everything else gets WEBHOOK_URL.
+  n8n_version_regex = "^v?([0-9]+)\\.([0-9]+)\\."
+  n8n_image_version_core = var.n8n_image_tag == null ? null : try(
+    regex(local.n8n_version_regex, var.n8n_image_tag),
+    var.n8n_image_repository != null && var.n8n_task_runners_enabled && var.n8n_task_runner_image_tag != null
+    ? try(regex(local.n8n_version_regex, var.n8n_task_runner_image_tag), null)
     : null
   )
-  n8n_needs_legacy_webhook_url_env = local.n8n_image_version_core == null ? false : (
+  # Major and minor only; the n8n_chart_version validation guarantees both are
+  # numeric, and split("+") drops build metadata as in scaling.tf.
+  n8n_chart_version_parts = split(".", split("+", var.n8n_chart_version)[0])
+  n8n_image_known_current = (
+    var.n8n_image_tag == null &&
+    var.n8n_chart_repository == "oci://ghcr.io/n8n-io/n8n-helm-chart" && (
+      tonumber(local.n8n_chart_version_parts[0]) > 1 || (
+        tonumber(local.n8n_chart_version_parts[0]) == 1 &&
+        tonumber(local.n8n_chart_version_parts[1]) >= 12
+      )
+    )
+  )
+  n8n_needs_legacy_webhook_url_env = local.n8n_image_version_core != null ? (
     tonumber(local.n8n_image_version_core[0]) < 2 ? true : (
       tonumber(local.n8n_image_version_core[0]) == 2 && tonumber(local.n8n_image_version_core[1]) < 30
     )
+  ) : !local.n8n_image_known_current
+
+  # The webhook env entries config.extraEnv carries. A local rather than inline
+  # in helm_release.n8n so tests can assert the rendered list: the release's
+  # values are unknown at plan under mocks (see AGENTS.md).
+  n8n_webhook_base_url = coalesce(var.n8n_webhook_url, "https://${local.n8n_domain}")
+  n8n_webhook_url_env = concat(
+    [{ name = "N8N_WEBHOOK_URL", value = local.n8n_webhook_base_url }],
+    # WEBHOOK_URL is the pre-2.30.0 name. n8n reads N8N_WEBHOOK_URL from
+    # 2.30.0 on and logs a deprecation warning at startup whenever WEBHOOK_URL
+    # is set, so it is only emitted when the image is not known to be current.
+    local.n8n_needs_legacy_webhook_url_env ? [{ name = "WEBHOOK_URL", value = local.n8n_webhook_base_url }] : [],
   )
 }
 
@@ -678,15 +718,10 @@ resource "helm_release" "n8n" {
           # the actual logs are silently dropped. See variable description.
           { name = "N8N_LOG_OUTPUT", value = var.n8n_log_output },
           { name = "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS", value = "true" },
-          { name = "N8N_WEBHOOK_URL", value = coalesce(var.n8n_webhook_url, "https://${local.n8n_domain}") },
         ],
-        # WEBHOOK_URL is the pre-2.30.0 name. n8n reads N8N_WEBHOOK_URL from
-        # 2.30.0 on and logs a deprecation warning at startup whenever
-        # WEBHOOK_URL is set, so it is only emitted for an image older than
-        # that (see local.n8n_needs_legacy_webhook_url_env).
-        local.n8n_needs_legacy_webhook_url_env ? [
-          { name = "WEBHOOK_URL", value = coalesce(var.n8n_webhook_url, "https://${local.n8n_domain}") },
-        ] : [],
+        # N8N_WEBHOOK_URL, plus the legacy WEBHOOK_URL when the image may
+        # predate 2.30.0 (see local.n8n_needs_legacy_webhook_url_env).
+        local.n8n_webhook_url_env,
         [
           # The editor's own base URL, and what n8n builds absolute non-webhook
           # URLs from: UrlService.getInstanceBaseUrl() prefers

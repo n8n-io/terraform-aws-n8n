@@ -151,8 +151,9 @@ Terraform input changes. The chart's removal of
 `N8N_AVAILABLE_BINARY_DATA_MODES` does not reach this module's pods, and
 1.13.0 → 1.14.0 also renamed the chart's `WEBHOOK_URL` ConfigMap key to
 `N8N_WEBHOOK_URL` without a release-note entry (n8n-io/n8n-hosting#184).
-The module sends neither deprecated name (except `WEBHOOK_URL` to an image
-older than n8n `2.30.0`) and rejects both in its env inputs; see
+The module sends neither deprecated name (except `WEBHOOK_URL` when the
+image tags do not prove n8n `2.30.0` or newer) and rejects both in its env
+inputs. The upgrade rolls every n8n pod once because the env list changes; see
 [Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1130-to-1140).
 
 ## What this policy deliberately does not force

@@ -242,8 +242,8 @@ echo "PASS: chart $chart_version, worker floor of 0 still renders Deployment+Sca
 # (local.n8n_deprecated_env_names). Render every n8n container with the
 # module's real S3 storage values (local.n8n_s3_storage_values) and fail if
 # N8N_AVAILABLE_BINARY_DATA_MODES reaches any of them. WEBHOOK_URL is not
-# checked here: at the default (null image tag) the module never emits it,
-# which tests/defaults.tftest.hcl pins on local.n8n_needs_legacy_webhook_url_env.
+# checked here: the module adds it through config.extraEnv, not the chart, and
+# tests/defaults.tftest.hcl pins that list on local.n8n_webhook_url_env.
 console <<< 'jsonencode({s3={enabled=true,bucket={name="test-bucket",region="us-east-1"},auth={autoDetect=true},storage=local.n8n_s3_storage_values},serviceAccount={awsRoleArn="arn:aws:iam::123456789012:role/test"}})' \
   > "$tmp/s3-values.json"
 RENDERED="$tmp/s3-rendered.yaml"

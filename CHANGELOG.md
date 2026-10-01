@@ -98,12 +98,20 @@ this project adheres to the stability contract in
     effect here: the chart only emits it from its own `webhook.url` or
     Ingress, and the module sets neither. The module itself now stops setting
     the deprecated `WEBHOOK_URL`, which also warned on every start, and
-    `N8N_WEBHOOK_URL` carries the same value. It is still sent to an image
-    older than n8n `2.30.0`, the first release that reads `N8N_WEBHOOK_URL`,
-    judged from `n8n_image_tag` or, for a custom image whose tag is not a
-    version, `n8n_task_runner_image_tag`; a null tag counts as current. `WEBHOOK_URL` moves onto the same
-    deprecated-names list, so the three env inputs reject it with the
-    deprecation error instead of the module-managed one. The unread
+    `N8N_WEBHOOK_URL` carries the same value. Every n8n pod rolls once on
+    apply because the env list changes. Before `2.30.0`, the first release
+    that reads `N8N_WEBHOOK_URL`, n8n falls back to
+    `http://<n8n_domain>:5678/` without `WEBHOOK_URL`, so the module keeps
+    sending it unless the tags prove the image is current: a versioned
+    `n8n_image_tag` (or, for a custom image whose tag is not a version and
+    with task runners enabled, `n8n_task_runner_image_tag`) of `2.30.0` or
+    newer, or a null tag on the default chart repository at chart `1.12.0`
+    or newer. Floating tags (`stable`, `latest`), a private chart mirror
+    with a null tag, and a custom image whose tags carry no version still
+    get `WEBHOOK_URL` and its warning. Pinning a tag of `2.30.0` or newer
+    removes it; an older image keeps `WEBHOOK_URL` because it needs it. `WEBHOOK_URL` moves onto
+    the same deprecated-names list, so the three env inputs reject it with
+    the deprecation error instead of the module-managed one. The unread
     `WEBHOOK_URL` key is dropped from `kubernetes_secret.n8n` (an in-place
     Secret update on apply).
   - n8n-io/n8n-hosting#209: chart validation reports every failure in one

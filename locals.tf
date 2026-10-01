@@ -704,9 +704,9 @@ locals {
   n8n_deprecated_env_names = [
     "N8N_AVAILABLE_BINARY_DATA_MODES",
     # AWS-only so far. Superseded by N8N_WEBHOOK_URL in n8n 2.30.0. The one
-    # exception to "never sets": n8n.tf still emits it for an image older than
-    # 2.30.0 (local.n8n_needs_legacy_webhook_url_env), which cannot read the
-    # successor.
+    # exception to "never sets": n8n.tf still emits it when the image is not
+    # known to be 2.30.0 or newer (local.n8n_needs_legacy_webhook_url_env),
+    # since an older image cannot read the successor.
     "WEBHOOK_URL",
   ]
 
