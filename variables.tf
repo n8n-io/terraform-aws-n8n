@@ -2161,6 +2161,12 @@ variable "db_postgresdb_ssl_enabled" {
   description = "Whether n8n connects to the database over SSL. Set to true (the default) for direct connections to RDS or Aurora — they use the AWS CA which Node.js doesn't trust by default, so the connection still negotiates SSL but skips certificate verification. Set to false when n8n connects to an in-cluster connection pooler (e.g. PgBouncer) that handles SSL on its upstream leg — the pod-to-pod traffic stays inside the cluster network."
   type        = bool
   default     = true
+
+  # null is not meaningful here: a caller writing x = null in a module block
+  # would propagate null into the validation/check conditions below rather
+  # than falling back to true, and Terraform rejects a null condition
+  # outright ("condition value must be a boolean"). See AGENTS.md on nullable.
+  nullable = false
 }
 
 variable "db_postgresdb_ssl_reject_unauthorized" {
