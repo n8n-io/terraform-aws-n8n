@@ -222,16 +222,16 @@ quickly; several are candidates for future minor releases (see
   validated. Endpoint differences (e.g. EKS Pod Identity GA dates per
   region) may break things.
 
-- **Air-gapped deployments.** `n8n_image_repository` moves the n8n
-  application image to a registry you control, but everything else
-  still comes from public registries: the n8n chart itself from
-  `ghcr.io/n8n-io`, the task runner sidecar image, and the KEDA /
-  Cluster Autoscaler / AWS Load Balancer Controller / metrics-server
-  charts and images from their respective upstreams.
-  `n8n_image_pull_secrets` carries registry credentials for the n8n
-  image and nothing else. Mirroring the whole set into a registry you
-  control is possible, but the module exposes no inputs for pointing
-  the charts and controller images at the mirror.
+- **Air-gapped deployments.** `n8n_image_repository` and
+  `n8n_task_runner_image_repository` move the n8n application and task
+  runner images to a registry you control, but everything else still comes
+  from public registries: the n8n chart itself from `ghcr.io/n8n-io`, and
+  the KEDA / Cluster Autoscaler / AWS Load Balancer Controller /
+  metrics-server charts and images from their respective upstreams.
+  `n8n_image_pull_secrets` carries registry credentials for both n8n images
+  (application and task runner) and nothing else. Mirroring the whole set
+  into a registry you control is possible, but the module exposes no inputs
+  for pointing the charts and controller images at the mirror.
 
 - **Backup/DR automation beyond RDS snapshots.** The module enables
   RDS automated backups (defaulting to RDS's own defaults). It does
@@ -1388,6 +1388,12 @@ module "n8n" {
   # ImagePullBackOff (workers only in chart 1.14.0 queue mode).
   n8n_task_runner_image_tag = "2.27.4"
 
+  # Only needed when mirroring the runner image into your own registry too;
+  # independent of n8n_image_repository, so it can point at a different
+  # repository on the same mirror. Leave null to keep pulling n8nio/runners
+  # from the public registry.
+  n8n_task_runner_image_repository = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners"
+
   # Not needed any more: the packages are in the image.
   n8n_reinstall_missing_packages = false
 }
@@ -1405,6 +1411,9 @@ Three things to know about the inputs:
   the sidecar image is `n8nio/runners`, tagged from `image.tag` unless
   overridden. Only skip the override when your tag happens to be a published
   n8n version. A plan-time warning fires when it looks like you forgot.
+  `n8n_task_runner_image_repository` separately overrides the sidecar's
+  repository, for mirroring that image on its own; it needs no corresponding
+  tag override, since `n8n_task_runner_image_tag` still governs the tag.
 - **Pull access comes from the node group by default.** With
   `n8n_image_pull_secrets` empty, the image has to be pullable by the node
   group's IAM role, which covers a public registry and any ECR repository in
@@ -2330,7 +2339,10 @@ doing at this node count, but neither removes the fivefold waste at source.
 | <a name="input_n8n_task_runner_cpu_limit"></a> [n8n\_task\_runner\_cpu\_limit](#input\_n8n\_task\_runner\_cpu\_limit) | CPU limit for task runner sidecar containers (e.g. 1, 2000m) | `string` | `"1"` | no |
 | <a name="input_n8n_task_runner_cpu_request"></a> [n8n\_task\_runner\_cpu\_request](#input\_n8n\_task\_runner\_cpu\_request) | CPU request for task runner sidecar containers (e.g. 200m, 500m) | `string` | `"200m"` | no |
 | <a name="input_n8n_task_runner_custom_config"></a> [n8n\_task\_runner\_custom\_config](#input\_n8n\_task\_runner\_custom\_config) | Mount a custom task-runner launcher config (`n8n-task-runners.json`) over the<br/>one baked into the runner image, from a ConfigMap you create separately. Wires<br/>the chart's `taskRunners.customConfig`; leave null to use the image default.<br/><br/>The launcher config is the ONLY way to set the runner allow-lists, most<br/>notably `N8N_RUNNERS_STDLIB_ALLOW` for the native Python runner. The runner<br/>image ships that as an empty string, which refuses every stdlib import<br/>including `time` and `math`, so Python Code nodes that import anything fail<br/>with "Import of standard library module 'x' is disallowed".<br/><br/>There is no env-var route to the same result, for two independent reasons:<br/>the allow-list names are absent from each runner's `allowed-env` list, so the<br/>launcher never forwards a pod-level env var to the runner process, and the<br/>file's own `env-overrides` block is applied regardless and would win anyway.<br/><br/>The ConfigMap replaces the whole file, not one key, so derive it from the<br/>running image rather than writing it from scratch, and re-derive it when the<br/>runner image changes:<br/><br/>  kubectl exec deploy/n8n-worker -c task-runner -n <namespace> -- \<br/>    cat /etc/n8n-task-runners.json > n8n-task-runners.json<br/>  # edit the python runner's env-overrides, then:<br/>  kubectl create configmap n8n-task-runners-custom -n <namespace> \<br/>    --from-file=n8n-task-runners.json<br/><br/>`config_map_key` defaults to the chart's own default, `n8n-task-runners.json`.<br/><br/>Editing the ConfigMap afterwards does not restart anything, and the running<br/>pods keep the old file until you roll them yourself. The chart mounts this<br/>key with `subPath`, and a subPath mount never receives later updates to its<br/>ConfigMap, so the file on disk does not change even after kubelet's usual<br/>refresh. The module cannot roll the pods for you here: it is given the<br/>ConfigMap's name, never its contents, so it has nothing to hash into a pod<br/>annotation, exactly as with `redis_auth_token_secret_ref`. Restart the<br/>worker deployment after every launcher-config change:<br/><br/>  kubectl rollout restart deploy/n8n-worker -n <namespace><br/><br/>Upstream chart 1.14.0 mounts this config only on workers in queue mode.<br/>For older or custom charts that also place runners on mains, restart<br/>deploy/n8n-main too. Each n8n\_worker\_pools pool on a suitable preview or<br/>verified custom chart also mounts it; roll those by label:<br/><br/>  kubectl rollout restart deployment \<br/>    -l app.kubernetes.io/component=worker-group -n <namespace> | <pre>object({<br/>    config_map_name = string<br/>    config_map_key  = optional(string, "n8n-task-runners.json")<br/>  })</pre> | `null` | no |
+| <a name="input_n8n_task_runner_image_repository"></a> [n8n\_task\_runner\_image\_repository](#input\_n8n\_task\_runner\_image\_repository) | Container image repository for the task runner sidecar (`n8nio/runners`), without a tag or digest (e.g. "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners"). When it is null (the default), the chart's own repository applies (currently `n8nio/runners`). Set alongside n8n\_image\_repository when mirroring both images into the same private registry; the two are independent, so the application and runner images can live in different repositories on the same mirror. Use n8n\_task\_runner\_image\_tag for the runner tag. Private-registry pull access is granted the same way as n8n\_image\_repository, through n8n\_image\_pull\_secrets on the module-managed ServiceAccount. | `string` | `null` | no |
 | <a name="input_n8n_task_runner_image_tag"></a> [n8n\_task\_runner\_image\_tag](#input\_n8n\_task\_runner\_image\_tag) | Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n\_image\_tag = "2.27.4-mypackages" together with n8n\_task\_runner\_image\_tag = "2.27.4"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 1.14.0 queue mode). Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n\_task\_runners\_enabled = false. | `string` | `null` | no |
+</content>
+<parameter name="i">Resolve README conflict keeping both, chart 1.14.0 text
 | <a name="input_n8n_task_runner_memory_limit"></a> [n8n\_task\_runner\_memory\_limit](#input\_n8n\_task\_runner\_memory\_limit) | Memory limit for task runner sidecar containers (e.g. 1Gi, 2Gi) | `string` | `"1Gi"` | no |
 | <a name="input_n8n_task_runner_memory_request"></a> [n8n\_task\_runner\_memory\_request](#input\_n8n\_task\_runner\_memory\_request) | Memory request for task runner sidecar containers (e.g. 512Mi, 1Gi) | `string` | `"512Mi"` | no |
 | <a name="input_n8n_task_runner_python_enabled"></a> [n8n\_task\_runner\_python\_enabled](#input\_n8n\_task\_runner\_python\_enabled) | Enable the native Python runner (beta). Required for Python code execution in workflows. | `bool` | `true` | no |

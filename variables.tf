@@ -1501,6 +1501,25 @@ variable "n8n_task_runner_image_tag" {
   }
 }
 
+variable "n8n_task_runner_image_repository" {
+  description = "Container image repository for the task runner sidecar (`n8nio/runners`), without a tag or digest (e.g. \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners\"). When it is null (the default), the chart's own repository applies (currently `n8nio/runners`). Set alongside n8n_image_repository when mirroring both images into the same private registry; the two are independent, so the application and runner images can live in different repositories on the same mirror. Use n8n_task_runner_image_tag for the runner tag. Private-registry pull access is granted the same way as n8n_image_repository, through n8n_image_pull_secrets on the module-managed ServiceAccount."
+  type        = string
+  default     = null
+
+  validation {
+    condition = var.n8n_task_runner_image_repository == null ? true : (
+      length(var.n8n_task_runner_image_repository) <= 255 &&
+      can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_task_runner_image_repository))
+    )
+    error_message = "n8n_task_runner_image_repository must be a bare image repository reference that Docker can pull: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n-runners\", \"registry.internal:5000/runners\", \"n8nio/runners\"). No scheme (\"https://\"), no whitespace, no uppercase path components, and no empty label anywhere, which rules out a trailing slash, a doubled slash, and a doubled dot. Set to null to use the chart's default repository."
+  }
+
+  validation {
+    condition     = var.n8n_task_runner_image_repository == null ? true : !can(regex(":", reverse(split("/", var.n8n_task_runner_image_repository))[0]))
+    error_message = "n8n_task_runner_image_repository must not include a tag or digest, because the chart appends the tag itself. Pass the version via n8n_task_runner_image_tag instead (e.g. n8n_task_runner_image_repository = \"myregistry.example.com/n8n-runners\", n8n_task_runner_image_tag = \"2.27.4\")."
+  }
+}
+
 variable "n8n_task_runner_cpu_request" {
   description = "CPU request for task runner sidecar containers (e.g. 200m, 500m)"
   type        = string
