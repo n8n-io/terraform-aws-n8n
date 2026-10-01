@@ -150,6 +150,9 @@ this project adheres to the stability contract in
   `n8n_webhook_hpa_max_replicas = 8` explicitly to keep the old ceiling, and
   raise `db_instance_class` or lower `db_postgresdb_pool_size` to keep the
   database sized for it.
+  `examples/worker-pools` now sets `db_instance_class = "db.t3.medium"`:
+  its three pools add 10 pods, taking its peak to ~300 connections, which
+  `db.t3.small` cannot hold.
 - Default n8n chart `1.12.0` to `1.13.0`. `n8n_image_tag = null` still uses
   the selected chart's default, which moves from `appVersion: 2.39.6` to
   `2.40.5`; pin the running application version first if it is not already

@@ -148,19 +148,30 @@ module "n8n" {
   n8n_worker_pools_chart_verified = var.n8n_worker_pools_chart_verified
 
   # ── Node capacity ───────────────────────────────────────────────────────────
-  # The one place this example is not sizing-equivalent to examples/small.
+  # One of two places this example is not sizing-equivalent to examples/small.
   # Pools are additional autoscalers on the same node group, and each can reach
   # its own ceiling independently, so their pods have to fit alongside the main,
   # default-worker and webhook ceilings rather than instead of them. The three
   # pools below add 9,000m of CPU requests at their maxima (4 x 1200m for heavy,
   # 3 x 700m each for secteam and itop, every pool pod carrying a task runner
-  # sidecar), which takes the peak from small's 15,400m to 24,400m. The default
+  # sidecar), which takes the peak from small's 14,200m to 23,200m. The default
   # node_max of 6 t3.xlarge only schedules about 21,720m, so it needs 8.
   #
   # The module warns at plan time when these fall out of step; see
   # check "autoscaling_maxima_fit_node_group_capacity" in scaling.tf and
   # README.md → "Sizing autoscaling against node capacity".
   node_max = 8
+
+  # ── Database connections ───────────────────────────────────────────────────
+  # The second place this example departs from examples/small, for the same
+  # reason. Every pool pod is another n8n process with its own
+  # db_postgresdb_pool_size (10) connections, so the three pools' 10 extra pods
+  # take the peak from small's 200 connections to 300, past db.t3.small's ~220
+  # usable (225 max_connections less 5 reserved superuser slots). db.t3.medium
+  # (~450) holds it with room to spare. The module warns at plan time when this
+  # falls out of step; see check "db_postgresdb_pool_size_fits_known_max_connections"
+  # in database.tf.
+  db_instance_class = "db.t3.medium"
 
   # ── Worker pools ────────────────────────────────────────────────────────────
   # The chart's own unlabelled worker deployment keeps serving the default
