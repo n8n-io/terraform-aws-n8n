@@ -136,7 +136,7 @@ this project adheres to the stability contract in
   value you pass never lands in a plan or state file. This mode requires
   `db_password_secret_ref` (the module cannot copy a write-only value into
   the Kubernetes Secret it would otherwise manage), makes the `db_password`
-  output `null`, and is fully opt-in — the default
+  output `null`, and is fully opt-in, the default
   (`db_password_write_only = false`) behavior is unchanged, and no
   `versions.tf` floor changes: the required Terraform (`>= 1.11`) and AWS
   provider (`~> 6.0`) constraints already satisfy write-only arguments
