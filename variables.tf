@@ -305,14 +305,14 @@ variable "n8n_webhook_url" {
 }
 
 variable "n8n_license_key" {
-  description = "n8n license activation key. The default multi-main topology requires Enterprise with feat:multipleMainInstances; Business is supported with n8n_main_hpa_min_replicas = 1. Get one at https://n8n.io/pricing. Required unless n8n_license_key_secret_ref points at an existing Kubernetes Secret that already carries it, in which case leave this null. Setting both is rejected at plan time; see n8n_license_key_secret_ref, which owns that validation to avoid a variable-validation dependency cycle between the two."
+  description = "n8n license activation key. The default multi-main topology requires Enterprise with feat:multipleMainInstances; Business is supported with n8n_main_hpa_min_replicas = 1. Get one at https://n8n.io/pricing. Required unless n8n_license_key_secret_ref points at an existing Kubernetes Secret that already carries it, or n8n_license_cert_secret_ref points at a caller-managed Secret holding an offline license certificate (N8N_LICENSE_CERT) for air-gapped or egress-restricted clusters that cannot reach n8n's license server, in which case leave this null. Setting more than one of the three is rejected at plan time; see n8n_license_key_secret_ref, which owns that validation to avoid a variable-validation dependency cycle among them."
   type        = string
   sensitive   = true
   default     = null
 }
 
 variable "n8n_license_key_secret_ref" {
-  description = "Existing Kubernetes Secret carrying the n8n license key, instead of supplying the value through n8n_license_key. The same topology requirements apply: Enterprise with feat:multipleMainInstances for multi-main, or Business with n8n_main_hpa_min_replicas = 1. name is the Secret's name in var.namespace; key defaults to \"license-key\", matching the chart's own license.existingSecret.key default, and can be overridden if the Secret you already sync uses a different key name. Null (the default) changes nothing: the module keeps writing the value from n8n_license_key into kubernetes_secret.n8n as it always has. The module does not verify that the named Secret exists or carries this key: a typo surfaces only as a pod stuck in CreateContainerConfigError naming the missing key, not as a Terraform error, because reading the Secret's data to check would put the credential back in Terraform state, which defeats the reason this input exists. Setting this alongside n8n_license_key is rejected at plan time, so one can never silently win over the other; so is setting neither, since n8n_license_key is otherwise required. Both checks live here rather than split across both variables, which would form a validation dependency cycle. Also see n8n_encryption_key_secret_ref: setting that input replaces kubernetes_secret.n8n entirely, and this input becomes required (not merely allowed) whenever it is set, since there is then no module-managed Secret left for the license key to live in."
+  description = "Existing Kubernetes Secret carrying the n8n license key, instead of supplying the value through n8n_license_key. The same topology requirements apply: Enterprise with feat:multipleMainInstances for multi-main, or Business with n8n_main_hpa_min_replicas = 1. name is the Secret's name in var.namespace; key defaults to \"license-key\", matching the chart's own license.existingSecret.key default, and can be overridden if the Secret you already sync uses a different key name. Null (the default) changes nothing: the module keeps writing the value from n8n_license_key into kubernetes_secret.n8n as it always has. The module does not verify that the named Secret exists or carries this key: a typo surfaces only as a pod stuck in CreateContainerConfigError naming the missing key, not as a Terraform error, because reading the Secret's data to check would put the credential back in Terraform state, which defeats the reason this input exists. Mutually exclusive with n8n_license_key and n8n_license_cert_secret_ref -- exactly one of the three must be set, so one can never silently win over the others, and setting none is also rejected since a license credential is otherwise required. All three checks live here rather than split across the variables, which would form a validation dependency cycle. Also see n8n_encryption_key_secret_ref: setting that input replaces kubernetes_secret.n8n entirely, and this input becomes required (not merely allowed) whenever it is set, since there is then no module-managed Secret left for the license key to live in."
   type = object({
     name = string
     key  = optional(string)
@@ -320,13 +320,37 @@ variable "n8n_license_key_secret_ref" {
   default = null
 
   validation {
-    condition     = var.n8n_license_key_secret_ref == null || var.n8n_license_key == null
-    error_message = "Both n8n_license_key and n8n_license_key_secret_ref are set. Only one may supply the license key: remove n8n_license_key to consume the referenced Secret, or remove n8n_license_key_secret_ref to keep passing the value directly."
+    condition = length([
+      for v in [var.n8n_license_key, var.n8n_license_key_secret_ref, var.n8n_license_cert_secret_ref] : v if v != null
+    ]) == 1
+    error_message = "Set exactly one of n8n_license_key, n8n_license_key_secret_ref, or n8n_license_cert_secret_ref."
+  }
+}
+
+variable "n8n_license_cert_secret_ref" {
+  description = "Existing Kubernetes Secret name and key holding a base64-encoded n8n Enterprise offline license certificate (N8N_LICENSE_CERT), for air-gapped or egress-restricted clusters that cannot reach n8n's license server to activate a key. Mutually exclusive with n8n_license_key and n8n_license_key_secret_ref -- exactly one of the three must be set (see n8n_license_key_secret_ref, which owns that validation). The module does not read the Secret's value; Terraform renders only the name and key into the shared config.extraEnv list as a secretKeyRef (n8n.tf), not into the chart's license.existingSecret block, which only ever maps to N8N_LICENSE_ACTIVATION_KEY. license.enabled still renders true on this path because the chart also gates N8N_MULTI_MAIN_SETUP_ENABLED on license.enabled, independent of which credential backs it. key defaults to \"cert\" when omitted."
+  type = object({
+    name = string
+    key  = optional(string)
+  })
+  default = null
+
+  validation {
+    condition = (
+      var.n8n_license_cert_secret_ref == null ? true :
+      can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$", var.n8n_license_cert_secret_ref.name))
+      && length(var.n8n_license_cert_secret_ref.name) <= 253
+    )
+    error_message = "n8n_license_cert_secret_ref.name must be a DNS-1123 subdomain of 253 characters or fewer, which is what Kubernetes requires of a Secret name: lowercase alphanumerics, hyphens and dots, starting and ending with an alphanumeric, with no empty label (e.g. \"n8n-license-cert\")."
   }
 
   validation {
-    condition     = var.n8n_license_key_secret_ref != null || var.n8n_license_key != null
-    error_message = "n8n_license_key is required unless n8n_license_key_secret_ref is set. Supply the license key directly, or point n8n_license_key_secret_ref at an existing Kubernetes Secret that already carries it."
+    condition = (
+      var.n8n_license_cert_secret_ref == null ? true :
+      can(regex("^[-._a-zA-Z0-9]+$", coalesce(var.n8n_license_cert_secret_ref.key, "cert")))
+      && length(coalesce(var.n8n_license_cert_secret_ref.key, "cert")) <= 253
+    )
+    error_message = "n8n_license_cert_secret_ref.key must be a valid Secret key of 253 characters or fewer: alphanumerics, '-', '_' and '.' only."
   }
 }
 

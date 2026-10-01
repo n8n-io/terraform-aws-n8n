@@ -29,3 +29,6 @@ dig +short n8n.yourdomain.com
 ## Access n8n and activate your license
 
 Open `https://n8n.yourdomain.com` in your browser. Create your owner account, then select **Settings** > **License** and enter your activation key.
+
+If you deployed with `var.n8n_license_cert_secret_ref` instead of `var.n8n_license_key` (an air-gapped or egress-restricted cluster; see ["Offline license activation"](../README.md#offline-license-activation) in the root README), there is no key to paste in **Settings** > **License**: the certificate in your caller-managed Secret already activated the license as `N8N_LICENSE_CERT` at pod startup, with no round trip to n8n's license server. Confirm activation from **Settings** > **License** instead of the key-entry flow, or with `kubectl -n n8n exec deploy/n8n-main -- n8n license:info`. Rotating the certificate means updating the caller-managed Secret's payload and restarting the `n8n-main`, `n8n-worker`, and `n8n-webhook-processor` deployments.
+
