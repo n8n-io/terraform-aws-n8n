@@ -1646,11 +1646,9 @@ run "rds_hardened_defaults" {
 
   # ARN-linkage between aws_kms_key.db[0].arn and its three consumers
   # (aws_db_instance.kms_key_id, performance_insights_kms_key_id, and the
-  # postgresql log group's kms_key_id) is verified by the live-apply step
-  # documented in README.md → "Upgrading from a pre-CMK apply" rather than at
-  # plan time: the ARN is computed and would require terraform >= 1.11's
-  # `override_during = plan` to assert against under the mock provider, which
-  # exceeds the module's `required_version = ">= 1.11"` floor.
+  # postgresql log group's kms_key_id) is not asserted at plan time: the ARN
+  # is computed, so it is unknown under the mock provider. Only a real apply
+  # verifies it.
 }
 
 run "db_storage_encrypted_false_skips_cmk" {
@@ -2037,9 +2035,9 @@ run "db_kms_key_arn_defaults_to_module_managed_cmk" {
   # aws_db_instance.n8n[0].kms_key_id == aws_kms_key.db[0].arn is NOT asserted
   # here: aws_kms_key.db[0].arn is computed, so under the mock provider it is
   # unknown at plan time ("Unknown condition value"). The ARN-linkage between
-  # the CMK and its three consumers is verified by the live-apply step
-  # documented in README.md → "Upgrading from a pre-CMK apply", same
-  # limitation already called out next to the rds_hardened_defaults run above.
+  # the CMK and its three consumers is only verified by a real apply, the
+  # same limitation already called out next to the rds_hardened_defaults run
+  # above.
 }
 
 run "db_kms_key_arn_suppresses_module_managed_cmk" {
