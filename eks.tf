@@ -295,14 +295,14 @@ resource "aws_eks_addon" "pod_identity_agent" {
 # ── VPC CNI NetworkPolicy enforcement ──────────────────────────────────────────
 # EKS bootstraps vpc-cni as a self-managed workload at cluster creation, so
 # adopting it into an EKS-managed aws_eks_addon needs resolve_conflicts_on_create
-# = "OVERWRITE" to take it over — the same shape examples/large/main.tf uses for
+# = "OVERWRITE" to take it over, the same shape examples/large/main.tf uses for
 # its own WARM_ENI_TARGET/WARM_IP_TARGET tuning. Only one Terraform resource may
 # own a given cluster's vpc-cni addon: do not combine this with a root module
 # (examples/large included) that already manages its own aws_eks_addon for
 # vpc-cni on the same cluster, see var.eks_network_policy_enabled's description.
 #
 # configuration_values.enableNetworkPolicy must be the string "true", not a
-# JSON boolean — the addon's schema rejects a boolean here. Requires VPC CNI
+# JSON boolean, the addon's schema rejects a boolean here. Requires VPC CNI
 # >= 1.14 and Kubernetes >= 1.25; this module leaves addon_version unpinned
 # (resolves AWS's current default, see docs/versioning.md) and defaults
 # kubernetes_version well above the floor, so both are satisfied out of the box.
@@ -409,7 +409,7 @@ check "existing_eks_cluster_name_requires_create_eks_false" {
 # The same "X is ignored when Y" shape as existing_eks_cluster_needs_its_own_storage_toggle
 # (storage.tf): unlike create_ebs_csi, aws_eks_addon.vpc_cni above is already
 # gated on create_eks, so this combination creates nothing rather than failing
-# outright — the warning exists purely so a caller who flips this toggle
+# outright, the warning exists purely so a caller who flips this toggle
 # expecting NetworkPolicy enforcement on their existing cluster learns why
 # nothing changed, instead of assuming the apply silently worked.
 check "existing_eks_cluster_needs_its_own_network_policy_toggle" {
