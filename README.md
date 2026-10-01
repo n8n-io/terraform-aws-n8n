@@ -1289,8 +1289,9 @@ diff has nothing left to get wrong:
    `aws rds modify-db-instance --db-instance-identifier n8n-postgres-<cluster_name> --master-user-password '<value>' --apply-immediately`.
    Wait for `aws rds describe-db-instances` to show the instance back in
    `available` with no pending password change.
-3. Create (or update) the Kubernetes Secret `db_password_secret_ref` will
-   point at, with that same password under its `key` (default `"password"`).
+3. Create a separate, caller-managed Kubernetes Secret, not
+   `n8n-enterprise-db-secret` (which Terraform destroys in the next step),
+   with that same password under its `key` (default `"password"`).
 4. Only now set `db_password_write_only = true`, `db_admin_password_wo` to the
    same value, and `db_password_secret_ref` to that Secret, and `terraform
    apply`. Expect `random_password.db_password[0]` and
