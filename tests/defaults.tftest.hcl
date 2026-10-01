@@ -812,9 +812,11 @@ run "encryption_key_secret_ref_rejects_a_nonstandard_key" {
 }
 
 # ── Database password secret ref ─────────────────────────────────────────────
-# External-database path only: aws_db_instance.n8n needs the password's actual
-# value to provision the instance, so this is rejected with create_database =
-# true rather than silently ignored.
+# External-database path (create_database = false): aws_db_instance.n8n needs
+# the password's actual value to provision the instance, so this is rejected
+# with create_database = true rather than silently ignored, UNLESS
+# db_password_write_only = true (see the write-only block below), the one
+# case where create_database = true requires this input instead.
 
 run "db_password_secret_ref_defaults_to_null_and_changes_nothing" {
   command = plan
@@ -888,6 +890,110 @@ run "db_password_secret_ref_rejects_being_set_alongside_the_value" {
   }
 
   expect_failures = [var.db_password_secret_ref]
+}
+
+# ── Database write-only password opt-in ──────────────────────────────────────
+
+run "accepts_db_password_write_only_with_secret_ref" {
+  command = plan
+
+  variables {
+    db_password_write_only       = true
+    db_admin_password_wo         = "an-ephemeral-value-terraform-never-persists"
+    db_admin_password_wo_version = 2
+    db_password_secret_ref       = { name = "platform-n8n-db-password", key = "password" }
+  }
+
+  assert {
+    condition     = length(random_password.db_password) == 0
+    error_message = "random_password.db_password must not be generated when db_password_write_only is set."
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n_db) == 0
+    error_message = "kubernetes_secret.n8n_db must not exist when db_password_write_only is set, the module cannot copy a write-only value into a Secret."
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].password == null
+    error_message = "password must be null when db_password_write_only is set; the password flows through password_wo instead."
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].password_wo_version == 2
+    error_message = "password_wo_version must reflect db_admin_password_wo_version."
+  }
+
+  assert {
+    condition     = output.db_password == null
+    error_message = "db_password output must be null when db_password_write_only is set, the value never leaves the write-only argument."
+  }
+}
+
+run "rejects_db_password_write_only_without_secret_ref" {
+  command = plan
+
+  variables {
+    db_password_write_only = true
+    db_admin_password_wo   = "an-ephemeral-value-terraform-never-persists"
+  }
+
+  expect_failures = [var.db_password_secret_ref]
+}
+
+run "rejects_db_password_write_only_without_password" {
+  command = plan
+
+  variables {
+    db_password_write_only = true
+    db_password_secret_ref = { name = "platform-n8n-db-password" }
+  }
+
+  expect_failures = [var.db_admin_password_wo]
+}
+
+run "rejects_db_password_write_only_with_external_database" {
+  command = plan
+
+  variables {
+    create_database        = false
+    db_host                = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password            = "external-db-password"
+    db_password_write_only = true
+    db_admin_password_wo   = "an-ephemeral-value-terraform-never-persists"
+  }
+
+  expect_failures = [var.db_password_write_only]
+}
+
+run "rejects_db_admin_password_wo_when_write_only_disabled" {
+  command = plan
+
+  variables {
+    db_admin_password_wo = "an-ephemeral-value-terraform-never-persists"
+  }
+
+  expect_failures = [var.db_admin_password_wo]
+}
+
+run "rejects_nonpositive_db_admin_password_wo_version" {
+  command = plan
+
+  variables {
+    db_admin_password_wo_version = 0
+  }
+
+  expect_failures = [var.db_admin_password_wo_version]
+}
+
+run "rejects_fractional_db_admin_password_wo_version" {
+  command = plan
+
+  variables {
+    db_admin_password_wo_version = 1.5
+  }
+
+  expect_failures = [var.db_admin_password_wo_version]
 }
 
 # ── Database health-check ping tuning ─────────────────────────────────────────

@@ -245,10 +245,11 @@ resource "kubernetes_secret" "n8n" {
 
 resource "kubernetes_secret" "n8n_db" {
   # Gated to zero when db_password_secret_ref points the chart at a Secret the
-  # caller already manages instead. Single-purpose Secret, unlike
-  # kubernetes_secret.n8n above, so the whole resource is skipped rather than
-  # one key dropped from it. Only reachable with create_database = false: see
-  # db_password_secret_ref's validation.
+  # caller already manages instead: the external-database path (create_database
+  # = false) or the module-managed write-only path (db_password_write_only =
+  # true). Single-purpose Secret, unlike kubernetes_secret.n8n above, so the
+  # whole resource is skipped rather than one key dropped from it. See
+  # db_password_secret_ref's validation for when each path requires it.
   count = var.db_password_secret_ref == null ? 1 : 0
 
   metadata {
@@ -258,7 +259,11 @@ resource "kubernetes_secret" "n8n_db" {
 
   data = {
     # Use caller-supplied password when an external DB is provided, otherwise use the generated one.
-    password = var.create_database ? random_password.db_password.result : var.db_password
+    # Only reachable when count = 1 above, which requires db_password_secret_ref
+    # == null; db_password_write_only requires db_password_secret_ref != null,
+    # so this branch never runs on the write-only path and random_password.db_password
+    # always has an instance here.
+    password = var.create_database ? random_password.db_password[0].result : var.db_password
   }
 
   # See the comment on kubernetes_secret.n8n above.

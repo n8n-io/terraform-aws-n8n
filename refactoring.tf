@@ -206,6 +206,15 @@ moved {
   to   = random_id.n8n_encryption_key[0]
 }
 
+# db_password_write_only. Skipped when the RDS master password is fed through
+# aws_db_instance.n8n's write-only password_wo argument instead. Without this,
+# an upgrading deployment regenerates the password and rotates the live RDS
+# master credential and kubernetes_secret.n8n_db along with it.
+moved {
+  from = random_password.db_password
+  to   = random_password.db_password[0]
+}
+
 # ── modules/controllers extraction ────────────────────────────────────────────
 # LBC, Cluster Autoscaler, metrics-server, KEDA and the EBS CSI driver moved
 # from flat root-level resources into a nested modules/controllers submodule,

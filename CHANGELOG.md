@@ -9,6 +9,27 @@ this project adheres to the stability contract in
 
 ### Added
 
+- **`db_password_write_only`, `db_admin_password_wo`, and
+  `db_admin_password_wo_version`** let the module-managed RDS instance
+  (`create_database = true`) accept its master password through
+  `aws_db_instance.n8n`'s write-only `password_wo` argument instead of a
+  `random_password` resource whose result Terraform stores in plain text in
+  state. `db_admin_password_wo` is an `ephemeral` module variable, so the
+  value you pass never lands in a plan or state file. This mode requires
+  `db_password_secret_ref` (the module cannot copy a write-only value into
+  the Kubernetes Secret it would otherwise manage), makes the `db_password`
+  output `null`, and is fully opt-in: the default
+  (`db_password_write_only = false`) behavior is unchanged, and no
+  `versions.tf` floor changes: the required Terraform (`>= 1.11`) and AWS
+  provider (`~> 6.0`) constraints already satisfy write-only arguments
+  (added in AWS provider `5.88.0`). Safe to enable from the first apply of a
+  new deployment. On an existing password-managed instance, follow the
+  migration recipe in README.md -> "Switching to the write-only RDS password"
+  instead of flipping it directly, because of an open AWS provider bug
+  (hashicorp/terraform-provider-aws#42582; fix proposed in provider PR #47904
+  but not yet merged). It did not reproduce in a live test on the locked
+  provider (6.65.0), and the recipe is correct either way.
+
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
   annotates the default worker `ScaledObject` with
