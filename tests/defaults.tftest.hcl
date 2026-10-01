@@ -3501,14 +3501,16 @@ run "connection_budget_warns_when_pool_size_is_raised" {
 
 # n8n_worker_pools ceilings must count toward the same budget. node_max is
 # raised so the unrelated node-capacity check has room, and the chart is
-# attested so the worker-pools chart precondition does not abort the plan;
-# this run proves only the connection-budget arithmetic.
+# attested so the worker-pools chart precondition does not abort the plan.
+# On the default db.t3.small the defaults alone fit (200 of 220 usable), so
+# the warning here can only come from the pools' 7 extra pods: a regression
+# that stopped counting pool maxima would leave the check quiet and fail this
+# run with a missing expected failure.
 run "connection_budget_counts_worker_pools" {
   command = plan
 
   variables {
-    db_instance_class = "db.m6g.2xlarge"
-    node_max          = 20
+    node_max = 20
 
     n8n_worker_pools_chart_verified = true
     n8n_worker_pools = [
@@ -3521,6 +3523,8 @@ run "connection_budget_counts_worker_pools" {
     condition     = local.n8n_worker_pool_max_replicas_sum == 7 && local.n8n_pg_peak_connections == 270
     error_message = "Worker pool ceilings (4 + 3 = 7) must add to the default 20-pod ceiling, giving 27 x db_postgresdb_pool_size 10 = 270, got pool sum ${local.n8n_worker_pool_max_replicas_sum} and peak ${local.n8n_pg_peak_connections}."
   }
+
+  expect_failures = [check.db_postgresdb_pool_size_fits_known_max_connections]
 }
 
 # An instance class outside the curated table must stay silent rather than
