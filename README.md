@@ -39,7 +39,7 @@ no follower to race, so this failure mode cannot occur.
 
 ### General
 
-- An **n8n Enterprise license key** (`n8n_license_key`): the module does not provision a community-edition deployment. A Business-tier key also works, but only at `n8n_main_hpa_min_replicas = 1` (single main pod, no multi-main entitlement required) — see above. For air-gapped or egress-restricted clusters that cannot reach n8n's license server, `n8n_license_cert_secret_ref` supplies an offline license certificate instead — see [Offline license activation](#offline-license-activation).
+- An **n8n Enterprise license key** (`n8n_license_key`): the module does not provision a community-edition deployment. A Business-tier key also works, but only at `n8n_main_hpa_min_replicas = 1` (single main pod, no multi-main entitlement required), see above. For air-gapped or egress-restricted clusters that cannot reach n8n's license server, `n8n_license_cert_secret_ref` supplies an offline license certificate instead, see [Offline license activation](#offline-license-activation).
 - **Terraform CLI `>= 1.13`**, with the `aws`, `kubernetes`, and `helm` providers configured by the caller. The module declares `required_providers` but does not configure them (see [`examples/small/providers.tf`](./examples/small/providers.tf)).
 - Read [Stability & versioning](#stability--versioning) before pinning a module version, and [Compatibility](#compatibility) for the provider/chart majors this module ships against.
 
@@ -2353,7 +2353,7 @@ keeps the last applied destinations but restores UI write access.
 ## Offline license activation
 
 For air-gapped or egress-restricted clusters that cannot reach n8n's license
-server, set `n8n_license_cert_secret_ref` instead of `n8n_license_key` — a
+server, set `n8n_license_cert_secret_ref` instead of `n8n_license_key`: a
 reference to a caller-managed Kubernetes Secret holding a base64-encoded
 [offline license certificate](https://docs.n8n.io/deploy/host-n8n/configure-n8n/manage-your-license/#add-a-license-certificate-using-an-environment-variable)
 (`N8N_LICENSE_CERT`, obtained from n8n directly):
@@ -2364,7 +2364,7 @@ n8n_license_cert_secret_ref = { name = "n8n-license-cert", key = "cert" }
 ```
 
 `n8n_license_key`, `n8n_license_key_secret_ref`, and
-`n8n_license_cert_secret_ref` are mutually exclusive — set exactly one. The
+`n8n_license_cert_secret_ref` are mutually exclusive: set exactly one. The
 certificate renders through the shared `config.extraEnv` list as a
 `secretKeyRef` on every n8n pod (main, worker, webhook processor, and any
 declared worker pool), not through the chart's `license.existingSecret`
@@ -2372,7 +2372,7 @@ block, because the pinned chart's license helper only ever maps
 `existingSecret` to `N8N_LICENSE_ACTIVATION_KEY`. `license.enabled` stays
 `true` on this path, because the chart separately gates
 `N8N_MULTI_MAIN_SETUP_ENABLED` on `license.enabled`, not on which credential
-backs it — multi-main leader election still requires
+backs it; multi-main leader election still requires
 `feat:multipleMainInstances` on the certificate itself. The module never
 reads the Secret's value.
 

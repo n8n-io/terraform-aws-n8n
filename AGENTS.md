@@ -40,7 +40,7 @@ clusters that cannot reach n8n's license server,
 `n8n_license_cert_secret_ref` (a caller-managed Secret holding an offline
 license certificate rendered as `N8N_LICENSE_CERT`). The three are mutually
 exclusive; exactly one must be set. The certificate renders through
-`config.extraEnv`, not the chart's `license.existingSecret` block — that
+`config.extraEnv`, not the chart's `license.existingSecret` block; that
 block's license helper only ever maps to `N8N_LICENSE_ACTIVATION_KEY`.
 `license.enabled` stays `true` on the certificate path because the chart
 also gates `N8N_MULTI_MAIN_SETUP_ENABLED` on `license.enabled`, not on which
