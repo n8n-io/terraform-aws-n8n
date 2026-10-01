@@ -453,6 +453,17 @@ resource "aws_db_instance" "n8n" {
   instance_class    = var.db_instance_class
   allocated_storage = var.db_allocated_storage
 
+  # Storage Autoscaling. null (the default) leaves max_allocated_storage unset
+  # and AWS never grows storage on its own. When set, AWS grows
+  # allocated_storage up to this ceiling as free space runs low, and the AWS
+  # provider automatically hides the resulting allocated_storage drift from
+  # the next plan: unlike the Azure sibling module's storage-autogrow input,
+  # there is no manual lifecycle.ignore_changes to write (nor would a
+  # conditional one be possible), and no drift-guard data source is needed
+  # here. See the variable description for the provider's documented
+  # behavior and the cross-cloud contrast.
+  max_allocated_storage = var.db_max_allocated_storage
+
   db_name  = "n8n_enterprise"
   username = "n8n"
 
@@ -890,6 +901,7 @@ check "rds_tuning_requires_module_managed_database" {
     condition = var.create_database ? true : (
       var.db_instance_class == "db.t3.small" &&
       var.db_allocated_storage == 50 &&
+      var.db_max_allocated_storage == null &&
       var.db_multi_az &&
       var.db_storage_encrypted &&
       var.db_backup_retention_period == 7 &&
@@ -901,7 +913,7 @@ check "rds_tuning_requires_module_managed_database" {
     )
     error_message = join("", [
       "An RDS sizing, hardening or deletion-control input (db_instance_class, db_allocated_storage, ",
-      "db_multi_az, db_storage_encrypted, db_backup_retention_period, db_apply_immediately, ",
+      "db_max_allocated_storage, db_multi_az, db_storage_encrypted, db_backup_retention_period, db_apply_immediately, ",
       "db_deletion_protection, db_skip_final_snapshot, db_final_snapshot_identifier, db_delete_automated_backups) is set while ",
       "create_database = false. The module creates no RDS instance in that mode, so none of them apply. ",
       "Configure these on the database you supply via db_host.",
