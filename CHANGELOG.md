@@ -9,6 +9,26 @@ this project adheres to the stability contract in
 
 ### Added
 
+- **`eks_network_policy_enabled`** input (default `false`). When true, the
+  module adopts the cluster's self-managed vpc-cni into an EKS-managed
+  `aws_eks_addon.vpc_cni` (`resolve_conflicts_on_create = "OVERWRITE"`,
+  needed because EKS bootstraps vpc-cni as a self-managed workload at
+  cluster creation) and sets `configuration_values` to turn on the VPC
+  CNI's native Kubernetes NetworkPolicy enforcement
+  (`enableNetworkPolicy = "true"`). Requires VPC CNI >= 1.14 and
+  Kubernetes >= 1.25, both already satisfied by every version this module
+  supports. Creates no Kubernetes NetworkPolicy objects itself, write your
+  own once enforcement is on, the port of terraform-azurerm-n8n PR #44's
+  `aks_network_policy` to EKS's addon-based equivalent. Default false
+  leaves EKS's own self-managed vpc-cni untouched, so every existing
+  caller sees no plan diff. Ignored, with a plan-time warning
+  (`check.existing_eks_cluster_needs_its_own_network_policy_toggle`),
+  when `create_eks = false`: the module manages no vpc-cni addon on an
+  existing cluster. Incompatible with a root module that already manages
+  its own `aws_eks_addon` for the same cluster's vpc-cni (e.g.
+  `examples/large`'s `WARM_ENI_TARGET`/`WARM_IP_TARGET` tuning); see the
+  variable's description.
+
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
   annotates the default worker `ScaledObject` with
