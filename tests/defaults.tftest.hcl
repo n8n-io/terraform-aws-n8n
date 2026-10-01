@@ -12529,7 +12529,7 @@ run "legacy_webhook_url_emitted_for_chart_0_x_default" {
 
   assert {
     condition     = local.n8n_needs_legacy_webhook_url_env
-    error_message = "The chart floor is 1.12.0, so a 0.x minor of 12 or more must not count as a verified default"
+    error_message = "A null n8n_image_tag counts as current only on a 1.x chart at 1.12.0 or newer, so a 0.x chart with minor 12 must still emit WEBHOOK_URL"
   }
 }
 
