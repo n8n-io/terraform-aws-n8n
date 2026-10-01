@@ -22,6 +22,7 @@ Every input below is a plain override on the root module:
 | `node_desired` | `1` | Matches `node_min`; only applies at creation (Cluster Autoscaler owns the count afterward), but `node_desired`'s own validation requires it to sit within `[node_min, node_max]`, and its module default of `3` would fail a fresh apply of this profile otherwise. |
 | `node_max` | `2` | Leaves headroom for a rolling node replacement without paying for a second steady-state node. |
 | `db_instance_class` | `db.t4g.micro` | Cheapest Graviton Burstable RDS class. Low `max_connections`; see the budget section below. |
+| `db_multi_az` | `false` | Drops the Multi-AZ standby, which the module enables by default and which roughly doubles the database cost. A sandbox does not need failover. |
 | `db_postgresdb_pool_size` | `3` or lower | See the budget section below. |
 
 `n8n_main_hpa_max_replicas` does not need to change: the effective main
@@ -49,7 +50,7 @@ RDS computes PostgreSQL's default `max_connections` from the selected
 `db_instance_class`'s memory: `LEAST({DBInstanceClassMemory/9531392}, 5000)`
 ([AWS docs: "Quotas and constraints for Amazon RDS", `max_connections`
 row](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Limits.html)).
-`db.t4g.micro` (1 vCPU, 1 GiB) resolves to around 112 user connections.
+`db.t4g.micro` (2 vCPUs, 1 GiB) resolves to around 112 user connections.
 Each main, worker, and webhook-processor pod can lazily open up to
 `db_postgresdb_pool_size` connections against the same instance
 (`db_postgresdb_pool_size` variable description), so the aggregate ceiling

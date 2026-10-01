@@ -967,6 +967,11 @@ locals {
 
   # sum()'s [0] seed keeps the no-pools default at 0 rather than erroring on
   # an empty list.
+  #
+  # n8n_webhook_hpa_max_replicas is counted even when n8n_webhook_hpa_enabled
+  # = false. That input exists so a caller can bring their own webhook
+  # autoscaler, whose ceiling the module cannot see, so the module's own
+  # maximum is the conservative stand-in rather than the pinned minimum.
   n8n_worker_pool_max_replicas_sum = sum(concat([0], [for p in var.n8n_worker_pools : p.max_replicas]))
 
   n8n_pg_peak_connections = var.db_postgresdb_pool_size * (
