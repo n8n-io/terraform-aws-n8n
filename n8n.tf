@@ -94,11 +94,25 @@ locals {
 }
 
 locals {
-  # Only mode: chart 1.14.0 dropped storage.availableModes and its deprecated
-  # N8N_AVAILABLE_BINARY_DATA_MODES (n8n-io/n8n-hosting#185), which n8n warns
-  # about on every start. A local so tests/scripts/check-main-chart.sh renders
-  # the chart with exactly what helm_release.n8n sends. Do not add it back.
-  n8n_s3_storage_values = { mode = "s3" }
+  # Only mode from chart 1.14.0 on: that release dropped storage.availableModes
+  # and its N8N_AVAILABLE_BINARY_DATA_MODES (n8n-io/n8n-hosting#185), which
+  # n8n 2.x ignores and warns about on every start. A chart pinned below
+  # 1.14.0 still renders the env var from its own default, "filesystem", and
+  # n8n 1.x still reads it, so those charts keep getting "filesystem,s3" or S3
+  # would drop out of the available modes. Prerelease builds of an older
+  # version count as older. A local so tests/scripts/check-main-chart.sh
+  # renders the chart with exactly what helm_release.n8n sends.
+  # local.n8n_chart_version_parts is defined with the webhook gate below.
+  n8n_chart_drops_available_modes = (
+    tonumber(local.n8n_chart_version_parts[0]) > 1 || (
+      tonumber(local.n8n_chart_version_parts[0]) == 1 &&
+      tonumber(local.n8n_chart_version_parts[1]) >= 14
+    )
+  )
+  n8n_s3_storage_values = merge(
+    { mode = "s3" },
+    local.n8n_chart_drops_available_modes ? {} : { availableModes = "filesystem,s3" },
+  )
 }
 
 locals {

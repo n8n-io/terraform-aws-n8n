@@ -11627,6 +11627,30 @@ run "worker_pools_reject_extra_env_overriding_the_pool_name" {
   expect_failures = [var.n8n_worker_pools]
 }
 
+# s3.storage.availableModes: dropped from chart 1.14.0 on, kept for older pins
+# whose own "filesystem" default would drop S3 on n8n 1.x.
+run "s3_storage_values_omit_available_modes_on_the_default_chart" {
+  command = plan
+
+  assert {
+    condition     = local.n8n_s3_storage_values == { mode = "s3" }
+    error_message = "Chart 1.14.0 removed s3.storage.availableModes, so the module must send only mode"
+  }
+}
+
+run "s3_storage_values_keep_available_modes_before_chart_1_14_0" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.13.0"
+  }
+
+  assert {
+    condition     = local.n8n_s3_storage_values == { mode = "s3", availableModes = "filesystem,s3" }
+    error_message = "A chart older than 1.14.0 defaults availableModes to filesystem, so the module must keep sending filesystem,s3"
+  }
+}
+
 # local.n8n_deprecated_env_names: n8n warns on every start while one is set.
 run "extra_env_rejects_deprecated_binary_data_modes" {
   command = plan

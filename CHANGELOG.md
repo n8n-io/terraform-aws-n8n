@@ -87,8 +87,10 @@ this project adheres to the stability contract in
     Worker-only task-runner capacity accounting now covers `1.14.0`.
   - n8n-io/n8n-hosting#185: the chart stops rendering the deprecated
     `N8N_AVAILABLE_BINARY_DATA_MODES`, and the module no longer sends
-    `s3.storage.availableModes`, so n8n's deprecation warning on every start
-    is gone. `n8n_extra_env`, `n8n_worker_extra_env` and
+    `s3.storage.availableModes` to chart `1.14.0` or newer, so n8n's
+    deprecation warning on every start is gone. A pinned chart older than
+    `1.14.0` still gets `"filesystem,s3"`: its own default is `"filesystem"`,
+    which n8n 1.x still reads. `n8n_extra_env`, `n8n_worker_extra_env` and
     `n8n_worker_pools[*].extra_env` now reject it at plan time
     (`local.n8n_deprecated_env_names`), and `tests/scripts/check-main-chart.sh`
     fails if it is ever rendered. **A caller that sets it through one of those
@@ -99,10 +101,10 @@ this project adheres to the stability contract in
     Ingress, and the module sets neither. The module itself now stops setting
     the deprecated `WEBHOOK_URL`, which also warned on every start, and
     `N8N_WEBHOOK_URL` carries the same value. Every n8n pod rolls once on
-    apply because the env list changes. Before `2.30.0`, the first release
-    that reads `N8N_WEBHOOK_URL`, n8n falls back to
-    `http://<n8n_domain>:5678/` without `WEBHOOK_URL`, so the module keeps
-    sending it unless the tags prove the image is current: a versioned
+    apply because the env list changes. n8n `2.30.0` is the first release
+    that reads `N8N_WEBHOOK_URL`. Without `WEBHOOK_URL`, older releases fall
+    back to `http://<n8n_domain>:5678/`, so the module keeps sending it
+    unless the tags prove the image is current: a versioned
     `n8n_image_tag` (or, for a custom image whose tag is not a version and
     with task runners enabled, `n8n_task_runner_image_tag`) of `2.30.0` or
     newer, or a null tag on the default chart repository at chart `1.12.0`

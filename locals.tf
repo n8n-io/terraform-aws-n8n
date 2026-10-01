@@ -698,13 +698,14 @@ locals {
   )
 
   # Env vars n8n has deprecated and logs a warning for on every start, even
-  # though it otherwise ignores them. The module never sets these, and the
+  # though it otherwise ignores them. The module does not set these on a
+  # current image (WEBHOOK_URL has one exception, below), and the
   # n8n_extra_env/n8n_worker_extra_env/pool extra_env inputs reject them so a
   # caller cannot bring the warning back either.
   n8n_deprecated_env_names = [
     "N8N_AVAILABLE_BINARY_DATA_MODES",
-    # AWS-only so far. Superseded by N8N_WEBHOOK_URL in n8n 2.30.0. The one
-    # exception to "never sets": n8n.tf still emits it when the image is not
+    # AWS-only so far. Superseded by N8N_WEBHOOK_URL in n8n 2.30.0. The
+    # exception: n8n.tf still emits it when the image is not
     # known to be 2.30.0 or newer (local.n8n_needs_legacy_webhook_url_env),
     # since an older image cannot read the successor.
     "WEBHOOK_URL",

@@ -81,7 +81,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `redis.database`, `redis.dualstack`, `redis.clusterNodes`, `redis.healthCheck` | Not exposed; chart defaults used |
 | *(no chart key)* Redis / Bull queue metrics | The chart ships no exporter and no `metrics`/`serviceMonitor` block, and n8n's own `/metrics` (`n8n_metrics_enabled`) does not report Bull queue depth usefully in multi-main, which is the topology this module deploys. `redis_exporter_enabled` deploys a `redis_exporter` beside the release instead (see `observability.tf`), reading the same endpoint and AUTH Secret the chart is given. Outside the chart entirely, like the module's Ingress and webhook HPA |
 | `s3.enabled/bucket.name/bucket.region/auth.autoDetect/storage.mode` | Hardcoded `true` / module-managed bucket / hardcoded `true` (Pod Identity) / hardcoded `"s3"` |
-| `s3.storage.availableModes` | Removed in `1.14.0` (n8n-io/n8n-hosting#185). Never sent: n8n deprecated `N8N_AVAILABLE_BINARY_DATA_MODES` and warns on every start while it is set |
+| `s3.storage.availableModes` | Removed in `1.14.0` (n8n-io/n8n-hosting#185). Not sent to `1.14.0` or newer: n8n 2.x deprecated `N8N_AVAILABLE_BINARY_DATA_MODES` and warns on every start while it is set. An `n8n_chart_version` older than `1.14.0` still gets hardcoded `"filesystem,s3"`, because that chart's own default, `"filesystem"`, drops S3 on n8n 1.x |
 | `s3.bucket.host`, `s3.storage.forcePathStyle`, `s3.storage.extraEnv`, `s3.auth.accessKeyId/secretAccessKeySecret` | Not exposed; not needed given `auth.autoDetect = true` |
 
 ## Not currently configurable

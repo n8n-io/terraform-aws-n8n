@@ -187,7 +187,9 @@ The upgrade rolls every n8n pod once, because the module's env list changes
 - The chart no longer renders `N8N_AVAILABLE_BINARY_DATA_MODES`
   (n8n-io/n8n-hosting#185). n8n ignored it and only logged a deprecation
   warning on every start, so S3 binary storage is unaffected. The module no
-  longer sends `s3.storage.availableModes` either, and `n8n_extra_env`,
+  longer sends `s3.storage.availableModes` to chart `1.14.0` or newer
+  either. It still sends `"filesystem,s3"` to an older pinned chart, whose
+  own default (`"filesystem"`) would drop S3 on n8n 1.x. `n8n_extra_env`,
   `n8n_worker_extra_env` and `n8n_worker_pools[*].extra_env` reject the name
   at plan time. **Remove it from those inputs before upgrading.**
 - The chart renamed its own `WEBHOOK_URL` ConfigMap key to
@@ -195,10 +197,10 @@ The upgrade rolls every n8n pod once, because the module's env list changes
   module never sets the chart's `webhook.url` or enables the chart's
   Ingress, so the chart renders neither. Separately, the module stops
   sending the deprecated `WEBHOOK_URL` itself and the same three inputs
-  reject it. Before `2.30.0`, the first n8n release that reads
-  `N8N_WEBHOOK_URL`, n8n builds webhook URLs from `WEBHOOK_URL` or else
-  from `http://<n8n_domain>:5678/`, so the module drops it only when the
-  tags prove the image is current:
+  reject it. n8n `2.30.0` is the first release that reads
+  `N8N_WEBHOOK_URL`. Older releases build webhook URLs from `WEBHOOK_URL`,
+  or else from `http://<n8n_domain>:5678/`. So the module drops it only
+  when the tags prove the image is current:
   - `n8n_image_tag` is a version of `2.30.0` or newer. For a custom image
     (`n8n_image_repository` set) whose tag is not a version, with task
     runners enabled, `n8n_task_runner_image_tag` is read instead.
