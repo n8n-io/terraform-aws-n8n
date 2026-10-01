@@ -145,6 +145,8 @@ This example is a reference deployment optimized for clean `apply` / `destroy` c
 
 See [../small/README.md](../small/README.md#production-considerations) for the module-level list, which applies here too and is passed through the same way.
 
+See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the module-level settings that are fixed at the first `terraform apply`.
+
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
 

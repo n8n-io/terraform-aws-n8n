@@ -126,6 +126,8 @@ The Aurora cluster also carries a `# checkov:skip=CKV_AWS_139` annotation that s
 
 **Upgrading to chart `1.13.0` can interrupt workers.** This example runs a worker floor of 20. The first upgrade to n8n chart `1.13.0` (the module default from this release) resets the worker Deployment's desired count to 1 before KEDA scales it back, and executions still running on terminated pods when their shutdown window ends can be interrupted. Upgrade in a low-traffic window and let running work drain first; see [Upgrading n8n](../../docs/upgrading-n8n.md#moving-from-chart-1120-to-1130).
 
+See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the module-level and AWS-level settings (RDS, S3, the n8n encryption key) that are fixed at the first `terraform apply`; `examples/large/aurora.tf`'s own Aurora cluster has its own set, documented in `aurora.tf`.
+
 ## Reference
 
 <!-- BEGIN_TF_DOCS -->

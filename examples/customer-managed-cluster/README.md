@@ -76,6 +76,8 @@ This example is a reference deployment optimized for clean `apply` / `destroy` c
 
 These inputs are passed straight through to the module; set them in `terraform.tfvars` (or via any other variable source) to override the defaults. They no longer require wrapping or forking the module.
 
+See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for settings above (and elsewhere in the root module) that are fixed at the first `terraform apply`.
+
 ## A note on test coverage
 
 Unlike [`customer-managed-redis`](../customer-managed-redis/) and [`customer-managed-s3`](../customer-managed-s3/), this example's `tests/defaults.tftest.hcl` cannot assert a normal, successful plan of its own wiring. The module's own `create_eks = false` path reads the existing cluster through `data.aws_eks_cluster.existing`, and that data source's result is unresolvable under `command = plan` with mocked providers once nested inside this example's `module "n8n"` call, a limitation confirmed by direct experimentation rather than assumed; see the comment at the top of that test file for the full writeup, including why one `run` block (`cluster_name` length validation) passes anyway: its failure cascades widely enough through the config to block the unresolvable check blocks from ever being reached, which most other variables' validations don't. The module's own `create_eks = false` logic is already covered by 400+ run blocks in the repo root's `tests/defaults.tftest.hcl`, tested directly rather than through an example wrapper. `terraform validate`, `terraform fmt`, and `tflint` all pass against this example; exercising it end to end needs real AWS credentials.

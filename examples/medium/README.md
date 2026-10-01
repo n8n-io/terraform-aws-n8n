@@ -80,6 +80,8 @@ This example is a reference deployment optimized for clean `apply` / `destroy` c
 
 These inputs are passed straight through to the module; set them in `terraform.tfvars` (or via any other variable source) to override the defaults. They no longer require wrapping or forking the module.
 
+See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the module-level settings elsewhere in the root module that are fixed at the first `terraform apply`.
+
 **Upgrading to chart `1.13.0` can interrupt workers.** This example runs a worker floor of 5. The first upgrade to n8n chart `1.13.0` (the module default from this release) resets the worker Deployment's desired count to 1 before KEDA scales it back, and executions still running on terminated pods when their shutdown window ends can be interrupted. Upgrade in a low-traffic window and let running work drain first; see [Upgrading n8n](../../docs/upgrading-n8n.md#moving-from-chart-1120-to-1130).
 
 ## Reference

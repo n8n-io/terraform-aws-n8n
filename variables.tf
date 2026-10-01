@@ -433,7 +433,7 @@ variable "create_ingress" {
 }
 
 variable "ingress_scheme" {
-  description = "ALB scheme for the module-managed Ingress: internet-facing (the default) or internal. Use internal to keep n8n reachable only from within the VPC and any peered/VPN networks. Ignored when create_ingress = false. An internal scheme makes the Route 53 alias record resolve to private addresses, which is the intended behavior for a private deployment."
+  description = "ALB scheme for the module-managed Ingress: internet-facing (the default) or internal. Use internal to keep n8n reachable only from within the VPC and any peered/VPN networks. Ignored when create_ingress = false. An internal scheme makes the Route 53 alias record resolve to private addresses, which is the intended behavior for a private deployment. An ALB's scheme is immutable once created; changing this on an existing deployment makes the AWS Load Balancer Controller delete and recreate the ALB, which drops the DNS target until the new one is provisioned. See docs/build-time-decisions.md."
   type        = string
   default     = "internet-facing"
 
@@ -541,7 +541,7 @@ variable "node_disk_size" {
 }
 
 variable "node_instance_type" {
-  description = "EC2 instance type for EKS worker nodes. t3.xlarge (4 vCPU, 16GB) is the recommended minimum for multi-main — the 6 n8n pods (main × 2, worker × 2, webhook × 2) request ~3,600m CPU at minimum replicas, leaving t3.medium nodes with insufficient headroom for HPA to scale."
+  description = "EC2 instance type for EKS worker nodes. t3.xlarge (4 vCPU, 16GB) is the recommended minimum for multi-main — the 6 n8n pods (main × 2, worker × 2, webhook × 2) request ~3,600m CPU at minimum replicas, leaving t3.medium nodes with insufficient headroom for HPA to scale. Changing this on an existing node group forces AWS to replace it, draining every node; see docs/build-time-decisions.md."
   type        = string
   default     = "t3.xlarge"
   nullable    = false

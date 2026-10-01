@@ -53,6 +53,10 @@ To point this at infrastructure you actually run instead of the stand-ins, layer
 
 See the root [README.md → "Customer-managed infrastructure"](../../README.md#customer-managed-infrastructure) for the full state matrix, and [`docs/customer-managed-infrastructure.md`](../../docs/customer-managed-infrastructure.md) for the convention behind every toggle used here.
 
+## Production considerations
+
+EKS, RDS, Redis, and S3 are all caller-owned in this example, so their build-time constraints (cluster/instance naming, subnet placement, encryption toggles, bucket naming) belong to whoever manages those stand-ins, not to this root module's inputs. The one setting this example still owns is the n8n encryption key: back it up immediately after the first apply (`terraform output -raw n8n_encryption_key`). See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the full module-level and AWS-level list, most of which does not apply here because every layer is customer-managed.
+
 ## Prerequisites
 
 - A Route53 hosted zone for the parent domain (e.g. `example.com` if `n8n_domain = n8n.example.com`). Note its zone ID.

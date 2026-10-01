@@ -14,6 +14,16 @@ this project adheres to the stability contract in
   network egress and DNS, secrets and Terraform state custody, backup and
   restore, upgrades, and monitoring/alerting, linked from the README
   "Out of scope" section and the Usage section.
+
+- `docs/build-time-decisions.md`, a single table of settings that are
+  fixed at the first `terraform apply` (EKS cluster name, subnets, service
+  CIDR, authentication mode, and secrets encryption; node group instance
+  types/AMI type/disk size; RDS engine/identifier/storage encryption;
+  ElastiCache engine/topology/transit/at-rest encryption; the S3 bucket
+  name; the ALB ingress scheme; and the n8n encryption key), what happens
+  if you change each one later, and what to do instead. Linked from
+  `README.md` and every example's "Production considerations" section.
+
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
   annotates the default worker `ScaledObject` with
