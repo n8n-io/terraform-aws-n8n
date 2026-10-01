@@ -695,6 +695,15 @@ locals {
     # unconditionally would break those callers at plan time on upgrade, for a
     # collision that cannot occur.
     var.n8n_node_max_old_space_size_mb != null ? ["NODE_OPTIONS"] : [],
+    # N8N_LICENSE_CERT is reserved ONLY while n8n_license_cert_secret_ref is
+    # set, same reasoning as NODE_OPTIONS above: local.n8n_license_cert_env
+    # is [] when the input is null, so there is no module-rendered value for
+    # a caller entry to clobber, and before this name existed a caller could
+    # already pass N8N_LICENSE_CERT through n8n_extra_env or
+    # n8n_worker_extra_env. Reserving it unconditionally would reject that
+    # existing usage at plan time on upgrade for a collision that cannot
+    # occur on the default (null) path.
+    local.n8n_license_uses_cert ? ["N8N_LICENSE_CERT"] : [],
   )
 
   # Env vars n8n has deprecated and logs a warning for on every start, even
