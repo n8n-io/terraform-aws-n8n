@@ -7233,7 +7233,8 @@ run "image_repository_rejects_digest" {
 }
 
 # ── n8n_task_runner_image_repository ───────────────────────────────────────────
-# Same coverage shape and limitation as n8n_image_repository above.
+# Same coverage shape as n8n_image_repository above and below (both rejection
+# groups), since the two variables carry verbatim copies of the same regex.
 
 run "task_runner_image_repository_defaults_to_null" {
   command = plan
@@ -7249,6 +7250,7 @@ run "task_runner_image_repository_accepts_ecr_reference" {
 
   variables {
     n8n_task_runner_image_repository = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners"
+    n8n_task_runner_image_tag        = "2.27.4"
   }
 
   assert {
@@ -7292,6 +7294,65 @@ run "task_runner_image_repository_rejects_digest" {
 
   variables {
     n8n_task_runner_image_repository = "myregistry.example.com/runners@sha256:0123456789abcdef"
+  }
+
+  expect_failures = [var.n8n_task_runner_image_repository]
+}
+
+# A URL is the intuitive thing to paste in, and a character whitelist accepted
+# it: the scheme's own characters are all legal in a repository reference. It
+# then reaches the chart and fails as an unpullable image after the cluster is
+# already up, which is exactly what plan-time validation is for.
+run "task_runner_image_repository_rejects_scheme_prefix" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_repository = "https://myregistry.example.com/runners"
+  }
+
+  expect_failures = [var.n8n_task_runner_image_repository]
+}
+
+# Only the first segment may carry a port. A second colon is a typo, not a
+# reference the registry could resolve.
+run "task_runner_image_repository_rejects_multiple_colons" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_repository = "registry.internal:5000:bad/runners"
+  }
+
+  expect_failures = [var.n8n_task_runner_image_repository]
+}
+
+# An empty path component renders as "myregistry.example.com/runners/:2.27.4"
+# once the chart appends the tag.
+run "task_runner_image_repository_rejects_trailing_slash" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_repository = "myregistry.example.com/runners/"
+  }
+
+  expect_failures = [var.n8n_task_runner_image_repository]
+}
+
+run "task_runner_image_repository_rejects_consecutive_slashes" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_repository = "myregistry.example.com//runners"
+  }
+
+  expect_failures = [var.n8n_task_runner_image_repository]
+}
+
+# Docker rejects this itself: "repository name (RUNNERS) must be lowercase".
+run "task_runner_image_repository_rejects_uppercase_path_component" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_repository = "myregistry.example.com/RUNNERS"
   }
 
   expect_failures = [var.n8n_task_runner_image_repository]
@@ -7821,6 +7882,33 @@ run "task_runner_image_repository_without_task_runners_warns" {
   expect_failures = [check.task_runner_image_repository_requires_task_runners]
 }
 
+# A custom runner repository with no tag falls back to n8n_image_tag (or the
+# chart's own default), either of which may not exist in this repository.
+run "custom_task_runner_repository_without_tag_warns" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_repository = "myregistry.example.com/runners"
+  }
+
+  expect_failures = [check.custom_task_runner_repository_needs_an_explicit_tag]
+}
+
+# Disabling task runners also disables the pull-secret justification a lone
+# runner-repository override provided: the sidecar never deploys, so the
+# mirror is never pulled from and the secrets go unused.
+run "image_pull_secrets_with_a_disabled_runner_mirror_warns" {
+  command = plan
+
+  variables {
+    n8n_image_pull_secrets           = ["registry-creds"]
+    n8n_task_runner_image_repository = "myregistry.example.com/runners"
+    n8n_task_runners_enabled         = false
+  }
+
+  expect_failures = [check.task_runner_image_repository_requires_task_runners, check.image_pull_secrets_need_a_custom_image]
+}
+
 # The chart's own repository with a plain version pin is the common case and
 # must not trip the custom-image checks: no repository override means the runner
 # sidecar's inherited tag is a published n8n version.
@@ -8131,6 +8219,7 @@ run "image_pull_secrets_with_only_a_runner_mirror_do_not_warn" {
   variables {
     n8n_image_pull_secrets           = ["registry-creds"]
     n8n_task_runner_image_repository = "myregistry.example.com/runners"
+    n8n_task_runner_image_tag        = "2.27.4"
   }
 }
 

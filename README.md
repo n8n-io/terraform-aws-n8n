@@ -224,14 +224,17 @@ quickly; several are candidates for future minor releases (see
 
 - **Air-gapped deployments.** `n8n_image_repository` and
   `n8n_task_runner_image_repository` move the n8n application and task
-  runner images to a registry you control, but everything else still comes
-  from public registries: the n8n chart itself from `ghcr.io/n8n-io`, and
-  the KEDA / Cluster Autoscaler / AWS Load Balancer Controller /
-  metrics-server charts and images from their respective upstreams.
-  `n8n_image_pull_secrets` carries registry credentials for both n8n images
-  (application and task runner) and nothing else. Mirroring the whole set
-  into a registry you control is possible, but the module exposes no inputs
-  for pointing the charts and controller images at the mirror.
+  runner images to a registry you control. The n8n chart itself
+  (`n8n_chart_repository`) and the KEDA / Cluster Autoscaler / AWS Load
+  Balancer Controller / metrics-server charts (`keda_chart_repository`,
+  `cluster_autoscaler_chart_repository`, `lbc_chart_repository`,
+  `metrics_server_chart_repository`) all default to public upstreams but
+  can each be pointed at a private mirror. What the module does not expose
+  is a way to override the *images* those controller charts render
+  (KEDA's operator, the Cluster Autoscaler binary, the ALB Controller,
+  metrics-server): only their chart repositories. `n8n_image_pull_secrets`
+  carries registry credentials for the two n8n images (application and
+  task runner) and nothing else.
 
 - **Backup/DR automation beyond RDS snapshots.** The module enables
   RDS automated backups (defaulting to RDS's own defaults). It does
@@ -1412,8 +1415,11 @@ Three things to know about the inputs:
   overridden. Only skip the override when your tag happens to be a published
   n8n version. A plan-time warning fires when it looks like you forgot.
   `n8n_task_runner_image_repository` separately overrides the sidecar's
-  repository, for mirroring that image on its own; it needs no corresponding
-  tag override, since `n8n_task_runner_image_tag` still governs the tag.
+  repository, for mirroring that image on its own. Leaving
+  `n8n_task_runner_image_tag` null still falls back to this same image tag
+  (or the chart's default, with no custom application image either), which
+  may not exist in the runner mirror; a plan-time warning fires in that case
+  too.
 - **Pull access comes from the node group by default.** With
   `n8n_image_pull_secrets` empty, the image has to be pullable by the node
   group's IAM role, which covers a public registry and any ECR repository in

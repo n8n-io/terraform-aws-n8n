@@ -191,6 +191,18 @@ run "customer_managed_node_max_rejects_below_min" {
   expect_failures = [var.customer_managed_node_max]
 }
 
+# n8n_task_runner_image_repository (passthrough to module "n8n", no
+# root-level resource reads it directly) was tested directly against the
+# rule above: an expect_failures run for its inline-tag rejection still
+# hits the same unresolvable check blocks (eks.tf's
+# existing_eks_cluster_kubernetes_version_matches, scaling.tf's
+# webhook_hpa_needs_metrics_server_somewhere) as any other ordinary plan
+# here, confirmed by direct experimentation: the variable's own validation
+# does fail as expected, but expect_failures also requires the rest of the
+# plan to be otherwise clean, and these two checks never are in this file.
+# Not testable in this file; covered at the repo root's
+# tests/defaults.tftest.hcl instead.
+
 # n8n_main_hpa_min_replicas (passthrough to module "n8n", no local validation
 # block of its own, and no root-level resource reads it directly) was tested
 # directly against the rule above: a plain, no-failure `command = plan` run

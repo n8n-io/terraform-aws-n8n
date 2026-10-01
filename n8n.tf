@@ -1651,7 +1651,7 @@ check "graceful_shutdown_fits_grace_period" {
 }
 
 # ── Custom image guards ───────────────────────────────────────────────────────
-# Seven plan-time warnings for custom-image, extra-volume and pull-secret
+# Eight plan-time warnings for custom-image, extra-volume and pull-secret
 # configurations that are accepted but almost certainly not what the caller
 # meant. All are warnings rather than errors: each is legitimate in some
 # deployment, and none can be decided with certainty from the inputs alone.
@@ -1674,6 +1674,15 @@ check "custom_image_tag_needs_a_task_runner_tag" {
       ) : true
     ) : true
     error_message = "A custom n8n image (n8n_image_repository + n8n_image_tag) is set with task runners enabled, but n8n_task_runner_image_tag is null. The chart tags the runner sidecar from the app image, so the sidecar resolves to n8nio/runners:<n8n_image_tag> and every pod carrying a runner sidecar (workers only in upstream chart 1.14.0 queue mode) fails with ImagePullBackOff unless that exact tag exists upstream, which fails the apply rather than completing with broken pods. Set n8n_task_runner_image_tag to the n8n version the custom image is built from. Ignore this warning if the custom image's tag is itself a published n8n version."
+  }
+}
+
+check "custom_task_runner_repository_needs_an_explicit_tag" {
+  assert {
+    condition = var.n8n_task_runner_image_repository != null ? (
+      var.n8n_task_runners_enabled ? var.n8n_task_runner_image_tag != null : true
+    ) : true
+    error_message = "n8n_task_runner_image_repository is set but n8n_task_runner_image_tag is null, so the sidecar's tag falls back to n8n_image_tag (or, if that is also null, the selected chart's default appVersion). If that resolved tag does not exist in this repository, the pods fail with ImagePullBackOff. Set n8n_task_runner_image_tag to a tag that exists in this repository. Ignore this warning only if the repository publishes the resolved tag."
   }
 }
 
@@ -1704,8 +1713,8 @@ check "extra_volumes_should_be_mounted" {
 
 check "image_pull_secrets_need_a_custom_image" {
   assert {
-    condition     = length(var.n8n_image_pull_secrets) > 0 ? var.n8n_image_repository != null || var.n8n_task_runner_image_repository != null : true
-    error_message = "n8n_image_pull_secrets is set while both n8n_image_repository and n8n_task_runner_image_repository are null, so every image the pods pull comes from a public registry: the chart's docker.n8n.io/n8nio/n8n and, with task runners on, n8nio/runners. Neither needs credentials, so the secrets are attached and never used. The cost is not zero: setting this input moves ownership of the ServiceAccount from the chart to the module. Clear it to hand the account back, or set one of the private custom repositories these credentials are for."
+    condition     = length(var.n8n_image_pull_secrets) > 0 ? var.n8n_image_repository != null || (var.n8n_task_runner_image_repository != null && var.n8n_task_runners_enabled) : true
+    error_message = "n8n_image_pull_secrets is set while no custom image is actually in effect: n8n_image_repository is null, and n8n_task_runner_image_repository is either null or ignored because n8n_task_runners_enabled is false, so every image the pods pull comes from a public registry: the chart's docker.n8n.io/n8nio/n8n and, with task runners on, n8nio/runners. Neither needs credentials, so the secrets are attached and never used. The cost is not zero: setting this input moves ownership of the ServiceAccount from the chart to the module. Clear it to hand the account back, or set one of the private custom repositories these credentials are for."
   }
 }
 
