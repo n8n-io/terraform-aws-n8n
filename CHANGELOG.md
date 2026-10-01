@@ -9,6 +9,20 @@ this project adheres to the stability contract in
 
 ### Added
 
+- A plan-time advisory `check.db_postgresdb_pool_size_fits_known_max_connections`
+  (`database.tf`) warns when `db_postgresdb_pool_size` times the modeled main,
+  worker, webhook-processor, and `n8n_worker_pools` replica ceilings would
+  exceed the known default `max_connections` for the selected
+  `db_instance_class`. RDS computes that default from
+  `LEAST({DBInstanceClassMemory/9531392}, 5000)` (AWS RDS quotas and
+  constraints); the check covers a small curated table of Burstable, General
+  Purpose, and Memory Optimized classes and stays silent for classes outside
+  that table, for `create_database = false`, and for `db.t3.small` (the
+  module's own shipped `db_instance_class` default, deliberately excluded so
+  the check stays quiet against the module's own untouched defaults, matching
+  every other advisory check here). This is now documented in the new
+  [`docs/sandbox.md`](./docs/sandbox.md), alongside a cheaper single-main
+  sandbox profile built from existing inputs.
 - `docs/shared-responsibility.md`: a single table summarizing what the
   module does versus what the caller owns across cluster security add-ons,
   network egress and DNS, secrets and Terraform state custody, backup and

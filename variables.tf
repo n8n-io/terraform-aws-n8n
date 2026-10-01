@@ -1699,7 +1699,7 @@ variable "n8n_task_runner_custom_config" {
 # ── RDS PostgreSQL ─────────────────────────────────────────────────────────────
 
 variable "db_instance_class" {
-  description = "RDS instance class (db.t3.small is roughly $25/month). Size it from target throughput: load validation measured a narrow band of 41 to 51 database transactions per completed execution across every clean workload type tested (no-op webhook, a representative 34-node real workflow, HTTP-heavy and binary-heavy variants), so required database TPS is roughly target executions/s x 45. As an upper reference point, a db.r6g.8xlarge-class Aurora writer sustained 22,512 TPS in the same validation series. The measurement is per EXECUTION, so workflows triggering sub-executions or heavy Code-node DB access sit above the band; verify against your database's measured transactions per second once live."
+  description = "RDS instance class (db.t3.small is roughly $25/month). Size it from target throughput: load validation measured a narrow band of 41 to 51 database transactions per completed execution across every clean workload type tested (no-op webhook, a representative 34-node real workflow, HTTP-heavy and binary-heavy variants), so required database TPS is roughly target executions/s x 45. As an upper reference point, a db.r6g.8xlarge-class Aurora writer sustained 22,512 TPS in the same validation series. The measurement is per EXECUTION, so workflows triggering sub-executions or heavy Code-node DB access sit above the band; verify against your database's measured transactions per second once live. Burstable classes (db.t3.*, db.t4g.*) also have low default connection limits (e.g. db.t4g.micro allows around 112) that scale with instance memory -- see check.db_postgresdb_pool_size_fits_known_max_connections (database.tf) and db_postgresdb_pool_size."
   type        = string
   default     = "db.t3.small"
 
@@ -2266,7 +2266,7 @@ variable "db_postgresdb_connection_timeout_ms" {
 }
 
 variable "db_postgresdb_pool_size" {
-  description = "Maximum TypeORM connection pool slots per n8n process. pg-pool creates connections lazily and checks out a slot only while a database query or transaction is active, so this is not a one-to-one match for concurrent workflows or requests. Size it from measured concurrent database operations and pool-wait time. Multiply it by the maximum main, worker, and webhook replica counts to verify that aggregate capacity fits the PgBouncer and database connection budgets. A waiter is bounded by db_postgresdb_connection_timeout_ms unless that timeout is zero."
+  description = "Maximum TypeORM connection pool slots per n8n process. pg-pool creates connections lazily and checks out a slot only while a database query or transaction is active, so this is not a one-to-one match for concurrent workflows or requests. Size it from measured concurrent database operations and pool-wait time. Multiply it by the maximum main, worker, and webhook replica counts to verify that aggregate capacity fits the PgBouncer and database connection budgets. A waiter is bounded by db_postgresdb_connection_timeout_ms unless that timeout is zero. check.db_postgresdb_pool_size_fits_known_max_connections (database.tf) warns at plan time when this arithmetic exceeds the known default max_connections for db_instance_class."
   type        = number
   default     = 10
 
