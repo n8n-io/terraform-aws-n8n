@@ -904,12 +904,23 @@ check "db_postgresdb_ssl_ca_pem_requires_verification" {
     condition = var.db_postgresdb_ssl_ca_pem != null ? (
       var.db_postgresdb_ssl_enabled && var.db_postgresdb_ssl_reject_unauthorized
     ) : true
-    error_message = join("", [
-      "db_postgresdb_ssl_ca_pem is set, but ",
-      var.db_postgresdb_ssl_enabled ? "db_postgresdb_ssl_reject_unauthorized is false" : "db_postgresdb_ssl_enabled is false",
-      ", so n8n never validates the database server certificate against it: the ConfigMap and volume mount ",
-      "still render, for nothing. Set db_postgresdb_ssl_enabled = true and db_postgresdb_ssl_reject_unauthorized ",
-      "= true to actually verify the certificate, or remove db_postgresdb_ssl_ca_pem.",
+    # The "still render, for nothing" clause only ever applies on the
+    # reject_unauthorized = false branch: there, db_postgresdb_ssl_enabled is
+    # true, so the ConfigMap, volume, and mount (n8n.tf, locals.tf) all exist,
+    # just unused. On the ssl_enabled = false branch none of the three exist
+    # at all (all three are gated on ssl_enabled && ca_pem != null), so saying
+    # they "render" would send a caller hunting for a ConfigMap that was never
+    # created.
+    error_message = var.db_postgresdb_ssl_enabled ? join("", [
+      "db_postgresdb_ssl_ca_pem is set, but db_postgresdb_ssl_reject_unauthorized is false, so n8n never ",
+      "validates the database server certificate against it: the ConfigMap and volume mount still render, ",
+      "for nothing. Set db_postgresdb_ssl_reject_unauthorized = true to actually verify the certificate, or ",
+      "remove db_postgresdb_ssl_ca_pem.",
+      ]) : join("", [
+      "db_postgresdb_ssl_ca_pem is set, but db_postgresdb_ssl_enabled is false, so there is no TLS connection ",
+      "for n8n to verify a certificate on: the ConfigMap and volume mount never render. Set ",
+      "db_postgresdb_ssl_enabled = true and db_postgresdb_ssl_reject_unauthorized = true to actually verify ",
+      "the certificate, or remove db_postgresdb_ssl_ca_pem.",
     ])
   }
 }

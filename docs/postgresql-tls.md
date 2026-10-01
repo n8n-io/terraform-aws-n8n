@@ -79,10 +79,15 @@ can be set to something that renders but does nothing:
   is no TLS connection in that case for `DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED`
   to apply to, and the module never renders the key at all when SSL is off.
 - `db_postgresdb_ssl_ca_pem_requires_verification` warns if a CA bundle is
-  supplied while verification is not actually turned on
-  (`db_postgresdb_ssl_enabled = false`, or
-  `db_postgresdb_ssl_reject_unauthorized = false`): the ConfigMap and mount
-  still render, but n8n never validates anything against the file they carry.
+  supplied while verification is not actually turned on. Which resources
+  exist depends on which half is off:
+  - `db_postgresdb_ssl_reject_unauthorized = false` (verification itself off,
+    `db_postgresdb_ssl_enabled` still `true`): the ConfigMap, volume, and
+    mount still render, but n8n never validates anything against the file
+    they carry.
+  - `db_postgresdb_ssl_enabled = false` (SSL itself off): the ConfigMap,
+    volume, and mount never render at all, since all three are gated on
+    `db_postgresdb_ssl_enabled` in addition to the CA input.
 
 Neither check fails the plan. Both exist so a caller who sets one input and
 forgets the other learns about it before the next `terraform apply`, not

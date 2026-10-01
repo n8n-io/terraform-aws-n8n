@@ -2180,23 +2180,38 @@ variable "db_postgresdb_ssl_ca_pem" {
   type        = string
   default     = null
 
+  # Requires PEM certificate framing rather than only rejecting an empty
+  # string: a non-empty value that is not actually PEM-encoded (e.g. a DER
+  # blob, a truncated download, or plain text) previously passed this
+  # validation unnoticed, reached kubernetes_config_map_v1.postgres_ssl_ca
+  # and the mounted file, and only surfaced as a connection failure once n8n
+  # tried to parse it. (?s) makes "." match newlines so a multi-certificate
+  # bundle (e.g. AWS's global-bundle.pem) still matches end to end; this does
+  # not parse the certificate itself, only its framing.
   validation {
-    condition     = var.db_postgresdb_ssl_ca_pem == null ? true : length(trimspace(var.db_postgresdb_ssl_ca_pem)) > 0
-    error_message = "db_postgresdb_ssl_ca_pem must be null or a non-empty PEM-encoded CA bundle."
+    condition     = var.db_postgresdb_ssl_ca_pem == null ? true : can(regex("(?s)^\\s*-----BEGIN CERTIFICATE-----.*-----END CERTIFICATE-----\\s*$", var.db_postgresdb_ssl_ca_pem))
+    error_message = "db_postgresdb_ssl_ca_pem must be null or a PEM-encoded CA bundle (containing -----BEGIN CERTIFICATE----- / -----END CERTIFICATE----- delimiters)."
   }
 
+  # Both collision checks below are gated on db_postgresdb_ssl_enabled, not
+  # only on db_postgresdb_ssl_ca_pem being set: the volume and mount they
+  # guard are themselves gated on db_postgresdb_ssl_enabled (see n8n.tf and
+  # locals.tf's n8n_extra_volumes / n8n_extra_volume_mounts), so with SSL off
+  # (e.g. an in-cluster pooler terminating TLS on its own upstream leg) the
+  # module never creates either one, and there is nothing for a caller's
+  # n8n_extra_volumes / n8n_extra_volume_mounts entry to collide with.
   validation {
-    condition = var.db_postgresdb_ssl_ca_pem == null ? true : alltrue([
+    condition = (var.db_postgresdb_ssl_ca_pem == null || !var.db_postgresdb_ssl_enabled) ? true : alltrue([
       for volume in var.n8n_extra_volumes : volume.name != "postgres-ssl-ca"
     ])
-    error_message = "db_postgresdb_ssl_ca_pem reserves the volume name \"postgres-ssl-ca\". Rename or remove the conflicting n8n_extra_volumes entry."
+    error_message = "db_postgresdb_ssl_ca_pem reserves the volume name \"postgres-ssl-ca\" while db_postgresdb_ssl_enabled = true. Rename or remove the conflicting n8n_extra_volumes entry."
   }
 
   validation {
-    condition = var.db_postgresdb_ssl_ca_pem == null ? true : alltrue([
+    condition = (var.db_postgresdb_ssl_ca_pem == null || !var.db_postgresdb_ssl_enabled) ? true : alltrue([
       for mount in var.n8n_extra_volume_mounts : mount.mount_path != "/etc/n8n/postgres-ssl-ca"
     ])
-    error_message = "db_postgresdb_ssl_ca_pem reserves the mount path \"/etc/n8n/postgres-ssl-ca\". Move or remove the conflicting n8n_extra_volume_mounts entry."
+    error_message = "db_postgresdb_ssl_ca_pem reserves the mount path \"/etc/n8n/postgres-ssl-ca\" while db_postgresdb_ssl_enabled = true. Move or remove the conflicting n8n_extra_volume_mounts entry."
   }
 }
 

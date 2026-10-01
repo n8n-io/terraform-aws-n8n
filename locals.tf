@@ -267,6 +267,13 @@ locals {
     "checksum/redis-auth-token" = sha256(local.redis_auth_token_value)
   } : {}
 
+  # Single seam the Helm values merge (n8n.tf) reads: merges every source of
+  # a forced-rollout annotation (the Redis AUTH token above, the PostgreSQL
+  # SSL CA bundle) into one map, so either, both, or neither can be present
+  # without one clobbering the other when both would otherwise set the same
+  # top-level podAnnotations key.
+  n8n_pod_annotations = merge(local.redis_pod_annotations, local.postgres_ssl_ca_pod_annotations)
+
   # The two arguments the staged HA -> HA+TLS migration needs, lifted here for
   # the same testability reason as the two locals above, though the mechanism
   # differs. Both are Optional+Computed on the replication group, so a plan that
@@ -609,6 +616,19 @@ locals {
       { name = "DB_POSTGRESDB_SSL_CA_FILE", value = "/etc/n8n/postgres-ssl-ca/ca.pem" },
     ] : [],
   )
+
+  # Rolls main, worker and webhook-processor pods when the CA bundle's
+  # content changes. kubernetes_config_map_v1.postgres_ssl_ca (n8n.tf) is
+  # referenced by a constant name (local.postgres_ssl_ca_configmap_name), so
+  # rotating db_postgresdb_ssl_ca_pem updates the ConfigMap's data but
+  # produces no Helm diff, and a mounted ConfigMap's content only refreshes on
+  # the kubelet's periodic sync, not immediately: see the merge site in n8n.tf
+  # for why podAnnotations is the seam that forces an immediate rollout
+  # instead. Same gate as the ConfigMap itself, so this is {} whenever the
+  # ConfigMap does not exist.
+  postgres_ssl_ca_pod_annotations = (var.db_postgresdb_ssl_enabled && var.db_postgresdb_ssl_ca_pem != null) ? {
+    "checksum/postgres-ssl-ca" = sha256(var.db_postgresdb_ssl_ca_pem)
+  } : {}
 
   # ── n8n_extra_env collision guard ──────────────────────────────────────────
   # config.extraEnv is appended LAST in every n8n container's env list (see the

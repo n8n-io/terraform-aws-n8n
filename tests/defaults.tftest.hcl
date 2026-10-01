@@ -5352,15 +5352,20 @@ run "rds_final_snapshot_identifier_rejects_blank_even_for_external_database" {
   expect_failures = [var.db_final_snapshot_identifier]
 }
 
-# ── AUTH token rotation rollout ──────────────────────────────────────────────
-# The token reaches pods through a Secret referenced by name, so rotating it
-# produces no Helm diff and nothing restarts. local.redis_pod_annotations is
-# what forces the rollout, and it is assertable here because helm_release.values
-# is not (it embeds the Redis endpoint and so is unknown at plan time).
+# ── Forced-rollout pod annotations ───────────────────────────────────────────
+# Two independent sources feed local.n8n_pod_annotations (locals.tf), which is
+# what n8n.tf actually merges into podAnnotations: the Redis AUTH token
+# reaches pods through a Secret referenced by name, and the PostgreSQL SSL CA
+# bundle reaches pods through a ConfigMap referenced by a constant name.
+# Either way, changing the underlying content produces no Helm diff and
+# nothing restarts on its own. Asserted here, not on helm_release.n8n.values,
+# because values is unknown at plan time (it embeds the Redis endpoint).
 #
-# The hash itself is unknown at plan time, since random_password.result is. What
-# these pin is the shape: which paths carry the annotation at all, and that it
-# is a checksum key rather than the token.
+# The hash itself is unknown at plan time for the Redis half, since
+# random_password.result is. What these pin is the shape: which paths carry
+# which annotation at all, that it is a checksum key rather than the secret
+# itself, and that the two sources merge into one map instead of one
+# clobbering the other.
 
 run "no_pod_annotations_by_default" {
   command = plan
@@ -5368,6 +5373,11 @@ run "no_pod_annotations_by_default" {
   assert {
     condition     = length(local.redis_pod_annotations) == 0
     error_message = "The default path must emit no podAnnotations key at all. An empty map is not the same as omitting it: the rendered values change and every existing release sees a Helm diff on upgrade."
+  }
+
+  assert {
+    condition     = length(local.n8n_pod_annotations) == 0
+    error_message = "With no rollout source active, the merged local.n8n_pod_annotations must also be empty, so n8n.tf omits the podAnnotations key entirely."
   }
 }
 
@@ -5400,6 +5410,83 @@ run "pod_annotations_carry_the_token_checksum_when_enabled" {
       contains(keys(local.redis_pod_annotations), "checksum/redis-auth-token")
     )
     error_message = "Transit encryption must add exactly the token checksum annotation, so a rotation rolls main, worker and webhook processor pods"
+  }
+}
+
+run "no_pod_annotations_for_postgres_ssl_ca_pem_without_verification" {
+  command = plan
+
+  # db_postgresdb_ssl_enabled = false is the gate postgres_ssl_ca_pod_annotations
+  # shares with the ConfigMap itself (locals.tf): both must stay empty/absent
+  # together. Listed in expect_failures for the same reason
+  # db_postgresdb_ssl_disabled_omits_reject_unauthorized_and_ca lists it above:
+  # check.db_postgresdb_ssl_ca_pem_requires_verification is expected to warn
+  # about exactly this combination.
+  variables {
+    db_postgresdb_ssl_enabled = false
+    db_postgresdb_ssl_ca_pem  = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition     = length(local.postgres_ssl_ca_pod_annotations) == 0
+    error_message = "db_postgresdb_ssl_enabled = false must omit the CA checksum annotation, matching the ConfigMap it would otherwise be pointless to roll pods for."
+  }
+
+  expect_failures = [check.db_postgresdb_ssl_ca_pem_requires_verification]
+}
+
+run "pod_annotations_carry_the_ca_checksum_when_set" {
+  command = plan
+
+  variables {
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition = (
+      length(local.postgres_ssl_ca_pod_annotations) == 1 &&
+      contains(keys(local.postgres_ssl_ca_pod_annotations), "checksum/postgres-ssl-ca")
+    )
+    error_message = "A set CA bundle with verification actually turned on must add exactly the CA checksum annotation, so a CA rotation rolls main, worker and webhook processor pods."
+  }
+
+  assert {
+    # length()/contains() rather than a direct map equality: local.redis_pod_annotations
+    # (and therefore local.n8n_pod_annotations, once merged) is tainted
+    # sensitive by Terraform whenever its "true" branch touches
+    # local.redis_auth_token_value, even on this run where that branch isn't
+    # taken and the map is actually empty. Comparing a sensitive-tainted map
+    # to a plain one for equality fails the assertion outright rather than
+    # evaluating the values, so key presence is what this pins instead.
+    condition = (
+      length(local.n8n_pod_annotations) == 1 &&
+      contains(keys(local.n8n_pod_annotations), "checksum/postgres-ssl-ca")
+    )
+    error_message = "With no Redis AUTH token in play, the merged local.n8n_pod_annotations must carry exactly the CA checksum annotation."
+  }
+}
+
+run "pod_annotations_merge_both_sources_without_clobbering" {
+  command = plan
+
+  # Proves the merge in locals.tf's n8n_pod_annotations composes rather than
+  # one source overwriting the other: both conditions below independently set
+  # a top-level podAnnotations key in n8n.tf's merge() call before this local
+  # existed, and merge() keeps only the last map that sets a given key.
+  variables {
+    redis_transit_encryption_enabled      = true
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition = (
+      length(local.n8n_pod_annotations) == 2 &&
+      contains(keys(local.n8n_pod_annotations), "checksum/redis-auth-token") &&
+      contains(keys(local.n8n_pod_annotations), "checksum/postgres-ssl-ca")
+    )
+    error_message = "Both the Redis AUTH token checksum and the PostgreSQL CA checksum must be present together: a rotation of either input must still roll pods, and neither source may clobber the other's annotation."
   }
 }
 
@@ -11408,6 +11495,20 @@ run "rejects_empty_db_postgresdb_ssl_ca_pem" {
   expect_failures = [var.db_postgresdb_ssl_ca_pem]
 }
 
+run "rejects_malformed_non_pem_db_postgresdb_ssl_ca_pem" {
+  command = plan
+
+  # Non-empty but not PEM-framed: a DER blob, a truncated download, or plain
+  # text would previously pass this validation (it only rejected an empty
+  # string), reach the ConfigMap and the mounted file, and only surface as a
+  # connection failure once n8n tried to use it.
+  variables {
+    db_postgresdb_ssl_ca_pem = "this is not a certificate, just some text"
+  }
+
+  expect_failures = [var.db_postgresdb_ssl_ca_pem]
+}
+
 run "db_postgresdb_ssl_ca_pem_rejects_a_conflicting_extra_volume_name" {
   command = plan
 
@@ -11438,6 +11539,31 @@ run "db_postgresdb_ssl_ca_pem_rejects_a_conflicting_extra_volume_mount_path" {
   }
 
   expect_failures = [var.db_postgresdb_ssl_ca_pem]
+}
+
+run "db_postgresdb_ssl_ca_pem_collision_checks_skip_when_ssl_disabled" {
+  command = plan
+
+  # db_postgresdb_ssl_enabled = false means the module itself never creates
+  # the "postgres-ssl-ca" volume or mount (n8n.tf, locals.tf), so a caller's
+  # n8n_extra_volumes / n8n_extra_volume_mounts entry reusing those exact
+  # names is not actually a collision. Before gating both validations on
+  # db_postgresdb_ssl_enabled, this otherwise-valid combination was rejected
+  # anyway. check.db_postgresdb_ssl_ca_pem_requires_verification still fires
+  # (ca_pem is set without verification), so it is listed in expect_failures;
+  # the variable's own validations must NOT be in it.
+  variables {
+    db_postgresdb_ssl_enabled = false
+    db_postgresdb_ssl_ca_pem  = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+    n8n_extra_volumes = [
+      { name = "postgres-ssl-ca", config_map = { name = "caller-owned" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "postgres-ssl-ca", mount_path = "/etc/n8n/postgres-ssl-ca" },
+    ]
+  }
+
+  expect_failures = [check.db_postgresdb_ssl_ca_pem_requires_verification]
 }
 
 run "rejects_reserved_ssl_ca_file_environment_name" {

@@ -1140,46 +1140,64 @@ resource "helm_release" "n8n" {
       )
     },
 
-    # ── Roll the pods when the AUTH token changes ─────────────────────────────
+    # ── Roll the pods when content outside the Helm diff changes ─────────────
     # kubernetes_secret.n8n_redis is referenced by NAME from redis.passwordSecret
     # above, so its contents are not part of the rendered Helm values. Rotating
     # the token therefore updates the Secret and the replication group but
     # produces no Helm diff, and nothing restarts: env vars sourced from a
     # secretKeyRef are resolved once at pod start, so every running pod keeps
-    # the old token indefinitely.
+    # the old token indefinitely. kubernetes_config_map_v1.postgres_ssl_ca has
+    # the same problem for a different reason: it is referenced by a constant
+    # name (local.postgres_ssl_ca_configmap_name), so a changed db_postgresdb_ssl_ca_pem
+    # updates the ConfigMap's data but produces no Helm diff either, and a
+    # mounted ConfigMap's content only refreshes on the kubelet's periodic
+    # sync, not immediately: a rotated RDS CA (docs/postgresql-tls.md) could
+    # reach already-running pods well after it reaches the ConfigMap.
     #
-    # auth_token_update_strategy = "ROTATE" (redis.tf) is what stops that being
-    # an immediate outage: AWS keeps the previous token valid alongside the new
-    # one. It is not a fix, only a grace period. The next rotation invalidates
-    # the token those pods are still holding, and the queue stops.
+    # auth_token_update_strategy = "ROTATE" (redis.tf) is what stops the Redis
+    # half being an immediate outage: AWS keeps the previous token valid
+    # alongside the new one. It is not a fix, only a grace period. The next
+    # rotation invalidates the token those pods are still holding, and the
+    # queue stops. RDS similarly overlaps CA validity windows across a
+    # rotation (see docs/postgresql-tls.md), which is what this annotation's
+    # forced rollout needs to land inside.
     #
     # The chart computes its own checksum/config and checksum/secret pod
     # annotations, but checksum/secret hashes templates/secrets.yaml, which
-    # renders secretRefs.env only. A Secret created outside the chart, as this
-    # one is, can never move that hash. podAnnotations is the seam that works:
-    # the chart merges it into all three pod templates (main, worker, webhook
-    # processor), so a changed value rolls exactly the pods that hold the token.
+    # renders secretRefs.env only, and neither ever hashes a ConfigMap this
+    # module creates outside the chart. podAnnotations is the seam that works
+    # for both cases: the chart merges it into all three pod templates (main,
+    # worker, webhook processor), so a changed value rolls exactly the pods
+    # that hold the token or the CA.
     #
     # CAVEAT: podAnnotations is accepted by the templates but is NOT documented
     # in the chart's values.yaml, so it is an implicit interface that could be
     # renamed without a breaking-change note. Verified present at the pinned
-    # n8n_chart_version (1.10.0) and still present at 1.11.0. If a chart bump
-    # ever silently drops it, rotation goes back to being manual rather than
-    # breaking anything, and the test in defaults.tftest.hcl pins the shape.
+    # n8n_chart_version (1.13.0) and present as far back as 1.10.0. If a chart
+    # bump ever silently drops it, rotation goes back to being manual rather
+    # than breaking anything, and the tests in defaults.tftest.hcl pin the shape.
     #
-    # The hash, never the token: annotations are readable by anyone who can get
-    # a pod, and sha256 is enough to change when the token changes.
+    # The hash, never the secret itself: annotations are readable by anyone who
+    # can get a pod. The CA bundle is already public information (it certifies
+    # the server, not the client), and sha256 is enough either way to change
+    # when the underlying content changes.
     #
     # Merged conditionally rather than emitted as an empty map, for the same
     # reason redis.timeout is: a default deployment must render byte-identical
     # values to what it renders today, or every existing release sees a Helm
-    # diff on upgrade.
+    # diff on upgrade. local.n8n_pod_annotations (locals.tf) merges
+    # redis_pod_annotations and postgres_ssl_ca_pod_annotations into one map,
+    # so either source, both, or neither can be present without one clobbering
+    # the other the way two separate `podAnnotations = ...` entries in this
+    # same merge() call would (merge() keeps only the last map that sets a
+    # given top-level key).
     #
-    # Also gated on redis_auth_token_secret_ref being null: with a
+    # Also gated on redis_auth_token_secret_ref for the Redis half: with a
     # caller-managed Secret the module never reads the token value, so it has
     # nothing to hash, and local.redis_pod_annotations resolves to {} on that
-    # path for the same reason.
-    (local.redis_auth_active && var.redis_auth_token_secret_ref == null) ? { podAnnotations = local.redis_pod_annotations } : {},
+    # path for the same reason. That gate lives inside redis_pod_annotations
+    # itself, not here, so it composes with the CA half unconditionally.
+    length(local.n8n_pod_annotations) > 0 ? { podAnnotations = local.n8n_pod_annotations } : {},
 
     # Pod DNS. Omitted entirely unless n8n_dns_config is set, so this is a no-op
     # by default. See that variable for why it exists (ndots:5 search-path

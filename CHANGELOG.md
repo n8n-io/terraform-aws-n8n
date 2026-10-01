@@ -104,9 +104,14 @@ this project adheres to the stability contract in
   https://truststore.pki.rds.amazonaws.com) via a module-managed
   `kubernetes_config_map_v1`, mounted read-only at
   `/etc/n8n/postgres-ssl-ca/ca.pem` on the main, worker, and
-  webhook-processor pods and wired to `DB_POSTGRESDB_SSL_CA_FILE`. Both
-  default to the prior behavior (`false` / `null`), so existing deployments
-  see no plan diff. A non-blocking `check` warns when a CA is supplied
+  webhook-processor pods and wired to `DB_POSTGRESDB_SSL_CA_FILE`. A
+  `checksum/postgres-ssl-ca` pod annotation (merged with the existing Redis
+  AUTH token checksum, if any, via `podAnnotations`) forces a rollout of all
+  three deployments whenever the CA bundle's content changes, so a rotated
+  RDS CA (AWS retires older CAs on a schedule; see
+  `docs/postgresql-tls.md`) reaches running pods instead of only the
+  ConfigMap. Both inputs default to the prior behavior (`false` / `null`), so
+  existing deployments see no plan diff. A non-blocking `check` warns when a CA is supplied
   without verification actually turned on, and another when verification is
   requested while `db_postgresdb_ssl_enabled = false`, so the input is never
   silently inert. See
