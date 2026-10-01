@@ -296,6 +296,31 @@ resource "kubernetes_secret" "n8n_redis" {
   depends_on = [aws_eks_node_group.n8n]
 }
 
+# ── PostgreSQL SSL CA bundle ──────────────────────────────────────────────────
+# Opt-in: only created when db_postgresdb_ssl_enabled = true and
+# db_postgresdb_ssl_ca_pem is set. Mounted read-only on main, worker and
+# webhook-processor pods (see locals.tf's n8n_extra_volumes /
+# n8n_extra_volume_mounts) and pointed at by DB_POSTGRESDB_SSL_CA_FILE
+# (locals.tf's n8n_postgres_ssl_env). A ConfigMap, not a Secret: a CA
+# certificate is public information (it certifies the server, not the
+# client), so there is nothing to protect read access to.
+
+resource "kubernetes_config_map_v1" "postgres_ssl_ca" {
+  count = var.db_postgresdb_ssl_enabled && var.db_postgresdb_ssl_ca_pem != null ? 1 : 0
+
+  metadata {
+    name      = local.postgres_ssl_ca_configmap_name
+    namespace = local.namespace_name
+  }
+
+  data = {
+    "ca.pem" = var.db_postgresdb_ssl_ca_pem
+  }
+
+  # See the comment on kubernetes_secret.n8n above.
+  depends_on = [aws_eks_node_group.n8n]
+}
+
 # ── Service account ───────────────────────────────────────────────────────────
 # Only created when var.n8n_image_pull_secrets is non-empty. Otherwise the chart
 # creates the account and this resource does not exist; see the note on
@@ -717,12 +742,7 @@ resource "helm_release" "n8n" {
         # Direct connections to RDS/Aurora use SSL with the AWS CA (not trusted by Node.js — safe
         # to skip cert verification within the VPC). Set db_postgresdb_ssl_enabled = false when
         # n8n's DB host is an in-cluster pooler (e.g. PgBouncer) that handles SSL on its upstream leg.
-        var.db_postgresdb_ssl_enabled ? [
-          { name = "DB_POSTGRESDB_SSL_ENABLED", value = "true" },
-          { name = "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED", value = "false" },
-          ] : [
-          { name = "DB_POSTGRESDB_SSL_ENABLED", value = "false" },
-        ],
+        local.n8n_postgres_ssl_env,
         [
           { name = "N8N_LOG_LEVEL", value = var.n8n_log_level },
           # N8N_LOG_OUTPUT controls *where* logs go (console / file), not their

@@ -104,7 +104,12 @@ module "n8n" {
   # `db_host` itself is computed (known after apply) and can't gate count.
   #
   # db_postgresdb_ssl_enabled = false because PgBouncer<->Aurora handles SSL;
-  # the n8n -> PgBouncer leg is plain TCP within the cluster.
+  # the n8n -> PgBouncer leg is plain TCP within the cluster. That also makes
+  # db_postgresdb_ssl_reject_unauthorized / db_postgresdb_ssl_ca_pem inert
+  # here: this module only ever sees db_host (PgBouncer's in-cluster Service),
+  # so it has no visibility into or control over PgBouncer's own upstream TLS
+  # posture to Aurora (SERVER_TLS_SSLMODE=require in pgbouncer.tf, encryption
+  # only, no certificate verification). See docs/postgresql-tls.md.
   create_database           = false
   db_host                   = "${kubernetes_service.pgbouncer.metadata[0].name}.${kubernetes_namespace.pgbouncer.metadata[0].name}.svc.cluster.local"
   db_password               = random_password.aurora.result

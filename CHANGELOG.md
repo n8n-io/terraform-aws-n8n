@@ -91,6 +91,29 @@ this project adheres to the stability contract in
   stand-in replication groups now also run `noeviction` on a matching
   stand-in parameter group, as a good-practice example for a caller-owned
   Redis feeding n8n's Bull queue. See README → "Redis eviction policy".
+
+- **`db_postgresdb_ssl_reject_unauthorized` and `db_postgresdb_ssl_ca_pem`**
+  close the certificate-verification gap on the module's direct PostgreSQL TLS
+  connection: `db_postgresdb_ssl_enabled` (existing) already encrypted the
+  connection but hardcoded `DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=false`,
+  skipping verification outright, because AWS's RDS server certificate
+  chains to Amazon's own RDS-specific CA (`rds-ca-rsa2048-g1` and friends),
+  not a root in Node.js's default trust store. Setting
+  `db_postgresdb_ssl_reject_unauthorized = true` turns verification on;
+  `db_postgresdb_ssl_ca_pem` supplies the RDS CA bundle (download from
+  https://truststore.pki.rds.amazonaws.com) via a module-managed
+  `kubernetes_config_map_v1`, mounted read-only at
+  `/etc/n8n/postgres-ssl-ca/ca.pem` on the main, worker, and
+  webhook-processor pods and wired to `DB_POSTGRESDB_SSL_CA_FILE`. Both
+  default to the prior behavior (`false` / `null`), so existing deployments
+  see no plan diff. A non-blocking `check` warns when a CA is supplied
+  without verification actually turned on, and another when verification is
+  requested while `db_postgresdb_ssl_enabled = false`, so the input is never
+  silently inert. See
+  [`docs/postgresql-tls.md`](./docs/postgresql-tls.md) for the full
+  procedure, AWS's CA rotation schedule, and the PgBouncer caveat
+  (`examples/large`): PgBouncer terminates TLS on its own upstream leg to
+  Aurora, which this module has no visibility into.
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
   annotates the default worker `ScaledObject` with

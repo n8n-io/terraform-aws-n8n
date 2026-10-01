@@ -48,6 +48,14 @@ locals {
   n8n_webhook_service_name = "n8n-webhook-processor"
   n8n_service_port         = 5678
 
+  # Fixed name for the module-managed PostgreSQL SSL CA bundle ConfigMap
+  # (n8n.tf's kubernetes_config_map_v1.postgres_ssl_ca), used both on the
+  # resource's own metadata.name and in n8n_extra_volumes below, so the two
+  # never drift and the volume source needs no dependency on the resource
+  # attribute (which would make it unknown at plan time under the mock
+  # provider -- see AGENTS.md's known mock-provider limitations).
+  postgres_ssl_ca_configmap_name = "n8n-postgres-ssl-ca"
+
   # Path prefixes that must reach the webhook processors rather than the mains.
   #
   # The module runs the chart with disableProductionWebhooksOnMainProcess = true,
@@ -531,6 +539,14 @@ locals {
         }
       },
     ],
+    (var.db_postgresdb_ssl_enabled && var.db_postgresdb_ssl_ca_pem != null) ? [
+      {
+        name = "postgres-ssl-ca"
+        configMap = {
+          name = local.postgres_ssl_ca_configmap_name
+        }
+      },
+    ] : [],
   )
 
   n8n_extra_volume_mounts = concat(
@@ -551,6 +567,13 @@ locals {
         readOnly  = true
       },
     ],
+    (var.db_postgresdb_ssl_enabled && var.db_postgresdb_ssl_ca_pem != null) ? [
+      {
+        name      = "postgres-ssl-ca"
+        mountPath = "/etc/n8n/postgres-ssl-ca"
+        readOnly  = true
+      },
+    ] : [],
   )
 
   n8n_credentials_overwrite_env = var.n8n_credentials_overwrite_secret_ref == null ? [] : [
@@ -559,6 +582,33 @@ locals {
       value = "/etc/n8n/credentials-overwrite/${var.n8n_credentials_overwrite_secret_ref.key}"
     },
   ]
+
+  # ── PostgreSQL SSL (DB_POSTGRESDB_SSL_ENABLED/_REJECT_UNAUTHORIZED/_CA_FILE) ──
+  # Extracted to its own local, like n8n_credentials_overwrite_env above, so it
+  # can be asserted on directly in tests/defaults.tftest.hcl under command =
+  # plan: helm_release.n8n's values are unknown at plan time (see AGENTS.md's
+  # known mock-provider limitations), so a list built inline inside that
+  # resource's config.extraEnv could not be.
+  #
+  # DB_POSTGRESDB_SSL_CA_FILE is gated on db_postgresdb_ssl_enabled, not only on
+  # db_postgresdb_ssl_ca_pem != null, so toggling SSL off also stops pointing
+  # n8n at a CA file for a connection that no longer exists. It is NOT also
+  # gated on db_postgresdb_ssl_reject_unauthorized: the CA stays mounted and
+  # referenced while verification is off, so flipping reject_unauthorized to
+  # true alone (no other change) needs no Helm values diff beyond that one
+  # setting. check.db_postgresdb_ssl_ca_pem_requires_verification (database.tf)
+  # is what flags that combination as likely a mistake.
+  n8n_postgres_ssl_env = concat(
+    var.db_postgresdb_ssl_enabled ? [
+      { name = "DB_POSTGRESDB_SSL_ENABLED", value = "true" },
+      { name = "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED", value = tostring(var.db_postgresdb_ssl_reject_unauthorized) },
+      ] : [
+      { name = "DB_POSTGRESDB_SSL_ENABLED", value = "false" },
+    ],
+    (var.db_postgresdb_ssl_enabled && var.db_postgresdb_ssl_ca_pem != null) ? [
+      { name = "DB_POSTGRESDB_SSL_CA_FILE", value = "/etc/n8n/postgres-ssl-ca/ca.pem" },
+    ] : [],
+  )
 
   # ── n8n_extra_env collision guard ──────────────────────────────────────────
   # config.extraEnv is appended LAST in every n8n container's env list (see the

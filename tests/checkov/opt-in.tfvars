@@ -11,4 +11,5 @@
 #
 # Not a terraform.tfvars: Terraform never reads this file, only checkov does,
 # and only when the script passes it with --var-file.
-redis_exporter_enabled = true
+redis_exporter_enabled   = true
+db_postgresdb_ssl_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIFakeCertificateForCheckovScanningOnly\n-----END CERTIFICATE-----\n"

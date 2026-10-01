@@ -11272,6 +11272,211 @@ run "db_postgresdb_connection_timeout_ms_rejects_a_node_timer_overflow" {
   expect_failures = [var.db_postgresdb_connection_timeout_ms]
 }
 
+# ── PostgreSQL SSL certificate verification ───────────────────────────────────
+# (db_postgresdb_ssl_reject_unauthorized / db_postgresdb_ssl_ca_pem). Asserted
+# on local.n8n_postgres_ssl_env / local.n8n_extra_volumes /
+# local.n8n_extra_volume_mounts rather than helm_release.n8n.values, per
+# AGENTS.md's documented mock-provider limitation (values is unknown at plan
+# time once kubernetes_namespace is in the dependency chain).
+
+run "db_postgresdb_ssl_defaults_match_prior_behavior" {
+  command = plan
+
+  assert {
+    condition     = var.db_postgresdb_ssl_reject_unauthorized == false
+    error_message = "db_postgresdb_ssl_reject_unauthorized must default to false, preserving the module's prior hardcoded behavior."
+  }
+
+  assert {
+    condition     = var.db_postgresdb_ssl_ca_pem == null
+    error_message = "db_postgresdb_ssl_ca_pem must default to null, so no ConfigMap, volume, or mount renders unless a caller opts in."
+  }
+
+  assert {
+    condition = (
+      length(local.n8n_postgres_ssl_env) == 2 &&
+      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_ENABLED" &&
+      local.n8n_postgres_ssl_env[0].value == "true" &&
+      local.n8n_postgres_ssl_env[1].name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED" &&
+      local.n8n_postgres_ssl_env[1].value == "false"
+    )
+    error_message = "With every db_postgresdb_ssl_* input at its default, local.n8n_postgres_ssl_env must render byte-identical to the module's prior hardcoded list, so an existing deployment sees no Helm values diff."
+  }
+
+  assert {
+    condition     = length(kubernetes_config_map_v1.postgres_ssl_ca) == 0
+    error_message = "The CA ConfigMap must not exist when db_postgresdb_ssl_ca_pem is unset."
+  }
+
+  assert {
+    condition     = length([for v in local.n8n_extra_volumes : v if v.name == "postgres-ssl-ca"]) == 0
+    error_message = "No postgres-ssl-ca volume should render by default."
+  }
+
+  assert {
+    condition     = length([for m in local.n8n_extra_volume_mounts : m if m.name == "postgres-ssl-ca"]) == 0
+    error_message = "No postgres-ssl-ca mount should render by default."
+  }
+}
+
+run "db_postgresdb_ssl_reject_unauthorized_true_renders_env" {
+  command = plan
+
+  variables {
+    db_postgresdb_ssl_reject_unauthorized = true
+  }
+
+  assert {
+    condition     = one([for e in local.n8n_postgres_ssl_env : e.value if e.name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"]) == "true"
+    error_message = "db_postgresdb_ssl_reject_unauthorized = true must render DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=true."
+  }
+}
+
+run "db_postgresdb_ssl_disabled_omits_reject_unauthorized_and_ca" {
+  command = plan
+
+  # db_postgresdb_ssl_ca_pem is deliberately also set here to prove it has no
+  # effect while SSL itself is off: check.db_postgresdb_ssl_ca_pem_requires_verification
+  # is expected to warn about exactly this combination (see the run below),
+  # so it is listed in expect_failures rather than left to fail this run.
+  variables {
+    db_postgresdb_ssl_enabled = false
+    db_postgresdb_ssl_ca_pem  = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition = (
+      length(local.n8n_postgres_ssl_env) == 1 &&
+      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_ENABLED" &&
+      local.n8n_postgres_ssl_env[0].value == "false"
+    )
+    error_message = "db_postgresdb_ssl_enabled = false must omit DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED and DB_POSTGRESDB_SSL_CA_FILE entirely, matching the module's prior behavior for this input."
+  }
+
+  assert {
+    condition     = length(kubernetes_config_map_v1.postgres_ssl_ca) == 0
+    error_message = "The CA ConfigMap must not exist while db_postgresdb_ssl_enabled = false, even with a CA bundle supplied."
+  }
+
+  expect_failures = [check.db_postgresdb_ssl_ca_pem_requires_verification]
+}
+
+run "db_postgresdb_ssl_ca_pem_renders_configmap_volume_and_env" {
+  command = plan
+
+  variables {
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition = (
+      length(kubernetes_config_map_v1.postgres_ssl_ca) == 1 &&
+      kubernetes_config_map_v1.postgres_ssl_ca[0].data["ca.pem"] == "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n" &&
+      kubernetes_config_map_v1.postgres_ssl_ca[0].metadata[0].name == local.postgres_ssl_ca_configmap_name
+    )
+    error_message = "db_postgresdb_ssl_ca_pem must create exactly one ConfigMap carrying the supplied PEM under the ca.pem key, named local.postgres_ssl_ca_configmap_name."
+  }
+
+  assert {
+    condition     = one([for v in local.n8n_extra_volumes : v if v.name == "postgres-ssl-ca"]).configMap.name == local.postgres_ssl_ca_configmap_name
+    error_message = "local.n8n_extra_volumes must carry a postgres-ssl-ca entry sourced from the module-managed ConfigMap."
+  }
+
+  assert {
+    condition = one([for m in local.n8n_extra_volume_mounts : m if m.name == "postgres-ssl-ca"]) == {
+      name      = "postgres-ssl-ca"
+      mountPath = "/etc/n8n/postgres-ssl-ca"
+      readOnly  = true
+    }
+    error_message = "local.n8n_extra_volume_mounts must mount postgres-ssl-ca read-only at /etc/n8n/postgres-ssl-ca."
+  }
+
+  assert {
+    condition     = one([for e in local.n8n_postgres_ssl_env : e.value if e.name == "DB_POSTGRESDB_SSL_CA_FILE"]) == "/etc/n8n/postgres-ssl-ca/ca.pem"
+    error_message = "local.n8n_postgres_ssl_env must set DB_POSTGRESDB_SSL_CA_FILE to the mounted file path."
+  }
+}
+
+run "rejects_empty_db_postgresdb_ssl_ca_pem" {
+  command = plan
+
+  variables {
+    db_postgresdb_ssl_ca_pem = "   "
+  }
+
+  expect_failures = [var.db_postgresdb_ssl_ca_pem]
+}
+
+run "db_postgresdb_ssl_ca_pem_rejects_a_conflicting_extra_volume_name" {
+  command = plan
+
+  variables {
+    db_postgresdb_ssl_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+    n8n_extra_volumes = [
+      { name = "postgres-ssl-ca", config_map = { name = "caller-owned" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "postgres-ssl-ca", mount_path = "/opt/caller-owned" },
+    ]
+  }
+
+  expect_failures = [var.db_postgresdb_ssl_ca_pem]
+}
+
+run "db_postgresdb_ssl_ca_pem_rejects_a_conflicting_extra_volume_mount_path" {
+  command = plan
+
+  variables {
+    db_postgresdb_ssl_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+    n8n_extra_volumes = [
+      { name = "caller-owned", config_map = { name = "caller-owned" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "caller-owned", mount_path = "/etc/n8n/postgres-ssl-ca" },
+    ]
+  }
+
+  expect_failures = [var.db_postgresdb_ssl_ca_pem]
+}
+
+run "rejects_reserved_ssl_ca_file_environment_name" {
+  command = plan
+
+  # DB_POSTGRESDB_SSL_CA_FILE needs no dedicated reservation: it already falls
+  # under the generic "DB_" prefix in local.n8n_managed_env_prefixes. This run
+  # exists to catch a future refactor of that prefix list silently narrowing
+  # it to miss this name.
+  variables {
+    n8n_extra_env = [
+      { name = "DB_POSTGRESDB_SSL_CA_FILE", value = "/tmp/override.pem" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "db_postgresdb_ssl_reject_unauthorized_without_ssl_enabled_warns" {
+  command = plan
+
+  variables {
+    db_postgresdb_ssl_enabled             = false
+    db_postgresdb_ssl_reject_unauthorized = true
+  }
+
+  expect_failures = [check.db_postgresdb_ssl_reject_unauthorized_requires_ssl_enabled]
+}
+
+run "db_postgresdb_ssl_ca_pem_without_verification_warns" {
+  command = plan
+
+  variables {
+    db_postgresdb_ssl_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+  }
+
+  expect_failures = [check.db_postgresdb_ssl_ca_pem_requires_verification]
+}
+
 # ── Pod DNS (n8n_dns_config) ──────────────────────────────────────────────────
 # Plan-time variable-contract assertions only, per AGENTS.md's documented mock
 # provider limitation: helm_release.values is unknown at plan time, so the
