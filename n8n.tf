@@ -1235,6 +1235,10 @@ resource "helm_release" "n8n" {
     aws_elasticache_replication_group.n8n,
     aws_iam_role_policy_attachment.s3,
     aws_eks_pod_identity_association.s3,
+    # The CA bundle is mounted by a constant name (see
+    # local.postgres_ssl_ca_configmap_name), so nothing else orders the
+    # ConfigMap before the pods that mount it. Empty when the CA is unset.
+    kubernetes_config_map_v1.postgres_ssl_ca,
     kubernetes_service_account_v1.n8n, # empty list unless the module owns it
   ]
 }
