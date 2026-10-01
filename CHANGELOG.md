@@ -12,15 +12,16 @@ this project adheres to the stability contract in
 - A plan-time advisory `check.db_postgresdb_pool_size_fits_known_max_connections`
   (`database.tf`) warns when `db_postgresdb_pool_size` times the modeled main,
   worker, webhook-processor, and `n8n_worker_pools` replica ceilings would
-  exceed the known default `max_connections` for the selected
-  `db_instance_class`. RDS computes that default from
-  `LEAST({DBInstanceClassMemory/9531392}, 5000)` (AWS RDS quotas and
-  constraints); the check covers a small curated table of Burstable, General
-  Purpose, and Memory Optimized classes and stays silent for classes outside
-  that table, for `create_database = false`, and for `db.t3.small` (the
-  module's own shipped `db_instance_class` default, deliberately excluded so
-  the check stays quiet against the module's own untouched defaults, matching
-  every other advisory check here). This is now documented in the new
+  exceed the connections usable for the selected `db_instance_class`: its
+  known default `max_connections` (RDS computes that from
+  `LEAST({DBInstanceClassMemory/9531392}, 5000)`, AWS RDS quotas and
+  constraints) minus 5 connections reserved by PostgreSQL's own
+  `superuser_reserved_connections` and RDS's own
+  `rds.rds_superuser_reserved_connections`. The check covers a small curated
+  table of Burstable, General Purpose, and Memory Optimized classes,
+  including `db.t3.small` (the module's own shipped `db_instance_class`
+  default), and stays silent for classes outside that table and for
+  `create_database = false`. This is now documented in the new
   [`docs/sandbox.md`](./docs/sandbox.md), alongside a cheaper single-main
   sandbox profile built from existing inputs.
 - `docs/shared-responsibility.md`: a single table summarizing what the
@@ -338,6 +339,22 @@ this project adheres to the stability contract in
   - n8n-io/n8n-hosting#209: chart validation reports every failure in one
     render.
   - See `docs/upgrading-n8n.md#moving-from-chart-1130-to-1140`.
+- **`n8n_webhook_hpa_max_replicas` default drops from `8` to `4`.** The
+  previous default left the module's own shipped defaults over its own
+  connection budget: main (6) + worker (10) + webhook (8) = 24 pods ×
+  `db_postgresdb_pool_size` (10) requested 240 connections against
+  `db.t3.small`'s 225 default `max_connections` (220 usable once
+  PostgreSQL's and RDS's own reserved connections are subtracted), a gap
+  `check.db_postgresdb_pool_size_fits_known_max_connections` previously
+  excluded `db.t3.small` from its table to avoid firing on. At the new
+  default the same arithmetic requests 200 connections, 20 under the
+  220-connection budget, so the check now covers `db.t3.small` too (see
+  **Added** above). Upgrade note: an explicit
+  `n8n_webhook_hpa_max_replicas` is untouched; a caller relying on the
+  default gets an HPA maximum of 4 instead of 8 on the next apply. Set
+  `n8n_webhook_hpa_max_replicas = 8` explicitly to keep the old ceiling, and
+  raise `db_instance_class` or lower `db_postgresdb_pool_size` to keep the
+  database sized for it.
 - Default n8n chart `1.12.0` to `1.13.0`. `n8n_image_tag = null` still uses
   the selected chart's default, which moves from `appVersion: 2.39.6` to
   `2.40.5`; pin the running application version first if it is not already

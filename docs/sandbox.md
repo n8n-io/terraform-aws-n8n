@@ -62,29 +62,30 @@ db_postgresdb_pool_size * (main replicas + worker replicas + webhook replicas + 
 At the single-main sandbox sizes above (1 main + 1 worker + 1 webhook = 3
 pods), `db_postgresdb_pool_size = 3` requests up to 9 connections,
 comfortably under `db.t4g.micro`'s ~112. The module's own shipped defaults
-do not have this kind of headroom: at `db_instance_class = db.t3.small`
-(the module default) with the default main/worker/webhook ceilings of
-6/10/8 and the default `db_postgresdb_pool_size = 10`, the ceiling
-arithmetic alone already requests 240 connections against db.t3.small's
-own known default of ~225, before any `n8n_worker_pools` are added (see
+(`db_instance_class = db.t3.small`, main/worker/webhook ceilings of 6/10/4,
+`db_postgresdb_pool_size = 10`) request up to 200 connections, before any
+`n8n_worker_pools` are added (see
 [`examples/worker-pools/README.md`](../examples/worker-pools/README.md)'s
-own connection-budget note). That specific combination predates this
-check and the check deliberately leaves `db.t3.small` out of its table so
-it stays quiet against the module's own untouched defaults, matching every
-other advisory check in this module; moving off the default class (or
-lowering the pool size or ceilings) is still worth doing for headroom, it
-is just not something this one check enforces for that exact class.
-Picking any *other* class in the curated table without adjusting the
-ceilings is exactly what `check.db_postgresdb_pool_size_fits_known_max_connections`
-(`database.tf`) does catch at plan time; it stays silent for instance
+own connection-budget note). db.t3.small's known default `max_connections`
+is 225, of which PostgreSQL's own `superuser_reserved_connections` (default
+3) and RDS's own `rds.rds_superuser_reserved_connections` (default 2 from
+PostgreSQL 15 onward) reserve 5, leaving 220 usable, so the module's own
+shipped defaults plan clean with 20 connections of headroom.
+Raising `n8n_webhook_hpa_max_replicas` back toward its old default of `8`
+(or raising `n8n_main_hpa_max_replicas` or `n8n_worker_keda_max_replicas`)
+without also raising `db_instance_class` or lowering
+`db_postgresdb_pool_size` can exceed that 220-connection budget again; see
+`n8n_webhook_hpa_max_replicas`'s own description for the tradeoff.
+Picking any class in the curated table and raising an autoscaler ceiling
+(or lowering `db_instance_class`) past what it allows is exactly what
+`check.db_postgresdb_pool_size_fits_known_max_connections`
+(`database.tf`) catches at plan time; it stays silent for instance
 classes outside that table and for `create_database = false`, and it is
 advisory only (it does not fail the plan or apply). Raising
 `db_instance_class`, lowering `db_postgresdb_pool_size`, or lowering an
 autoscaler ceiling all shrink the same number; see the check's own comment
-in `database.tf` for the full curated table and for why PostgreSQL's
-`superuser_reserved_connections` and RDS's own
-`rds.rds_superuser_reserved_connections` leave the real headroom a few
-connections tighter than the table's figure.
+in `database.tf` for the full curated table and the reserved-connections
+subtraction.
 
 ## Redis and S3
 
