@@ -10968,6 +10968,13 @@ run "controller_charts_are_version_pinned" {
     error_message = "helm_release.keda must pin its chart version"
   }
 
+  # The literal default, so an accidental revert of the 2.21.0 bump (#150) is
+  # caught here rather than only in the drift report.
+  assert {
+    condition     = module.controllers.keda_helm_release[0].version == "2.21.0"
+    error_message = "keda_chart_version must default to 2.21.0, got ${module.controllers.keda_helm_release[0].version}"
+  }
+
   assert {
     condition     = helm_release.n8n.version == var.n8n_chart_version
     error_message = "helm_release.n8n must keep pinning its chart version"

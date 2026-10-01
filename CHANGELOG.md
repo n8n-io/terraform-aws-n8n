@@ -47,13 +47,38 @@ this project adheres to the stability contract in
 ### Changed
 
 - Default `keda_chart_version` `2.20.2` to `2.21.0` (root module and
-  `modules/controllers`). KEDA 2.21 supports Kubernetes `1.34` to `1.36`, so a
-  caller on `create_eks = false` with an older cluster must pin
-  `keda_chart_version = "2.20.2"` or set `install_keda = false`. See #150.
+  `modules/controllers`). Callers that do not pin `keda_chart_version` move
+  too: their next apply runs an in-place `helm upgrade` of KEDA. KEDA is
+  cluster-wide, so on `create_eks = false` the upgrade also affects every
+  other `ScaledObject` and `ScaledJob` in the cluster. KEDA 2.21 fixes
+  CVE-2026-77524 and carries three breaking changes: explicit service
+  account token audiences (Vault Kubernetes authentication and any
+  `TriggerAuthentication` using `boundServiceAccountToken`), removal of the
+  Temporal scaler's deprecated settings, and `scaleOnInFlight: true` as the
+  Azure Pipelines scaler default. The n8n chart's worker `ScaledObject` uses
+  none of these, but other workloads on a shared cluster may; read
+  <https://keda.sh/docs/2.21/migration/> before upgrading. KEDA's tested
+  Kubernetes window moves from `1.33` to `1.35` (2.20) to `1.34` to `1.36`
+  (2.21), so the module default `1.35` stays inside both. The chart itself
+  does not block other versions (`kubeVersion: >=1.23`), so this is a tested
+  range, not an enforced one. `kubernetes_version` accepts any
+  `major.minor`; for a cluster outside the new window, pin a release KEDA
+  tests there: `"2.20.2"` on `1.33`, `"2.19.0"` on `1.32`, `"2.18.3"` on
+  `1.31`. Treat that pin as a temporary compatibility hold, reviewed for
+  security: as of 2.21.0, KEDA has published no 2.20.x or older chart with
+  the CVE-2026-77524 fix. `1.30` and older are outside every window listed
+  here. On a cluster that already runs its own KEDA, `install_keda = false`
+  is the alternative; on a stack where this module already installed KEDA,
+  switching it off uninstalls that release (see `install_keda`). See #150.
 - `tests/scripts/check-version-drift.sh` moves `kubernetes_version` out of
-  the drift list into a "Known and expected" section linking open issue #158 while
-  the pinned checkov's `CKV_AWS_339` does not allow the newer EKS minor, and
-  back to drift plus `ACTIONABLE` once it does. See #150 and #158.
+  the drift list into a "Known and expected" section linking open issue #158
+  while the pinned checkov's `CKV_AWS_339` does not allow the next EKS minor.
+  It returns to drift plus `ACTIONABLE` when the pinned checkov allows that
+  minor, when a newer checkov release allows it (bump `CHECKOV_VERSION`), or
+  when the pinned version is past the end of EKS standard support. An
+  unreadable or unparseable EKS release list, `isEol` flag, or pinned
+  allow-list keeps the line in the drift list with a note. See #150 and
+  #158.
 - Default n8n chart `1.12.0` to `1.13.0`. `n8n_image_tag = null` still uses
   the selected chart's default, which moves from `appVersion: 2.39.6` to
   `2.40.5`; pin the running application version first if it is not already
@@ -134,6 +159,11 @@ this project adheres to the stability contract in
 
 ### Fixed
 
+- **`keda_chart_version = null` now resolves to the module default.** The
+  root input declares `nullable = false`, matching `modules/controllers`. An
+  explicit `null`, for example from a caller's own nullable pass-through
+  variable, previously failed the input's SemVer validation with a
+  misleading "must be an exact SemVer 2 version" error.
 - **`tests/scripts/smoke-test.sh` reports a missing Ingress route instead of
   exiting silently** (#156). Under `set -euo pipefail`, the no-match `grep` in
   the Ingress routing lookups aborted the script before the "is not routed"

@@ -788,9 +788,10 @@ variable "metrics_server_chart_version" {
 }
 
 variable "keda_chart_version" {
-  description = "KEDA Helm chart version. Defaults to 2.21.0, which supports Kubernetes 1.34 through 1.36 per KEDA's compatibility matrix. On a 1.33 cluster pin \"2.20.2\" (supports 1.33 through 1.35) or set install_keda = false and manage it yourself. KEDA ships its CRDs in this chart, and the n8n chart always emits a ScaledObject (n8n.tf sets keda.enabled = true unconditionally), so a downgrade far enough to drop the ScaledObject API version the n8n chart renders fails helm_release.n8n outright rather than degrading. Ignored when install_keda = false."
+  description = "KEDA Helm chart version. Defaults to 2.21.0, which KEDA's compatibility matrix tests on Kubernetes 1.34 through 1.36. The chart does not block other versions, so on a cluster outside that window pin a release the matrix covers (\"2.20.2\" on 1.33, \"2.19.0\" on 1.32, \"2.18.3\" on 1.31) as a temporary hold, reviewing it for security: those releases do not carry the CVE-2026-77524 fix in 2.21.0. KEDA ships its CRDs in this chart, and the n8n chart always emits a ScaledObject (n8n.tf sets keda.enabled = true unconditionally), so a downgrade far enough to drop the ScaledObject API version the n8n chart renders fails helm_release.n8n outright rather than degrading. Ignored when install_keda = false."
   type        = string
   default     = "2.21.0"
+  nullable    = false
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.keda_chart_version))
