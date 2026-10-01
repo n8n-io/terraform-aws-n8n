@@ -3391,6 +3391,123 @@ run "clean_external_db_config_is_quiet" {
   }
 }
 
+# -- db_postgresdb_pool_size vs. known max_connections ----------------------
+#
+# db.t3.small (the module's own shipped db_instance_class default) is
+# deliberately left out of the curated table (database.tf): its true
+# AWS-documented default (225) sits below what the module's own default
+# main/worker/webhook ceilings already request (240), a pre-existing gap
+# examples/worker-pools/README.md already flags in prose. Every check in
+# this module stays silent against the module's own untouched defaults
+# (see "autoscaling_defaults_fit_the_default_node_group" above), so this one
+# must too: the module default config plans clean with no expect_failures.
+run "db_postgresdb_pool_size_fits_known_max_connections_is_silent_at_module_defaults" {
+  command = plan
+
+  assert {
+    condition     = local.db_max_connections_known == null
+    error_message = "db.t3.small must stay out of the curated table so the check is silent at the module's own shipped defaults."
+  }
+
+  assert {
+    condition     = local.n8n_pg_peak_connections == 240
+    error_message = "Default ceilings (main 6 + worker 10 + webhook 8 = 24) x db_postgresdb_pool_size 10 must be 240, got ${local.n8n_pg_peak_connections}."
+  }
+
+  # No expect_failures: this must plan clean, exactly like every other
+  # advisory check at module defaults.
+}
+
+# A production-sized instance class at the same default ceilings has ample
+# headroom and must stay quiet.
+run "connection_budget_is_quiet_with_a_production_sized_instance_class" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+  }
+
+  assert {
+    condition     = local.db_max_connections_known == 3604 && local.n8n_pg_peak_connections == 240
+    error_message = "db.m6g.2xlarge must resolve to 3604 known connections, comfortably above the default 240-connection budget."
+  }
+}
+
+# Starting from that same headroom, raising db_postgresdb_pool_size alone
+# (no autoscaler ceiling changes, so the unrelated node-capacity check stays
+# quiet) must still trip the connection-budget check once the arithmetic
+# outgrows the instance class.
+run "connection_budget_warns_when_pool_size_is_raised" {
+  command = plan
+
+  variables {
+    db_instance_class       = "db.m6g.2xlarge"
+    db_postgresdb_pool_size = 200
+  }
+
+  assert {
+    condition     = local.n8n_pg_peak_connections == 4800
+    error_message = "200 x the default 24-pod ceiling must be 4800, got ${local.n8n_pg_peak_connections}."
+  }
+
+  expect_failures = [check.db_postgresdb_pool_size_fits_known_max_connections]
+}
+
+# n8n_worker_pools ceilings must count toward the same budget. node_max is
+# raised so the unrelated node-capacity check has room and this run proves
+# only the connection-budget arithmetic.
+run "connection_budget_counts_worker_pools" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    node_max          = 20
+    n8n_worker_pools = [
+      { name = "gpu", min_replicas = 1, max_replicas = 4 },
+      { name = "sec-team", min_replicas = 1, max_replicas = 3 },
+    ]
+  }
+
+  assert {
+    condition     = local.n8n_worker_pool_max_replicas_sum == 7 && local.n8n_pg_peak_connections == 310
+    error_message = "Worker pool ceilings (4 + 3 = 7) must add to the default 24-pod ceiling, giving 31 x db_postgresdb_pool_size 10 = 310, got pool sum ${local.n8n_worker_pool_max_replicas_sum} and peak ${local.n8n_pg_peak_connections}."
+  }
+}
+
+# An instance class outside the curated table must stay silent rather than
+# warn from a guessed limit, no matter how large the arithmetic gets.
+run "connection_budget_unknown_instance_class_is_silent" {
+  command = plan
+
+  variables {
+    db_instance_class       = "db.m6g.16xlarge"
+    db_postgresdb_pool_size = 1000
+  }
+
+  assert {
+    condition     = local.db_max_connections_known == null
+    error_message = "An unrecognized db_instance_class must resolve to a null known-connections lookup rather than a guessed limit."
+  }
+}
+
+# create_database = false means the module manages no RDS instance at all, so
+# the check must stay silent even though the arithmetic itself still computes.
+run "connection_budget_check_is_silent_on_the_external_database_path" {
+  command = plan
+
+  variables {
+    create_database         = false
+    db_host                 = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password             = "external-db-password"
+    db_postgresdb_pool_size = 1000
+  }
+
+  assert {
+    condition     = local.n8n_pg_peak_connections == 24000
+    error_message = "The arithmetic still computes on the external path (24 ceiling x 1000), but create_database = false must keep check.db_postgresdb_pool_size_fits_known_max_connections silent."
+  }
+}
+
 run "alb_hostname_is_null_without_a_module_managed_ingress" {
   command = plan
 
