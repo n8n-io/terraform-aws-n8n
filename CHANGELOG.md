@@ -241,9 +241,9 @@ this project adheres to the stability contract in
   CNI's native Kubernetes NetworkPolicy enforcement
   (`enableNetworkPolicy = "true"`). Requires VPC CNI >= 1.14 and
   Kubernetes >= 1.25, both already satisfied by every version this module
-  supports. Creates no Kubernetes NetworkPolicy objects itself, write your
-  own once enforcement is on, the port of terraform-azurerm-n8n PR #44's
-  `aks_network_policy` to EKS's addon-based equivalent. Default false
+  supports. Creates no Kubernetes NetworkPolicy objects itself (write your
+  own once enforcement is on); this is the port of terraform-azurerm-n8n PR
+  #44's `aks_network_policy` to EKS's addon-based equivalent. Default false
   leaves EKS's own self-managed vpc-cni untouched, so every existing
   caller sees no plan diff. Ignored, with a plan-time warning
   (`check.existing_eks_cluster_needs_its_own_network_policy_toggle`),
