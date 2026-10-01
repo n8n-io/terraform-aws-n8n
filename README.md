@@ -1541,11 +1541,17 @@ not send.
    Secret and in `db_admin_password_wo`, increment
    `db_admin_password_wo_version`, and apply. That is a plain
    `password_wo_version` change, not the `password` to `null` transition
-   #42582 describes, but between the Secret update and the apply the two
-   disagree, so do it in a maintenance window and confirm n8n reconnects
-   afterwards. If it does not, the live credential is the source of truth:
-   reset it with `aws rds modify-db-instance --db-instance-identifier n8n-postgres-<cluster_name> --master-user-password '<value>' --apply-immediately`
-   to match the Secret.
+   #42582 describes. Neither the Secret update nor the apply restarts n8n:
+   the pods read the password from an environment variable at startup, and
+   the chart still points at the same Secret name. Restart them after the
+   apply so they pick up the new value:
+   `kubectl -n <namespace> rollout restart deployment/n8n-main deployment/n8n-worker deployment/n8n-webhook-processor`
+   (plus any `n8n-worker-<pool>` deployments from `n8n_worker_pools`). Until
+   they restart, new database connections fail, so do this in a maintenance
+   window and confirm n8n reconnects. If it does not, the live credential is
+   the source of truth: reset it with
+   `aws rds modify-db-instance --db-instance-identifier n8n-postgres-<cluster_name> --master-user-password '<value>' --apply-immediately`
+   to match the Secret, and restart the deployments again.
 
 This module has no way to detect "existing instance, migrating from `password`
 to `password_wo`" at plan time: the condition depends on what is already
