@@ -92,6 +92,7 @@ See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the
 
 | Name | Type |
 | ---- | ---- |
+| [aws_elasticache_parameter_group.customer_managed](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticache_parameter_group) | resource |
 | [aws_elasticache_replication_group.customer_managed](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticache_replication_group) | resource |
 | [aws_elasticache_subnet_group.customer_managed](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticache_subnet_group) | resource |
 | [aws_security_group.customer_managed_redis](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group) | resource |
