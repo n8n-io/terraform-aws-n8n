@@ -147,6 +147,27 @@ variable "n8n_task_runner_image_tag" {
   }
 }
 
+variable "n8n_task_runner_image_repository" {
+  description = "Container image repository for the task runner sidecar (n8nio/runners), without a tag or digest (e.g. \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners\"). Leave null to use the Helm chart's own repository (n8nio/runners). Set alongside n8n_image_repository when mirroring both images into the same private registry; the two are independent. Use n8n_task_runner_image_tag for the runner tag. Private-registry pull access is granted the same way as n8n_image_repository, through n8n_image_pull_secrets on the module-managed ServiceAccount."
+  type        = string
+  default     = null
+
+  validation {
+    # Keep this validation in sync with the module root's variables.tf; the
+    # grammar is duplicated in every example.
+    condition = var.n8n_task_runner_image_repository == null ? true : (
+      length(var.n8n_task_runner_image_repository) <= 255 &&
+      can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_task_runner_image_repository))
+    )
+    error_message = "n8n_task_runner_image_repository must be a bare image repository reference that Docker can pull: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n-runners\", \"registry.internal:5000/runners\", \"n8nio/runners\"). No scheme (\"https://\"), no whitespace, no uppercase path components, and no empty label anywhere, which rules out a trailing slash, a doubled slash, and a doubled dot. Set to null to use the chart's default repository."
+  }
+
+  validation {
+    condition     = var.n8n_task_runner_image_repository == null ? true : !can(regex(":", reverse(split("/", var.n8n_task_runner_image_repository))[0]))
+    error_message = "n8n_task_runner_image_repository must not include a tag or digest, because the chart appends the tag itself. Pass the version via n8n_task_runner_image_tag instead (e.g. n8n_task_runner_image_repository = \"myregistry.example.com/n8n-runners\", n8n_task_runner_image_tag = \"2.27.4\")."
+  }
+}
+
 variable "n8n_custom_extensions_path" {
   description = "Absolute path inside the n8n container that n8n scans for custom nodes at startup (e.g. \"/opt/n8n-nodes\"). Maps to N8N_CUSTOM_EXTENSIONS, and is set on main, worker and webhook processor pods alike. Set this alongside n8n_image_repository when the custom image bakes community packages in: since n8n 1.0 the loader no longer reads the image's global node_modules, so a plain npm install into the image is never scanned and the packages ship but never load. Nodes found here register under the package name CUSTOM, so a node installed from npm as n8n-nodes-example.myNode becomes CUSTOM.myNode and existing workflows referencing the npm-qualified type will not resolve. Leave null (the default) to omit the env var."
   type        = string

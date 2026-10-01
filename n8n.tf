@@ -1036,12 +1036,17 @@ resource "helm_release" "n8n" {
     # The worker's n8n container runs a task broker on port 5679; its sidecar
     # connects over localhost using the auto-generated auth token.
     #
-    # The sidecar's image tag is left to the chart, which defaults it to the n8n
-    # application image's resolved tag (including appVersion fallback).
-    # That is correct for a published n8n tag but wrong
-    # for a custom image tagged something like "2.27.4-mypackages", since no such
-    # `n8nio/runners` tag exists, hence the n8n_task_runner_image_tag override,
-    # merged in only when set so the chart's inheritance stays the default.
+    # The sidecar's image repository and tag are left to the chart by default,
+    # which defaults the repository to n8nio/runners and the tag to the n8n
+    # application image's resolved tag (including appVersion fallback). The
+    # tag default is correct for a published n8n tag but wrong for a custom
+    # image tagged something like "2.27.4-mypackages", since no such
+    # `n8nio/runners` tag exists, hence the n8n_task_runner_image_tag override.
+    # n8n_task_runner_image_repository lets the runner image itself be
+    # mirrored, independently of n8n_image_repository. Repository and tag are
+    # merged key by key, not as a whole `image` map, so setting one does not
+    # blank the other the same way the top-level image block below avoids it.
+    # Both merged in only when set so the chart's inheritance stays the default.
     taskRunners = merge({
       enabled = var.n8n_task_runners_enabled
       authToken = {
@@ -1061,7 +1066,12 @@ resource "helm_release" "n8n" {
         limits   = { cpu = var.n8n_task_runner_cpu_limit, memory = var.n8n_task_runner_memory_limit }
       }
       },
-      var.n8n_task_runner_image_tag == null ? {} : { image = { tag = var.n8n_task_runner_image_tag } },
+      var.n8n_task_runner_image_repository == null && var.n8n_task_runner_image_tag == null ? {} : {
+        image = merge(
+          var.n8n_task_runner_image_repository == null ? {} : { repository = var.n8n_task_runner_image_repository },
+          var.n8n_task_runner_image_tag == null ? {} : { tag = var.n8n_task_runner_image_tag },
+        )
+      },
 
       # Custom launcher config, mounted over the runner image's baked-in
       # /etc/n8n-task-runners.json from a ConfigMap the caller creates.
@@ -1641,7 +1651,7 @@ check "graceful_shutdown_fits_grace_period" {
 }
 
 # ── Custom image guards ───────────────────────────────────────────────────────
-# Six plan-time warnings for custom-image, extra-volume and pull-secret
+# Eight plan-time warnings for custom-image, extra-volume and pull-secret
 # configurations that are accepted but almost certainly not what the caller
 # meant. All are warnings rather than errors: each is legitimate in some
 # deployment, and none can be decided with certainty from the inputs alone.
@@ -1664,6 +1674,15 @@ check "custom_image_tag_needs_a_task_runner_tag" {
       ) : true
     ) : true
     error_message = "A custom n8n image (n8n_image_repository + n8n_image_tag) is set with task runners enabled, but n8n_task_runner_image_tag is null. The chart tags the runner sidecar from the app image, so the sidecar resolves to n8nio/runners:<n8n_image_tag> and every pod carrying a runner sidecar (workers only in upstream chart 1.14.0 queue mode) fails with ImagePullBackOff unless that exact tag exists upstream, which fails the apply rather than completing with broken pods. Set n8n_task_runner_image_tag to the n8n version the custom image is built from. Ignore this warning if the custom image's tag is itself a published n8n version."
+  }
+}
+
+check "custom_task_runner_repository_needs_an_explicit_tag" {
+  assert {
+    condition = var.n8n_task_runner_image_repository != null ? (
+      var.n8n_task_runners_enabled ? var.n8n_task_runner_image_tag != null : true
+    ) : true
+    error_message = "n8n_task_runner_image_repository is set but n8n_task_runner_image_tag is null, so the sidecar's tag falls back to n8n_image_tag (or, if that is also null, the selected chart's default appVersion). If that resolved tag does not exist in this repository, the pods fail with ImagePullBackOff. Set n8n_task_runner_image_tag to a tag that exists in this repository. Ignore this warning only if the repository publishes the resolved tag."
   }
 }
 
@@ -1694,8 +1713,8 @@ check "extra_volumes_should_be_mounted" {
 
 check "image_pull_secrets_need_a_custom_image" {
   assert {
-    condition     = length(var.n8n_image_pull_secrets) > 0 ? var.n8n_image_repository != null : true
-    error_message = "n8n_image_pull_secrets is set but n8n_image_repository is null, so every image the pods pull comes from a public registry: the chart's docker.n8n.io/n8nio/n8n and, with task runners on, n8nio/runners. Neither needs credentials, so the secrets are attached and never used. The cost is not zero: setting this input moves ownership of the ServiceAccount from the chart to the module. Clear it to hand the account back, or set n8n_image_repository to the private image these credentials are for."
+    condition     = length(var.n8n_image_pull_secrets) > 0 ? var.n8n_image_repository != null || (var.n8n_task_runner_image_repository != null && var.n8n_task_runners_enabled) : true
+    error_message = "n8n_image_pull_secrets is set while no custom image is actually in effect: n8n_image_repository is null, and n8n_task_runner_image_repository is either null or ignored because n8n_task_runners_enabled is false, so every image the pods pull comes from a public registry: the chart's docker.n8n.io/n8nio/n8n and, with task runners on, n8nio/runners. Neither needs credentials, so the secrets are attached and never used. The cost is not zero: setting this input moves ownership of the ServiceAccount from the chart to the module. Clear it to hand the account back, or set one of the private custom repositories these credentials are for."
   }
 }
 
@@ -1703,5 +1722,12 @@ check "task_runner_image_tag_requires_task_runners" {
   assert {
     condition     = var.n8n_task_runner_image_tag != null ? var.n8n_task_runners_enabled : true
     error_message = "n8n_task_runner_image_tag is set, but n8n_task_runners_enabled is false, so no runner sidecar is deployed and the tag is ignored. Set n8n_task_runners_enabled = true to apply it, or clear the tag to silence this warning."
+  }
+}
+
+check "task_runner_image_repository_requires_task_runners" {
+  assert {
+    condition     = var.n8n_task_runner_image_repository != null ? var.n8n_task_runners_enabled : true
+    error_message = "n8n_task_runner_image_repository is set, but n8n_task_runners_enabled is false, so no runner sidecar is deployed and the repository is ignored. Set n8n_task_runners_enabled = true to apply it, or clear the repository to silence this warning."
   }
 }

@@ -444,6 +444,25 @@ run "n8n_task_runner_image_tag_rejects_whitespace" {
   expect_failures = [var.n8n_task_runner_image_tag]
 }
 
+run "n8n_task_runner_image_repository_defaults_to_null" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_task_runner_image_repository == null
+    error_message = "Example must not pin a task runner image repository by default; the chart's own repository (n8nio/runners) should apply."
+  }
+}
+
+run "n8n_task_runner_image_repository_rejects_inline_tag" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_repository = "myregistry.example.com/runners:2.27.4"
+  }
+
+  expect_failures = [var.n8n_task_runner_image_repository]
+}
+
 run "n8n_custom_extensions_path_defaults_to_null" {
   command = plan
 
