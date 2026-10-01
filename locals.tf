@@ -844,6 +844,7 @@ locals {
     "OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS",
     "N8N_DEFAULT_BINARY_DATA_MODE",
     "N8N_LICENSE_ACTIVATION_KEY",
+    "N8N_LICENSE_CERT",
     # Owned by var.n8n_worker_pools. N8N_WORKER_POOLS_ENABLED is emitted only
     # when pools are declared, and N8N_WORKER_POOL_NAME is set per worker group
     # by the chart. Reached through config.extraEnv (all pods), an override here
