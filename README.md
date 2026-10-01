@@ -1514,31 +1514,38 @@ apply that flips `db_password_write_only` to `true`:
 ### Safe migration recipe for an existing instance
 
 Until the provider fix ships and this module's AWS provider floor moves past
-it, treat the Terraform apply as a pure state/config transition and perform
-the actual credential rotation yourself, out of band, so the provider's broken
-diff has nothing left to get wrong:
+it, make the migration apply unable to change the credential at all: keep the
+instance's **current** password as the write-only value, so the live
+credential, the new Secret and `db_admin_password_wo` all agree before and
+after the apply, whatever the provider's `ModifyDBInstance` call does or does
+not send.
 
 1. Capture the current password while `db_password_write_only` is still
    `false`: `terraform output -raw db_password`.
-2. Decide the new password (the value you will pass as `db_admin_password_wo`),
-   and set it on the live instance directly, bypassing Terraform entirely:
-   `aws rds modify-db-instance --db-instance-identifier n8n-postgres-<cluster_name> --master-user-password '<value>' --apply-immediately`.
-   Wait for `aws rds describe-db-instances` to show the instance back in
-   `available` with no pending password change.
-3. Create a separate, caller-managed Kubernetes Secret, not
-   `n8n-enterprise-db-secret` (which Terraform destroys in the next step),
-   with that same password under its `key` (default `"password"`).
-4. Only now set `db_password_write_only = true`, `db_admin_password_wo` to the
-   same value, and `db_password_secret_ref` to that Secret, and `terraform
-   apply`. Expect `random_password.db_password[0]` and
-   `kubernetes_secret.n8n_db[0]` destroyed and an in-place `password_wo_version`
-   bump on `aws_db_instance.n8n`, no replacement. Because the live credential
-   already matches `db_admin_password_wo` from step 2, it does not matter
-   whether the provider's `ModifyDBInstance` call actually resends it: either
-   way the instance ends up on the right password.
-5. Confirm n8n reconnects before considering the migration complete. If it
-   does not, the live credential (not Terraform state) is the source of
-   truth: repeat step 2 with the AWS CLI.
+2. Create a separate, caller-managed Kubernetes Secret holding that same
+   password under its `key` (default `"password"`). Create it in the namespace
+   n8n runs in (`var.namespace`, default `n8n`), because
+   `db_password_secret_ref` names a Secret in that namespace. Do not reuse
+   `n8n-enterprise-db-secret`: the next step destroys it.
+3. Set `db_password_write_only = true`, `db_admin_password_wo` to that same
+   current password (from your ephemeral source), and `db_password_secret_ref`
+   to the new Secret, then `terraform apply`. Expect
+   `random_password.db_password[0]` and `kubernetes_secret.n8n_db[0]`
+   destroyed and an in-place `password_wo_version` bump on
+   `aws_db_instance.n8n`, no replacement. n8n's pods roll onto the new Secret,
+   which holds the password the database already accepts, so there is no
+   window where they disagree.
+4. Confirm n8n reconnects before considering the migration complete.
+5. The old password is still readable in earlier state versions and backups,
+   so rotate it once on the new path: put the new value in the caller-managed
+   Secret and in `db_admin_password_wo`, increment
+   `db_admin_password_wo_version`, and apply. That is a plain
+   `password_wo_version` change, not the `password` to `null` transition
+   #42582 describes, but between the Secret update and the apply the two
+   disagree, so do it in a maintenance window and confirm n8n reconnects
+   afterwards. If it does not, the live credential is the source of truth:
+   reset it with `aws rds modify-db-instance --db-instance-identifier n8n-postgres-<cluster_name> --master-user-password '<value>' --apply-immediately`
+   to match the Secret.
 
 This module has no way to detect "existing instance, migrating from `password`
 to `password_wo`" at plan time: the condition depends on what is already
