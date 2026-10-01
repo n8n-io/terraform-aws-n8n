@@ -140,7 +140,7 @@ module "n8n" {
   # ── Webhook processors ────────────────────────────────────────────────────────
   # Minimum floor of 5 ensures warm pods are ready before traffic ramps.
   # Max of 50 raises both the warm floor and the ceiling over the module default
-  # (2/8), which this tier's node group has the CPU to schedule.
+  # (2/4), which this tier's node group has the CPU to schedule.
   # 2 Gi memory limit prevents OOM under concurrent in-flight requests.
   n8n_webhook_hpa_min_replicas = 5
   n8n_webhook_hpa_max_replicas = 50

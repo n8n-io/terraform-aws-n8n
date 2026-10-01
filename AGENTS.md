@@ -55,7 +55,8 @@ internet-facing ALB serving only the webhook path prefixes (optionally behind a
 WAF) and an internal ALB serving the editor UI and REST API.
 [`examples/worker-pools/`](./examples/worker-pools/) declares three
 `n8n_worker_pools` beside the default worker deployment and raises `node_max`
-to hold their autoscaling ceilings. **Early Alpha, subject to change without
+to hold their autoscaling ceilings and `db_instance_class` to `db.t3.medium`
+for their database connections. **Early Alpha, subject to change without
 notice, and a draft until upstream ships:** the chart side
 (`queueMode.workerGroups`, n8n-io/n8n-hosting#189) is merged to the chart's
 `preview/worker-pools` branch but not released, so the example requires an
@@ -146,7 +147,7 @@ expected by the Terraform Registry:
 | `examples/cloudflare/`            | DNS-variant of `small` using Cloudflare DNS, including the VPC. |
 | `examples/godaddy/`               | DNS-variant of `small` using GoDaddy DNS, including the VPC.    |
 | `examples/split-ingress/`         | Topology-variant of `small`: `create_ingress = false` with a public webhook ALB and an internal admin ALB (Route 53, includes the VPC). |
-| `examples/worker-pools/`          | Topology-variant of `small`: three `n8n_worker_pools` beside the default workers, `node_max` raised to 8 (Route 53, includes the VPC). **Early Alpha, subject to change without notice.** Requires a chart that renders `queueMode.workerGroups` (merged to the chart's `preview/worker-pools` branch, n8n-io/n8n-hosting#189, not released); `n8n_chart_version` is a required input there. |
+| `examples/worker-pools/`          | Topology-variant of `small`: three `n8n_worker_pools` beside the default workers, `node_max` raised to 8 and `db_instance_class` to `db.t3.medium` (Route 53, includes the VPC). **Early Alpha, subject to change without notice.** Requires a chart that renders `queueMode.workerGroups` (merged to the chart's `preview/worker-pools` branch, n8n-io/n8n-hosting#189, not released); `n8n_chart_version` is a required input there. |
 | `examples/customer-managed-redis/` | Customer-managed variant of `small`: a plain-Terraform ElastiCache replication group (AUTH + TLS) stands in for infrastructure the customer already runs, consumed via `create_elasticache = false`. |
 | `examples/customer-managed-s3/`   | Customer-managed variant of `small`: a plain-Terraform bucket with its own security configuration, consumed via `create_s3_bucket = false`. |
 | `examples/customer-managed-cluster/` | Customer-managed variant of `small`: a plain-Terraform EKS cluster and node group, consumed via `create_eks = false` + `existing_eks_cluster_name`. |
@@ -460,9 +461,9 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
 - Each example has its own `README.md` documenting the runnable example.
 - `docs/troubleshooting.md`, `docs/post-deployment.md`,
   `docs/destroy-cleanup.md`, `docs/upgrading-n8n.md`, `docs/pod-identity.md`,
-  `docs/helm-chart-coverage.md`, and `docs/istio-ingress.md` cover
-  operator-facing concerns that don't belong inline in `README.md`.
-  `docs/versioning.md` is the contributor-facing
+  `docs/helm-chart-coverage.md`, `docs/istio-ingress.md`, and
+  `docs/sandbox.md` cover operator-facing concerns that don't belong inline
+  in `README.md`. `docs/versioning.md` is the contributor-facing
   inventory of every pinned version and the bump tier each falls into; read
   it before bumping any provider, chart, engine, or CI tool version.
 - Inline comments in `.tf` files use the `# ── Section ──` banner style. Every

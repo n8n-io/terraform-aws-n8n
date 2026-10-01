@@ -880,3 +880,126 @@ check "rds_tuning_requires_module_managed_database" {
     ])
   }
 }
+
+# ── Diagnostics: PostgreSQL connection budget vs. known instance class limits ──
+# RDS computes PostgreSQL's default max_connections from the selected instance
+# class's memory at launch: LEAST({DBInstanceClassMemory/9531392}, 5000) (AWS
+# docs: "Quotas and constraints for Amazon RDS", max_connections row --
+# https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Limits.html).
+# Unlike Azure Flexible Server, this is dynamic rather than fixed at
+# provisioning -- a caller who raises db_instance_class later gets the new
+# class's default max_connections after the next reboot -- but the module
+# still cannot read live RDS parameter state from inside a Terraform plan, so
+# this has to warn from the configured class rather than the running one.
+#
+# This check catches the other direction db_postgresdb_pool_size's
+# description already asks callers to budget by hand: pool_size times the
+# modeled pod ceiling (effective main, worker, webhook-processor, and any
+# n8n_worker_pools) against the known table below, the same arithmetic
+# examples/worker-pools/README.md's "Budget database connections before
+# raising these ceilings" note walks through by hand today. An unrecognized
+# db_instance_class stays silent rather than warn from a guessed limit,
+# following the node_vcpus_derived / n8n_capacity_model_readable pattern in
+# scaling.tf.
+#
+# Values are the *default* max_connections for a freshly created instance of
+# that class with no custom parameter group override. The module's own
+# optional parameter group (aws_db_parameter_group.n8n above, gated on
+# db_query_logging_enabled) only ever sets log_statement,
+# log_min_duration_statement and rds.force_ssl -- never max_connections -- so
+# that path never changes this table. A caller who attaches an entirely
+# different custom parameter group with its own max_connections override is
+# outside what a Terraform plan can see and is not modeled here.
+#
+# The table holds each class's raw max_connections. PostgreSQL's own
+# superuser_reserved_connections and RDS's own
+# rds.rds_superuser_reserved_connections carve a few slots out of that
+# figure; db_max_connections_reserved below accounts for them before the
+# check compares against local.n8n_pg_peak_connections.
+locals {
+  db_max_connections_by_instance_class = {
+    # Burstable (T family). Memory doubles per size and is identical between
+    # t3 and t4g at the same size.
+    "db.t4g.micro"  = 112
+    "db.t4g.small"  = 225
+    "db.t4g.medium" = 450
+    "db.t4g.large"  = 901
+    "db.t3.micro"   = 112
+    "db.t3.small"   = 225
+    "db.t3.medium"  = 450
+    "db.t3.large"   = 901
+    # General Purpose (M family). 4 GiB of memory per vCPU.
+    "db.m6g.large"   = 901
+    "db.m6g.xlarge"  = 1802
+    "db.m6g.2xlarge" = 3604
+    "db.m6g.4xlarge" = 5000
+    "db.m7g.large"   = 901
+    "db.m7g.xlarge"  = 1802
+    "db.m7g.2xlarge" = 3604
+    "db.m7g.4xlarge" = 5000
+    # Memory Optimized (R family). 8 GiB of memory per vCPU.
+    "db.r6g.large"   = 1802
+    "db.r6g.xlarge"  = 3604
+    "db.r6g.2xlarge" = 5000
+    "db.r6g.4xlarge" = 5000
+    "db.r7g.large"   = 1802
+    "db.r7g.xlarge"  = 3604
+    "db.r7g.2xlarge" = 5000
+    "db.r7g.4xlarge" = 5000
+  }
+  db_max_connections_known = lookup(local.db_max_connections_by_instance_class, var.db_instance_class, null)
+
+  # A flat 5-connection reserve: PostgreSQL's own superuser_reserved_connections
+  # (default 3) plus a conservative 2-connection RDS-side allowance. That 2
+  # matches rds.rds_superuser_reserved_connections's own default, but AWS
+  # deprecated that parameter in RDS for PostgreSQL 16 in favor of
+  # PostgreSQL's native reserved_connections (default 0) plus RDS's own
+  # rds.rds_reserved_connections for the internal rds_reserved role (15.9+/
+  # 16.5+/17.1+) -- this module's own default db_engine_version (18.6) is on
+  # that newer path, where the true default reserve is 3, not 5. Kept as one
+  # fixed number rather than branching on var.db_engine_version: a flat 5 is
+  # a deliberately conservative margin that matches exactly on PostgreSQL
+  # <= 15 and only ever over-subtracts slightly on 16+, never
+  # under-subtracts either way. Subtracted here so the check below compares
+  # against connections a non-superuser pool can actually use, not the raw
+  # max_connections figure.
+  db_max_connections_reserved = 5
+
+  # sum()'s [0] seed keeps the no-pools default at 0 rather than erroring on
+  # an empty list.
+  #
+  # n8n_webhook_hpa_max_replicas is counted even when n8n_webhook_hpa_enabled
+  # = false. That input exists so a caller can bring their own webhook
+  # autoscaler, whose ceiling the module cannot see, so the module's own
+  # maximum is the conservative stand-in rather than the pinned minimum.
+  n8n_worker_pool_max_replicas_sum = sum(concat([0], [for p in var.n8n_worker_pools : p.max_replicas]))
+
+  n8n_pg_peak_connections = var.db_postgresdb_pool_size * (
+    local.n8n_main_hpa_effective_max_replicas +
+    var.n8n_worker_keda_max_replicas +
+    var.n8n_webhook_hpa_max_replicas +
+    local.n8n_worker_pool_max_replicas_sum
+  )
+}
+
+check "db_postgresdb_pool_size_fits_known_max_connections" {
+  assert {
+    condition = (var.create_database && local.db_max_connections_known != null) ? (
+      local.n8n_pg_peak_connections <= local.db_max_connections_known - local.db_max_connections_reserved
+    ) : true
+    error_message = join("", [
+      "db_postgresdb_pool_size (${var.db_postgresdb_pool_size}) times the modeled pod ceiling (main ",
+      "${local.n8n_main_hpa_effective_max_replicas} + worker ${var.n8n_worker_keda_max_replicas} + webhook ",
+      tostring(var.n8n_webhook_hpa_max_replicas),
+      local.n8n_worker_pool_max_replicas_sum > 0 ? " + worker pools ${local.n8n_worker_pool_max_replicas_sum}" : "",
+      ") requests up to ${local.n8n_pg_peak_connections} connections, more than the ",
+      "${coalesce(local.db_max_connections_known, 0) - local.db_max_connections_reserved} connections usable for ",
+      "db_instance_class = \"${var.db_instance_class}\" (${coalesce(local.db_max_connections_known, 0)} default ",
+      "max_connections, LEAST(DBInstanceClassMemory/9531392, 5000); AWS RDS quotas and constraints -- minus ",
+      "${local.db_max_connections_reserved} reserved as a conservative margin for PostgreSQL's own ",
+      "superuser_reserved_connections and RDS's own reserved-connection overhead). Lower db_postgresdb_pool_size ",
+      "or the autoscaler ",
+      "maxima, or raise db_instance_class. This diagnostic is advisory and does not fail the plan.",
+    ])
+  }
+}

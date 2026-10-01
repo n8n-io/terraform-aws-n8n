@@ -24,7 +24,7 @@ Route 53 (alias A-record)
 | DB storage | 200 GB gp3 | 3,000 baseline IOPS (vs gp2 burst); no IOPS ceiling at this throughput |
 | Redis | cache.r6g.large | ~4× the memory of cache.t3.medium; comfortable headroom at 175 req/s |
 | Main pods | min=3, max=24 | Mains serve the editor and REST API only, not webhooks or manual executions, so the ceiling tracks concurrent users rather than executions/day; 4× the module default, matching how the worker ceiling scales. Floor of 3 keeps two serving the editor through a node drain |
-| Webhook pods | min=5, max=50 | Floor of 5 is warm; 50 ceiling raises both the floor and the ceiling over the module default of 2/8 |
+| Webhook pods | min=5, max=50 | Floor of 5 is warm; 50 ceiling raises both the floor and the ceiling over the module default of 2/4 |
 | Worker pods | min=5, max=40 | Queue-driven via KEDA; floor ensures fast queue drain at any time |
 | Worker concurrency | 20 | Doubles throughput per pod vs default; pool_size=10 matches |
 | Pruning | 7 days / 500k records | Keeps execution_entity at manageable size without losing debug history. Caveat: n8n's hard deletion is hardcoded at 100 executions/s (~8.6M/day, leader-only), so the retention math stops holding as sustained completion rates approach 100/s; see the large example for the mechanism |

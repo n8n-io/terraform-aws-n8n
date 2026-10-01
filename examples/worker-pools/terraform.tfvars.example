@@ -54,9 +54,10 @@ n8n_image_tag = "2.39.0"
 
 # Where n8n stores execution data. Default "database" keeps it in PostgreSQL.
 # "s3" offloads every new execution to the bucket the module already creates for
-# binary data. This example runs the module's default db.t3.small on 50 GB of gp2
-# with a 150 IOPS baseline, the least room of any sizing this module ships, so
-# reach for this before resizing the database. It needs n8n >= 2.27 and an
+# binary data. This example runs a db.t3.medium on the module's default 50 GB
+# of gp2 (a 150 IOPS baseline), which leaves little room to absorb
+# execution-data growth, so reach for this before resizing the database. It
+# needs n8n >= 2.27 and an
 # Enterprise license with the feat:executionDataS3 entitlement, and it does not
 # backfill: existing executions stay readable where they were written. Read the
 # execution data section of the root README first, including the durability

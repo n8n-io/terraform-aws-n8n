@@ -148,19 +148,33 @@ module "n8n" {
   n8n_worker_pools_chart_verified = var.n8n_worker_pools_chart_verified
 
   # ── Node capacity ───────────────────────────────────────────────────────────
-  # The one place this example is not sizing-equivalent to examples/small.
+  # One of two places this example is not sizing-equivalent to examples/small.
   # Pools are additional autoscalers on the same node group, and each can reach
   # its own ceiling independently, so their pods have to fit alongside the main,
   # default-worker and webhook ceilings rather than instead of them. The three
   # pools below add 9,000m of CPU requests at their maxima (4 x 1200m for heavy,
   # 3 x 700m each for secteam and itop, every pool pod carrying a task runner
-  # sidecar), which takes the peak from small's 16,600m to 25,600m. The default
+  # sidecar), which takes the peak from small's 15,400m to 24,400m. The pinned
+  # preview chart (n8n_chart_version, below) predates worker-only task
+  # runners, so main pods still carry the sidecar too -- unlike a numbered
+  # 1.12.0+ chart, where small's baseline would be 14,200m. The default
   # node_max of 6 t3.xlarge only schedules about 21,720m, so it needs 8.
   #
   # The module warns at plan time when these fall out of step; see
   # check "autoscaling_maxima_fit_node_group_capacity" in scaling.tf and
   # README.md → "Sizing autoscaling against node capacity".
   node_max = 8
+
+  # ── Database connections ───────────────────────────────────────────────────
+  # The second place this example departs from examples/small, for the same
+  # reason. Every pool pod is another n8n process with its own
+  # db_postgresdb_pool_size (10) connections, so the three pools' 10 extra pods
+  # take the peak from small's 200 connections to 300, past db.t3.small's ~220
+  # usable (225 max_connections less 5 reserved superuser slots). db.t3.medium
+  # (~450) holds it with room to spare. The module warns at plan time when this
+  # falls out of step; see check "db_postgresdb_pool_size_fits_known_max_connections"
+  # in database.tf.
+  db_instance_class = "db.t3.medium"
 
   # ── Worker pools ────────────────────────────────────────────────────────────
   # The chart's own unlabelled worker deployment keeps serving the default
@@ -174,10 +188,11 @@ module "n8n" {
 
   # ── Execution data ──────────────────────────────────────────────────────────
   # Left at "database" so this example applies without the feat:executionDataS3
-  # entitlement. This sizing sees the least traffic but has the least database
-  # headroom to absorb it: db.t3.small with 50 GB of gp2 and a 150 IOPS
-  # baseline, where sustained execution-data writes burn burst credits and the
-  # volume fills. "s3" moves those payloads out of PostgreSQL entirely, reusing
+  # entitlement. This example runs a db.t3.medium on the module's default
+  # 50 GB of gp2 (a 150 IOPS baseline), which leaves little room to absorb
+  # execution-data growth, so sustained execution-data writes burn burst
+  # credits and the volume fills. "s3" moves those payloads out of PostgreSQL
+  # entirely, reusing
   # the bucket and Pod Identity role the module already creates for binary data,
   # so nothing else changes. Read the execution data section of the root README
   # first: it needs n8n >= 2.27 and an Enterprise license with that entitlement,

@@ -153,8 +153,10 @@ module "n8n" {
   # Mains carry neither webhooks (disableProductionWebhooksOnMainProcess) nor
   # manual executions (the chart sets OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS), so
   # this ceiling tracks concurrent editor and REST API users rather than the
-  # ~50-60M executions/day this tier targets. 60 is 10× the module default, the
-  # same factor this tier already scales the webhook ceiling by (8 to 80).
+  # ~50-60M executions/day this tier targets. 60 is 10× the module default.
+  # The webhook ceiling below (80) predates the module's own default change
+  # from 8 to 4 and stays unchanged at this tier's sizing: it was 10× the
+  # module default when that default was 8, now it is 20×.
   #
   # Floor of 6 keeps warm capacity for the editor and API the way the webhook
   # floor of 30 does for webhooks. n8n pods take tens of seconds to boot, so a
