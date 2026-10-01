@@ -28,8 +28,10 @@ this project adheres to the stability contract in
 
 - **`n8n_proxy_hops`** (default `1`, renders `N8N_PROXY_HOPS` on every n8n
   pod via `config.extraEnv`). Previously n8n ran with its default trust-proxy
-  setting of `0` behind the module's ALB, so it read client IP and TLS
-  termination state from the wrong `X-Forwarded-*` hop. The default of `1`
+  setting of `0` behind the module's ALB, so it trusted no proxy and derived
+  the client's IP and TLS termination state from the ALB's own socket
+  identity rather than the `X-Forwarded-*` headers it set, ignoring the
+  real client and TLS information the ALB forwarded. The default of `1`
   matches the module's own single-hop ALB Ingress; callers running a
   caller-owned ingress (`create_ingress = false`) with a different hop count
   (e.g. a CloudFront distribution or an additional load balancer ahead of

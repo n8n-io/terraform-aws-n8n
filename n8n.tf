@@ -765,7 +765,7 @@ resource "helm_release" "n8n" {
           # module's own ALB Ingress is one hop; a caller-owned ingress
           # (create_ingress = false) with extra hops in front of the cluster
           # sets var.n8n_proxy_hops to match. See that variable's description.
-          { name = "N8N_PROXY_HOPS", value = tostring(var.n8n_proxy_hops) },
+          local.n8n_proxy_hops_env,
           { name = "N8N_RUNNERS_TASK_REQUEST_TIMEOUT", value = tostring(var.n8n_task_runner_request_timeout) },
           # Keeps ElastiCache from dropping idle Redis subscriber connections under sustained load.
           # Without this, Bull detects dropped connections, emits queue errors, and pods crash.

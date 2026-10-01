@@ -6777,11 +6777,12 @@ run "license_detach_floating_on_shutdown_defaults_to_false" {
 }
 
 # ── n8n_proxy_hops ───────────────────────────────────────────────────────────
-# N8N_PROXY_HOPS is asserted at the variable-contract level only: the Helm
-# values blob is unknown at plan time under the mock provider (helm_release
-# depends on kubernetes_namespace, which is "(known after apply)"), so the env
-# var's actual value in config.extraEnv cannot be asserted here. Verify the
-# wiring with a real terraform plan against n8n.tf's base env list.
+# N8N_PROXY_HOPS is asserted against local.n8n_proxy_hops_env, not
+# helm_release.n8n directly: that resource depends on kubernetes_namespace,
+# which is "(known after apply)" under the mock provider, so its values blob
+# is unknown at plan time. The local has no such dependency, carries the exact
+# config.extraEnv entry n8n.tf renders, and is known at plan, so it is where
+# the rendered value is actually assertable.
 
 run "proxy_hops_defaults_to_one" {
   command = plan
@@ -6790,7 +6791,7 @@ run "proxy_hops_defaults_to_one" {
     # The module's own ALB Ingress is one hop, so this must match it by
     # default or create_ingress = true deployments misattribute client IPs
     # and TLS termination state out of the box.
-    condition     = var.n8n_proxy_hops == 1
+    condition     = local.n8n_proxy_hops_env.value == "1"
     error_message = "n8n_proxy_hops must default to 1 to match the module's own single-hop ALB Ingress."
   }
 }
@@ -6803,8 +6804,8 @@ run "proxy_hops_accepts_override_for_extra_hop" {
   }
 
   assert {
-    condition     = var.n8n_proxy_hops == 2
-    error_message = "n8n_proxy_hops must accept an override for a caller-owned ingress with an extra hop in front of the ALB (e.g. CloudFront)."
+    condition     = local.n8n_proxy_hops_env.value == "2"
+    error_message = "n8n_proxy_hops must accept an override for a caller-owned ingress with an extra hop in front of the ALB (e.g. CloudFront), and that override must reach the rendered N8N_PROXY_HOPS env entry."
   }
 }
 
