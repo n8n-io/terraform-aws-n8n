@@ -3431,6 +3431,11 @@ run "redis_private_and_sized" {
     condition     = one(aws_security_group.redis[0].ingress).protocol == "tcp"
     error_message = "Redis SG should restrict ingress to TCP"
   }
+
+  assert {
+    condition     = aws_elasticache_cluster.n8n[0].parameter_group_name == aws_elasticache_parameter_group.n8n[0].name
+    error_message = "The default single-node cluster must use the module-managed parameter group"
+  }
 }
 
 # ── Redis high availability ──────────────────────────────────────────────────
@@ -3465,6 +3470,69 @@ run "redis_defaults_to_a_single_node_cluster" {
     condition     = length(aws_kms_key.redis) == 0
     error_message = "redis_kms_encryption_enabled must default to false so existing standalone clusters are not replaced by a replication group and lose their queue"
   }
+}
+
+# ── Redis eviction policy (maxmemory-policy) ─────────────────────────────────
+# The family default parameter group's own maxmemory-policy default is
+# volatile-lru (AWS docs), which can silently evict a Bull queue key carrying
+# a TTL under memory pressure. The module-managed parameter group must
+# default to noeviction instead, be overridable, reject a bogus value, and
+# not exist at all when create_elasticache = false.
+
+run "redis_maxmemory_policy_defaults_to_noeviction" {
+  command = plan
+
+  assert {
+    condition     = one(aws_elasticache_parameter_group.n8n[0].parameter).name == "maxmemory-policy"
+    error_message = "The module-managed parameter group must set maxmemory-policy"
+  }
+
+  assert {
+    condition     = one(aws_elasticache_parameter_group.n8n[0].parameter).value == "noeviction"
+    error_message = "redis_maxmemory_policy must default to noeviction, so a full Redis rejects writes instead of silently evicting a Bull queue key carrying a TTL (the redis7 family default is volatile-lru)"
+  }
+
+  assert {
+    condition     = aws_elasticache_parameter_group.n8n[0].family == "redis7"
+    error_message = "The module-managed parameter group must use the redis7 family, matching both ElastiCache resources' engine_version = \"7.1\""
+  }
+}
+
+run "redis_maxmemory_policy_override_renders_on_the_parameter_group" {
+  command = plan
+
+  variables {
+    redis_maxmemory_policy = "volatile-lru"
+  }
+
+  assert {
+    condition     = one(aws_elasticache_parameter_group.n8n[0].parameter).value == "volatile-lru"
+    error_message = "The parameter group must render var.redis_maxmemory_policy when overridden"
+  }
+}
+
+run "rejects_malformed_redis_maxmemory_policy" {
+  command = plan
+
+  variables {
+    redis_maxmemory_policy = "bogus-policy"
+  }
+
+  expect_failures = [
+    var.redis_maxmemory_policy,
+  ]
+}
+
+run "redis_maxmemory_policy_with_create_elasticache_false_warns" {
+  command = plan
+
+  variables {
+    create_elasticache     = false
+    redis_host             = "shared-redis.abc123.ng.0001.use1.cache.amazonaws.com"
+    redis_maxmemory_policy = "volatile-lru"
+  }
+
+  expect_failures = [check.redis_tuning_requires_module_managed_elasticache]
 }
 
 run "redis_high_availability_creates_a_failover_capable_replication_group" {
@@ -3543,6 +3611,11 @@ run "redis_high_availability_creates_a_failover_capable_replication_group" {
   assert {
     condition     = one(aws_security_group.redis[0].ingress).from_port == 6379
     error_message = "The HA path must still restrict Redis ingress to 6379"
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.n8n[0].parameter_group_name == aws_elasticache_parameter_group.n8n[0].name
+    error_message = "The HA replication group must use the same module-managed parameter group as the single-node topology"
   }
 }
 
@@ -5504,6 +5577,11 @@ run "external_redis_skips_the_whole_redis_tier" {
   assert {
     condition     = length(aws_elasticache_subnet_group.n8n) == 0
     error_message = "No ElastiCache subnet group should be created when create_elasticache = false"
+  }
+
+  assert {
+    condition     = length(aws_elasticache_parameter_group.n8n) == 0
+    error_message = "No ElastiCache parameter group should be created when create_elasticache = false"
   }
 
   # Unlike the RDS security group, which stays behind unattached because

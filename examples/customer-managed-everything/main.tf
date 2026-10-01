@@ -358,6 +358,24 @@ resource "aws_elasticache_subnet_group" "customer_managed" {
   tags = merge(local.common_tags, { Name = "customer-managed-redis-subnet-group-${var.cluster_name}" })
 }
 
+# noeviction: good practice for a caller-owned Redis feeding n8n's Bull
+# queue, same rationale as the root module's own default
+# (redis_maxmemory_policy) in redis.tf. AWS's redis7 family default
+# parameter group defaults maxmemory-policy to volatile-lru, which can
+# evict a queue key carrying a TTL under memory pressure instead of
+# rejecting the write.
+resource "aws_elasticache_parameter_group" "customer_managed" {
+  name   = "customer-managed-redis-params-${var.cluster_name}"
+  family = "redis7"
+
+  parameter {
+    name  = "maxmemory-policy"
+    value = "noeviction"
+  }
+
+  tags = merge(local.common_tags, { Name = "customer-managed-redis-params-${var.cluster_name}" })
+}
+
 resource "aws_elasticache_replication_group" "customer_managed" {
   replication_group_id = "${var.cluster_name}-cm-redis"
   description          = "Stand-in for a customer-managed Redis, for the customer-managed-everything example"
@@ -371,8 +389,9 @@ resource "aws_elasticache_replication_group" "customer_managed" {
   automatic_failover_enabled = true
   multi_az_enabled           = true
 
-  subnet_group_name  = aws_elasticache_subnet_group.customer_managed.name
-  security_group_ids = [aws_security_group.customer_managed_redis.id]
+  parameter_group_name = aws_elasticache_parameter_group.customer_managed.name
+  subnet_group_name    = aws_elasticache_subnet_group.customer_managed.name
+  security_group_ids   = [aws_security_group.customer_managed_redis.id]
 
   # checkov:skip=CKV_AWS_191:Encrypted at rest with the ElastiCache-managed key (at_rest_encryption_enabled below), not a Customer Managed Key: this stand-in models a plausible minimum-viable customer Redis, not this module's own CMK-capable posture (redis_kms_encryption_enabled). A real customer-managed Redis's actual key is the caller's decision.
   at_rest_encryption_enabled = true

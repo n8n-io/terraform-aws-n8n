@@ -53,6 +53,30 @@ this project adheres to the stability contract in
   address. This makes the change a minor-version
   boundary under [Stability & versioning](./README.md#stability--versioning),
   not a patch.
+
+- **`redis_maxmemory_policy`** (default `"noeviction"`, validated against the
+  ElastiCache Redis/Valkey maxmemory-policy enum). Wired into a new
+  module-managed `aws_elasticache_parameter_group` (family `redis7`,
+  attached via `parameter_group_name` to both `aws_elasticache_cluster.n8n`
+  and `aws_elasticache_replication_group.n8n`, whichever topology is
+  active). Without this, both topologies ran on the `redis7` family's
+  *default* parameter group, whose AWS-documented `maxmemory-policy`
+  default is `volatile-lru`: once Redis fills up it evicts keys carrying a
+  TTL, and n8n's Bull queue keys can carry one, so an in-flight job could be
+  silently dropped under memory pressure instead of the write failing
+  loudly. `noeviction` makes a full Redis reject the write with an
+  out-of-memory error on enqueue instead. **Upgrade impact:**
+  `parameter_group_name` is "No interruption" on both ElastiCache resource
+  types per the AWS provider docs, so the first apply after upgrading
+  updates the parameter group in place (immediately if
+  `redis_apply_immediately = true`, otherwise at the next maintenance
+  window) rather than replacing the cache or dropping the queue. Extends
+  `check.redis_tuning_requires_module_managed_elasticache` to also warn when
+  this is set while `create_elasticache = false`. The
+  `customer-managed-redis` and `customer-managed-everything` examples' own
+  stand-in replication groups now also run `noeviction` on a matching
+  stand-in parameter group, as a good-practice example for a caller-owned
+  Redis feeding n8n's Bull queue. See README → "Redis eviction policy".
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
   annotates the default worker `ScaledObject` with
