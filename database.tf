@@ -949,12 +949,20 @@ locals {
   }
   db_max_connections_known = lookup(local.db_max_connections_by_instance_class, var.db_instance_class, null)
 
-  # PostgreSQL's own superuser_reserved_connections (default 3) plus RDS's own
-  # rds.rds_superuser_reserved_connections (default 2 from PostgreSQL 15
-  # onward, which is what every db_engine_version this module ships defaults
-  # to) are carved out of max_connections, not added on top of it. Subtracted
-  # here so the check below compares against connections a non-superuser pool
-  # can actually use, not the raw max_connections figure.
+  # A flat 5-connection reserve: PostgreSQL's own superuser_reserved_connections
+  # (default 3) plus a conservative 2-connection RDS-side allowance. That 2
+  # matches rds.rds_superuser_reserved_connections's own default, but AWS
+  # deprecated that parameter in RDS for PostgreSQL 16 in favor of
+  # PostgreSQL's native reserved_connections (default 0) plus RDS's own
+  # rds.rds_reserved_connections for the internal rds_reserved role (15.9+/
+  # 16.5+/17.1+) -- this module's own default db_engine_version (18.6) is on
+  # that newer path, where the true default reserve is 3, not 5. Kept as one
+  # fixed number rather than branching on var.db_engine_version: a flat 5 is
+  # a deliberately conservative margin that matches exactly on PostgreSQL
+  # <= 15 and only ever over-subtracts slightly on 16+, never
+  # under-subtracts either way. Subtracted here so the check below compares
+  # against connections a non-superuser pool can actually use, not the raw
+  # max_connections figure.
   db_max_connections_reserved = 5
 
   # sum()'s [0] seed keeps the no-pools default at 0 rather than erroring on
@@ -983,8 +991,9 @@ check "db_postgresdb_pool_size_fits_known_max_connections" {
       "${coalesce(local.db_max_connections_known, 0) - local.db_max_connections_reserved} connections usable for ",
       "db_instance_class = \"${var.db_instance_class}\" (${coalesce(local.db_max_connections_known, 0)} default ",
       "max_connections, LEAST(DBInstanceClassMemory/9531392, 5000); AWS RDS quotas and constraints -- minus ",
-      "${local.db_max_connections_reserved} reserved for PostgreSQL's own superuser_reserved_connections and ",
-      "RDS's own rds.rds_superuser_reserved_connections). Lower db_postgresdb_pool_size or the autoscaler ",
+      "${local.db_max_connections_reserved} reserved as a conservative margin for PostgreSQL's own ",
+      "superuser_reserved_connections and RDS's own reserved-connection overhead). Lower db_postgresdb_pool_size ",
+      "or the autoscaler ",
       "maxima, or raise db_instance_class. This diagnostic is advisory and does not fail the plan.",
     ])
   }

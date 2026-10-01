@@ -139,9 +139,9 @@ this project adheres to the stability contract in
   connection budget: main (6) + worker (10) + webhook (8) = 24 pods ×
   `db_postgresdb_pool_size` (10) requested 240 connections against
   `db.t3.small`'s 225 default `max_connections` (220 usable once
-  PostgreSQL's and RDS's own reserved connections are subtracted), a gap
-  `check.db_postgresdb_pool_size_fits_known_max_connections` previously
-  excluded `db.t3.small` from its table to avoid firing on. At the new
+  PostgreSQL's and RDS's own reserved connections are subtracted). The
+  newly introduced `check.db_postgresdb_pool_size_fits_known_max_connections`
+  includes `db.t3.small`. At the new
   default the same arithmetic requests 200 connections, 20 under the
   220-connection budget, so the check now covers `db.t3.small` too (see
   **Added** above). Upgrade note: an explicit

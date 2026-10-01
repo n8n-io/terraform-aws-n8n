@@ -3396,9 +3396,10 @@ run "clean_external_db_config_is_quiet" {
 # db.t3.small (the module's own shipped db_instance_class default) is in the
 # curated table (database.tf): its true AWS-documented default max_connections
 # is 225, of which 5 are reserved (PostgreSQL's own
-# superuser_reserved_connections, default 3, plus RDS's own
-# rds.rds_superuser_reserved_connections, default 2 from PostgreSQL 15
-# onward), leaving 220 usable. The module's own default main/worker/webhook
+# superuser_reserved_connections, default 3, plus a conservative 2-connection
+# RDS-side allowance; see database.tf's db_max_connections_reserved for why
+# that 5 is a flat, deliberately conservative margin rather than a per-engine
+# figure), leaving 220 usable. The module's own default main/worker/webhook
 # ceilings (6 + 10 + 4 = 20 pods) x the default db_postgresdb_pool_size of 10
 # request 200 connections, 20 under that budget, so the module default config
 # plans clean with no expect_failures, exactly like every other advisory

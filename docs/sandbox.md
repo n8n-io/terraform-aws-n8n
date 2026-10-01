@@ -68,9 +68,14 @@ comfortably under `db.t4g.micro`'s ~112. The module's own shipped defaults
 [`examples/worker-pools/README.md`](../examples/worker-pools/README.md)'s
 own connection-budget note). db.t3.small's known default `max_connections`
 is 225, of which PostgreSQL's own `superuser_reserved_connections` (default
-3) and RDS's own `rds.rds_superuser_reserved_connections` (default 2 from
-PostgreSQL 15 onward) reserve 5, leaving 220 usable, so the module's own
-shipped defaults plan clean with 20 connections of headroom.
+3) plus a conservative RDS-side allowance of 2 reserve a flat 5 (see
+`database.tf`'s `db_max_connections_reserved`: that 2 matches
+`rds.rds_superuser_reserved_connections`'s own default on PostgreSQL <= 15, a
+parameter AWS deprecated in RDS for PostgreSQL 16+ in favor of the native
+`reserved_connections`, so the module's own default engine, 18.6, actually
+reserves only 3 by default and the flat 5 is a deliberately conservative
+margin there), leaving 220 usable, so the module's own shipped defaults plan
+clean with 20 connections of headroom.
 Raising `n8n_webhook_hpa_max_replicas` back toward its old default of `8`
 (or raising `n8n_main_hpa_max_replicas` or `n8n_worker_keda_max_replicas`)
 without also raising `db_instance_class` or lowering
