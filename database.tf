@@ -1,4 +1,12 @@
+# Generated once at apply time; surfaced to aws_db_instance.n8n below and, on
+# the external-database path, echoed nowhere (kubernetes_secret.n8n_db reads
+# var.db_password instead). Skipped when var.db_password_write_only is true:
+# that path feeds var.db_admin_password_wo straight into aws_db_instance.n8n's
+# write-only password_wo argument instead, so there is no plain-text value for
+# this resource to generate or store.
 resource "random_password" "db_password" {
+  count = var.db_password_write_only ? 0 : 1
+
   length           = 24
   special          = true
   override_special = "!#$%&*()-_=+[]{}<>:?"
@@ -445,9 +453,11 @@ resource "aws_db_instance" "n8n" {
   instance_class    = var.db_instance_class
   allocated_storage = var.db_allocated_storage
 
-  db_name  = "n8n_enterprise"
-  username = "n8n"
-  password = random_password.db_password.result
+  db_name             = "n8n_enterprise"
+  username            = "n8n"
+  password            = var.db_password_write_only ? null : random_password.db_password[0].result
+  password_wo         = var.db_password_write_only ? var.db_admin_password_wo : null
+  password_wo_version = var.db_password_write_only ? var.db_admin_password_wo_version : null
 
   db_subnet_group_name    = aws_db_subnet_group.n8n[0].name
   vpc_security_group_ids  = [aws_security_group.rds[0].id]

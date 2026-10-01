@@ -1968,7 +1968,7 @@ variable "db_password" {
 }
 
 variable "db_password_secret_ref" {
-  description = "Existing Kubernetes Secret carrying the external database password, instead of supplying the value through db_password. name is the Secret's name in var.namespace; key defaults to \"password\", matching the chart's database.passwordSecret.key default. External-database path only (create_database = false): aws_db_instance.n8n (database.tf:374) needs the password's actual value to provision the instance, and a Kubernetes Secret name cannot supply that, so setting this while create_database = true is rejected at plan time. On the external path this gates kubernetes_secret.n8n_db to zero and points the chart's database.passwordSecret at your Secret instead. Setting this alongside db_password is rejected at plan time, and so is setting neither while create_database = false, since db_password is otherwise required there; both checks live here rather than split across this variable and db_password, which would form a validation dependency cycle. The module does not verify that the named Secret exists or carries this key: a typo surfaces only as a pod stuck in CreateContainerConfigError, not as a Terraform error, because reading the Secret to check would put the password back in Terraform state, which defeats the reason this input exists."
+  description = "Existing Kubernetes Secret carrying the database password, instead of supplying the value through db_password. name is the Secret's name in var.namespace; key defaults to \"password\", matching the chart's database.passwordSecret.key default. Required on two paths: the external database path (create_database = false, as the counterpart to db_password), and the module-managed write-only path (create_database = true with db_password_write_only = true), since the module cannot copy a write-only value into a Kubernetes Secret it manages. Ignored when create_database = true and db_password_write_only = false; aws_db_instance.n8n (database.tf) needs the password's actual value to provision the instance in that case, and a Kubernetes Secret name cannot supply it. Setting this alongside db_password is rejected at plan time, and so is setting neither when create_database = false. The module does not read the Secret's value on either required path."
   type = object({
     name = string
     key  = optional(string)
@@ -1976,8 +1976,13 @@ variable "db_password_secret_ref" {
   default = null
 
   validation {
-    condition     = var.db_password_secret_ref == null || !var.create_database
-    error_message = "db_password_secret_ref is set while create_database = true. aws_db_instance.n8n needs the database password's actual value to provision the instance, and a Kubernetes Secret name cannot supply it. Either set create_database = false, or supply the password via db_password instead."
+    condition     = (var.create_database && !var.db_password_write_only) ? var.db_password_secret_ref == null : true
+    error_message = "db_password_secret_ref is ignored when create_database = true and db_password_write_only = false; aws_db_instance.n8n needs the database password's actual value to provision the instance, and a Kubernetes Secret name cannot supply it. Set db_password_write_only = true to supply the password through your own Secret instead, or set create_database = false to use an external database."
+  }
+
+  validation {
+    condition     = (var.create_database && var.db_password_write_only) ? var.db_password_secret_ref != null : true
+    error_message = "db_password_secret_ref is required when db_password_write_only = true: the module cannot write a write-only value into a Kubernetes Secret, so you must supply your own Secret already populated with the same password."
   }
 
   validation {
@@ -1988,6 +1993,53 @@ variable "db_password_secret_ref" {
   validation {
     condition     = var.create_database || var.db_password_secret_ref != null || var.db_password != null
     error_message = "db_password or db_password_secret_ref is required when create_database = false."
+  }
+}
+
+variable "db_password_write_only" {
+  description = "When true, the module writes the RDS master password through aws_db_instance.n8n's write-only password_wo argument (sourced from db_admin_password_wo) instead of generating a password with random_password.db_password and storing it in plain text in Terraform state. Requires db_admin_password_wo to be set and db_password_secret_ref to reference a Kubernetes Secret you populate yourself (for example, synced from AWS Secrets Manager via External Secrets Operator) — the module cannot copy a write-only value into kubernetes_secret.n8n_db, so it creates no managed Secret and the db_password output is null on this path. Ignored (must stay false) when create_database = false; the module never manages a password for an external database."
+  type        = bool
+  default     = false
+  nullable    = false
+
+  validation {
+    condition     = var.db_password_write_only ? var.create_database : true
+    error_message = "db_password_write_only has no effect when create_database = false; the module never manages a password for an external database."
+  }
+}
+
+variable "db_admin_password_wo" {
+  description = "RDS master password, accepted as a write-only value so Terraform never persists it in plan or state files. Required when db_password_write_only = true; must stay null otherwise, because the module generates its own password in that mode. Feed this from your own ephemeral source, for example an ephemeral resource backed by AWS Secrets Manager or SSM Parameter Store in the calling root, so the value never touches state on the caller's side either. Keep the Kubernetes Secret referenced by db_password_secret_ref in sync with the same value: Terraform never copies one into the other."
+  type        = string
+  ephemeral   = true
+  sensitive   = true
+  default     = null
+
+  validation {
+    condition     = var.db_password_write_only ? var.db_admin_password_wo != null : true
+    error_message = "db_admin_password_wo is required when db_password_write_only = true."
+  }
+
+  validation {
+    condition     = var.db_password_write_only ? true : var.db_admin_password_wo == null
+    error_message = "db_admin_password_wo has no effect when db_password_write_only = false; the module generates and manages its own password in that mode."
+  }
+}
+
+variable "db_admin_password_wo_version" {
+  description = "Version marker for db_admin_password_wo, forwarded to aws_db_instance.n8n's password_wo_version. Increment this value whenever you rotate db_admin_password_wo — Terraform only re-applies a write-only value when its version number changes. Ignored when db_password_write_only = false."
+  type        = number
+  default     = 1
+  nullable    = false
+
+  validation {
+    condition     = var.db_admin_password_wo_version >= 1
+    error_message = "db_admin_password_wo_version must be a positive integer (start at 1, increment on each rotation)."
+  }
+
+  validation {
+    condition     = floor(var.db_admin_password_wo_version) == var.db_admin_password_wo_version
+    error_message = "db_admin_password_wo_version must be a positive integer (start at 1, increment on each rotation); fractional values are not allowed."
   }
 }
 
