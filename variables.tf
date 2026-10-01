@@ -1838,6 +1838,39 @@ variable "db_allocated_storage" {
   }
 }
 
+variable "db_max_allocated_storage" {
+  description = "Upper bound in GB for RDS Storage Autoscaling on the managed instance. null (the default) disables autoscaling entirely: allocated storage stays fixed at db_allocated_storage, and AWS never grows it on its own. When set, AWS grows allocated_storage automatically as free space runs low, up to this ceiling, and the AWS provider automatically hides the resulting allocated_storage drift from the next plan (no lifecycle.ignore_changes needed, unlike azurerm_postgresql_flexible_server's auto_grow_enabled in the Azure sibling module, which has no equivalent provider-side drift suppression). Must be a whole number of GB at least 10% greater than db_allocated_storage (AWS rejects anything less with 'Invalid max storage size') and at most 65536 GB, RDS PostgreSQL's 64 TiB storage ceiling. Ignored when create_database = false."
+  type        = number
+  default     = null
+
+  validation {
+    # Integer-exact form of db_max_allocated_storage >= 1.1 * db_allocated_storage:
+    # AWS requires the autoscaling ceiling to be at least 10% above the current
+    # allocated storage and otherwise rejects it at apply with "Invalid max
+    # storage size", not at plan time. AWS enforces this floor against the
+    # live allocated_storage, not the configured db_allocated_storage: once
+    # autoscaling has already grown storage past the configured value, a
+    # ceiling that passes this plan-time check can still be rejected at apply
+    # for sitting below 1.1x the live size. Raise db_allocated_storage to
+    # match the live size before lowering the ceiling.
+    condition = var.db_max_allocated_storage == null || (
+      var.db_max_allocated_storage * 10 >= var.db_allocated_storage * 11 &&
+      var.db_max_allocated_storage <= 65536
+    )
+    error_message = "db_max_allocated_storage must be null, or at least 10% greater than db_allocated_storage (${var.db_allocated_storage}) and at most 65536 GB (RDS PostgreSQL's 64 TiB storage ceiling). AWS otherwise rejects the ceiling with 'Invalid max storage size'."
+  }
+
+  # RDS's max_allocated_storage is integer GiB. Without this the fractional
+  # value reaches the provider, which does reject it, but blames
+  # aws_db_instance.n8n inside the module rather than this input. Failing
+  # here names the variable and the line the caller actually wrote, the same
+  # reasoning as db_backup_retention_period below.
+  validation {
+    condition     = var.db_max_allocated_storage == null || var.db_max_allocated_storage == floor(var.db_max_allocated_storage)
+    error_message = "db_max_allocated_storage must be a whole number of GB."
+  }
+}
+
 variable "db_backup_retention_period" {
   description = "Number of days to retain automated RDS backups. 0 disables automated backups (not recommended, and it also disables point-in-time recovery). AWS allows up to 35 days. Ignored when create_database = false."
   type        = number

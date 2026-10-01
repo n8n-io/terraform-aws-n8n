@@ -1561,6 +1561,12 @@ run "rds_hardened_defaults" {
   }
 
   assert {
+    condition     = aws_db_instance.n8n[0].max_allocated_storage == null
+    error_message = "db_max_allocated_storage should default to null: storage autoscaling off"
+  }
+
+
+  assert {
     condition     = aws_db_instance.n8n[0].multi_az == true
     error_message = "db_multi_az should default to true: HA is the point of the multi template"
   }
@@ -5158,6 +5164,96 @@ run "rds_deletion_controls_with_external_database_warn" {
   expect_failures = [check.rds_tuning_requires_module_managed_database]
 }
 
+run "rds_max_allocated_storage_with_external_database_warns" {
+  command = plan
+
+  variables {
+    create_database          = false
+    db_host                  = "db.internal.example.com"
+    db_password              = "external-db-password"
+    db_max_allocated_storage = 100
+  }
+
+  expect_failures = [check.rds_tuning_requires_module_managed_database]
+}
+
+run "db_max_allocated_storage_rejects_value_at_or_below_allocated_storage" {
+  command = plan
+
+  variables {
+    db_allocated_storage     = 50
+    db_max_allocated_storage = 50
+  }
+
+  expect_failures = [var.db_max_allocated_storage]
+}
+
+// AWS requires the ceiling to be at least 10% above db_allocated_storage,
+// not merely greater than it: 54 passes a strict `>` check against 50 but
+// is still below the 55 the 10% floor requires, and AWS rejects it at apply
+// with "Invalid max storage size" rather than at plan time.
+run "db_max_allocated_storage_rejects_value_below_the_ten_percent_floor" {
+  command = plan
+
+  variables {
+    db_allocated_storage     = 50
+    db_max_allocated_storage = 54
+  }
+
+  expect_failures = [var.db_max_allocated_storage]
+}
+
+run "db_max_allocated_storage_accepts_the_ten_percent_floor" {
+  command = plan
+
+  variables {
+    db_allocated_storage     = 50
+    db_max_allocated_storage = 55
+  }
+
+  # 55 is exactly 1.1x db_allocated_storage; this would catch a regression
+  # that tightened the floor condition (e.g. from >= to >, or a rounding
+  # tolerance refactor), which the rejection test above cannot: it only
+  # pins the failure side.
+}
+
+run "db_max_allocated_storage_rejects_value_above_the_64_tib_ceiling" {
+  command = plan
+
+  variables {
+    db_max_allocated_storage = 65537
+  }
+
+  expect_failures = [var.db_max_allocated_storage]
+}
+
+run "db_max_allocated_storage_accepts_the_64_tib_ceiling" {
+  command = plan
+
+  variables {
+    db_max_allocated_storage = 65536
+  }
+
+  # 65536 is exactly the allowed maximum; this would catch a regression that
+  # tightened the ceiling condition (e.g. from <= 65536 to < 65536), which
+  # the rejection test above cannot: it only pins the failure side.
+}
+
+// RDS's max_allocated_storage is integer GiB. Caught on the input so the
+// error names db_max_allocated_storage and the caller's own line, rather
+// than surfacing from aws_db_instance.n8n inside the module where the
+// attribute is called max_allocated_storage and the file is not one the
+// caller owns.
+run "fractional_db_max_allocated_storage_fails_validation" {
+  command = plan
+
+  variables {
+    db_max_allocated_storage = 400.5
+  }
+
+  expect_failures = [var.db_max_allocated_storage]
+}
+
 # The identifier's pairing rules only bite when the module manages the
 # database. With create_database = false the module creates no RDS instance,
 # so an identifier that would otherwise be rejected (set while
@@ -6284,10 +6380,11 @@ run "custom_database_sizing" {
   command = plan
 
   variables {
-    db_instance_class    = "db.r6g.large"
-    db_allocated_storage = 200
-    db_multi_az          = true
-    db_engine_version    = "16.13"
+    db_instance_class        = "db.r6g.large"
+    db_allocated_storage     = 200
+    db_max_allocated_storage = 500
+    db_multi_az              = true
+    db_engine_version        = "16.13"
   }
 
   assert {
@@ -6298,6 +6395,11 @@ run "custom_database_sizing" {
   assert {
     condition     = aws_db_instance.n8n[0].allocated_storage == 200
     error_message = "db_allocated_storage variable did not propagate"
+  }
+
+  assert {
+    condition     = aws_db_instance.n8n[0].max_allocated_storage == 500
+    error_message = "db_max_allocated_storage variable did not propagate"
   }
 
   assert {
