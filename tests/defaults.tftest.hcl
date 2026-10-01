@@ -6776,6 +6776,70 @@ run "license_detach_floating_on_shutdown_defaults_to_false" {
   }
 }
 
+# ── n8n_proxy_hops ───────────────────────────────────────────────────────────
+# N8N_PROXY_HOPS is asserted at the variable-contract level only: the Helm
+# values blob is unknown at plan time under the mock provider (helm_release
+# depends on kubernetes_namespace, which is "(known after apply)"), so the env
+# var's actual value in config.extraEnv cannot be asserted here. Verify the
+# wiring with a real terraform plan against n8n.tf's base env list.
+
+run "proxy_hops_defaults_to_one" {
+  command = plan
+
+  assert {
+    # The module's own ALB Ingress is one hop, so this must match it by
+    # default or create_ingress = true deployments misattribute client IPs
+    # and TLS termination state out of the box.
+    condition     = var.n8n_proxy_hops == 1
+    error_message = "n8n_proxy_hops must default to 1 to match the module's own single-hop ALB Ingress."
+  }
+}
+
+run "proxy_hops_accepts_override_for_extra_hop" {
+  command = plan
+
+  variables {
+    n8n_proxy_hops = 2
+  }
+
+  assert {
+    condition     = var.n8n_proxy_hops == 2
+    error_message = "n8n_proxy_hops must accept an override for a caller-owned ingress with an extra hop in front of the ALB (e.g. CloudFront)."
+  }
+}
+
+run "rejects_negative_n8n_proxy_hops" {
+  command = plan
+
+  variables {
+    n8n_proxy_hops = -1
+  }
+
+  expect_failures = [var.n8n_proxy_hops]
+}
+
+run "rejects_fractional_n8n_proxy_hops" {
+  command = plan
+
+  variables {
+    n8n_proxy_hops = 1.5
+  }
+
+  expect_failures = [var.n8n_proxy_hops]
+}
+
+run "extra_env_rejects_proxy_hops_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_PROXY_HOPS", value = "5" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
 # ── n8n_extra_env ────────────────────────────────────────────────────────────
 # Asserted at the variable-contract level: defaults, accepted shape, and the
 # three validation guards (non-empty name, no duplicates, no collision with

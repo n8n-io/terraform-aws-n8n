@@ -1433,6 +1433,18 @@ variable "n8n_prestop_sleep" {
   }
 }
 
+variable "n8n_proxy_hops" {
+  description = "Number of trusted reverse-proxy hops in front of n8n, rendered as N8N_PROXY_HOPS on every n8n pod (main, worker, webhook processor) via config.extraEnv. The module's own ALB Ingress is one hop, so the default of 1 is correct for create_ingress = true. Raise this when a caller-owned ingress (create_ingress = false) adds extra hops in front of the cluster (e.g. a CloudFront distribution or an additional load balancer ahead of the ALB), otherwise n8n derives client IPs and TLS state from the wrong X-Forwarded-* hop. Reserved in n8n_managed_env_names, so n8n_extra_env cannot shadow it."
+  type        = number
+  default     = 1
+  nullable    = false
+
+  validation {
+    condition     = var.n8n_proxy_hops >= 0 && var.n8n_proxy_hops == floor(var.n8n_proxy_hops)
+    error_message = "n8n_proxy_hops must be a whole number of at least 0."
+  }
+}
+
 variable "n8n_graceful_shutdown_timeout" {
   description = <<-EOT
     Seconds n8n gives in-flight executions to finish after it receives

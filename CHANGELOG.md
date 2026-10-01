@@ -26,6 +26,18 @@ this project adheres to the stability contract in
   from `README.md` and every example's "Production considerations"
   section.
 
+- **`n8n_proxy_hops`** (default `1`, renders `N8N_PROXY_HOPS` on every n8n
+  pod via `config.extraEnv`). Previously n8n ran with its default trust-proxy
+  setting of `0` behind the module's ALB, so it read client IP and TLS
+  termination state from the wrong `X-Forwarded-*` hop. The default of `1`
+  matches the module's own single-hop ALB Ingress; callers running a
+  caller-owned ingress (`create_ingress = false`) with a different hop count
+  (e.g. a CloudFront distribution or an additional load balancer ahead of
+  the ALB) can now set the correct value. Rejects non-integer or negative
+  values at plan time. Reserved in `local.n8n_managed_env_names`, so
+  `n8n_extra_env` cannot shadow it. README.md's "Customer-managed Ingress"
+  section documents the full routing contract (path-prefix ordering, session
+  stickiness, `N8N_PROXY_HOPS`) a replacement ingress must reproduce.
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
   annotates the default worker `ScaledObject` with
