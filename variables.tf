@@ -281,6 +281,25 @@ variable "create_ebs_csi" {
   nullable    = false
 }
 
+
+variable "eks_network_policy_enabled" {
+  description = "When true, the module adopts the cluster's vpc-cni into an EKS-managed aws_eks_addon (resolve_conflicts_on_create = \"OVERWRITE\", needed because EKS bootstraps vpc-cni as a self-managed workload at cluster creation) and sets configuration_values to enable the VPC CNI's native Kubernetes NetworkPolicy enforcement (enableNetworkPolicy = \"true\"). Requires VPC CNI >= 1.14 and Kubernetes >= 1.25, enforced at plan time by this variable's own validation below since kubernetes_version's own validation alone accepts e.g. \"1.24\". Every kubernetes_version this module currently defaults to satisfies both, and the addon version is left unpinned, like every other addon this module installs, see docs/versioning.md. This toggle only turns on the enforcement engine: it creates no Kubernetes NetworkPolicy objects, write your own once enabled, the same split terraform-azurerm-n8n's aks_network_policy documents. Adopting an unmanaged vpc-cni with OVERWRITE replaces its entire configuration with this module's single enableNetworkPolicy key, discarding any hand-edited aws-node DaemonSet settings (e.g. WARM_IP_TARGET, ENABLE_PREFIX_DELEGATION) that were never backed by a Terraform-managed addon; resolve_conflicts_on_update = \"OVERWRITE\" repeats that overwrite on every later apply while this stays true, so hand-tune vpc-cni through this module's configuration_values afterward, not by editing the DaemonSet directly. Opting back out destroys aws_eks_addon.vpc_cni, but preserve = true (eks.tf) tells EKS to leave the running vpc-cni DaemonSet and its configuration in place as a self-managed installation instead of deleting it, so existing nodes keep pod networking and new nodes can still join; only EKS's own management of the addon's settings and update notifications goes away. Default false leaves EKS's own self-managed vpc-cni untouched, matching current behavior with zero plan diff for every existing caller. Ignored when create_eks = false (check.existing_eks_cluster_needs_its_own_network_policy_toggle warns): the module manages no vpc-cni addon on an existing cluster. Also incompatible with any root module that already manages its own aws_eks_addon for the same cluster's vpc-cni, such as examples/large's WARM_ENI_TARGET/WARM_IP_TARGET tuning, AWS rejects two Terraform resources both claiming the same addon with a ResourceInUseException. If you already manage vpc-cni yourself, leave this false and fold enableNetworkPolicy = \"true\" into your own configuration_values instead."
+  type        = bool
+  default     = false
+  nullable    = false
+
+  validation {
+    condition = var.eks_network_policy_enabled ? (
+      tonumber(split(".", var.kubernetes_version)[0]) > 1 ||
+      (
+        tonumber(split(".", var.kubernetes_version)[0]) == 1 &&
+        tonumber(split(".", var.kubernetes_version)[1]) >= 25
+      )
+    ) : true
+    error_message = "eks_network_policy_enabled = true requires kubernetes_version >= 1.25: the VPC CNI's native NetworkPolicy enforcement needs that floor, and an older control plane either rejects the addon's configuration_values at apply time or silently never enforces policy. kubernetes_version is set to ${var.kubernetes_version}. Raise kubernetes_version to 1.25 or above, or leave eks_network_policy_enabled = false."
+  }
+}
+
 variable "n8n_webhook_url" {
   description = "Public HTTPS base URL used for webhook callbacks (e.g. <https://webhooks.example.com>). Defaults to https://<n8n_domain> when not set. Override when webhooks are served from a different host than the n8n UI."
   type        = string
