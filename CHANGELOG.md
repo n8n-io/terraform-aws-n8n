@@ -202,10 +202,16 @@ this project adheres to the stability contract in
   different repositories on the same private mirror. Same bare-repository
   validation (no scheme, tag, or digest) as `n8n_image_repository`. Setting
   it with `n8n_task_runners_enabled = false` now warns
-  (`check.task_runner_image_repository_requires_task_runners`), and
+  (`check.task_runner_image_repository_requires_task_runners`), and a
+  repository with no corresponding `n8n_task_runner_image_tag` now warns too
+  (`check.custom_task_runner_repository_needs_an_explicit_tag`), since the
+  tag then falls back to `n8n_image_tag` or the chart's default, either of
+  which may not exist in a private mirror.
   `check.image_pull_secrets_need_a_custom_image` no longer warns on
   `n8n_image_pull_secrets` when only this repository, not
-  `n8n_image_repository`, is set.
+  `n8n_image_repository`, is set and task runners are enabled. All eleven
+  examples expose the new input as a passthrough variable, matching
+  `n8n_image_repository`'s existing shape.
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
   annotates the default worker `ScaledObject` with
