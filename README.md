@@ -238,10 +238,13 @@ quickly; several are candidates for future minor releases (see
   and daily ElastiCache snapshots (`redis_snapshot_retention_limit`,
   default 1 day). It does *not* automate restore drills, cross-region
   snapshot copy, S3 versioning policy, or n8n encryption-key escrow.
-  The `n8n_encryption_key` output is stored in Terraform state and
-  readable at any time, but state is not a backup: copying the key
-  somewhere safe outside state is the operator's job and is the single
-  most important thing they will forget.
+  On the default path, the `n8n_encryption_key` output is stored in
+  Terraform state and readable at any time, but state is not a backup:
+  copying the key somewhere safe outside state is the operator's job
+  and is the single most important thing they will forget. With
+  `n8n_encryption_key_secret_ref` set, the output is null and the key
+  lives only in the caller's Secret, so backing it up is that Secret
+  owner's job.
 
 - **Bundled observability.** The module installs KEDA (for worker
   autoscaling) and metrics-server (for HPA on mains/webhooks) because
