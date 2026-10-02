@@ -111,12 +111,17 @@ resource "aws_security_group" "redis" {
 # is already how both resources stay in sync with each other.
 #
 # Changing the family later (for example to valkey8) needs more than editing
-# the literal. `family` and `name` both force replacement, the name is fixed,
-# and this provider resource has no name_prefix. Terraform would destroy the
-# group first, while a cache still uses it, and AWS refuses to delete a
-# parameter group that is in use. When the family changes, put the family in
-# `name` and add `lifecycle { create_before_destroy = true }` in the same
-# change, so the new group exists before the cache moves to it.
+# the literal. `family` and `name` both force replacement, and the name is
+# fixed (aws_elasticache_parameter_group has no name_prefix in the AWS
+# provider 6.x schema). By default Terraform would destroy the group first,
+# while a cache still uses it, and AWS refuses to delete a parameter group
+# that is in use. Putting the family in `name` and adding
+# `lifecycle { create_before_destroy = true }` lets Terraform create the new
+# group and re-point the cache before it deletes the old one. That is still
+# not guaranteed on its own: with redis_apply_immediately = false the re-point
+# can stay pending until the maintenance window, the old group is then still
+# attached, and the delete fails. Not verified against a live cache. Plan a family change as a staged rollout
+# (re-point with apply_immediately, then remove the old group).
 #
 # Shared by both topologies, same as the subnet group and security group
 # above: there's exactly one parameter group per deployment regardless of

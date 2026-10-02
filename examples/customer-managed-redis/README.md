@@ -30,6 +30,7 @@ To point this at a Redis you actually run instead of the stand-in:
    ```
 3. Make sure your Redis is reachable from the EKS node subnets on `redis_port`. This module creates no security group on this path; the rules that let the nodes in are yours to write, same as the stand-in's own security group does here.
 4. If your Redis is a replication group, use its **primary endpoint**, not a node address, so the name follows the primary across a failover.
+5. Check your Redis's `maxmemory-policy`. Deleting the stand-in also deletes its `noeviction` parameter group, and the module sets no eviction policy on a Redis it does not manage. An ElastiCache Redis on the `default.redis7` group runs `volatile-lru`, which can silently evict Bull keys that carry a TTL, such as job locks, under memory pressure. Use `noeviction` (or at least avoid the `allkeys-*` policies, which can also evict job data). See the root [README.md → "Redis eviction policy"](../../README.md#redis-eviction-policy) for the trade-offs.
 
 See the root [README.md → "Customer-managed Redis"](../../README.md#customer-managed-redis) for the full details on this toggle.
 
