@@ -234,12 +234,14 @@ quickly; several are candidates for future minor releases (see
   the charts and controller images at the mirror.
 
 - **Backup/DR automation beyond RDS snapshots.** The module enables
-  RDS automated backups (defaulting to RDS's own defaults). It does
-  *not* automate restore drills, cross-region snapshot copy, S3
-  versioning policy, or n8n encryption-key escrow. The
-  `n8n_encryption_key` output is emitted exactly once at apply time;
-  backing it up is the operator's job and is the single most
-  important thing they will forget.
+  RDS automated backups (`db_backup_retention_period`, default 7 days)
+  and daily ElastiCache snapshots (`redis_snapshot_retention_limit`,
+  default 1 day). It does *not* automate restore drills, cross-region
+  snapshot copy, S3 versioning policy, or n8n encryption-key escrow.
+  The `n8n_encryption_key` output is stored in Terraform state and
+  readable at any time, but state is not a backup: copying the key
+  somewhere safe outside state is the operator's job and is the single
+  most important thing they will forget.
 
 - **Bundled observability.** The module installs KEDA (for worker
   autoscaling) and metrics-server (for HPA on mains/webhooks) because
