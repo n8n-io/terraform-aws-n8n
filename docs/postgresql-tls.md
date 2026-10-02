@@ -30,7 +30,7 @@ db_postgresdb_ssl_ca_pem              = file("${path.module}/global-bundle.pem")
 ```
 
 1. Download the RDS CA bundle from AWS's trust store endpoint:
-   `https://truststore.pki.rds.amazonaws.com/global-bundle.pem` is the
+   `https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem` is the
    combined bundle covering every AWS region and every CA generation RDS has
    issued from, so it works regardless of which region or CA your instance
    currently uses. Per-region bundles
@@ -125,8 +125,27 @@ the ConfigMap in place before the Helm release rolls the pods. If the new
 bundle does not cover the server's certificate and the Helm upgrade fails,
 `atomic = true` rolls the release back, but the rolled-back pods still mount
 the same ConfigMap, which now holds the new bundle. Keep the previous bundle
-file until the new one is confirmed. To recover, set
-`db_postgresdb_ssl_ca_pem` back to the previous bundle and apply again.
+file until the new one is confirmed.
+
+A live test with a wrong CA showed what this looks like:
+
+- The failure is slow. New pods cannot connect and crash-loop, and the apply
+  only fails when the Helm upgrade reaches `n8n_helm_timeout` (600 seconds
+  by default) and rolls back.
+- Workers stop processing the queue. The chart's worker Deployment has no
+  readiness probe, so a new worker counts as ready as soon as it starts, and
+  the healthy old worker is removed before the new one fails. After the
+  rollback, the recreated worker mounts the same ConfigMap, which still holds
+  the wrong bundle, so it keeps crash-looping.
+- Main and webhook-processor pods keep serving. They read the CA when they
+  start, so the old pods are not affected by the changed file.
+
+To recover, set `db_postgresdb_ssl_ca_pem` back to the previous bundle and
+apply again. The plan updates only the ConfigMap, with no Helm change and no
+pod rollout: Helm's stored values already match the previous bundle after
+the rollback. The kubelet syncs the corrected file into the pods, and
+crash-looping workers recover on their next restart (about a minute in the
+live test).
 
 ## Upgrading an existing deployment
 
