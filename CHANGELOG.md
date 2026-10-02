@@ -61,16 +61,26 @@ this project adheres to the stability contract in
   and `aws_elasticache_replication_group.n8n`, whichever topology is
   active). Without this, both topologies ran on the `redis7` family's
   *default* parameter group, whose AWS-documented `maxmemory-policy`
-  default is `volatile-lru`: once Redis fills up it evicts keys carrying a
-  TTL, and n8n's Bull queue keys can carry one, so an in-flight job could be
-  silently dropped under memory pressure instead of the write failing
-  loudly. `noeviction` makes a full Redis reject the write with an
-  out-of-memory error on enqueue instead. **Upgrade impact:**
-  `parameter_group_name` is "No interruption" on both ElastiCache resource
-  types per the AWS provider docs, so the first apply after upgrading
-  updates the parameter group in place (immediately if
-  `redis_apply_immediately = true`, otherwise at the next maintenance
-  window) rather than replacing the cache or dropping the queue. Extends
+  default for node-based clusters is `volatile-lru`: once Redis fills up it
+  evicts keys carrying a TTL, and some of n8n's Bull queue keys (job locks)
+  carry one, so queue state could be silently removed under memory
+  pressure. `noeviction` makes a full Redis reject writes with an
+  out-of-memory error instead. That covers more than enqueue: Bull lock
+  renewals fail too (n8n does not retry a stalled job), and n8n's cache
+  shares this Redis in queue mode, so size and alert on memory for both.
+  **Upgrade impact:** existing deployments change behavior on the next
+  apply. `parameter_group_name` does not force replacement on either
+  ElastiCache resource type (AWS provider schema), so the first apply
+  creates the group and modifies the cache in place (immediately if
+  `redis_apply_immediately = true`, together with any other pending
+  modification, otherwise at the next maintenance window). A custom
+  parameter group attached outside Terraform is replaced; check yours
+  first. To keep the old eviction behavior, set
+  `redis_maxmemory_policy = "volatile-lru"`. **Rollback:** pinning an
+  earlier module version alone fails, because the cache stays attached to
+  the module's group and AWS refuses to delete a group in use. Attach
+  `default.redis7` to the cache first; README → "Redis eviction policy"
+  has the commands. Extends
   `check.redis_tuning_requires_module_managed_elasticache` to also warn when
   this is set while `create_elasticache = false`. The
   `customer-managed-redis` and `customer-managed-everything` examples' own
