@@ -915,8 +915,8 @@ When the new association takes effect depends on the topology:
   hold the change for the maintenance window when
   `redis_apply_immediately = false`, in which case `terraform plan` keeps
   showing it until then. After applying, check the replication group's
-  member clusters with `describe-cache-clusters` (below) and confirm the new
-  group is `in-sync`.
+  member clusters with the `describe-cache-clusters` command below and
+  confirm each shows the new group with `ParameterApplyStatus` `in-sync`.
 
 With `redis_apply_immediately = true`, AWS also applies any other
 modification already pending on the cache. Later edits to `redis_maxmemory_policy` change a dynamic
@@ -928,7 +928,7 @@ parameter inside the group, which AWS applies right away regardless of
 
 ```sh
 aws elasticache describe-cache-clusters \
-  --query 'CacheClusters[].[CacheClusterId,CacheParameterGroup.CacheParameterGroupName]'
+  --query 'CacheClusters[].[CacheClusterId,CacheParameterGroup.CacheParameterGroupName,CacheParameterGroup.ParameterApplyStatus]'
 ```
 
 If it is not `default.redis7`, someone attached a custom group outside
