@@ -265,15 +265,22 @@ rules apply here too.
 
 - **`n8n_proxy_hops`.** An Istio ingress gateway is a proxy hop of its own:
   Envoy adds the address it received the request from to
-  `X-Forwarded-For`. Count the load balancer in front of it as well:
+  `X-Forwarded-For`. Count the load balancer in front of it only when it
+  adds an entry too. An ALB does. A TCP passthrough NLB does not:
 
   | Path to n8n | `n8n_proxy_hops` |
   | --- | --- |
   | ALB, then the Istio gateway | `2` |
   | NLB (TCP passthrough), then the Istio gateway | `1` |
 
-  Mesh sidecars do not count, because they do not add `X-Forwarded-For`
-  entries. A value above `1` is only safe when the gateway accepts traffic
+  The NLB row only yields the real client IP when Envoy sees the client's
+  address. Network Load Balancer TCP and TLS target groups of target type
+  `ip` disable client IP preservation by default
+  ([AWS docs](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/edit-target-group-attributes.html)).
+  Without it, Envoy records the NLB's address and n8n reports that
+  instead. Enable `preserve_client_ip.enabled` on the target group, or turn
+  on PROXY protocol v2 on both the NLB and the gateway. Mesh sidecars do
+  not count, because they do not add `X-Forwarded-For` entries. A value above `1` is only safe when the gateway accepts traffic
   from its load balancer alone. Otherwise a client that reaches the gateway
   directly can forge its IP. Gateway-side settings such as Istio's
   `numTrustedProxies` count only the proxies in front of Envoy, so they do

@@ -32,8 +32,8 @@ this project adheres to the stability contract in
   no proxy, so n8n took the client IP from the ALB's own connection and
   ignored `X-Forwarded-For` and `X-Forwarded-Proto`. The default of `1`
   matches an ALB alone, whether the module or the caller owns the Ingress.
-  Each proxy in front of the ALB, such as CloudFront, adds one hop, with
-  either `create_ingress` setting. A value above `1` is only safe when the
+  Each HTTP proxy in front of the ALB that adds an `X-Forwarded-For` entry,
+  such as CloudFront, adds one hop, with either `create_ingress` setting. A value above `1` is only safe when the
   inner proxy accepts traffic from the outer one alone, otherwise a client
   can forge its IP. Rejects non-integer or negative values at plan time.
   README.md's "Customer-managed Ingress" section documents session
