@@ -118,19 +118,22 @@ resource "aws_security_group" "redis" {
 # that is in use. Putting the family in `name` and adding
 # `lifecycle { create_before_destroy = true }` lets Terraform create the new
 # group and re-point the cache before it deletes the old one. That is still
-# not guaranteed on its own: with redis_apply_immediately = false the re-point
-# can stay pending until the maintenance window, the old group is then still
-# attached, and the delete fails. Not verified against a live cache. Plan a family change as a staged rollout
-# (re-point with apply_immediately, then remove the old group).
+# not guaranteed on its own: if the re-point is held for the maintenance
+# window (possible on the replication group with redis_apply_immediately =
+# false; the single-node cluster was measured applying it immediately), the
+# old group is still attached and the delete fails. Plan a family change as a
+# staged rollout (re-point with apply_immediately, then remove the old group).
 #
 # Shared by both topologies, same as the subnet group and security group
 # above: there's exactly one parameter group per deployment regardless of
 # which cache resource reads it, so there's nothing to duplicate per topology.
 #
 # `parameter_group_name` is not ForceNew on either resource type (AWS provider
-# schema), so attaching this group modifies the existing cache in place
-# (immediately with apply_immediately, otherwise at the next maintenance
-# window), the same as the other tuning knobs in this file. It does not drop
+# schema), so attaching this group modifies the existing cache in place. On
+# the single-node aws_elasticache_cluster the swap was measured live taking
+# effect immediately even with apply_immediately = false (in-sync in about
+# 40 seconds, no reboot). On the replication group it has not been verified
+# live and may wait for the maintenance window. It does not drop
 # the queue the way a ForceNew attribute (e.g. kms_key_id,
 # replication_group_id) would.
 #

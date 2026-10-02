@@ -71,9 +71,13 @@ this project adheres to the stability contract in
   **Upgrade impact:** existing deployments change behavior on the next
   apply. `parameter_group_name` does not force replacement on either
   ElastiCache resource type (AWS provider schema), so the first apply
-  creates the group and modifies the cache in place (immediately if
-  `redis_apply_immediately = true`, together with any other pending
-  modification, otherwise at the next maintenance window). A custom
+  creates the group and modifies the cache in place. On the default
+  single-node cluster this took effect immediately in a live test even with
+  `redis_apply_immediately = false` (in-sync in about 40 seconds, no
+  reboot), so it is not deferred to the maintenance window. The replication
+  group topology is not verified live and may wait for the window unless
+  `redis_apply_immediately = true`, which also applies any other pending
+  modification. A custom
   parameter group attached outside Terraform is replaced; check yours
   first. To keep the old eviction behavior, set
   `redis_maxmemory_policy = "volatile-lru"`. **Rollback:** pinning an
