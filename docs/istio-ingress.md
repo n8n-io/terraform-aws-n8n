@@ -257,6 +257,35 @@ The module still requires exactly one of `route53_zone_id` or
 `certificate_arn`, even when Envoy terminates TLS and does not use the ACM
 certificate.
 
+## Proxy hops and session stickiness
+
+The README's
+["Session stickiness and `N8N_PROXY_HOPS`"](../README.md#session-stickiness-and-n8n_proxy_hops)
+rules apply here too.
+
+- **`n8n_proxy_hops`.** An Istio ingress gateway is a proxy hop of its own:
+  Envoy adds the address it received the request from to
+  `X-Forwarded-For`. Count the load balancer in front of it as well:
+
+  | Path to n8n | `n8n_proxy_hops` |
+  | --- | --- |
+  | ALB, then the Istio gateway | `2` |
+  | NLB (TCP passthrough), then the Istio gateway | `1` |
+
+  Mesh sidecars do not count, because they do not add `X-Forwarded-For`
+  entries. A value above `1` is only safe when the gateway accepts traffic
+  from its load balancer alone. Otherwise a client that reaches the gateway
+  directly can forge its IP. Gateway-side settings such as Istio's
+  `numTrustedProxies` count only the proxies in front of Envoy, so they do
+  not equal `n8n_proxy_hops`.
+- **Session stickiness.** n8n requires session persistence in front of the
+  main pods in a multi-main setup, which the module's own ALB provides with
+  a load balancer cookie. The `VirtualService` above has no affinity, so give
+  the internal route to `n8n-main` an equivalent. A `DestinationRule` with a
+  cookie-based `consistentHash` is one option. Sticky sessions on the load
+  balancer in front of the gateway do not pin a browser to one n8n pod.
+  The public webhook route needs none.
+
 ## What this module does not solve
 
 - **WAF**: AWS WAFv2 web ACLs attach to Application Load Balancers (and

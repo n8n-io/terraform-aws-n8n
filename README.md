@@ -432,31 +432,46 @@ declare the prefixes **before** any catch-all `/` rule.
 
 ### Session stickiness and `N8N_PROXY_HOPS`
 
-Beyond path routing, a caller-owned Ingress must reproduce two more things the
-module's own Ingress provides, or multi-main sessions and client-IP/TLS
-attribution break silently:
+Beyond path routing, a caller-owned Ingress must reproduce session stickiness,
+and every deployment must declare its proxy hop count. Get either wrong and
+multi-main editor sessions or client-IP attribution break without an error:
 
-- **Session stickiness to `n8n_service_name`.** The module's own Ingress sets
-  `alb.ingress.kubernetes.io/target-group-attributes =
-  stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=10800` (see
-  `locals.tf`) so each browser stays pinned to one main pod. With more than
-  one main replica, editor session state and WebSocket connections are not
-  shared across main pods: without an equivalent sticky-session
-  configuration on whatever load balancer or ingress controller you bring,
-  users see dropped WebSocket connections and intermittent authentication
-  failures as requests round-robin across mains. Webhook traffic routed to
-  `n8n_webhook_service_name` does not need stickiness; webhook processors are
-  stateless with respect to the queue.
-- **`n8n_proxy_hops`.** n8n uses `N8N_PROXY_HOPS` (Express's `trust proxy` hop
-  count) to decide which `X-Forwarded-*` header to trust for the client's real
-  IP and TLS termination state. The module renders `var.n8n_proxy_hops`
-  (default `1`, correct for the module's own single-hop ALB) to every n8n pod.
-  A caller-owned ingress topology with a different hop count in front of the
-  cluster, for example a CloudFront distribution or an additional load
-  balancer ahead of the ALB, must set `n8n_proxy_hops` to match. Too low a
-  value makes n8n trust the wrong header and misattribute client IPs and TLS
-  state; too high a value lets a client spoof `X-Forwarded-For` past the
-  trusted boundary.
+- **Session stickiness to `n8n_service_name`.** n8n's
+  [queue mode docs](https://docs.n8n.io/hosting/scaling/queue-mode/) require
+  every main process in a multi-main setup to run behind a load balancer with
+  session persistence. The module's own Ingress sets
+  `stickiness.enabled=true` and `stickiness.lb_cookie.duration_seconds=10800`
+  in `alb.ingress.kubernetes.io/target-group-attributes` (see
+  `local.ingress_default_annotations` in `locals.tf`, which also sets
+  `deregistration_delay.timeout_seconds=30` there), so each browser stays on
+  one main pod. Without an equivalent sticky-session setting on the load
+  balancer or ingress controller you bring, editor requests and WebSocket
+  connections from one browser spread across mains, and the editor loses its
+  connection. Webhook traffic routed to `n8n_webhook_service_name` does not
+  need stickiness.
+- **`n8n_proxy_hops`.** n8n passes `N8N_PROXY_HOPS` to Express's
+  [`trust proxy`](https://expressjs.com/en/guide/behind-proxies.html) setting.
+  The number decides which `X-Forwarded-For` entry n8n takes as the client
+  IP. Any value of `1` or more also makes n8n honor `X-Forwarded-Proto`. The
+  module renders `n8n_proxy_hops` (default `1`) on every n8n pod. Count every
+  proxy a client passes through to reach n8n, whatever `create_ingress` is
+  set to:
+
+  | Path to n8n | `n8n_proxy_hops` |
+  | --- | --- |
+  | Module or caller-owned ALB only | `1` |
+  | CloudFront, then the ALB | `2` |
+  | ALB, then an Istio ingress gateway ([docs/istio-ingress.md](docs/istio-ingress.md)) | `2` |
+
+  Too low a value attributes every request to the nearest extra proxy's IP.
+  Too high a value lets a client forge its IP: n8n trusts the hops you
+  declare, so a client that reaches an inner proxy directly can put any
+  address in `X-Forwarded-For` and n8n accepts it. A value above `1` is only
+  safe when the inner proxy accepts traffic from the outer one alone, for
+  example an ALB restricted to CloudFront (see `alb_inbound_prefix_list_ids`
+  and its security group quota caveat). The same applies at `1` to callers
+  inside the cluster: anything that reaches the n8n Services directly,
+  without passing the ALB, can set its own `X-Forwarded-For`.
 
 ```hcl
 module "n8n" {
@@ -2363,7 +2378,7 @@ doing at this node count, but neither removes the fivefold waste at source.
 | <a name="input_n8n_otel_traces_sample_rate"></a> [n8n\_otel\_traces\_sample\_rate](#input\_n8n\_otel\_traces\_sample\_rate) | Fraction of traces to export, between 0 and 1 inclusive. Maps to N8N\_OTEL\_TRACES\_SAMPLE\_RATE. n8n uses a trace-ID-ratio sampler, so the same trace ID is either fully sampled or fully dropped across all spans. Leave null to use n8n's default (1.0 — every trace exported). Lower for high-volume installs where the collector or backend can't handle every workflow execution as a trace. Ignored when n8n\_otel\_enabled = false. | `number` | `null` | no |
 | <a name="input_n8n_personalization_enabled"></a> [n8n\_personalization\_enabled](#input\_n8n\_personalization\_enabled) | Whether n8n asks users personalization survey questions and tailors content/recommendations based on the answers. Maps to N8N\_PERSONALIZATION\_ENABLED. When false, sets N8N\_PERSONALIZATION\_ENABLED=false on all n8n pods (main, worker, webhook processor) via config.extraEnv. Defaults to true, matching n8n's own default — note that explicitly setting true emits no env var (n8n's default already applies). Set to false to skip the personalization survey, e.g. on shared or ephemeral instances. | `bool` | `true` | no |
 | <a name="input_n8n_prestop_sleep"></a> [n8n\_prestop\_sleep](#input\_n8n\_prestop\_sleep) | Seconds the preStop hook sleeps before SIGTERM is sent, giving the load balancer time to drain the pod. MINIMUM — do not lower below 10. | `number` | `10` | no |
-| <a name="input_n8n_proxy_hops"></a> [n8n\_proxy\_hops](#input\_n8n\_proxy\_hops) | Number of trusted reverse-proxy hops in front of n8n, rendered as N8N\_PROXY\_HOPS on every n8n pod (main, worker, webhook processor) via config.extraEnv. The module's own ALB Ingress is one hop, so the default of 1 is correct for create\_ingress = true. Raise this when a caller-owned ingress (create\_ingress = false) adds extra hops in front of the cluster (e.g. a CloudFront distribution or an additional load balancer ahead of the ALB), otherwise n8n derives client IPs and TLS state from the wrong X-Forwarded-* hop. Reserved in n8n\_managed\_env\_names, so n8n\_extra\_env cannot shadow it. | `number` | `1` | no |
+| <a name="input_n8n_proxy_hops"></a> [n8n\_proxy\_hops](#input\_n8n\_proxy\_hops) | Number of trusted reverse-proxy hops in front of n8n, rendered as N8N\_PROXY\_HOPS on every n8n pod (main, worker, webhook processor) via config.extraEnv. n8n passes it to Express's trust proxy setting, which uses it to pick the client IP out of X-Forwarded-For; any value of 1 or more also makes n8n honor X-Forwarded-Proto. Count every proxy a client passes through to reach n8n, whatever create\_ingress is set to: an ALB alone (the module's own Ingress, or a caller-owned one) is 1, so the default fits it; CloudFront in front of the ALB, or an ALB in front of an Istio ingress gateway, is 2. Too low a value attributes every request to the nearest extra proxy's IP. A value above 1 is only safe when the inner proxy accepts traffic from the outer one alone (e.g. an ALB restricted to CloudFront, see alb\_inbound\_prefix\_list\_ids): otherwise a client that reaches the inner proxy directly can forge its IP through X-Forwarded-For. Set 0 only when nothing proxies traffic to n8n. Reserved in n8n\_managed\_env\_names, so n8n\_extra\_env, n8n\_worker\_extra\_env and n8n\_worker\_pools[*].extra\_env cannot set it. | `number` | `1` | no |
 | <a name="input_n8n_pruning_max_age"></a> [n8n\_pruning\_max\_age](#input\_n8n\_pruning\_max\_age) | Maximum age of execution records to retain, in hours (336 = 14 days) | `number` | `336` | no |
 | <a name="input_n8n_pruning_max_count"></a> [n8n\_pruning\_max\_count](#input\_n8n\_pruning\_max\_count) | Maximum number of execution records to retain (0 = no limit) | `number` | `10000` | no |
 | <a name="input_n8n_queue_worker_lock_duration"></a> [n8n\_queue\_worker\_lock\_duration](#input\_n8n\_queue\_worker\_lock\_duration) | Milliseconds a worker holds a Bull job lock before it must renew it. Maps to the chart's redis.worker.lockDuration value (QUEUE\_WORKER\_LOCK\_DURATION on the pods); must go through this chart value rather than config.extraEnv: once set, the chart renders its own env entry for this key, config.extraEnv is appended after it, and Kubernetes silently keeps the last of two same-named entries, so a duplicate would override this value with no warning. n8n\_extra\_env rejects every QUEUE\_ name at plan time for that reason. Leave null for n8n's own default (60000ms). Lowering it to 10000ms or less additionally requires setting n8n\_queue\_worker\_lock\_renew\_time explicitly below it: the chart's renewal default is 10000ms, so an unset renewal interval would otherwise outlast the lock. That pairing is validated on n8n\_queue\_worker\_lock\_renew\_time, because Terraform forbids two variables' validations from referencing each other, so a violation is reported against that variable. | `number` | `null` | no |

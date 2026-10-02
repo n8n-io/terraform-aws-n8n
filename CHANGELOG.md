@@ -27,19 +27,32 @@ this project adheres to the stability contract in
   section.
 
 - **`n8n_proxy_hops`** (default `1`, renders `N8N_PROXY_HOPS` on every n8n
-  pod via `config.extraEnv`). Previously n8n ran with its default trust-proxy
-  setting of `0` behind the module's ALB, so it trusted no proxy and derived
-  the client's IP and TLS termination state from the ALB's own socket
-  identity rather than the `X-Forwarded-*` headers it set, ignoring the
-  real client and TLS information the ALB forwarded. The default of `1`
-  matches the module's own single-hop ALB Ingress; callers running a
-  caller-owned ingress (`create_ingress = false`) with a different hop count
-  (e.g. a CloudFront distribution or an additional load balancer ahead of
-  the ALB) can now set the correct value. Rejects non-integer or negative
-  values at plan time. Reserved in `local.n8n_managed_env_names`, so
-  `n8n_extra_env` cannot shadow it. README.md's "Customer-managed Ingress"
-  section documents the full routing contract (path-prefix ordering, session
-  stickiness, `N8N_PROXY_HOPS`) a replacement ingress must reproduce.
+  pod via `config.extraEnv`). Unless a caller set it through `n8n_extra_env`,
+  n8n ran with its own default of `0` behind the module's ALB: Express trusted
+  no proxy, so n8n took the client IP from the ALB's own connection and
+  ignored `X-Forwarded-For` and `X-Forwarded-Proto`. The default of `1`
+  matches an ALB alone, whether the module or the caller owns the Ingress.
+  Each proxy in front of the ALB, such as CloudFront, adds one hop, with
+  either `create_ingress` setting. A value above `1` is only safe when the
+  inner proxy accepts traffic from the outer one alone, otherwise a client
+  can forge its IP. Rejects non-integer or negative values at plan time.
+  README.md's "Customer-managed Ingress" section documents session
+  stickiness and the hop count beside the path-prefix rules, and
+  `docs/istio-ingress.md` covers both for an Istio gateway.
+
+  **Upgrade note (breaking):** the env var name is now reserved in
+  `local.n8n_managed_env_names`. It matches none of the guard prefixes and
+  was absent from the exact-match list, so callers could set it through the
+  escape hatches. An `N8N_PROXY_HOPS` entry in `n8n_extra_env`,
+  `n8n_worker_extra_env` or `n8n_worker_pools[*].extra_env` now fails
+  variable validation at plan time and must move to `n8n_proxy_hops`. The new
+  input sets one value for every pod type, so a different value per pod type
+  is no longer possible. Every n8n pod (main, worker, webhook processor)
+  rolls once on the next apply because the env list changes, and from then on
+  n8n uses the forwarded client IP and protocol instead of the ALB's own
+  address. This makes the change a minor-version
+  boundary under [Stability & versioning](./README.md#stability--versioning),
+  not a patch.
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
   annotates the default worker `ScaledObject` with

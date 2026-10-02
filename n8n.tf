@@ -760,11 +760,11 @@ resource "helm_release" "n8n" {
           # against. Deployments where the two agree render the value n8n
           # already resolves to today, so only a split hostname sees a change.
           { name = "N8N_EDITOR_BASE_URL", value = "https://${local.n8n_domain}" },
-          # Hop count for Express's trust-proxy setting, so n8n reads client IP
-          # and TLS termination state from the right X-Forwarded-* hop. The
-          # module's own ALB Ingress is one hop; a caller-owned ingress
-          # (create_ingress = false) with extra hops in front of the cluster
-          # sets var.n8n_proxy_hops to match. See that variable's description.
+          # Hop count for Express's trust-proxy setting, so n8n takes the
+          # client IP from the right X-Forwarded-For entry and honors
+          # X-Forwarded-Proto. An ALB alone is one hop; any proxy in front of
+          # it (e.g. CloudFront) adds one, whether or not the module owns the
+          # Ingress. See var.n8n_proxy_hops's description.
           local.n8n_proxy_hops_env,
           { name = "N8N_RUNNERS_TASK_REQUEST_TIMEOUT", value = tostring(var.n8n_task_runner_request_timeout) },
           # Keeps ElastiCache from dropping idle Redis subscriber connections under sustained load.

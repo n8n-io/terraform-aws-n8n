@@ -6841,6 +6841,47 @@ run "extra_env_rejects_proxy_hops_name" {
   expect_failures = [var.n8n_extra_env]
 }
 
+# 0 is the lower bound the validation allows: no proxy in front of n8n.
+run "proxy_hops_accepts_zero" {
+  command = plan
+
+  variables {
+    n8n_proxy_hops = 0
+  }
+
+  assert {
+    condition     = local.n8n_proxy_hops_env == { name = "N8N_PROXY_HOPS", value = "0" }
+    error_message = "n8n_proxy_hops = 0 must be accepted and render N8N_PROXY_HOPS=0."
+  }
+}
+
+# The reservation covers every escape hatch, not only n8n_extra_env. Before this
+# input existed all three accepted the name, which is the upgrade break the
+# CHANGELOG notes.
+run "worker_extra_env_rejects_proxy_hops_name" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [{ name = "N8N_PROXY_HOPS", value = "2" }]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
+
+run "worker_pools_reject_proxy_hops_name" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools = [{
+      name      = "gpu"
+      extra_env = [{ name = "N8N_PROXY_HOPS", value = "2" }]
+    }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
 # ── n8n_extra_env ────────────────────────────────────────────────────────────
 # Asserted at the variable-contract level: defaults, accepted shape, and the
 # three validation guards (non-empty name, no duplicates, no collision with
