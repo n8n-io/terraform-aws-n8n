@@ -18,8 +18,8 @@ this project adheres to the stability contract in
 - `docs/build-time-decisions.md`, a single table of settings that are
   fixed at the first `terraform apply` (EKS cluster name, subnets, service
   CIDR, authentication mode, and secrets encryption; node group instance
-  types/AMI type/disk size; RDS engine/identifier/storage encryption;
-  ElastiCache engine/topology/transit/at-rest encryption; the S3 bucket
+  type and disk size; RDS engine, storage encryption and subnet placement;
+  ElastiCache topology, transit and at-rest encryption; the S3 bucket
   name; the ALB ingress scheme; and the n8n encryption key), what happens
   if you change each one later, and what to do instead. Linked from
   `README.md` and every example's "Production considerations" section.

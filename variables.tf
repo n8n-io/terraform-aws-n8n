@@ -541,7 +541,7 @@ variable "node_disk_size" {
 }
 
 variable "node_instance_type" {
-  description = "EC2 instance type for EKS worker nodes. t3.xlarge (4 vCPU, 16GB) is the recommended minimum for multi-main, the 6 n8n pods (main × 2, worker × 2, webhook × 2) request ~3,600m CPU at minimum replicas, leaving t3.medium nodes with insufficient headroom for HPA to scale. Changing this on an existing node group forces AWS to replace it, draining every node; see docs/build-time-decisions.md."
+  description = "EC2 instance type for EKS worker nodes. t3.xlarge (4 vCPU, 16GB) is the recommended minimum for multi-main: the 6 n8n pods (main × 2, worker × 2, webhook × 2) request ~3,600m CPU at minimum replicas, leaving t3.medium nodes with insufficient headroom for HPA to scale. Changing this on an existing deployment replaces the node group: Terraform deletes the old group before it creates the new one, so every pod is down until the new nodes join. See docs/build-time-decisions.md."
   type        = string
   default     = "t3.xlarge"
   nullable    = false
