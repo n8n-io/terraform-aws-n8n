@@ -625,9 +625,10 @@ locals {
   # the kubelet's periodic sync, not immediately: see the merge site in n8n.tf
   # for why podAnnotations is the seam that forces an immediate rollout
   # instead. Same gate as the ConfigMap itself, so this is {} whenever the
-  # ConfigMap does not exist.
+  # ConfigMap does not exist. Hashes the same trimmed value the ConfigMap
+  # stores, so a whitespace-only change does not roll pods for no reason.
   postgres_ssl_ca_pod_annotations = (var.db_postgresdb_ssl_enabled && var.db_postgresdb_ssl_ca_pem != null) ? {
-    "checksum/postgres-ssl-ca" = sha256(var.db_postgresdb_ssl_ca_pem)
+    "checksum/postgres-ssl-ca" = sha256(trimspace(var.db_postgresdb_ssl_ca_pem))
   } : {}
 
   # ── n8n_extra_env collision guard ──────────────────────────────────────────

@@ -2158,7 +2158,7 @@ variable "db_postgresdb_pool_size" {
 }
 
 variable "db_postgresdb_ssl_enabled" {
-  description = "Whether n8n connects to the database over SSL. Set to true (the default) for direct connections to RDS or Aurora — they use the AWS CA which Node.js doesn't trust by default, so the connection still negotiates SSL but skips certificate verification. Set to false when n8n connects to an in-cluster connection pooler (e.g. PgBouncer) that handles SSL on its upstream leg — the pod-to-pod traffic stays inside the cluster network."
+  description = "Whether n8n connects to the database over SSL. Set to true (the default) for direct connections to RDS or Aurora. By default the connection is encrypted but the server certificate is not verified, because the RDS CA is not in Node.js's default trust store; set db_postgresdb_ssl_reject_unauthorized = true and db_postgresdb_ssl_ca_pem to verify it (see docs/postgresql-tls.md). Set to false when n8n connects to an in-cluster connection pooler (e.g. PgBouncer) that handles SSL on its upstream leg. The pod-to-pod traffic then stays inside the cluster network."
   type        = bool
   default     = true
 
@@ -2213,11 +2213,16 @@ variable "db_postgresdb_ssl_ca_pem" {
     error_message = "db_postgresdb_ssl_ca_pem reserves the volume name \"postgres-ssl-ca\" while db_postgresdb_ssl_enabled = true. Rename or remove the conflicting n8n_extra_volumes entry."
   }
 
+  # Reserves the directory and everything under it, not only the exact path:
+  # a caller mount at /etc/n8n/postgres-ssl-ca/ca.pem (with sub_path) would
+  # replace the managed CA file, while the checksum/postgres-ssl-ca pod
+  # annotation would still hash db_postgresdb_ssl_ca_pem.
   validation {
     condition = (var.db_postgresdb_ssl_ca_pem == null || !var.db_postgresdb_ssl_enabled) ? true : alltrue([
-      for mount in var.n8n_extra_volume_mounts : mount.mount_path != "/etc/n8n/postgres-ssl-ca"
+      for mount in var.n8n_extra_volume_mounts :
+      mount.mount_path != "/etc/n8n/postgres-ssl-ca" && !startswith(mount.mount_path, "/etc/n8n/postgres-ssl-ca/")
     ])
-    error_message = "db_postgresdb_ssl_ca_pem reserves the mount path \"/etc/n8n/postgres-ssl-ca\" while db_postgresdb_ssl_enabled = true. Move or remove the conflicting n8n_extra_volume_mounts entry."
+    error_message = "db_postgresdb_ssl_ca_pem reserves the mount path \"/etc/n8n/postgres-ssl-ca\" and every path under it while db_postgresdb_ssl_enabled = true. Move or remove the conflicting n8n_extra_volume_mounts entry."
   }
 }
 

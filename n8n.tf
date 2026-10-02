@@ -313,8 +313,13 @@ resource "kubernetes_config_map_v1" "postgres_ssl_ca" {
     namespace = local.namespace_name
   }
 
+  # trimspace: n8n reads DB_POSTGRESDB_SSL_CA_FILE through its _FILE loader,
+  # which trims the file contents and logs a warning on every process start
+  # when it had to. A downloaded PEM bundle always ends in a newline, so
+  # storing it untrimmed would log that warning on every pod start. n8n uses
+  # the trimmed value either way, so nothing else changes.
   data = {
-    "ca.pem" = var.db_postgresdb_ssl_ca_pem
+    "ca.pem" = trimspace(var.db_postgresdb_ssl_ca_pem)
   }
 
   # See the comment on kubernetes_secret.n8n above.
@@ -739,9 +744,11 @@ resource "helm_release" "n8n" {
     config = {
       timezone = var.n8n_timezone
       extraEnv = concat(
-        # Direct connections to RDS/Aurora use SSL with the AWS CA (not trusted by Node.js — safe
-        # to skip cert verification within the VPC). Set db_postgresdb_ssl_enabled = false when
-        # n8n's DB host is an in-cluster pooler (e.g. PgBouncer) that handles SSL on its upstream leg.
+        # Direct connections to RDS/Aurora use SSL. Certificate verification is off by default
+        # because the RDS CA is not in Node.js's trust store; db_postgresdb_ssl_reject_unauthorized
+        # and db_postgresdb_ssl_ca_pem turn it on (see docs/postgresql-tls.md). Set
+        # db_postgresdb_ssl_enabled = false when n8n's DB host is an in-cluster pooler (e.g.
+        # PgBouncer) that handles SSL on its upstream leg.
         local.n8n_postgres_ssl_env,
         [
           { name = "N8N_LOG_LEVEL", value = var.n8n_log_level },
@@ -1173,7 +1180,7 @@ resource "helm_release" "n8n" {
     # CAVEAT: podAnnotations is accepted by the templates but is NOT documented
     # in the chart's values.yaml, so it is an implicit interface that could be
     # renamed without a breaking-change note. Verified present at the pinned
-    # n8n_chart_version (1.13.0) and present as far back as 1.10.0. If a chart
+    # n8n_chart_version (1.14.0) and present as far back as 1.10.0. If a chart
     # bump ever silently drops it, rotation goes back to being manual rather
     # than breaking anything, and the tests in defaults.tftest.hcl pin the shape.
     #
@@ -1256,6 +1263,17 @@ resource "helm_release" "n8n" {
     # The CA bundle is mounted by a constant name (see
     # local.postgres_ssl_ca_configmap_name), so nothing else orders the
     # ConfigMap before the pods that mount it. Empty when the CA is unset.
+    #
+    # The same edge orders removal the wrong way round: when the CA is
+    # removed (or SSL turned off), Terraform deletes the ConfigMap before it
+    # updates this release. If that upgrade then fails, atomic = true rolls
+    # back to a release whose pods still mount the deleted ConfigMap, and any
+    # pod that starts afterwards waits in ContainerCreating. Not fixed with
+    # create_before_destroy on the ConfigMap: Terraform propagates that
+    # setting to every resource the ConfigMap depends on (the node group, the
+    # namespace and, through them, the cluster), which would change how those
+    # resources are replaced for every caller. docs/postgresql-tls.md
+    # ("Removing the CA") documents the recovery instead.
     kubernetes_config_map_v1.postgres_ssl_ca,
     kubernetes_service_account_v1.n8n, # empty list unless the module owns it
   ]

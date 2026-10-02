@@ -104,7 +104,13 @@ this project adheres to the stability contract in
   https://truststore.pki.rds.amazonaws.com) via a module-managed
   `kubernetes_config_map_v1`, mounted read-only at
   `/etc/n8n/postgres-ssl-ca/ca.pem` on the main, worker, and
-  webhook-processor pods and wired to `DB_POSTGRESDB_SSL_CA_FILE`. A
+  webhook-processor pods and wired to `DB_POSTGRESDB_SSL_CA_FILE`. The
+  bundle is stored with surrounding whitespace trimmed, matching what n8n's
+  `_FILE` loader reads, so n8n does not log a whitespace warning on every
+  pod start. The volume name `postgres-ssl-ca` and the mount path
+  `/etc/n8n/postgres-ssl-ca`, including every path under it, are reserved
+  in `n8n_extra_volumes` / `n8n_extra_volume_mounts` while the CA is in
+  use. A
   `checksum/postgres-ssl-ca` pod annotation (merged with the existing Redis
   AUTH token checksum, if any, via `podAnnotations`) forces a rollout of all
   three deployments whenever the CA bundle's content changes, so a rotated
@@ -116,8 +122,9 @@ this project adheres to the stability contract in
   requested while `db_postgresdb_ssl_enabled = false`, so the input is never
   silently inert. See
   [`docs/postgresql-tls.md`](./docs/postgresql-tls.md) for the full
-  procedure, AWS's CA rotation schedule, and the PgBouncer caveat
-  (`examples/large`): PgBouncer terminates TLS on its own upstream leg to
+  procedure, the `db_host` hostname requirement, AWS's CA rotation
+  schedule, recovering from a failed Helm upgrade when rotating or removing
+  the CA, and the PgBouncer caveat (`examples/large`): PgBouncer terminates TLS on its own upstream leg to
   Aurora, which this module has no visibility into.
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`

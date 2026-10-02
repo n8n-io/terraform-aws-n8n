@@ -5413,7 +5413,7 @@ run "pod_annotations_carry_the_token_checksum_when_enabled" {
   }
 }
 
-run "no_pod_annotations_for_postgres_ssl_ca_pem_without_verification" {
+run "no_pod_annotations_for_postgres_ssl_ca_pem_with_ssl_disabled" {
   command = plan
 
   # db_postgresdb_ssl_enabled = false is the gate postgres_ssl_ca_pod_annotations
@@ -5435,7 +5435,7 @@ run "no_pod_annotations_for_postgres_ssl_ca_pem_without_verification" {
   expect_failures = [check.db_postgresdb_ssl_ca_pem_requires_verification]
 }
 
-run "pod_annotations_carry_the_ca_checksum_when_set" {
+run "pod_annotations_carry_the_ca_checksum_when_ssl_enabled_and_ca_set" {
   command = plan
 
   variables {
@@ -5448,7 +5448,7 @@ run "pod_annotations_carry_the_ca_checksum_when_set" {
       length(local.postgres_ssl_ca_pod_annotations) == 1 &&
       contains(keys(local.postgres_ssl_ca_pod_annotations), "checksum/postgres-ssl-ca")
     )
-    error_message = "A set CA bundle with verification actually turned on must add exactly the CA checksum annotation, so a CA rotation rolls main, worker and webhook processor pods."
+    error_message = "A set CA bundle with db_postgresdb_ssl_enabled = true must add exactly the CA checksum annotation, so a CA rotation rolls main, worker and webhook processor pods. The annotation does not depend on db_postgresdb_ssl_reject_unauthorized."
   }
 
   assert {
@@ -11459,10 +11459,10 @@ run "db_postgresdb_ssl_ca_pem_renders_configmap_volume_and_env" {
   assert {
     condition = (
       length(kubernetes_config_map_v1.postgres_ssl_ca) == 1 &&
-      kubernetes_config_map_v1.postgres_ssl_ca[0].data["ca.pem"] == "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n" &&
+      kubernetes_config_map_v1.postgres_ssl_ca[0].data["ca.pem"] == "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----" &&
       kubernetes_config_map_v1.postgres_ssl_ca[0].metadata[0].name == local.postgres_ssl_ca_configmap_name
     )
-    error_message = "db_postgresdb_ssl_ca_pem must create exactly one ConfigMap carrying the supplied PEM under the ca.pem key, named local.postgres_ssl_ca_configmap_name."
+    error_message = "db_postgresdb_ssl_ca_pem must create exactly one ConfigMap carrying the supplied PEM (trailing newline trimmed) under the ca.pem key, named local.postgres_ssl_ca_configmap_name."
   }
 
   assert {
@@ -11539,6 +11539,48 @@ run "db_postgresdb_ssl_ca_pem_rejects_a_conflicting_extra_volume_mount_path" {
   }
 
   expect_failures = [var.db_postgresdb_ssl_ca_pem]
+}
+
+run "db_postgresdb_ssl_ca_pem_rejects_a_mount_under_the_reserved_path" {
+  command = plan
+
+  # A sub_path mount at the CA file itself would replace the managed bundle
+  # while the checksum annotation still hashes db_postgresdb_ssl_ca_pem, so
+  # the reservation covers every path under the directory, not only the
+  # directory.
+  variables {
+    db_postgresdb_ssl_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+    n8n_extra_volumes = [
+      { name = "caller-owned", config_map = { name = "caller-owned" } },
+    ]
+    n8n_extra_volume_mounts = [
+      { name = "caller-owned", mount_path = "/etc/n8n/postgres-ssl-ca/ca.pem", sub_path = "ca.pem" },
+    ]
+  }
+
+  expect_failures = [var.db_postgresdb_ssl_ca_pem]
+}
+
+run "db_postgresdb_ssl_ca_pem_accepts_a_multi_certificate_bundle" {
+  command = plan
+
+  # AWS's global-bundle.pem concatenates many certificates. The PEM
+  # validation must accept the whole bundle, and the ConfigMap and checksum
+  # must both use the trimmed value n8n's _FILE loader would read anyway.
+  variables {
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFakeOne\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIFakeTwo\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition     = kubernetes_config_map_v1.postgres_ssl_ca[0].data["ca.pem"] == "-----BEGIN CERTIFICATE-----\nMIIFakeOne\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIFakeTwo\n-----END CERTIFICATE-----"
+    error_message = "A multi-certificate bundle must reach the ConfigMap whole, with only the surrounding whitespace trimmed."
+  }
+
+  assert {
+    condition     = local.postgres_ssl_ca_pod_annotations["checksum/postgres-ssl-ca"] == sha256("-----BEGIN CERTIFICATE-----\nMIIFakeOne\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIFakeTwo\n-----END CERTIFICATE-----")
+    error_message = "The CA checksum annotation must hash the same trimmed value the ConfigMap stores."
+  }
 }
 
 run "db_postgresdb_ssl_ca_pem_collision_checks_skip_when_ssl_disabled" {

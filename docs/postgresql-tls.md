@@ -22,12 +22,6 @@ connection fail closed with a certificate-chain error, which is why the
 module defaults to skipping verification rather than breaking every existing
 deployment.
 
-Node.js 18 and earlier bundled a wider set of CAs in some distributions;
-Node 20 and later load only the CAs Node ships with by default, and the RDS
-CA was never one of them on any version. Supplying the bundle yourself is
-the supported path on every Node version this module's pinned n8n image
-runs.
-
 ## Turning on verification
 
 ```hcl
@@ -54,9 +48,12 @@ db_postgresdb_ssl_ca_pem              = file("${path.module}/global-bundle.pem")
    into a module-managed `kubernetes_config_map_v1`
    (`kubernetes_config_map_v1.postgres_ssl_ca` in `n8n.tf`), mounts it
    read-only at `/etc/n8n/postgres-ssl-ca/ca.pem` on the main, worker, and
-   webhook-processor pods, and sets `DB_POSTGRESDB_SSL_CA_FILE` to that path
-   (n8n's Postgres driver reads either the certificate's literal content or a
-   file path from this variable; the module always uses the file path form).
+   webhook-processor pods, and sets `DB_POSTGRESDB_SSL_CA_FILE` to that path.
+   n8n's configuration loader reads any `<NAME>_FILE` variable from disk, so
+   it reads the file, trims surrounding whitespace, and passes the PEM
+   contents to the Postgres connection as `DB_POSTGRESDB_SSL_CA`. The module
+   stores the bundle already trimmed, so n8n does not log a whitespace
+   warning on every pod start.
 3. Both inputs default to the prior behavior (`false` / `null`), so setting
    neither changes an existing deployment's rendered Helm values at all.
 
@@ -68,6 +65,14 @@ the database, only on `db_postgresdb_ssl_enabled` and the CA input itself.
 If `db_host` points at a non-RDS PostgreSQL server (e.g. a self-managed
 instance or a different provider's managed database), supply that server's
 own CA bundle instead of the RDS one.
+
+Verification also checks the server's name, not only its CA. The host n8n
+connects to (the module-managed RDS endpoint, or `db_host`) must match a name
+in the server certificate. The RDS endpoint always does. A `db_host` set to a
+custom DNS alias (for example a Route 53 CNAME pointing at the RDS endpoint)
+or an IP address does not, and every connection fails with a hostname
+mismatch once `db_postgresdb_ssl_reject_unauthorized = true`. Point `db_host`
+at the endpoint name AWS gives you instead.
 
 ## Plan-time warnings
 
@@ -115,6 +120,14 @@ tracking a specific pinned CA for other reasons.
 = false` (the module's default) is unaffected by CA rotation: it never
 validates the certificate chain, so a rotated CA changes nothing it checks.
 
+A Helm rollback does not restore the previous CA bundle. The module updates
+the ConfigMap in place before the Helm release rolls the pods. If the new
+bundle does not cover the server's certificate and the Helm upgrade fails,
+`atomic = true` rolls the release back, but the rolled-back pods still mount
+the same ConfigMap, which now holds the new bundle. Keep the previous bundle
+file until the new one is confirmed. To recover, set
+`db_postgresdb_ssl_ca_pem` back to the previous bundle and apply again.
+
 ## Upgrading an existing deployment
 
 Changing either input only changes what the n8n application containers send
@@ -129,6 +142,33 @@ that covers the server's actual certificate chain fails every database
 connection closed after the rollout completes, which takes down the main,
 worker, and webhook-processor pods alike (there is no fallback to an
 unverified connection once the setting is live).
+
+## Removing the CA
+
+Setting `db_postgresdb_ssl_ca_pem` back to `null`, or setting
+`db_postgresdb_ssl_enabled = false`, removes the ConfigMap and the mount
+together. Terraform deletes the ConfigMap first and then upgrades the Helm
+release, which drops the mount. Pods that are already running are not
+affected by the deletion, and the upgrade replaces them with pods that no
+longer mount the ConfigMap.
+
+The risk is the Helm upgrade failing after the ConfigMap is gone. The release
+uses `atomic = true`, so a failed upgrade rolls back to the previous release,
+whose pods still mount the deleted ConfigMap. Running pods keep working, but
+any pod that starts later (a node drain, an autoscaler scale-up, a crash
+restart) waits in `ContainerCreating` because the ConfigMap does not exist.
+
+- Remove the CA at a time when you can watch the apply finish, not during a
+  node rotation or a traffic peak.
+- If the Helm upgrade fails, set `db_postgresdb_ssl_ca_pem` back to its
+  previous value and apply again. That recreates the ConfigMap the
+  rolled-back release mounts. Fix the cause of the failed upgrade before you
+  remove the CA again.
+
+The module does not reorder this with `create_before_destroy`, because
+Terraform applies that setting to every resource the ConfigMap depends on,
+including the EKS node group and cluster. That would change how those
+resources are replaced for every caller.
 
 ## PgBouncer topologies (`examples/large`)
 
