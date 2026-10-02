@@ -126,7 +126,7 @@ The Aurora cluster also carries a `# checkov:skip=CKV_AWS_139` annotation that s
 
 **Upgrading to chart `1.13.0` can interrupt workers.** This example runs a worker floor of 20. The first upgrade to n8n chart `1.13.0` (the module default from this release) resets the worker Deployment's desired count to 1 before KEDA scales it back, and executions still running on terminated pods when their shutdown window ends can be interrupted. Upgrade in a low-traffic window and let running work drain first; see [Upgrading n8n](../../docs/upgrading-n8n.md#moving-from-chart-1120-to-1130).
 
-See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the module-level settings (EKS cluster name and subnets, the node group's instance type and disk size, ElastiCache topology and encryption, the ALB scheme, S3 bucket name and encryption, and the n8n encryption key) that are fixed at the first `terraform apply`. The RDS rows there do not apply, because this example sets `create_database = false`. The Aurora cluster in `aurora.tf` is created by this example, not by the module, so that page does not cover its create-time constraints.
+See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the module-level settings (EKS cluster name and subnet removal, the node group's instance type and disk size, ElastiCache topology and encryption, the ALB scheme, S3 bucket name and encryption, and the n8n encryption key) that are fixed or constrained after the first `terraform apply`. The RDS rows there do not apply, because this example sets `create_database = false`. The Aurora cluster in `aurora.tf` is created by this example, not by the module, so that page does not cover its create-time constraints.
 
 ## Reference
 
