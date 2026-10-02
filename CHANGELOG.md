@@ -22,8 +22,9 @@ this project adheres to the stability contract in
   storage encryption and subnet removal; ElastiCache topology, transit
   and at-rest encryption; the S3 bucket name and its KMS encryption
   toggle; the ALB ingress scheme; and the n8n encryption key), what
-  happens if you change each one later, and what to do instead. Linked from `README.md` and every
-  example's "Production considerations" section.
+  happens if you change each one later, and what to do instead. Linked
+  from `README.md` and every example's "Production considerations"
+  section.
 
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
