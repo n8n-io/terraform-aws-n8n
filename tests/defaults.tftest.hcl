@@ -898,10 +898,10 @@ run "accepts_db_password_write_only_with_secret_ref" {
   command = plan
 
   variables {
-    db_password_write_only       = true
-    db_admin_password_wo         = "an-ephemeral-value-terraform-never-persists"
-    db_admin_password_wo_version = 2
-    db_password_secret_ref       = { name = "platform-n8n-db-password", key = "password" }
+    db_password_write_only = true
+    db_password_wo         = "an-ephemeral-value-terraform-never-persists"
+    db_password_wo_version = 2
+    db_password_secret_ref = { name = "platform-n8n-db-password", key = "password" }
   }
 
   assert {
@@ -921,7 +921,7 @@ run "accepts_db_password_write_only_with_secret_ref" {
 
   assert {
     condition     = aws_db_instance.n8n[0].password_wo_version == 2
-    error_message = "password_wo_version must reflect db_admin_password_wo_version."
+    error_message = "password_wo_version must reflect db_password_wo_version."
   }
 
   assert {
@@ -935,7 +935,7 @@ run "rejects_db_password_write_only_without_secret_ref" {
 
   variables {
     db_password_write_only = true
-    db_admin_password_wo   = "an-ephemeral-value-terraform-never-persists"
+    db_password_wo         = "an-ephemeral-value-terraform-never-persists"
   }
 
   expect_failures = [var.db_password_secret_ref]
@@ -949,7 +949,7 @@ run "rejects_db_password_write_only_without_password" {
     db_password_secret_ref = { name = "platform-n8n-db-password" }
   }
 
-  expect_failures = [var.db_admin_password_wo]
+  expect_failures = [var.db_password_wo]
 }
 
 run "rejects_db_password_write_only_with_external_database" {
@@ -960,40 +960,40 @@ run "rejects_db_password_write_only_with_external_database" {
     db_host                = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
     db_password            = "external-db-password"
     db_password_write_only = true
-    db_admin_password_wo   = "an-ephemeral-value-terraform-never-persists"
+    db_password_wo         = "an-ephemeral-value-terraform-never-persists"
   }
 
   expect_failures = [var.db_password_write_only]
 }
 
-run "rejects_db_admin_password_wo_when_write_only_disabled" {
+run "rejects_db_password_wo_when_write_only_disabled" {
   command = plan
 
   variables {
-    db_admin_password_wo = "an-ephemeral-value-terraform-never-persists"
+    db_password_wo = "an-ephemeral-value-terraform-never-persists"
   }
 
-  expect_failures = [var.db_admin_password_wo]
+  expect_failures = [var.db_password_wo]
 }
 
-run "rejects_nonpositive_db_admin_password_wo_version" {
+run "rejects_nonpositive_db_password_wo_version" {
   command = plan
 
   variables {
-    db_admin_password_wo_version = 0
+    db_password_wo_version = 0
   }
 
-  expect_failures = [var.db_admin_password_wo_version]
+  expect_failures = [var.db_password_wo_version]
 }
 
-run "rejects_fractional_db_admin_password_wo_version" {
+run "rejects_fractional_db_password_wo_version" {
   command = plan
 
   variables {
-    db_admin_password_wo_version = 1.5
+    db_password_wo_version = 1.5
   }
 
-  expect_failures = [var.db_admin_password_wo_version]
+  expect_failures = [var.db_password_wo_version]
 }
 
 # ── Database health-check ping tuning ─────────────────────────────────────────

@@ -2010,7 +2010,7 @@ variable "db_password_secret_ref" {
 }
 
 variable "db_password_write_only" {
-  description = "When true, the module writes the RDS master password through aws_db_instance.n8n's write-only password_wo argument (sourced from db_admin_password_wo) instead of generating a password with random_password.db_password and storing it in plain text in Terraform state. Requires db_admin_password_wo to be set and db_password_secret_ref to reference a Kubernetes Secret you populate yourself (for example, synced from AWS Secrets Manager via External Secrets Operator), the module cannot copy a write-only value into kubernetes_secret.n8n_db, so it creates no managed Secret and the db_password output is null on this path. Ignored (must stay false) when create_database = false; the module never manages a password for an external database. Safe to set from the first apply of a new deployment. On an EXISTING password-managed instance, follow the migration recipe in README.md -> \"Switching to the write-only RDS password\" rather than flipping it directly, because of the open provider bug hashicorp/terraform-provider-aws#42582."
+  description = "When true, the module writes the RDS master password through aws_db_instance.n8n's write-only password_wo argument (sourced from db_password_wo) instead of generating a password with random_password.db_password and storing it in plain text in Terraform state. Requires db_password_wo to be set and db_password_secret_ref to reference a Kubernetes Secret you populate yourself (for example, synced from AWS Secrets Manager via External Secrets Operator), the module cannot copy a write-only value into kubernetes_secret.n8n_db, so it creates no managed Secret and the db_password output is null on this path. Ignored (must stay false) when create_database = false; the module never manages a password for an external database. Safe to set from the first apply of a new deployment. On an EXISTING password-managed instance, follow the migration recipe in README.md -> \"Switching to the write-only RDS password\" rather than flipping it directly, because of the open provider bug hashicorp/terraform-provider-aws#42582."
   type        = bool
   default     = false
   nullable    = false
@@ -2021,7 +2021,7 @@ variable "db_password_write_only" {
   }
 }
 
-variable "db_admin_password_wo" {
+variable "db_password_wo" {
   description = "RDS master password, accepted as a write-only value so Terraform never persists it in plan or state files. Required when db_password_write_only = true; must stay null otherwise, because the module generates its own password in that mode. Feed this from your own ephemeral source, for example an ephemeral resource backed by AWS Secrets Manager or SSM Parameter Store in the calling root, so the value never touches state on the caller's side either. Keep the Kubernetes Secret referenced by db_password_secret_ref in sync with the same value: Terraform never copies one into the other."
   type        = string
   ephemeral   = true
@@ -2029,30 +2029,30 @@ variable "db_admin_password_wo" {
   default     = null
 
   validation {
-    condition     = var.db_password_write_only ? var.db_admin_password_wo != null : true
-    error_message = "db_admin_password_wo is required when db_password_write_only = true."
+    condition     = var.db_password_write_only ? var.db_password_wo != null : true
+    error_message = "db_password_wo is required when db_password_write_only = true."
   }
 
   validation {
-    condition     = var.db_password_write_only ? true : var.db_admin_password_wo == null
-    error_message = "db_admin_password_wo has no effect when db_password_write_only = false; the module generates and manages its own password in that mode."
+    condition     = var.db_password_write_only ? true : var.db_password_wo == null
+    error_message = "db_password_wo has no effect when db_password_write_only = false; the module generates and manages its own password in that mode."
   }
 }
 
-variable "db_admin_password_wo_version" {
-  description = "Version marker for db_admin_password_wo, forwarded to aws_db_instance.n8n's password_wo_version. Increment this value whenever you rotate db_admin_password_wo, Terraform only re-applies a write-only value when its version number changes. Ignored when db_password_write_only = false."
+variable "db_password_wo_version" {
+  description = "Version marker for db_password_wo, forwarded to aws_db_instance.n8n's password_wo_version. Increment this value whenever you rotate db_password_wo, Terraform only re-applies a write-only value when its version number changes. Ignored when db_password_write_only = false."
   type        = number
   default     = 1
   nullable    = false
 
   validation {
-    condition     = var.db_admin_password_wo_version >= 1
-    error_message = "db_admin_password_wo_version must be a positive integer (start at 1, increment on each rotation)."
+    condition     = var.db_password_wo_version >= 1
+    error_message = "db_password_wo_version must be a positive integer (start at 1, increment on each rotation)."
   }
 
   validation {
-    condition     = floor(var.db_admin_password_wo_version) == var.db_admin_password_wo_version
-    error_message = "db_admin_password_wo_version must be a positive integer (start at 1, increment on each rotation); fractional values are not allowed."
+    condition     = floor(var.db_password_wo_version) == var.db_password_wo_version
+    error_message = "db_password_wo_version must be a positive integer (start at 1, increment on each rotation); fractional values are not allowed."
   }
 }
 

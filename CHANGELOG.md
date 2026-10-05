@@ -127,12 +127,12 @@ this project adheres to the stability contract in
   the CA, and the PgBouncer caveat (`examples/large`): PgBouncer terminates TLS on its own upstream leg to
   Aurora, which this module has no visibility into.
 
-- **`db_password_write_only`, `db_admin_password_wo`, and
-  `db_admin_password_wo_version`** let the module-managed RDS instance
+- **`db_password_write_only`, `db_password_wo`, and
+  `db_password_wo_version`** let the module-managed RDS instance
   (`create_database = true`) accept its master password through
   `aws_db_instance.n8n`'s write-only `password_wo` argument instead of a
   `random_password` resource whose result Terraform stores in plain text in
-  state. `db_admin_password_wo` is an `ephemeral` module variable, so the
+  state. `db_password_wo` is an `ephemeral` module variable, so the
   value you pass never lands in a plan or state file. This mode requires
   `db_password_secret_ref` (the module cannot copy a write-only value into
   the Kubernetes Secret it would otherwise manage), makes the `db_password`
