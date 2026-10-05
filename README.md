@@ -1511,6 +1511,16 @@ fires, and the same test confirmed every step of it (migrating with the
 current password, then rotating with a `password_wo_version` bump, both
 in place).
 
+A second live test ran the full module through this whole section on a
+deployed `examples/small`, on the same provider version: the migration
+recipe below, a rotation, and switching back. CloudTrail recorded the
+`ModifyDBInstance` call for the migration apply, the exact `password` to
+`null` plus `password_wo_version` transition, with `masterUserPassword`
+included, and RDS logged a master credential reset. So on 6.65.0 the
+provider sends the password on this transition. n8n's pods reconnected
+without an authentication error in every phase. Other provider versions
+are untested, which is another reason to keep using the recipe.
+
 This module's own apply makes recovering from that worse, not better. The same
 apply that flips `db_password_write_only` to `true`:
 
