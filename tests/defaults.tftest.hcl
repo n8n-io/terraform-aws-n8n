@@ -7889,9 +7889,105 @@ run "image_repository_rejects_digest" {
   expect_failures = [var.n8n_image_repository]
 }
 
+# Docker's 255-character limit applies to the repository path after it
+# normalizes the reference (distribution/reference v0.6.0), not to the whole
+# string. The registry host does not count, and a single-component Docker Hub
+# name counts an implicit "library/" prefix. The four boundaries below are the
+# last accepted and first rejected length on each side of that rule.
+run "image_repository_accepts_255_character_path_behind_a_registry" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "registry.example.com/${join("", [for _ in range(255) : "a"])}"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = length(var.n8n_image_repository) == 276
+    error_message = "n8n_image_repository should accept a 255-character path behind a registry host; Docker does not count the host."
+  }
+}
+
+run "image_repository_rejects_256_character_path_behind_a_registry" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "registry.example.com/${join("", [for _ in range(256) : "a"])}"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+run "image_repository_accepts_247_character_bare_name" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = join("", [for _ in range(247) : "a"])
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = length(var.n8n_image_repository) == 247
+    error_message = "n8n_image_repository should accept a 247-character bare name, which normalizes to a 255-character library/ path."
+  }
+}
+
+run "image_repository_rejects_248_character_bare_name" {
+  command = plan
+
+  variables {
+    n8n_image_repository = join("", [for _ in range(248) : "a"])
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
+# "a_b.c" contains a dot, so Docker first takes it for a registry host, but a
+# host label cannot contain "_", so Parse counts it as part of the path. The
+# whole 255- or 256-character string is the path here.
+run "image_repository_accepts_255_character_path_with_underscore_first_component" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "a_b.c/${join("", [for _ in range(249) : "a"])}"
+    n8n_image_tag             = "2.27.4"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = length(var.n8n_image_repository) == 255
+    error_message = "n8n_image_repository should accept a 255-character path whose first component only looks like a host."
+  }
+}
+
+run "image_repository_rejects_256_character_path_with_underscore_first_component" {
+  command = plan
+
+  variables {
+    n8n_image_repository = "a_b.c/${join("", [for _ in range(250) : "a"])}"
+  }
+
+  expect_failures = [var.n8n_image_repository]
+}
+
 # ── n8n_task_runner_image_repository ───────────────────────────────────────────
 # Same coverage shape as n8n_image_repository above and below (both rejection
-# groups), since the two variables carry verbatim copies of the same regex.
+# groups, and the length boundaries), since both validations share
+# local.image_repository_regex and the same normalized-path length rule.
+#
+# Limited to the variable contract for the same reason as n8n_image_repository:
+# helm_release.values is unknown at plan time under the mock provider, so the
+# merge() of taskRunners.image.repository into the Helm values cannot be
+# asserted here, and the example runs can only read the example's own variable
+# because the module exposes no output for it. To verify end-to-end against a
+# staging deployment: save a plan from examples/small/ with
+# n8n_task_runner_image_repository and n8n_task_runner_image_tag set, then read
+# taskRunners.image from helm_release.n8n's values in `terraform show -json`.
+# The human-readable plan redacts those values because they carry the runner
+# token, and the saved plan contains secrets, so handle it accordingly. This
+# checks the Terraform wiring only, not chart rendering or pullability.
 
 run "task_runner_image_repository_defaults_to_null" {
   command = plan
@@ -8010,6 +8106,79 @@ run "task_runner_image_repository_rejects_uppercase_path_component" {
 
   variables {
     n8n_task_runner_image_repository = "myregistry.example.com/RUNNERS"
+  }
+
+  expect_failures = [var.n8n_task_runner_image_repository]
+}
+
+# Same normalized-path length boundaries as n8n_image_repository's.
+run "task_runner_image_repository_accepts_255_character_path_behind_a_registry" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_repository = "registry.example.com/${join("", [for _ in range(255) : "a"])}"
+    n8n_task_runner_image_tag        = "2.27.4"
+  }
+
+  assert {
+    condition     = length(var.n8n_task_runner_image_repository) == 276
+    error_message = "n8n_task_runner_image_repository should accept a 255-character path behind a registry host; Docker does not count the host."
+  }
+}
+
+run "task_runner_image_repository_rejects_256_character_path_behind_a_registry" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_repository = "registry.example.com/${join("", [for _ in range(256) : "a"])}"
+  }
+
+  expect_failures = [var.n8n_task_runner_image_repository]
+}
+
+run "task_runner_image_repository_accepts_247_character_bare_name" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_repository = join("", [for _ in range(247) : "a"])
+    n8n_task_runner_image_tag        = "2.27.4"
+  }
+
+  assert {
+    condition     = length(var.n8n_task_runner_image_repository) == 247
+    error_message = "n8n_task_runner_image_repository should accept a 247-character bare name, which normalizes to a 255-character library/ path."
+  }
+}
+
+run "task_runner_image_repository_rejects_248_character_bare_name" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_repository = join("", [for _ in range(248) : "a"])
+  }
+
+  expect_failures = [var.n8n_task_runner_image_repository]
+}
+
+run "task_runner_image_repository_accepts_255_character_path_with_underscore_first_component" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_repository = "a_b.c/${join("", [for _ in range(249) : "a"])}"
+    n8n_task_runner_image_tag        = "2.27.4"
+  }
+
+  assert {
+    condition     = length(var.n8n_task_runner_image_repository) == 255
+    error_message = "n8n_task_runner_image_repository should accept a 255-character path whose first component only looks like a host."
+  }
+}
+
+run "task_runner_image_repository_rejects_256_character_path_with_underscore_first_component" {
+  command = plan
+
+  variables {
+    n8n_task_runner_image_repository = "a_b.c/${join("", [for _ in range(250) : "a"])}"
   }
 
   expect_failures = [var.n8n_task_runner_image_repository]
@@ -8563,6 +8732,9 @@ run "custom_image_and_runner_repository_without_runner_tag_warns_once" {
     n8n_image_tag                    = "2.27.4-mypackages"
     n8n_task_runner_image_repository = "myregistry.example.com/runners"
   }
+
+  expect_failures = [check.custom_task_runner_repository_needs_an_explicit_tag]
+}
 
 # Disabling task runners also disables the pull-secret justification a lone
 # runner-repository override provided: the sidecar never deploys, so the

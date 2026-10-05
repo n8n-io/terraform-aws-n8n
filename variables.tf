@@ -828,45 +828,10 @@ variable "n8n_image_repository" {
   default     = null
 
   validation {
-    # Docker's own reference grammar (distribution/reference), narrowed to the
-    # repository half: no tag, no digest. Reading it in pieces, since it is one
-    # long line by necessity (a validation condition cannot reference a local):
-    #
-    #   label = [A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?
-    #   ipv6  = \[[0-9A-Fa-f:]+\]
-    #   host  = (label(.label)* | ipv6)(:port)?
-    #   sep   = __ | [._] | -+
-    #   comp  = [a-z0-9]+(sep[a-z0-9]+)*
-    #   ref   = (host/)? comp(/comp)*
-    #
-    # Every accept and reject below was read off docker's exit code rather than
-    # inferred, because two earlier attempts at this validation got the rules
-    # backwards in both directions.
-    #
-    # The host is deliberately permissive about case while path components are
-    # not, and that asymmetry is Docker's, not ours. splitDockerDomain treats a
-    # first component as a registry host when it contains a dot or a colon, is
-    # localhost, *or contains an uppercase letter*, so N8NIO/n8n and MYREG/n8n
-    # are pullable while myorg/N8N is not ("repository name must be lowercase")
-    # and FOO/BAR is not. Path components may carry doubled separators
-    # (my--repo, my__repo, a---b) which an earlier version wrongly rejected.
-    #
-    # What stays rejected is a reference no registry could serve: a scheme
-    # prefix, a second colon, an empty label (a..b, a trailing slash, a doubled
-    # slash), a label ending in a hyphen, and an IPv6 zone ID. Each of those
-    # otherwise reaches the chart and surfaces as ImagePullBackOff only after
-    # the cluster is up, which is the whole point of checking at plan time.
-    #
-    # The bracketed host is hex and colons only, no dots, which is Docker's
-    # grammar exactly: it rejects [....], [a:b.c] and even the IPv4-mapped
-    # [::ffff:1.2.3.4], while accepting the structurally meaningless [::::].
-    # Matching that is deliberate. Being stricter than docker here would reject
-    # an address a registry would have answered on, and this validation has no
-    # override.
-    condition = var.n8n_image_repository == null ? true : (
-      length(var.n8n_image_repository) <= 255 &&
-      can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_image_repository))
-    )
+    # Docker's reference grammar, shared with n8n_task_runner_image_repository.
+    # See local.image_repository_regex in locals.tf for how to read it and why
+    # each accept and reject is what it is.
+    condition     = var.n8n_image_repository == null ? true : can(regex(local.image_repository_regex, var.n8n_image_repository))
     error_message = "n8n_image_repository must be a bare image repository reference that Docker can pull: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n\", \"registry.internal:5000/n8n\", \"n8nio/n8n\", \"[2001:db8::1]:5000/n8n\"). No scheme (\"https://\"), no whitespace, no uppercase path components, and no empty label anywhere, which rules out a trailing slash, a doubled slash, and a doubled dot. Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
   }
 
@@ -877,6 +842,27 @@ variable "n8n_image_repository" {
     # and point at the right input instead of failing at pod start.
     condition     = var.n8n_image_repository == null ? true : !can(regex(":", reverse(split("/", var.n8n_image_repository))[0]))
     error_message = "n8n_image_repository must not include a tag or digest, because the chart appends the tag itself. Pass the version via n8n_image_tag instead (e.g. n8n_image_repository = \"myregistry.example.com/n8n\", n8n_image_tag = \"2.27.4\")."
+  }
+
+  validation {
+    # Docker limits the repository path to 255 characters, measured after it
+    # normalizes the reference (distribution/reference v0.6.0, Parse and
+    # splitDockerDomain), not the whole string. The registry host is removed
+    # when the first component looks like one (localhost, or it contains a
+    # dot, a colon or an uppercase letter), and a single-component Docker Hub
+    # name gains a "library/" prefix. So "registry.example.com/" plus 255
+    # characters is pullable, while a bare 248-character name is not.
+    #
+    # The host-stripping pattern excludes "_" on purpose. A host label cannot
+    # contain one but a path component can, so for "a_b.c/..." Docker first
+    # picks "a_b.c" as the host, then Parse fails to match it as one and
+    # counts the whole string as the path. "(?s)" keeps a value containing a
+    # newline on the grammar validation's message instead of a regex error.
+    condition = var.n8n_image_repository == null ? true : length(join("", [
+      can(regex("^(?:(?:docker\\.io|index\\.docker\\.io)/)?[^/]+$", var.n8n_image_repository)) ? "library/" : "",
+      can(regex("^(?:localhost|[^/_]*[.:A-Z][^/_]*)/", var.n8n_image_repository)) ? regex("(?s)^[^/]+/(.*)$", var.n8n_image_repository)[0] : var.n8n_image_repository,
+    ])) <= 255
+    error_message = "n8n_image_repository's repository path must be 255 characters or fewer, Docker's limit. The path is measured without the registry host, and a single-component Docker Hub name counts its implicit \"library/\" prefix."
   }
 }
 
@@ -1519,16 +1505,23 @@ variable "n8n_task_runner_image_repository" {
   default     = null
 
   validation {
-    condition = var.n8n_task_runner_image_repository == null ? true : (
-      length(var.n8n_task_runner_image_repository) <= 255 &&
-      can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_task_runner_image_repository))
-    )
+    # Same grammar as n8n_image_repository; see local.image_repository_regex.
+    condition     = var.n8n_task_runner_image_repository == null ? true : can(regex(local.image_repository_regex, var.n8n_task_runner_image_repository))
     error_message = "n8n_task_runner_image_repository must be a bare image repository reference that Docker can pull: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n-runners\", \"registry.internal:5000/runners\", \"n8nio/runners\"). No scheme (\"https://\"), no whitespace, no uppercase path components, and no empty label anywhere, which rules out a trailing slash, a doubled slash, and a doubled dot. Set to null to use the chart's default repository."
   }
 
   validation {
     condition     = var.n8n_task_runner_image_repository == null ? true : !can(regex(":", reverse(split("/", var.n8n_task_runner_image_repository))[0]))
     error_message = "n8n_task_runner_image_repository must not include a tag or digest, because the chart appends the tag itself. Pass the version via n8n_task_runner_image_tag instead (e.g. n8n_task_runner_image_repository = \"myregistry.example.com/n8n-runners\", n8n_task_runner_image_tag = \"2.27.4\")."
+  }
+
+  validation {
+    # Same normalized-path length rule as n8n_image_repository, which explains it.
+    condition = var.n8n_task_runner_image_repository == null ? true : length(join("", [
+      can(regex("^(?:(?:docker\\.io|index\\.docker\\.io)/)?[^/]+$", var.n8n_task_runner_image_repository)) ? "library/" : "",
+      can(regex("^(?:localhost|[^/_]*[.:A-Z][^/_]*)/", var.n8n_task_runner_image_repository)) ? regex("(?s)^[^/]+/(.*)$", var.n8n_task_runner_image_repository)[0] : var.n8n_task_runner_image_repository,
+    ])) <= 255
+    error_message = "n8n_task_runner_image_repository's repository path must be 255 characters or fewer, Docker's limit. The path is measured without the registry host, and a single-component Docker Hub name counts its implicit \"library/\" prefix."
   }
 }
 

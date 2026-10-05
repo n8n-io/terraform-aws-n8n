@@ -404,6 +404,17 @@ this project adheres to the stability contract in
 
 ### Fixed
 
+- **`n8n_image_repository` applies Docker's 255-character limit to the
+  repository path, not the whole string.** Docker measures the path after
+  normalizing the reference (`distribution/reference` v0.6.0): the registry
+  host does not count, and a single-component Docker Hub name counts an
+  implicit `library/` prefix. A path of up to 255 characters behind a
+  registry host is now accepted, and a bare name of 248 to 255 characters,
+  which Docker could never pull, is now rejected at plan time. The limit is a
+  validation of its own with its own message, and the reference pattern now
+  lives in `local.image_repository_regex`, shared with
+  `n8n_task_runner_image_repository`. The examples' copies follow the same
+  rule.
 - **`keda_chart_version = null` now resolves to the module default.** The
   root input declares `nullable = false`, matching `modules/controllers`. An
   explicit `null`, for example from a caller's own nullable pass-through

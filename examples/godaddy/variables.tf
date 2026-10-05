@@ -68,8 +68,8 @@ variable "n8n_image_repository" {
   default     = null
 
   validation {
-    # Keep this validation in sync with the module root's variables.tf; the
-    # grammar is duplicated in every example.
+    # Keep this pattern in sync with local.image_repository_regex in the
+    # module root's locals.tf; the grammar is duplicated in every example.
     # Docker's own reference grammar (distribution/reference), repository half
     # only, with every rule read off docker's exit code rather than inferred.
     # splitDockerDomain treats a first component as a registry host when it has
@@ -78,16 +78,25 @@ variable "n8n_image_repository" {
     # Path components must be lowercase but may carry doubled separators
     # (my--repo, my__repo). No label may be empty or end in a hyphen, which
     # rules out a..b, foo-.com, a trailing slash and a doubled slash.
-    condition = var.n8n_image_repository == null ? true : (
-      length(var.n8n_image_repository) <= 255 &&
-      can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_image_repository))
-    )
+    condition     = var.n8n_image_repository == null ? true : can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_image_repository))
     error_message = "n8n_image_repository must be a bare image repository reference that Docker can pull: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n\", \"n8nio/n8n\", \"[2001:db8::1]:5000/n8n\"). No scheme (\"https://\"), no whitespace, no uppercase path components, and no empty label anywhere, which rules out a trailing slash, a doubled slash, and a doubled dot. Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
   }
 
   validation {
     condition     = var.n8n_image_repository == null ? true : !can(regex(":", reverse(split("/", var.n8n_image_repository))[0]))
     error_message = "n8n_image_repository must not include a tag or digest, because the chart appends the tag itself. Pass the version via n8n_image_tag instead."
+  }
+
+  validation {
+    # Docker limits the repository path, after normalization, to 255
+    # characters: the registry host does not count, and a single-component
+    # Docker Hub name counts an implicit "library/" prefix. Keep in sync with
+    # the module root's variables.tf.
+    condition = var.n8n_image_repository == null ? true : length(join("", [
+      can(regex("^(?:(?:docker\\.io|index\\.docker\\.io)/)?[^/]+$", var.n8n_image_repository)) ? "library/" : "",
+      can(regex("^(?:localhost|[^/_]*[.:A-Z][^/_]*)/", var.n8n_image_repository)) ? regex("(?s)^[^/]+/(.*)$", var.n8n_image_repository)[0] : var.n8n_image_repository,
+    ])) <= 255
+    error_message = "n8n_image_repository's repository path must be 255 characters or fewer, Docker's limit. The path is measured without the registry host, and a single-component Docker Hub name counts its implicit \"library/\" prefix."
   }
 }
 
@@ -153,18 +162,27 @@ variable "n8n_task_runner_image_repository" {
   default     = null
 
   validation {
-    # Keep this validation in sync with the module root's variables.tf; the
-    # grammar is duplicated in every example.
-    condition = var.n8n_task_runner_image_repository == null ? true : (
-      length(var.n8n_task_runner_image_repository) <= 255 &&
-      can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_task_runner_image_repository))
-    )
+    # Keep this pattern in sync with local.image_repository_regex in the
+    # module root's locals.tf; the grammar is duplicated in every example.
+    condition     = var.n8n_task_runner_image_repository == null ? true : can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_task_runner_image_repository))
     error_message = "n8n_task_runner_image_repository must be a bare image repository reference that Docker can pull: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n-runners\", \"registry.internal:5000/runners\", \"n8nio/runners\"). No scheme (\"https://\"), no whitespace, no uppercase path components, and no empty label anywhere, which rules out a trailing slash, a doubled slash, and a doubled dot. Set to null to use the chart's default repository."
   }
 
   validation {
     condition     = var.n8n_task_runner_image_repository == null ? true : !can(regex(":", reverse(split("/", var.n8n_task_runner_image_repository))[0]))
     error_message = "n8n_task_runner_image_repository must not include a tag or digest, because the chart appends the tag itself. Pass the version via n8n_task_runner_image_tag instead (e.g. n8n_task_runner_image_repository = \"myregistry.example.com/n8n-runners\", n8n_task_runner_image_tag = \"2.27.4\")."
+  }
+
+  validation {
+    # Docker limits the repository path, after normalization, to 255
+    # characters: the registry host does not count, and a single-component
+    # Docker Hub name counts an implicit "library/" prefix. Keep in sync with
+    # the module root's variables.tf.
+    condition = var.n8n_task_runner_image_repository == null ? true : length(join("", [
+      can(regex("^(?:(?:docker\\.io|index\\.docker\\.io)/)?[^/]+$", var.n8n_task_runner_image_repository)) ? "library/" : "",
+      can(regex("^(?:localhost|[^/_]*[.:A-Z][^/_]*)/", var.n8n_task_runner_image_repository)) ? regex("(?s)^[^/]+/(.*)$", var.n8n_task_runner_image_repository)[0] : var.n8n_task_runner_image_repository,
+    ])) <= 255
+    error_message = "n8n_task_runner_image_repository's repository path must be 255 characters or fewer, Docker's limit. The path is measured without the registry host, and a single-component Docker Hub name counts its implicit \"library/\" prefix."
   }
 }
 
