@@ -6,8 +6,8 @@ footprint: two main pods, two webhook processors, a worker with a task
 runner sidecar, and a `t3.xlarge` node group sized to hold all three at
 their default ceilings. This document describes a cheaper single-main
 profile you can layer on top of `small` (or your own root module) today
-using only existing inputs, and calls out the one piece `examples/small`
-does not currently expose.
+using only existing inputs, and lists which of those inputs
+`examples/small` does not currently forward.
 
 ## What you can set today
 
@@ -36,7 +36,7 @@ this input's own value.
 `examples/small/variables.tf` only forwards `n8n_main_hpa_min_replicas` (and
 the image/deletion-control inputs) to the module; it does not expose
 `node_min`, `node_desired`, `node_max`, `db_instance_class`, `db_multi_az`,
-`db_postgresdb_pool_size`, or the webhook/worker replica floors the way it
+`db_postgresdb_pool_size`, or the webhook/worker replica floors and ceilings the way it
 forwards `n8n_main_hpa_min_replicas` today. Applying this profile against that example therefore means either
 invoking the module directly from your own root module (see `module "n8n"`
 in `examples/small/main.tf` for the wiring `small` already does), or adding
@@ -50,7 +50,13 @@ RDS computes PostgreSQL's default `max_connections` from the selected
 `db_instance_class`'s memory: `LEAST({DBInstanceClassMemory/9531392}, 5000)`
 ([AWS docs: "Quotas and constraints for Amazon RDS", `max_connections`
 row](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Limits.html)).
-`db.t4g.micro` (2 vCPUs, 1 GiB) resolves to around 112 user connections.
+Evaluated against nominal memory, `db.t4g.micro` (2 vCPUs, 1 GiB) resolves
+to around 112 connections. That figure is an estimate, not the live value:
+AWS documents that `DBInstanceClassMemory` is smaller than the nominal GiB
+figure, because memory is reserved for the operating system and RDS
+management processes. One community report observed 81 on a `db.t3.micro`
+running PostgreSQL 14.10. Run `SHOW max_connections` on your instance for
+the live value.
 Each main, worker, and webhook-processor pod can lazily open up to
 `db_postgresdb_pool_size` connections against the same instance
 (`db_postgresdb_pool_size` variable description), so the aggregate ceiling
@@ -62,34 +68,34 @@ db_postgresdb_pool_size * (main replicas + worker replicas + webhook replicas + 
 
 At the single-main sandbox sizes above (1 main + 1 worker + 1 webhook = 3
 pods), `db_postgresdb_pool_size = 3` requests up to 9 connections,
-comfortably under `db.t4g.micro`'s ~112. The module's own shipped defaults
+well below the nominal-memory estimate, but confirm the instance's connection budget before relying on it. The module's own shipped defaults
 (`db_instance_class = db.t3.small`, main/worker/webhook ceilings of 6/10/4,
 `db_postgresdb_pool_size = 10`) request up to 200 connections, before any
 `n8n_worker_pools` are added (see
 [`examples/worker-pools/README.md`](../examples/worker-pools/README.md)'s
-own connection-budget note). db.t3.small's known default `max_connections`
-is 225, of which PostgreSQL's own `superuser_reserved_connections` (default
-3) plus a conservative RDS-side allowance of 2 reserve a flat 5 (see
-`database.tf`'s `db_max_connections_reserved`: that 2 matches
-`rds.rds_superuser_reserved_connections`'s own default on PostgreSQL <= 15, a
-parameter AWS deprecated in RDS for PostgreSQL 16+ in favor of the native
-`reserved_connections`, so the module's own default engine, 18.6, actually
-reserves only 3 by default and the flat 5 is a deliberately conservative
-margin there), leaving 220 usable, so the module's own shipped defaults plan
-clean with 20 connections of headroom.
+own connection-budget note). For db.t3.small, the formula against nominal memory gives 225, and the
+module subtracts a flat 5-connection margin for superuser and RDS-internal
+roles (see `database.tf`'s `db_max_connections_reserved`; the real
+reservation depends on the PostgreSQL version and has not been verified on
+the default engine, 18.6). That gives a heuristic threshold of 220, not a
+verified usable limit. The live formula result can be lower, so the
+20-connection margin at the defaults is not guaranteed: confirm the live
+connection budget (`SHOW max_connections`, reserved connections, and other
+clients) before running near the autoscaler ceilings.
 Raising `n8n_webhook_hpa_max_replicas` back toward its old default of `8`
 (or raising `n8n_main_hpa_max_replicas` or `n8n_worker_keda_max_replicas`)
 without also raising `db_instance_class` or lowering
-`db_postgresdb_pool_size` can exceed that 220-connection budget again; see
+`db_postgresdb_pool_size` can push demand past that threshold; see
 `n8n_webhook_hpa_max_replicas`'s own description for the tradeoff.
 Picking any class in the curated table and raising an autoscaler ceiling
-(or lowering `db_instance_class`) past what it allows is exactly what
+(or lowering `db_instance_class`) past its threshold is what
 `check.db_postgresdb_pool_size_fits_known_max_connections`
-(`database.tf`) catches at plan time; it stays silent for instance
+(`database.tf`) warns about at plan time. Because the threshold is a
+heuristic, a silent check does not prove the ceilings fit. It also stays silent for instance
 classes outside that table and for `create_database = false`, and it is
-advisory only (it does not fail the plan or apply). Raising
-`db_instance_class`, lowering `db_postgresdb_pool_size`, or lowering an
-autoscaler ceiling all shrink the same number; see the check's own comment
+advisory only (it does not fail the plan or apply). A larger-memory class
+raises the estimated capacity up to the formula's cap, while a lower
+`db_postgresdb_pool_size` or autoscaler ceiling reduces modeled demand; see the check's own comment
 in `database.tf` for the full curated table and the reserved-connections
 subtraction.
 

@@ -3661,14 +3661,12 @@ run "clean_external_db_config_is_quiet" {
 # -- db_postgresdb_pool_size vs. known max_connections ----------------------
 #
 # db.t3.small (the module's own shipped db_instance_class default) is in the
-# curated table (database.tf): its true AWS-documented default max_connections
-# is 225, of which 5 are reserved (PostgreSQL's own
-# superuser_reserved_connections, default 3, plus a conservative 2-connection
-# RDS-side allowance; see database.tf's db_max_connections_reserved for why
-# that 5 is a flat, deliberately conservative margin rather than a per-engine
-# figure), leaving 220 usable. The module's own default main/worker/webhook
+# curated table (database.tf) at 225, the RDS max_connections formula
+# evaluated against nominal memory. That is a heuristic, not a measured
+# value (see database.tf). The module subtracts a flat 5-connection margin
+# (db_max_connections_reserved), giving a modeled threshold of 220. The module's own default main/worker/webhook
 # ceilings (6 + 10 + 4 = 20 pods) x the default db_postgresdb_pool_size of 10
-# request 200 connections, 20 under that budget, so the module default config
+# request 200 connections, under that threshold, so the module default config
 # plans clean with no expect_failures, exactly like every other advisory
 # check at module defaults (see "autoscaling_defaults_fit_the_default_node_group"
 # above).
@@ -3691,7 +3689,7 @@ run "db_postgresdb_pool_size_fits_known_max_connections_is_silent_at_module_defa
 
 # Raising the webhook ceiling back to its old default of 8 (main and worker
 # left alone) pushes the same arithmetic to 240, over db.t3.small's
-# 220-connection usable budget, and must warn.
+# 220-connection modeled threshold, and must warn.
 run "connection_budget_warns_when_webhook_ceiling_is_raised_back_to_its_old_default" {
   command = plan
 
@@ -3726,8 +3724,8 @@ run "connection_budget_warns_inside_the_reserved_connections_margin" {
     error_message = "Main 6 + worker 10 + webhook 9 = 25 pods x pool_size 9 must be 225, got ${local.n8n_pg_peak_connections}."
   }
 
-  # 225 equals db.t3.small's known max_connections but exceeds the 220 usable
-  # once the 5 reserved connections are subtracted, so this must warn.
+  # 225 equals db.t3.small's table value but exceeds the 220 modeled threshold
+  # once the 5-connection margin is subtracted, so this must warn.
   expect_failures = [check.db_postgresdb_pool_size_fits_known_max_connections]
 }
 
@@ -3769,7 +3767,8 @@ run "connection_budget_warns_when_pool_size_is_raised" {
 # n8n_worker_pools ceilings must count toward the same budget. node_max is
 # raised so the unrelated node-capacity check has room, and the chart is
 # attested so the worker-pools chart precondition does not abort the plan.
-# On the default db.t3.small the defaults alone fit (200 of 220 usable), so
+# On the default db.t3.small the defaults alone stay under the modeled
+# threshold (200 of 220), so
 # the warning here can only come from the pools' 7 extra pods: a regression
 # that stopped counting pool maxima would leave the check quiet and fail this
 # run with a missing expected failure.
@@ -9925,7 +9924,7 @@ run "autoscaling_defaults_fit_the_default_node_group" {
   # defaults that make it hold.
   assert {
     condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].max_replicas == 4
-    error_message = "The webhook HPA ceiling must default to 4, which fits both the default node group and the default db.t3.small connection budget"
+    error_message = "The webhook HPA ceiling must default to 4, which fits the default node group and stays under the default db.t3.small connection threshold"
   }
 
   assert {
@@ -9941,8 +9940,8 @@ run "autoscaling_defaults_fit_the_default_node_group" {
 
 # The old ceiling of 20 mains remains oversized even without main runners:
 # 20,000m plus worker and webhook ceilings exceeds the node group's budget.
-# It also pushes the connection-budget arithmetic over db.t3.small's usable
-# budget (10 x (20 + 10 + 4) = 340 > 220), so both checks warn.
+# It also pushes the connection-budget arithmetic over db.t3.small's modeled
+# threshold (10 x (20 + 10 + 4) = 340 > 220), so both checks warn.
 run "pre_fix_main_hpa_maximum_warns" {
   command = plan
 
@@ -10037,7 +10036,7 @@ run "main_maximum_of_thirteen_warns_with_task_runners_enabled" {
     error_message = "Thirteen mains with worker runners and the old webhook default of 8 must request 22400m."
   }
 
-  # Also exceeds db.t3.small's usable connection budget: 10 x (13 + 10 + 8) = 310.
+  # Also exceeds db.t3.small's modeled connection threshold: 10 x (13 + 10 + 8) = 310.
   expect_failures = [
     check.autoscaling_maxima_fit_node_group_capacity,
     check.db_postgresdb_pool_size_fits_known_max_connections,
@@ -10187,7 +10186,7 @@ run "a_larger_instance_type_admits_higher_maxima" {
 # ...and the ladder has to be read, not assumed. 4 × m6i.2xlarge is 8 vCPU × 4,
 # which the same maxima do not fit into, so this run proves the size suffix is
 # actually parsed rather than treated as a constant. The same maxima (10 x
-# (20 + 10 + 20) = 500) also exceed db.t3.small's usable connection budget.
+# (20 + 10 + 20) = 500) also exceed db.t3.small's modeled connection threshold.
 run "the_instance_size_ladder_is_read_not_assumed" {
   command = plan
 
@@ -10246,7 +10245,7 @@ run "unparseable_cpu_request_is_rejected_rather_than_silencing_the_capacity_chec
     n8n_main_hpa_max_replicas = 200
   }
 
-  # 200 mains also exceeds db.t3.small's usable connection budget
+  # 200 mains also exceeds db.t3.small's modeled connection threshold
   # (10 x (200 + 10 + 4) = 2140), independent of the cpu_request grammar.
   expect_failures = [
     var.n8n_main_cpu_request,
@@ -10373,7 +10372,7 @@ run "webhook_floor_above_its_ceiling_fails_validation" {
     n8n_webhook_hpa_max_replicas = 8
   }
 
-  # webhook max 8 also exceeds db.t3.small's usable connection budget
+  # webhook max 8 also exceeds db.t3.small's modeled connection threshold
   # (10 x (6 + 10 + 8) = 240), independent of the floor/ceiling validation.
   expect_failures = [
     var.n8n_webhook_hpa_min_replicas,

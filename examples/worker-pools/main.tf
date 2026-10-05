@@ -170,11 +170,14 @@ module "n8n" {
   # The second place this example departs from examples/small, for the same
   # reason. Every pool pod is another n8n process with its own
   # db_postgresdb_pool_size (10) connections, so the three pools' 10 extra pods
-  # take the peak from small's 200 connections to 300, past db.t3.small's ~220
-  # usable (225 max_connections less 5 reserved superuser slots). db.t3.medium
-  # (~450) holds it with room to spare. The module warns at plan time when this
-  # falls out of step; see check "db_postgresdb_pool_size_fits_known_max_connections"
-  # in database.tf.
+  # take the peak from small's 200 connections to 300. That is past the
+  # module's heuristic threshold for db.t3.small (220: the RDS formula against
+  # nominal memory gives 225, less a flat 5-connection margin). db.t3.medium's
+  # threshold is about 445. Neither is a verified limit, because RDS reserves
+  # memory for the OS and its own processes, so confirm the live connection
+  # budget. The module warns at plan time when the ceilings exceed the
+  # threshold; see check
+  # "db_postgresdb_pool_size_fits_known_max_connections" in database.tf.
   db_instance_class = "db.t3.medium"
 
   # ── Worker pools ────────────────────────────────────────────────────────────
