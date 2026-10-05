@@ -1794,14 +1794,16 @@ Three things to know about the inputs:
 - **`n8n_task_runner_image_tag` is usually required alongside a custom tag.**
   Task runners are enabled by default (`n8n_task_runners_enabled = true`) and
   the sidecar image is `n8nio/runners`, tagged from `image.tag` unless
-  overridden. Only skip the override when your tag happens to be a published
-  n8n version. A plan-time warning fires when it looks like you forgot.
+  overridden. With the default runner repository, only skip the override
+  when your tag happens to be a published n8n version. A plan-time warning
+  fires when it looks like you forgot.
   `n8n_task_runner_image_repository` separately overrides the sidecar's
   repository, for mirroring that image on its own. Leaving
   `n8n_task_runner_image_tag` null still falls back to this same image tag
   (or the chart's default, with no custom application image either), which
-  may not exist in the runner mirror; a plan-time warning fires in that case
-  too.
+  may not exist in the runner mirror even when it is a published n8n
+  version, so set the runner tag explicitly. A separate plan-time warning
+  fires in that case, in place of the first one.
 - **Pull access comes from the node group by default.** With
   `n8n_image_pull_secrets` empty, the image has to be pullable by the node
   group's IAM role, which covers a public registry and any ECR repository in

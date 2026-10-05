@@ -8551,6 +8551,19 @@ run "custom_task_runner_repository_without_tag_warns" {
   expect_failures = [check.custom_task_runner_repository_needs_an_explicit_tag]
 }
 
+# Both repositories custom, a non-version app tag, and no runner tag. The
+# sidecar pulls from the custom runner repository, not n8nio/runners, so only
+# the repository-aware check may fire. The older public-repository check
+# would name the wrong image here; the run fails if it fires too.
+run "custom_image_and_runner_repository_without_runner_tag_warns_once" {
+  command = plan
+
+  variables {
+    n8n_image_repository             = "myregistry.example.com/n8n"
+    n8n_image_tag                    = "2.27.4-mypackages"
+    n8n_task_runner_image_repository = "myregistry.example.com/runners"
+  }
+
 # Disabling task runners also disables the pull-secret justification a lone
 # runner-repository override provided: the sidecar never deploys, so the
 # mirror is never pulled from and the secrets go unused.

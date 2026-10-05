@@ -1737,14 +1737,20 @@ check "custom_image_repository_needs_an_explicit_tag" {
   }
 }
 
+# Only covers the public runner repository. With n8n_task_runner_image_repository
+# set, the sidecar no longer pulls n8nio/runners, so this message would name the
+# wrong image; custom_task_runner_repository_needs_an_explicit_tag covers that
+# case instead, and the two never fire together.
 check "custom_image_tag_needs_a_task_runner_tag" {
   assert {
     condition = var.n8n_image_repository != null ? (
       var.n8n_task_runners_enabled ? (
-        var.n8n_image_tag == null || var.n8n_task_runner_image_tag != null
+        var.n8n_task_runner_image_repository == null ? (
+          var.n8n_image_tag == null || var.n8n_task_runner_image_tag != null
+        ) : true
       ) : true
     ) : true
-    error_message = "A custom n8n image (n8n_image_repository + n8n_image_tag) is set with task runners enabled, but n8n_task_runner_image_tag is null. The chart tags the runner sidecar from the app image, so the sidecar resolves to n8nio/runners:<n8n_image_tag> and every pod carrying a runner sidecar (workers only in upstream chart 1.14.0 queue mode) fails with ImagePullBackOff unless that exact tag exists upstream, which fails the apply rather than completing with broken pods. Set n8n_task_runner_image_tag to the n8n version the custom image is built from. Ignore this warning if the custom image's tag is itself a published n8n version."
+    error_message = "A custom n8n image (n8n_image_repository + n8n_image_tag) is set with task runners enabled and the default runner repository, but n8n_task_runner_image_tag is null. The chart tags the runner sidecar from the app image, so the sidecar resolves to n8nio/runners:<n8n_image_tag> and every pod carrying a runner sidecar (workers only in upstream chart 1.14.0 queue mode) fails with ImagePullBackOff unless that exact tag exists upstream, which fails the apply rather than completing with broken pods. Set n8n_task_runner_image_tag to the n8n version the custom image is built from. Ignore this warning if the custom image's tag is itself a published n8n version."
   }
 }
 

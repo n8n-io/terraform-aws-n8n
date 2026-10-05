@@ -206,7 +206,9 @@ this project adheres to the stability contract in
   repository with no corresponding `n8n_task_runner_image_tag` now warns too
   (`check.custom_task_runner_repository_needs_an_explicit_tag`), since the
   tag then falls back to `n8n_image_tag` or the chart's default, either of
-  which may not exist in a private mirror.
+  which may not exist in a private mirror. In that case it replaces
+  `check.custom_image_tag_needs_a_task_runner_tag`, which now only covers the
+  default `n8nio/runners` repository, so the two never fire together.
   `check.image_pull_secrets_need_a_custom_image` no longer warns on
   `n8n_image_pull_secrets` when only this repository, not
   `n8n_image_repository`, is set and task runners are enabled. All eleven
