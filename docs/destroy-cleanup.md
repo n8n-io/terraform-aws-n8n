@@ -11,6 +11,11 @@ terraform output -raw n8n_encryption_key   # Save to a password manager
 terraform output -raw db_password           # Save to a password manager
 ```
 
+With `db_password_write_only = true`, the `db_password` output is `null`.
+Terraform does not store null outputs, so `terraform output -raw db_password`
+reports that the output is not found. Back up the RDS password from the
+source that feeds `db_password_wo` instead.
+
 Set shell variables used throughout this guide:
 
 ```bash

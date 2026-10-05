@@ -57,7 +57,7 @@ Set exactly one of:
 ### Secrets
 
 - `n8n_license_key`: pass as a Terraform variable (e.g. from a secrets manager or `TF_VAR_n8n_license_key`), never hardcoded in `.tfvars` committed to version control.
-- The module generates `n8n_encryption_key` and (when `create_database = true`) the RDS `db_password`, and returns both as sensitive outputs. **Back these up immediately after the first apply**: there is no re-issue path, and losing the encryption key makes existing credentials/workflow secrets unrecoverable. See [Out of scope](#out-of-scope) and [`docs/build-time-decisions.md`](docs/build-time-decisions.md) for other settings that are fixed once the first `terraform apply` runs.
+- The module generates `n8n_encryption_key` and (when `create_database = true`) the RDS `db_password`, and returns both as sensitive outputs. With `db_password_write_only = true` the module generates no RDS password and the `db_password` output is `null`: back up the password from the source that feeds `db_password_wo` instead. **Back these up immediately after the first apply**: there is no re-issue path, and losing the encryption key makes existing credentials/workflow secrets unrecoverable. See [Out of scope](#out-of-scope) and [`docs/build-time-decisions.md`](docs/build-time-decisions.md) for other settings that are fixed once the first `terraform apply` runs.
 
 ### Compute
 
@@ -291,7 +291,7 @@ once, at creation, and cannot be changed in place afterward.
 | EBS CSI driver | `create_ebs_csi` | none: assumes the existing cluster already runs its own |
 | Cluster controllers (LBC, Cluster Autoscaler, metrics-server, KEDA) | `install_lbc` / `install_cluster_autoscaler` / `install_metrics_server` / `install_keda` | none: assumes the existing cluster already runs equivalents |
 | Pod Identity agent | automatic with `create_eks` | none: the module skips managing the addon itself when `create_eks = false` and assumes it's already installed on the existing cluster |
-| External worker fleet | outputs only | `redis_endpoint`, `redis_auth_token`, `rds_endpoint`, `db_password`, `s3_bucket_name`, `n8n_encryption_key` |
+| External worker fleet | outputs only | `redis_endpoint`, `redis_auth_token`, `rds_endpoint`, `db_password` (`null` with `db_password_write_only = true`), `s3_bucket_name`, `n8n_encryption_key` |
 
 A few things worth knowing before combining these:
 
@@ -1474,7 +1474,8 @@ upstream connection to Aurora at all.
 ## Switching to the write-only RDS password
 
 Setting `db_password_write_only = true` from the **first apply** of a new
-deployment is safe and exercised by `tests/defaults.tftest.hcl`. Flipping it
+deployment is safe; `tests/defaults.tftest.hcl` covers the module wiring at
+plan time, not the provider's behavior against a live instance. Flipping it
 on an **existing** instance that is still running on `random_password.db_password`
 runs into an open AWS provider bug, which this module cannot guard against at
 plan time: follow the migration recipe below rather than flipping it directly.
@@ -1560,10 +1561,33 @@ not send.
    `kubectl -n <namespace> rollout restart deployment/n8n-main deployment/n8n-worker deployment/n8n-webhook-processor`
    (plus any `n8n-worker-<pool>` deployments from `n8n_worker_pools`). Until
    they restart, new database connections fail, so do this in a maintenance
-   window and confirm n8n reconnects. If it does not, the live credential is
-   the source of truth: reset it with
-   `aws rds modify-db-instance --db-instance-identifier n8n-postgres-<cluster_name> --master-user-password '<value>' --apply-immediately`
-   to match the Secret, and restart the deployments again.
+   window and confirm n8n reconnects. If it does not, reset the live
+   credential to the value in the Secret, then restart the deployments again.
+   The commands below read the password straight from the Secret into a
+   request file only you can read, so it never appears in your shell history
+   or in the `aws` process arguments (the AWS CLI reads `file://` input more
+   than once, so a pipe or process substitution does not work here). The
+   subshell stops before calling AWS if the Secret or its key is missing or
+   empty, and removes the request file on every exit path:
+
+   ```bash
+   (
+     set -euo pipefail
+     umask 077
+     REQ=$(mktemp)
+     trap 'rm -f "$REQ"' EXIT
+     kubectl -n <namespace> get secret <secret-name> -o json \
+       | jq -e --arg key '<key>' --arg id 'n8n-postgres-<cluster_name>' '
+           (.data[$key] // "" | @base64d) as $pw
+           | if ($pw | length) == 0 then error("Secret key missing or empty")
+             else {DBInstanceIdentifier: $id, MasterUserPassword: $pw} end' > "$REQ"
+     aws rds modify-db-instance --cli-input-json "file://$REQ"
+   )
+   ```
+
+   Leave out `--apply-immediately`: RDS applies a master password change as
+   soon as possible either way, and the flag would also apply every other
+   pending modification, such as a queued instance class change.
 
 This module has no way to detect "existing instance, migrating from `password`
 to `password_wo`" at plan time: the condition depends on what is already

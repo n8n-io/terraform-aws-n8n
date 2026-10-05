@@ -530,10 +530,11 @@ resource "aws_db_instance" "n8n" {
 
   # Restore from an existing snapshot instead of creating an empty database.
   # Null (the default) creates an empty one exactly as before. ForceNew, so this
-  # is for standing a stack up, not for reloading a live one. The generated
-  # password above still lands: the provider issues a ModifyDBInstance right
-  # after the restore, because RestoreDBInstanceFromDBSnapshot takes no password
-  # parameter. Encryption, by contrast, comes from the snapshot and cannot be set
+  # is for standing a stack up, not for reloading a live one. The password
+  # above still lands, whether it is the generated one or db_password_wo: the
+  # provider issues a ModifyDBInstance right after the restore, because
+  # RestoreDBInstanceFromDBSnapshot takes no password parameter, and it sends
+  # password_wo on that call too. Encryption, by contrast, comes from the snapshot and cannot be set
   # while restoring, which is what the db_snapshot_* checks below are about.
   snapshot_identifier = var.db_snapshot_identifier
 

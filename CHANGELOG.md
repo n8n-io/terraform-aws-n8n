@@ -146,7 +146,22 @@ this project adheres to the stability contract in
   instead of flipping it directly, because of an open AWS provider bug
   (hashicorp/terraform-provider-aws#42582; fix proposed in provider PR #47904
   but not yet merged). It did not reproduce in a live test on the locked
-  provider (6.65.0), and the recipe is correct either way.
+  provider (6.65.0), and the recipe is correct either way. `db_password_wo`
+  is validated against the RDS for PostgreSQL master password rules (8 to 128
+  printable ASCII characters, no `/`, `"`, `@` or space), and an empty value is
+  rejected: the provider silently skips an empty write-only password on
+  update, which would turn a rotation into a no-op.
+
+  **Upgrade note (resource address):** `random_password.db_password` gains a
+  `count`, so its address becomes `random_password.db_password[0]`.
+  `refactoring.tf` carries the `moved` block, so with
+  `db_password_write_only` left at `false` the move itself changes nothing:
+  the generated password, the RDS instance and `kubernetes_secret.n8n_db`
+  keep their values, and no action is needed. Other changes in the same
+  upgrade, or drift, can still show up in that plan. A script that targets the old address (for example
+  `-replace=module.n8n.random_password.db_password`) must add the `[0]`.
+  Under [Stability & versioning](./README.md#stability--versioning) a
+  changed resource address is a minor-version boundary, not a patch.
 
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
