@@ -33,11 +33,11 @@ this input's own value.
 
 ### Not yet a passthrough on `examples/small`
 
-`examples/small/variables.tf` only forwards `n8n_main_hpa_min_replicas` (and
-the image/deletion-control inputs) to the module; it does not expose
-`node_min`, `node_desired`, `node_max`, `db_instance_class`, `db_multi_az`,
-`db_postgresdb_pool_size`, or the webhook/worker replica floors and ceilings the way it
-forwards `n8n_main_hpa_min_replicas` today. Applying this profile against that example therefore means either
+Of the inputs in the table above, `examples/small/variables.tf` forwards only
+`n8n_main_hpa_min_replicas` to the module. It does not expose `node_min`,
+`node_desired`, `node_max`, `db_instance_class`, `db_multi_az`,
+`db_postgresdb_pool_size`, or the webhook/worker replica floors and
+ceilings. Applying this profile against that example therefore means either
 invoking the module directly from your own root module (see `module "n8n"`
 in `examples/small/main.tf` for the wiring `small` already does), or adding
 the missing passthroughs to a copy of `examples/small` yourself, following

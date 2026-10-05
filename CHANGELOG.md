@@ -20,8 +20,9 @@ this project adheres to the stability contract in
   system and its own processes, and the actual reservation varies by engine
   version. The threshold is therefore not a verified usable limit, and
   silence does not prove the ceilings fit. Confirm the live connection
-  budget (`SHOW max_connections`, reserved connections, and other clients). The check covers a small curated
-  table of Burstable, General Purpose, and Memory Optimized classes,
+  budget (`SHOW max_connections`, reserved connections, and other
+  clients). The check covers a small curated table of Burstable, General
+  Purpose, and Memory Optimized classes,
   including `db.t3.small` (the module's own shipped `db_instance_class`
   default), and stays silent for classes outside that table and for
   `create_database = false`. This is now documented in the new
@@ -347,8 +348,8 @@ this project adheres to the stability contract in
   offer: main (6) + worker (10) + webhook (8) = 24 pods ×
   `db_postgresdb_pool_size` (10) requested 240 connections, above the
   heuristic threshold of 220 for `db.t3.small` (225 from the RDS formula
-  evaluated against nominal memory, minus a flat 5-connection margin). At the new default the same arithmetic requests 200
-  connections, so the new
+  evaluated against nominal memory, minus a flat 5-connection margin). At
+  the new default the same arithmetic requests 200 connections, so the new
   `check.db_postgresdb_pool_size_fits_known_max_connections` (see **Added**
   above) stays silent at the module defaults. That 220 is an estimate, not
   a verified limit, so confirm the live connection budget before relying on
