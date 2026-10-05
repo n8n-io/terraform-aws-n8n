@@ -177,20 +177,20 @@ this project adheres to the stability contract in
 - **`db_max_allocated_storage`** (number, default `null`) enables RDS
   Storage Autoscaling on the managed PostgreSQL instance, mapped to
   `max_allocated_storage` on `aws_db_instance.n8n`. `null` (the default)
-  leaves it unset, so allocated storage stays fixed at `db_allocated_storage`
-  exactly as before. When set, AWS grows `allocated_storage` automatically
-  as free space runs low, up to this ceiling. Must be a whole number of GB
+  leaves it unset, so autoscaling stays off and existing deployments see no
+  plan change. When set, AWS grows `allocated_storage` automatically
+  as free space runs low, up to this ceiling. Must be a whole number of GiB
   at least 10% greater than `db_allocated_storage` (AWS's own floor for the
   ceiling; anything less fails at apply with "Invalid max storage size")
-  and at most 65536 GB (RDS PostgreSQL's 64 TiB ceiling). Unlike the Azure
-  sibling module's storage-autogrow input, this needs no drift-guard
-  workaround: the AWS provider documents that it automatically hides the
-  resulting `allocated_storage` drift from the next plan once
+  and at most 65536 GiB (RDS PostgreSQL's 64 TiB ceiling). The AWS provider
+  hides the resulting `allocated_storage` drift from the next plan once
   `max_allocated_storage` is configured, so no `lifecycle.ignore_changes`
-  (conditional or otherwise) is required while autoscaling stays on.
-  Disabling it later by setting this input back to `null` ends that
-  suppression, so raise `db_allocated_storage` to the live size first or the
-  next plan proposes shrinking it back down. Set to `400` in the `medium`
+  is required while autoscaling stays on. Setting this input back to `null`
+  ends that suppression: in the same apply, raise `db_allocated_storage` to
+  the live size, or the plan proposes shrinking storage, which AWS rejects.
+  Raising `db_allocated_storage` first, on its own, can fail the 10%
+  validation. The validations are written so they also work on Terraform
+  1.11, which does not short-circuit `||`. Set to `400` in the `medium`
   example. Triggers a non-blocking check warning when
   `create_database = false`, alongside the other managed-instance sizing
   inputs.

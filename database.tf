@@ -457,11 +457,8 @@ resource "aws_db_instance" "n8n" {
   # and AWS never grows storage on its own. When set, AWS grows
   # allocated_storage up to this ceiling as free space runs low, and the AWS
   # provider automatically hides the resulting allocated_storage drift from
-  # the next plan: unlike the Azure sibling module's storage-autogrow input,
-  # there is no manual lifecycle.ignore_changes to write (nor would a
-  # conditional one be possible), and no drift-guard data source is needed
-  # here. See the variable description for the provider's documented
-  # behavior and the cross-cloud contrast.
+  # the next plan, so no lifecycle.ignore_changes is needed. See the variable
+  # description for how to turn autoscaling off after storage has grown.
   max_allocated_storage = var.db_max_allocated_storage
 
   db_name  = "n8n_enterprise"

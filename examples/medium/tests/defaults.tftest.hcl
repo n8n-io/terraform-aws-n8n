@@ -156,3 +156,13 @@ run "deletion_controls_pass_through_to_module" {
     error_message = "s3_force_destroy must pass from the example to the module"
   }
 }
+
+# db_max_allocated_storage = 400 is set as a literal in main.tf, not passed
+# through an example variable, and the module has no output that exposes it.
+# An example test can only read module outputs, so it cannot assert the value
+# here, and adding a public output only for this test is not worth it. The
+# wiring to aws_db_instance.n8n.max_allocated_storage and both validations are
+# covered in the root suite: see custom_database_sizing and the
+# db_max_allocated_storage_* runs in tests/defaults.tftest.hcl. Confirm the
+# live value with `aws rds describe-db-instances` (MaxAllocatedStorage) after
+# an apply.

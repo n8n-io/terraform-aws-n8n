@@ -21,7 +21,7 @@ Route 53 (alias A-record)
 | Node type | m6i.2xlarge (8 vCPU, 32 GB) | ~3× the starter; 5 nodes = 40 vCPU cluster headroom |
 | Node count | desired=5, min=5, max=15 | Warm floor prevents cold-start delays on traffic spikes |
 | DB class | db.m6g.2xlarge | Memory-optimized; keeps execution_entity working set in shared_buffers |
-| DB storage | 200 GB gp3 | 3,000 baseline IOPS (vs gp2 burst); no IOPS ceiling at this throughput |
+| DB storage | 200 GiB gp3, autoscaling to 400 GiB | 3,000 baseline IOPS (vs gp2 burst); no IOPS ceiling at this throughput. Storage Autoscaling (`db_max_allocated_storage = 400`) grows storage as free space runs low |
 | Redis | cache.r6g.large | ~4× the memory of cache.t3.medium; comfortable headroom at 175 req/s |
 | Main pods | min=3, max=24 | Mains serve the editor and REST API only, not webhooks or manual executions, so the ceiling tracks concurrent users rather than executions/day; 4× the module default, matching how the worker ceiling scales. Floor of 3 keeps two serving the editor through a node drain |
 | Webhook pods | min=5, max=50 | Floor of 5 is warm; 50 ceiling raises both the floor and the ceiling over the module default of 2/8 |
