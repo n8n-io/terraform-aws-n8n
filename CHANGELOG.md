@@ -12,20 +12,18 @@ this project adheres to the stability contract in
 - A plan-time advisory `check.db_postgresdb_pool_size_fits_known_max_connections`
   (`database.tf`) warns when `db_postgresdb_pool_size` times the modeled main,
   worker, webhook-processor, and `n8n_worker_pools` replica ceilings would
-  exceed a heuristic connection threshold for the selected
-  `db_instance_class`. The threshold evaluates the RDS default
-  `LEAST({DBInstanceClassMemory/9531392}, 5000)` against the class's nominal
-  memory and subtracts a flat 5-connection margin. The live formula result
-  can be lower, because RDS reserves part of the memory for the operating
-  system and its own processes, and the actual reservation varies by engine
-  version. The threshold is therefore not a verified usable limit, and
-  silence does not prove the ceilings fit. Confirm the live connection
-  budget (`SHOW max_connections`, reserved connections, and other
-  clients). The check covers a small curated table of Burstable, General
-  Purpose, and Memory Optimized classes,
-  including `db.t3.small` (the module's own shipped `db_instance_class`
-  default), and stays silent for classes outside that table and for
-  `create_database = false`. This is now documented in the new
+  exceed the connections n8n can use on the selected `db_instance_class`:
+  `max_connections` from a curated table, minus the 7 slots PostgreSQL 18.6
+  on RDS reserves for superusers (`superuser_reserved_connections`, 3) and
+  RDS's internal role (`rds.rds_reserved_connections`, 4). The `db.t3.small`
+  entry is measured on a live instance (191; RDS's formula against nominal
+  memory would give 225). The other entries evaluate
+  `LEAST({DBInstanceClassMemory/9531392}, 5000)` against nominal memory and
+  are not measured, so the live value can be lower and silence does not
+  prove the ceilings fit; confirm the live connection budget
+  (`SHOW max_connections`, reserved connections, and other clients). The
+  check stays silent for classes outside the table and for
+  `create_database = false`. This is documented in the new
   [`docs/sandbox.md`](./docs/sandbox.md), alongside a cheaper single-main
   sandbox profile built from existing inputs.
 - `docs/shared-responsibility.md`: a single table summarizing what the
@@ -343,23 +341,23 @@ this project adheres to the stability contract in
   - n8n-io/n8n-hosting#209: chart validation reports every failure in one
     render.
   - See `docs/upgrading-n8n.md#moving-from-chart-1130-to-1140`.
-- **`n8n_webhook_hpa_max_replicas` default drops from `8` to `4`.** The
-  previous default asked for more connections than the default database can
-  offer: main (6) + worker (10) + webhook (8) = 24 pods ×
-  `db_postgresdb_pool_size` (10) requested 240 connections, above the
-  heuristic threshold of 220 for `db.t3.small` (225 from the RDS formula
-  evaluated against nominal memory, minus a flat 5-connection margin). At
-  the new default the same arithmetic requests 200 connections, so the new
+- **`n8n_webhook_hpa_max_replicas` default drops from `8` to `4`, and
+  `db_postgresdb_pool_size` default drops from `10` to `9`.** The previous
+  defaults asked for more connections than the default database can offer.
+  A live `db.t3.small` running PostgreSQL 18.6 reports `max_connections` of
+  191, of which 184 are usable by n8n once the superuser and RDS-internal
+  reserves are subtracted. Main (6) + worker (10) + webhook (8) = 24 pods ×
+  pool size 10 requested 240 connections. At the new defaults, 20 pods ×
+  pool size 9 request 180, so the new
   `check.db_postgresdb_pool_size_fits_known_max_connections` (see **Added**
-  above) stays silent at the module defaults. That 220 is an estimate, not
-  a verified limit, so confirm the live connection budget before relying on
-  the margin.
+  above) stays silent at the module defaults. The margin is small (4
+  connections) and assumes every pod fills its pool at once.
   Upgrade notes:
-  - An explicit `n8n_webhook_hpa_max_replicas` is untouched. A caller
-    relying on the default gets an HPA maximum of 4 instead of 8 on the next
-    apply. Set `n8n_webhook_hpa_max_replicas = 8` explicitly to keep the old
-    ceiling, and raise `db_instance_class` or lower
-    `db_postgresdb_pool_size` to keep the database sized for it.
+  - An explicit `n8n_webhook_hpa_max_replicas` or
+    `db_postgresdb_pool_size` is untouched. To keep the old values, set
+    `n8n_webhook_hpa_max_replicas = 8` and `db_postgresdb_pool_size = 10`
+    explicitly, and raise `db_instance_class` to keep the database sized
+    for them; the check warns otherwise.
   - **A caller who sets `n8n_webhook_hpa_min_replicas` above 4 without
     setting `n8n_webhook_hpa_max_replicas` now fails at plan** with
     "n8n_webhook_hpa_min_replicas must not exceed
@@ -369,11 +367,14 @@ this project adheres to the stability contract in
     this upgrade lowers `maxReplicas` to 4, and the HPA controller can then
     reduce existing replicas above 4. Set an explicit maximum before
     upgrading to keep that capacity.
+  - If you rely on the default pool size, the next apply changes
+    `DB_POSTGRESDB_POOL_SIZE` from 10 to 9, so every n8n pod (main, worker,
+    webhook processor) restarts once.
   - `examples/worker-pools` now sets `db_instance_class = "db.t3.medium"`:
-    its three pools add 10 pods, taking its peak to about 300 connections,
-    above the `db.t3.small` threshold. For an existing deployment of that
-    example, the next apply requests an in-place instance class change. With
-    the default `db_apply_immediately = false`, AWS schedules it for the next
+    its three pools add 10 pods, taking its peak to 270 connections, above
+    the `db.t3.small` budget. For an existing deployment of that example,
+    the next apply requests an in-place instance class change. With the
+    default `db_apply_immediately = false`, AWS schedules it for the next
     maintenance window; the resize interrupts database availability.
 - Default n8n chart `1.12.0` to `1.13.0`. `n8n_image_tag = null` still uses
   the selected chart's default, which moves from `appVersion: 2.39.6` to

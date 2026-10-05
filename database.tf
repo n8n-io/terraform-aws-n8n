@@ -983,18 +983,23 @@ check "db_postgresdb_ssl_ca_pem_requires_verification" {
 # following the node_vcpus_derived / n8n_capacity_model_readable pattern in
 # scaling.tf.
 #
-# Values are the formula evaluated against each class's NOMINAL memory (for
-# example 2 GiB / 9531392 = 225 for db.t3.small). They are a heuristic, not
-# the live default. AWS documents that DBInstanceClassMemory is smaller than
-# the nominal GiB figure because memory is reserved for the operating system
-# and RDS management processes (same CHAP_Limits page), so the live formula
-# result can be lower than the table; classes large enough to hit the
-# 5000 cap can still reach it. One community report observed
-# max_connections = 81 on a db.t3.micro running PostgreSQL 14.10, against 112
-# in this table. These entries have not been validated against live
-# instances running the module's default engine. A warning means the
-# ceilings exceed this heuristic threshold; silence does NOT prove the
-# ceilings fit.
+# db.t3.small, the module's default class, holds a MEASURED value: SHOW
+# max_connections returned 191 on a live db.t3.small running PostgreSQL 18.6
+# with the default.postgres18 parameter group (live test of PR #169). Every
+# other entry is the formula evaluated against the class's NOMINAL memory
+# (for example 2 GiB / 9531392 = 225), so it is a heuristic, not the live
+# default. AWS documents that DBInstanceClassMemory is smaller than the
+# nominal GiB figure because memory is reserved for the operating system and
+# RDS management processes (same CHAP_Limits page). On db.t3.small the live
+# value was 191 against a nominal 225, about 85%. That ratio is not applied to
+# the other entries: the reserved memory is not proportional to instance
+# size and has not been measured elsewhere, and classes large enough to hit
+# the 5000 cap can still reach it. db.t4g.small has the same nominal memory
+# as db.t3.small but was not measured, so it keeps the nominal figure. For
+# the nominal entries, a warning means the ceilings exceed an optimistic
+# threshold, and silence does NOT prove the ceilings fit. Replace an entry
+# with a measured value only when it was measured on the module's default
+# engine and default parameter group.
 #
 # The table assumes no custom parameter group override. The module's own
 # optional parameter group (aws_db_parameter_group.n8n above, gated on
@@ -1004,9 +1009,9 @@ check "db_postgresdb_ssl_ca_pem_requires_verification" {
 # different custom parameter group with its own max_connections override is
 # outside what a Terraform plan can see and is not modeled here.
 #
-# PostgreSQL and RDS also reserve a few connection slots for superuser and
-# internal roles; db_max_connections_reserved below subtracts a flat margin
-# for them before the check compares against local.n8n_pg_peak_connections.
+# PostgreSQL and RDS also reserve connection slots that n8n cannot use;
+# db_max_connections_reserved below subtracts them before the check compares
+# against local.n8n_pg_peak_connections.
 locals {
   db_max_connections_by_instance_class = {
     # Burstable (T family). Memory doubles per size and is identical between
@@ -1016,7 +1021,7 @@ locals {
     "db.t4g.medium" = 450
     "db.t4g.large"  = 901
     "db.t3.micro"   = 112
-    "db.t3.small"   = 225
+    "db.t3.small"   = 191 # measured, see above
     "db.t3.medium"  = 450
     "db.t3.large"   = 901
     # General Purpose (M family). 4 GiB of memory per vCPU.
@@ -1040,17 +1045,22 @@ locals {
   }
   db_max_connections_known = lookup(local.db_max_connections_by_instance_class, var.db_instance_class, null)
 
-  # A flat 5-connection margin, not a per-version measurement. PostgreSQL's
-  # own superuser_reserved_connections defaults to 3. On RDS for PostgreSQL
-  # 15 and older, rds.rds_superuser_reserved_connections adds 2 more; RDS for
-  # PostgreSQL 16 deprecated that parameter in favor of PostgreSQL's native
-  # reserved_connections. Separately, newer minor versions (for example
-  # 15.9, 16.5 and 17.1 and later) add rds.rds_reserved_connections for RDS's
-  # internal role. The total reservation on the module's default engine
-  # (18.6) has not been verified and may be larger or smaller than 5. Kept as one fixed number rather than branching on
-  # var.db_engine_version, because the table above is already a heuristic
-  # and a precise reserve would not make it exact.
-  db_max_connections_reserved = 5
+  # Connection slots n8n cannot use, measured on the same live db.t3.small
+  # (PostgreSQL 18.6, default parameter group):
+  #   superuser_reserved_connections = 3  (superusers only; n8n's role is
+  #                                        not a superuser)
+  #   rds.rds_reserved_connections   = 4  (RDS's internal rds_reserved role)
+  #   reserved_connections           = 2  (not subtracted: roles with
+  #                                        pg_use_reserved_connections can use
+  #                                        them, which n8n's master user does
+  #                                        through rds_superuser)
+  # PostgreSQL documents that these reserves are carved out of
+  # max_connections. A caller who points n8n at a role without rds_superuser
+  # loses the 2 reserved_connections slots as well. Older engines differ
+  # (PostgreSQL 15 and older use rds.rds_superuser_reserved_connections,
+  # default 2, instead of reserved_connections), so this is one fixed number
+  # measured on the default engine rather than a per-version model.
+  db_max_connections_reserved = 7
 
   # sum()'s [0] seed keeps the no-pools default at 0 rather than erroring on
   # an empty list.
@@ -1079,12 +1089,12 @@ check "db_postgresdb_pool_size_fits_known_max_connections" {
       "${local.n8n_main_hpa_effective_max_replicas} + worker ${var.n8n_worker_keda_max_replicas} + webhook ",
       tostring(var.n8n_webhook_hpa_max_replicas),
       local.n8n_worker_pool_max_replicas_sum > 0 ? " + worker pools ${local.n8n_worker_pool_max_replicas_sum}" : "",
-      ") requests up to ${local.n8n_pg_peak_connections} connections, more than the heuristic threshold of ",
-      "${coalesce(local.db_max_connections_known, 0) - local.db_max_connections_reserved} connections for ",
-      "db_instance_class = \"${var.db_instance_class}\" (LEAST(DBInstanceClassMemory/9531392, 5000) evaluated ",
-      "against nominal instance memory gives ${coalesce(local.db_max_connections_known, 0)}, minus a flat ",
-      "${local.db_max_connections_reserved}-connection margin; the live formula result can be lower because RDS ",
-      "reserves memory for the OS and its own processes). Lower db_postgresdb_pool_size or the autoscaler maxima, ",
+      ") requests up to ${local.n8n_pg_peak_connections} connections, more than the ",
+      "${coalesce(local.db_max_connections_known, 0) - local.db_max_connections_reserved} connections n8n can use ",
+      "on db_instance_class = \"${var.db_instance_class}\" (max_connections ${coalesce(local.db_max_connections_known, 0)} ",
+      "from the table in database.tf, minus ${local.db_max_connections_reserved} slots reserved for superusers and ",
+      "RDS's internal role; the table is measured for db.t3.small and estimated from nominal memory for other ",
+      "classes, where the live value can be lower). Lower db_postgresdb_pool_size or the autoscaler maxima, ",
       "or raise db_instance_class, and confirm the live connection budget (SHOW max_connections, reserved ",
       "connections, and other clients). This diagnostic is advisory and does not fail the plan.",
     ])

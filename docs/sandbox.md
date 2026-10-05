@@ -70,34 +70,38 @@ At the single-main sandbox sizes above (1 main + 1 worker + 1 webhook = 3
 pods), `db_postgresdb_pool_size = 3` requests up to 9 connections,
 well below the nominal-memory estimate, but confirm the instance's connection budget before relying on it. The module's own shipped defaults
 (`db_instance_class = db.t3.small`, main/worker/webhook ceilings of 6/10/4,
-`db_postgresdb_pool_size = 10`) request up to 200 connections, before any
+`db_postgresdb_pool_size = 9`) request up to 180 connections, before any
 `n8n_worker_pools` are added (see
 [`examples/worker-pools/README.md`](../examples/worker-pools/README.md)'s
-own connection-budget note). For db.t3.small, the formula against nominal memory gives 225, and the
-module subtracts a flat 5-connection margin for superuser and RDS-internal
-roles (see `database.tf`'s `db_max_connections_reserved`; the real
-reservation depends on the PostgreSQL version and has not been verified on
-the default engine, 18.6). That gives a heuristic threshold of 220, not a
-verified usable limit. The live formula result can be lower, so the
-20-connection margin at the defaults is not guaranteed: confirm the live
-connection budget (`SHOW max_connections`, reserved connections, and other
-clients) before running near the autoscaler ceilings.
-Raising `n8n_webhook_hpa_max_replicas` back toward its old default of `8`
-(or raising `n8n_main_hpa_max_replicas` or `n8n_worker_keda_max_replicas`)
-without also raising `db_instance_class` or lowering
-`db_postgresdb_pool_size` can push demand past that threshold; see
-`n8n_webhook_hpa_max_replicas`'s own description for the tradeoff.
-Picking any class in the curated table and raising an autoscaler ceiling
-(or lowering `db_instance_class`) past its threshold is what
-`check.db_postgresdb_pool_size_fits_known_max_connections`
-(`database.tf`) warns about at plan time. Because the threshold is a
-heuristic, a silent check does not prove the ceilings fit. It also stays silent for instance
+own connection-budget note).
+
+On a live `db.t3.small` running PostgreSQL 18.6 with the default parameter
+group, `SHOW max_connections` returned 191, not the 225 the formula gives
+against nominal memory. Of those, 3 are reserved for superusers
+(`superuser_reserved_connections`) and 4 for RDS's internal role
+(`rds.rds_reserved_connections`), and n8n's role can use neither, which
+leaves 184. A further 2 slots (`reserved_connections`) are usable by n8n's
+master user through `rds_superuser`, but not by a role without it. So the
+module's defaults fit with a margin of 4 connections, assuming every pod
+fills its pool at the same time. RDS's own management connections and any
+other client you connect also draw from the same 184.
+
+Raising `n8n_webhook_hpa_max_replicas` back to its old default of `8`
+(216 connections), raising `db_postgresdb_pool_size` back to `10` (200), or
+raising `n8n_main_hpa_max_replicas` or `n8n_worker_keda_max_replicas`
+without also raising `db_instance_class` pushes demand past that budget;
+see `n8n_webhook_hpa_max_replicas`'s own description for the tradeoff.
+`check.db_postgresdb_pool_size_fits_known_max_connections` (`database.tf`)
+warns about that at plan time for every class in its curated table. Only
+the `db.t3.small` entry is measured; the others are the formula against
+nominal memory, so the live value can be lower and a silent check does not
+prove the ceilings fit for them. The check also stays silent for instance
 classes outside that table and for `create_database = false`, and it is
 advisory only (it does not fail the plan or apply). A larger-memory class
-raises the estimated capacity up to the formula's cap, while a lower
-`db_postgresdb_pool_size` or autoscaler ceiling reduces modeled demand; see the check's own comment
-in `database.tf` for the full curated table and the reserved-connections
-subtraction.
+raises the capacity up to the formula's cap, while a lower
+`db_postgresdb_pool_size` or autoscaler ceiling reduces modeled demand; see
+the check's own comment in `database.tf` for the full curated table and the
+reserved-connections subtraction.
 
 ## Redis and S3
 
