@@ -1874,7 +1874,7 @@ variable "db_max_allocated_storage" {
       var.db_max_allocated_storage * 10 >= var.db_allocated_storage * 11 &&
       var.db_max_allocated_storage <= 65536
     )
-    error_message = "db_max_allocated_storage must be null, or at least 10% greater than db_allocated_storage (${var.db_allocated_storage}) and at most 65536 GiB (RDS PostgreSQL's 64 TiB storage ceiling). AWS otherwise rejects the ceiling with 'Invalid max storage size'."
+    error_message = "db_max_allocated_storage must be null, or at least 10% greater than db_allocated_storage (${var.db_allocated_storage}) and at most 65536 GiB (RDS PostgreSQL's 64 TiB storage ceiling). AWS otherwise rejects the ceiling with 'Invalid max storage size'. Both limits can only hold while db_allocated_storage is at most 59578 GiB; above that, no ceiling is valid, so leave db_max_allocated_storage null."
   }
 
   # RDS's max_allocated_storage is integer GiB. Without this the fractional

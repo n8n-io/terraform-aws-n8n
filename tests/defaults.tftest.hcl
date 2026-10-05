@@ -5573,6 +5573,29 @@ run "db_max_allocated_storage_accepts_the_64_tib_ceiling" {
   # the rejection test above cannot: it only pins the failure side.
 }
 
+# The 10% floor and the 65536 GiB ceiling only overlap while
+# db_allocated_storage is at most 59578 GiB (59578 * 1.1 = 65535.8). These two
+# runs pin both sides of that edge, which the error message names.
+run "db_max_allocated_storage_accepts_the_largest_allocation_with_a_valid_ceiling" {
+  command = plan
+
+  variables {
+    db_allocated_storage     = 59578
+    db_max_allocated_storage = 65536
+  }
+}
+
+run "db_max_allocated_storage_rejects_any_ceiling_above_the_largest_allocation" {
+  command = plan
+
+  variables {
+    db_allocated_storage     = 59579
+    db_max_allocated_storage = 65536
+  }
+
+  expect_failures = [var.db_max_allocated_storage]
+}
+
 // RDS's max_allocated_storage is integer GiB. Caught on the input so the
 // error names db_max_allocated_storage and the caller's own line, rather
 // than surfacing from aws_db_instance.n8n inside the module where the
