@@ -7894,6 +7894,8 @@ run "image_repository_rejects_digest" {
 # string. The registry host does not count, and a single-component Docker Hub
 # name counts an implicit "library/" prefix. The four boundaries below are the
 # last accepted and first rejected length on each side of that rule.
+# The accepting runs carry no assert: a rejected value fails the plan, so
+# a run that plans cleanly is the whole check.
 run "image_repository_accepts_255_character_path_behind_a_registry" {
   command = plan
 
@@ -7901,11 +7903,6 @@ run "image_repository_accepts_255_character_path_behind_a_registry" {
     n8n_image_repository      = "registry.example.com/${join("", [for _ in range(255) : "a"])}"
     n8n_image_tag             = "2.27.4"
     n8n_task_runner_image_tag = "2.27.4"
-  }
-
-  assert {
-    condition     = length(var.n8n_image_repository) == 276
-    error_message = "n8n_image_repository should accept a 255-character path behind a registry host; Docker does not count the host."
   }
 }
 
@@ -7926,11 +7923,6 @@ run "image_repository_accepts_247_character_bare_name" {
     n8n_image_repository      = join("", [for _ in range(247) : "a"])
     n8n_image_tag             = "2.27.4"
     n8n_task_runner_image_tag = "2.27.4"
-  }
-
-  assert {
-    condition     = length(var.n8n_image_repository) == 247
-    error_message = "n8n_image_repository should accept a 247-character bare name, which normalizes to a 255-character library/ path."
   }
 }
 
@@ -7954,11 +7946,6 @@ run "image_repository_accepts_255_character_path_with_underscore_first_component
     n8n_image_repository      = "a_b.c/${join("", [for _ in range(249) : "a"])}"
     n8n_image_tag             = "2.27.4"
     n8n_task_runner_image_tag = "2.27.4"
-  }
-
-  assert {
-    condition     = length(var.n8n_image_repository) == 255
-    error_message = "n8n_image_repository should accept a 255-character path whose first component only looks like a host."
   }
 }
 
@@ -8119,11 +8106,6 @@ run "task_runner_image_repository_accepts_255_character_path_behind_a_registry" 
     n8n_task_runner_image_repository = "registry.example.com/${join("", [for _ in range(255) : "a"])}"
     n8n_task_runner_image_tag        = "2.27.4"
   }
-
-  assert {
-    condition     = length(var.n8n_task_runner_image_repository) == 276
-    error_message = "n8n_task_runner_image_repository should accept a 255-character path behind a registry host; Docker does not count the host."
-  }
 }
 
 run "task_runner_image_repository_rejects_256_character_path_behind_a_registry" {
@@ -8143,11 +8125,6 @@ run "task_runner_image_repository_accepts_247_character_bare_name" {
     n8n_task_runner_image_repository = join("", [for _ in range(247) : "a"])
     n8n_task_runner_image_tag        = "2.27.4"
   }
-
-  assert {
-    condition     = length(var.n8n_task_runner_image_repository) == 247
-    error_message = "n8n_task_runner_image_repository should accept a 247-character bare name, which normalizes to a 255-character library/ path."
-  }
 }
 
 run "task_runner_image_repository_rejects_248_character_bare_name" {
@@ -8166,11 +8143,6 @@ run "task_runner_image_repository_accepts_255_character_path_with_underscore_fir
   variables {
     n8n_task_runner_image_repository = "a_b.c/${join("", [for _ in range(249) : "a"])}"
     n8n_task_runner_image_tag        = "2.27.4"
-  }
-
-  assert {
-    condition     = length(var.n8n_task_runner_image_repository) == 255
-    error_message = "n8n_task_runner_image_repository should accept a 255-character path whose first component only looks like a host."
   }
 }
 
