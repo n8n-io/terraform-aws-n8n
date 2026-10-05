@@ -985,8 +985,13 @@ check "db_postgresdb_ssl_ca_pem_requires_verification" {
 #
 # db.t3.small, the module's default class, holds a MEASURED value: SHOW
 # max_connections returned 191 on a live db.t3.small running PostgreSQL 18.6
-# with the default.postgres18 parameter group (live test of PR #169). Every
-# other entry is the formula evaluated against the class's NOMINAL memory
+# with the default.postgres18 parameter group (live test of PR #169).
+# db.t4g.small has the same nominal memory (2 GiB) and reuses that 191. It
+# was not measured, and DBInstanceClassMemory may differ between Intel and
+# Graviton classes, but for an advisory check the lower figure errs towards
+# warning early rather than staying silent on a configuration that does not
+# fit, which is the failure the measurement exposed. Every other entry is
+# the formula evaluated against the class's NOMINAL memory
 # (for example 2 GiB / 9531392 = 225), so it is a heuristic, not the live
 # default. AWS documents that DBInstanceClassMemory is smaller than the
 # nominal GiB figure because memory is reserved for the operating system and
@@ -994,9 +999,7 @@ check "db_postgresdb_ssl_ca_pem_requires_verification" {
 # value was 191 against a nominal 225, about 85%. That ratio is not applied to
 # the other entries: the reserved memory is not proportional to instance
 # size and has not been measured elsewhere, and classes large enough to hit
-# the 5000 cap can still reach it. db.t4g.small has the same nominal memory
-# as db.t3.small but was not measured, so it keeps the nominal figure. For
-# the nominal entries, a warning means the ceilings exceed an optimistic
+# the 5000 cap can still reach it. For the nominal entries, a warning means the ceilings exceed an optimistic
 # threshold, and silence does NOT prove the ceilings fit. Replace an entry
 # with a measured value only when it was measured on the module's default
 # engine and default parameter group.
@@ -1017,7 +1020,7 @@ locals {
     # Burstable (T family). Memory doubles per size and is identical between
     # t3 and t4g at the same size.
     "db.t4g.micro"  = 112
-    "db.t4g.small"  = 225
+    "db.t4g.small"  = 191 # assumed equal to db.t3.small, see above
     "db.t4g.medium" = 450
     "db.t4g.large"  = 901
     "db.t3.micro"   = 112

@@ -17,7 +17,8 @@ this project adheres to the stability contract in
   on RDS reserves for superusers (`superuser_reserved_connections`, 3) and
   RDS's internal role (`rds.rds_reserved_connections`, 4). The `db.t3.small`
   entry is measured on a live instance (191; RDS's formula against nominal
-  memory would give 225). The other entries evaluate
+  memory would give 225), and `db.t4g.small`, which has the same nominal
+  memory, reuses that figure without being measured. The other entries evaluate
   `LEAST({DBInstanceClassMemory/9531392}, 5000)` against nominal memory and
   are not measured, so the live value can be lower and silence does not
   prove the ceilings fit; confirm the live connection budget

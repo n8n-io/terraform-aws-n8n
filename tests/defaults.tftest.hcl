@@ -3746,6 +3746,27 @@ run "connection_budget_warns_inside_the_reserved_connections_margin" {
   expect_failures = [check.db_postgresdb_pool_size_fits_known_max_connections]
 }
 
+# db.t4g.small has the same nominal memory as db.t3.small and reuses its
+# measured 191 rather than the nominal 225. At the previous pool-size default
+# of 10 the default ceilings request 200: silent against 225 - 7 = 218, over
+# 191 - 7 = 184. This run fails with a missing expected failure if the entry
+# goes back to the nominal figure.
+run "connection_budget_db_t4g_small_reuses_the_db_t3_small_measurement" {
+  command = plan
+
+  variables {
+    db_instance_class       = "db.t4g.small"
+    db_postgresdb_pool_size = 10
+  }
+
+  assert {
+    condition     = local.db_max_connections_known == 191 && local.n8n_pg_peak_connections == 200
+    error_message = "db.t4g.small must resolve to 191 known connections (reused from db.t3.small), got ${local.db_max_connections_known}; peak must be 200, got ${local.n8n_pg_peak_connections}."
+  }
+
+  expect_failures = [check.db_postgresdb_pool_size_fits_known_max_connections]
+}
+
 # A production-sized instance class at the same default ceilings has ample
 # headroom and must stay quiet.
 run "connection_budget_is_quiet_with_a_production_sized_instance_class" {
