@@ -1974,7 +1974,7 @@ variable "db_host" {
 }
 
 variable "db_password" {
-  description = "Password for the external database specified by db_host. Required when create_database = false, unless db_password_secret_ref supplies it instead; see that variable, which owns the combined validation to avoid a variable-validation dependency cycle between the two. Ignored otherwise (the module generates a random password for its managed RDS instance)."
+  description = "Password for the external database specified by db_host. Required when create_database = false, unless db_password_secret_ref supplies it instead; see that variable, which owns the combined validation to avoid a variable-validation dependency cycle between the two. Ignored otherwise: the module generates a random password for its managed RDS instance, or takes db_password_wo when db_password_write_only = true."
   type        = string
   default     = null
   sensitive   = true
@@ -2022,7 +2022,7 @@ variable "db_password_write_only" {
 }
 
 variable "db_password_wo" {
-  description = "RDS master password, accepted as a write-only value so Terraform never persists it in plan or state files. Required when db_password_write_only = true; must stay null otherwise, because the module generates its own password in that mode. Feed this from your own ephemeral source, for example an ephemeral resource backed by AWS Secrets Manager or SSM Parameter Store in the calling root, so the value never touches state on the caller's side either. Keep the Kubernetes Secret referenced by db_password_secret_ref in sync with the same value: Terraform never copies one into the other."
+  description = "RDS master password, accepted as a write-only value so Terraform never persists it in plan or state files. Required when db_password_write_only = true; must stay null otherwise, because the module generates its own password in that mode. Must meet the RDS for PostgreSQL master password rules: 8 to 128 printable ASCII characters, excluding /, \", @ and space. An empty value is rejected rather than passed on, because the AWS provider silently skips an empty write-only password on update, which would turn a rotation into a no-op. Feed this from your own ephemeral source, for example an ephemeral resource backed by AWS Secrets Manager or SSM Parameter Store in the calling root, so the value never touches state on the caller's side either. Keep the Kubernetes Secret referenced by db_password_secret_ref in sync with the same value: Terraform never copies one into the other."
   type        = string
   ephemeral   = true
   sensitive   = true
@@ -2036,6 +2036,22 @@ variable "db_password_wo" {
   validation {
     condition     = var.db_password_write_only ? true : var.db_password_wo == null
     error_message = "db_password_wo has no effect when db_password_write_only = false; the module generates and manages its own password in that mode."
+  }
+
+  # RDS for PostgreSQL master password constraints: 8 to 128 characters per the
+  # CreateDBInstance API reference, printable ASCII without /, " or @ per the
+  # same reference, and no space per the RDS User Guide's DB instance settings
+  # page. The two AWS sources disagree on the space; rejecting it is the
+  # conservative intersection. The message does not echo the value: it is
+  # ephemeral and sensitive.
+  validation {
+    condition = var.db_password_wo == null ? true : (
+      length(var.db_password_wo) >= 8 &&
+      length(var.db_password_wo) <= 128 &&
+      can(regex("^[[:print:]]+$", var.db_password_wo)) &&
+      !can(regex("[/\"@ ]", var.db_password_wo))
+    )
+    error_message = "db_password_wo must be 8 to 128 printable ASCII characters and must not contain a forward slash, a double quote, an at sign, or a space, per the AWS RDS for PostgreSQL master password rules."
   }
 }
 
