@@ -469,6 +469,9 @@ resource "aws_db_instance" "n8n" {
   # Terraform-known password afterward either. See README.md -> "Switching to
   # the write-only RDS password" for the safe migration recipe: migrate with
   # db_password_wo set to the instance's current password, then rotate.
+  # Flipping back from true to false is a rotation too: it generates a new
+  # random_password.db_password[0] and sends it as the new master password.
+  # See README.md -> "Switching back to the generated password".
   password            = var.db_password_write_only ? null : random_password.db_password[0].result
   password_wo         = var.db_password_write_only ? var.db_password_wo : null
   password_wo_version = var.db_password_write_only ? var.db_password_wo_version : null

@@ -132,8 +132,10 @@ this project adheres to the stability contract in
   (`create_database = true`) accept its master password through
   `aws_db_instance.n8n`'s write-only `password_wo` argument instead of a
   `random_password` resource whose result Terraform stores in plain text in
-  state. `db_password_wo` is an `ephemeral` module variable, so the
-  value you pass never lands in a plan or state file. This mode requires
+  state. `db_password_wo` is an `ephemeral` module variable, so the module
+  never writes the value to a plan or state file. Pass it from an ephemeral
+  root input variable or an ephemeral resource as well: a non-ephemeral root
+  input variable is saved in the caller's plan file. This mode requires
   `db_password_secret_ref` (the module cannot copy a write-only value into
   the Kubernetes Secret it would otherwise manage), makes the `db_password`
   output `null`, and is fully opt-in: the default

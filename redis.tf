@@ -170,7 +170,8 @@ resource "aws_elasticache_subnet_group" "n8n" {
 
 # ── AUTH token ────────────────────────────────────────────────────────────────
 # Only generated on the module-managed, opt-in path. random_password.db_password
-# is unconditional, but this one is count-gated deliberately: the contract for
+# is created by default and skipped only when db_password_write_only = true,
+# but this one is off by default and count-gated deliberately: the contract for
 # this feature is that a caller who leaves redis_transit_encryption_enabled at
 # its default sees NO plan diff, and an unconditional random_password would
 # still render `Plan: 1 to add`.

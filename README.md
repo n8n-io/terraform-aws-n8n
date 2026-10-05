@@ -1552,7 +1552,11 @@ not send.
 5. The old password is still readable in earlier state versions and backups,
    so rotate it once on the new path: put the new value in the caller-managed
    Secret and in `db_password_wo`, increment
-   `db_password_wo_version`, and apply. That is a plain
+   `db_password_wo_version`, and apply. Do the Secret update and the apply
+   back to back in the same maintenance window: an n8n pod that restarts
+   between them for any reason, such as a node replacement or an
+   out-of-memory kill, reads the new password while RDS still holds the old
+   one, and cannot connect. That is a plain
    `password_wo_version` change, not the `password` to `null` transition
    #42582 describes. Neither the Secret update nor the apply restarts n8n:
    the pods read the password from an environment variable at startup, and
@@ -1592,6 +1596,30 @@ not send.
 This module has no way to detect "existing instance, migrating from `password`
 to `password_wo`" at plan time: the condition depends on what is already
 running, not on the configuration being planned. Follow this recipe by hand.
+
+### Switching back to the generated password
+
+Setting `db_password_write_only` back to `false` on a live instance is a
+password rotation, not a no-op. The validations require you to remove
+`db_password_wo` and `db_password_secret_ref` in the same change, and the
+apply then:
+
+- Creates a new `random_password.db_password[0]` with a new value, which
+  Terraform stores in plain text in state again.
+- Sends that new value to `aws_db_instance.n8n` as an in-place master
+  password change. The provider sets `MasterUserPassword` from `password`
+  whenever it changes, so this direction does not depend on the
+  `password_wo` code path #42582 is about. It has not been tested against a
+  live instance.
+- Recreates the module-managed `kubernetes_secret.n8n_db` with the same new
+  value and points the chart back at it, so n8n's pods roll onto it.
+  `helm_release.n8n` depends on `aws_db_instance.n8n`, so the rollout starts
+  only after the password change is sent. RDS applies that change
+  asynchronously, so expect a short window of failed connections.
+
+Your own Secret is left in place but no longer used, and it now holds a
+password the database rejects. Do this in a maintenance window, confirm n8n
+reconnects, then delete or retire that Secret.
 
 ## KMS key after `terraform destroy`
 
@@ -2578,7 +2606,7 @@ doing at this node count, but neither removes the fivefold waste at source.
 | <a name="input_db_multi_az"></a> [db\_multi\_az](#input\_db\_multi\_az) | Deploy RDS in Multi-AZ mode for automatic failover (recommended for production) | `bool` | `true` | no |
 | <a name="input_db_password"></a> [db\_password](#input\_db\_password) | Password for the external database specified by db\_host. Required when create\_database = false, unless db\_password\_secret\_ref supplies it instead; see that variable, which owns the combined validation to avoid a variable-validation dependency cycle between the two. Ignored otherwise: the module generates a random password for its managed RDS instance, or takes db\_password\_wo when db\_password\_write\_only = true. | `string` | `null` | no |
 | <a name="input_db_password_secret_ref"></a> [db\_password\_secret\_ref](#input\_db\_password\_secret\_ref) | Existing Kubernetes Secret carrying the database password, instead of supplying the value through db\_password. name is the Secret's name in var.namespace; key defaults to "password", matching the chart's database.passwordSecret.key default. Required on two paths: the external database path (create\_database = false, as the counterpart to db\_password), and the module-managed write-only path (create\_database = true with db\_password\_write\_only = true), since the module cannot copy a write-only value into a Kubernetes Secret it manages. Disallowed (must stay null) when create\_database = true and db\_password\_write\_only = false; aws\_db\_instance.n8n (database.tf) needs the password's actual value to provision the instance in that case, and a Kubernetes Secret name cannot supply it. Setting this alongside db\_password is rejected at plan time, and so is setting neither when create\_database = false. The module does not read the Secret's value on either required path. | <pre>object({<br/>    name = string<br/>    key  = optional(string)<br/>  })</pre> | `null` | no |
-| <a name="input_db_password_wo"></a> [db\_password\_wo](#input\_db\_password\_wo) | RDS master password, accepted as a write-only value so Terraform never persists it in plan or state files. Required when db\_password\_write\_only = true; must stay null otherwise, because the module generates its own password in that mode. Must meet the RDS for PostgreSQL master password rules: 8 to 128 printable ASCII characters, excluding /, ", @ and space. An empty value is rejected rather than passed on, because the AWS provider silently skips an empty write-only password on update, which would turn a rotation into a no-op. Feed this from your own ephemeral source, for example an ephemeral resource backed by AWS Secrets Manager or SSM Parameter Store in the calling root, so the value never touches state on the caller's side either. Keep the Kubernetes Secret referenced by db\_password\_secret\_ref in sync with the same value: Terraform never copies one into the other. | `string` | `null` | no |
+| <a name="input_db_password_wo"></a> [db\_password\_wo](#input\_db\_password\_wo) | RDS master password, accepted as an ephemeral, write-only value so this module never persists it in plan or state files. That holds end to end only if the calling root passes an ephemeral value too, for example an ephemeral input variable or an ephemeral resource: a non-ephemeral root input variable is saved in the caller's plan file. Required when db\_password\_write\_only = true; must stay null otherwise, because the module generates its own password in that mode. Must meet the RDS for PostgreSQL master password rules: 8 to 128 printable ASCII characters, excluding /, ", @ and space. An empty value is rejected rather than passed on, because the AWS provider silently skips an empty write-only password on update, which would turn a rotation into a no-op. Feed this from your own ephemeral source, for example an ephemeral resource backed by AWS Secrets Manager or SSM Parameter Store in the calling root, so the value never touches state on the caller's side either. Keep the Kubernetes Secret referenced by db\_password\_secret\_ref in sync with the same value: Terraform never copies one into the other. | `string` | `null` | no |
 | <a name="input_db_password_wo_version"></a> [db\_password\_wo\_version](#input\_db\_password\_wo\_version) | Version marker for db\_password\_wo, forwarded to aws\_db\_instance.n8n's password\_wo\_version. Increment this value whenever you rotate db\_password\_wo, Terraform only re-applies a write-only value when its version number changes. Ignored when db\_password\_write\_only = false. | `number` | `1` | no |
 | <a name="input_db_password_write_only"></a> [db\_password\_write\_only](#input\_db\_password\_write\_only) | When true, the module writes the RDS master password through aws\_db\_instance.n8n's write-only password\_wo argument (sourced from db\_password\_wo) instead of generating a password with random\_password.db\_password and storing it in plain text in Terraform state. Requires db\_password\_wo to be set and db\_password\_secret\_ref to reference a Kubernetes Secret you populate yourself (for example, synced from AWS Secrets Manager via External Secrets Operator), the module cannot copy a write-only value into kubernetes\_secret.n8n\_db, so it creates no managed Secret and the db\_password output is null on this path. Ignored (must stay false) when create\_database = false; the module never manages a password for an external database. Safe to set from the first apply of a new deployment. On an EXISTING password-managed instance, follow the migration recipe in README.md -> "Switching to the write-only RDS password" rather than flipping it directly, because of the open provider bug hashicorp/terraform-provider-aws#42582. | `bool` | `false` | no |
 | <a name="input_db_ping_interval_seconds"></a> [db\_ping\_interval\_seconds](#input\_db\_ping\_interval\_seconds) | Seconds between n8n's database health-check pings<br/>(`DB_PING_INTERVAL_SECONDS`). Leave null for n8n's own default of 2.<br/>Unsettable through the chart or `n8n_extra_env`, see db\_ping\_timeout\_ms.<br/><br/>Each ping consumes a connection from the same pool that serves request<br/>traffic, so on a saturated pool a shorter interval adds contention to the<br/>resource already under pressure. Lengthening it reduces that contention at<br/>the cost of slower detection of a genuinely lost connection. | `number` | `null` | no |
