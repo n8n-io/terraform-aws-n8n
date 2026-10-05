@@ -162,11 +162,15 @@ this project adheres to the stability contract in
   keep their values, and no action is needed. Other changes in the same
   upgrade, or drift, can still show up in that plan. A script that targets the old address (for example
   `-replace=module.n8n.random_password.db_password`) must add the `[0]`.
-  Downgrading to an earlier module version also needs no action:
+  Downgrading to an earlier module version needs no state command either:
   Terraform moves `random_password.db_password[0]` back to the old address
-  on its own, as long as `db_password_write_only` is `false`. Both
-  directions were verified on a live `examples/small` deployment, with no
-  change to the password, the RDS instance or the Secret.
+  on its own, as long as write-only mode is off. First remove
+  `db_password_write_only`, `db_password_wo` and `db_password_wo_version`
+  from the module call, even when they are set to their defaults: an
+  earlier version does not declare them and rejects them as unsupported
+  arguments. Both directions were verified on a live `examples/small`
+  deployment, with no change to the password, the RDS instance or the
+  Secret.
   Under [Stability & versioning](./README.md#stability--versioning) a
   changed resource address is a minor-version boundary, not a patch.
 
