@@ -93,9 +93,11 @@ without also raising `db_instance_class` pushes demand past that budget;
 see `n8n_webhook_hpa_max_replicas`'s own description for the tradeoff.
 `check.db_postgresdb_pool_size_fits_known_max_connections` (`database.tf`)
 warns about that at plan time for every class in its curated table. Only
-the `db.t3.small` entry is measured; the others are the formula against
-nominal memory, so the live value can be lower and a silent check does not
-prove the ceilings fit for them. The check also stays silent for instance
+the `db.t3.small` entry is measured. `db.t4g.small`, which has the same
+nominal memory, reuses that measurement by assumption rather than the
+formula's 225. The others are the formula against nominal memory, so the
+live value can be lower and a silent check does not prove the ceilings fit
+for them. The check also stays silent for instance
 classes outside that table and for `create_database = false`, and it is
 advisory only (it does not fail the plan or apply). A larger-memory class
 raises the capacity up to the formula's cap, while a lower

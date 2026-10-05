@@ -1096,8 +1096,8 @@ check "db_postgresdb_pool_size_fits_known_max_connections" {
       "${coalesce(local.db_max_connections_known, 0) - local.db_max_connections_reserved} connections n8n can use ",
       "on db_instance_class = \"${var.db_instance_class}\" (max_connections ${coalesce(local.db_max_connections_known, 0)} ",
       "from the table in database.tf, minus ${local.db_max_connections_reserved} slots reserved for superusers and ",
-      "RDS's internal role; the table is measured for db.t3.small and estimated from nominal memory for other ",
-      "classes, where the live value can be lower). Lower db_postgresdb_pool_size or the autoscaler maxima, ",
+      "RDS's internal role; the table is measured for db.t3.small, reuses that figure for db.t4g.small, and is ",
+      "estimated from nominal memory for other classes, where the live value can be lower). Lower db_postgresdb_pool_size or the autoscaler maxima, ",
       "or raise db_instance_class, and confirm the live connection budget (SHOW max_connections, reserved ",
       "connections, and other clients). This diagnostic is advisory and does not fail the plan.",
     ])
