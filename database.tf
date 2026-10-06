@@ -21,8 +21,8 @@ resource "random_password" "db_password" {
 # Gated on var.db_storage_encrypted so callers with existing unencrypted RDS
 # deployments can opt out and avoid the RDS replacement that enabling storage
 # encryption triggers (AWS does not support flipping storage_encrypted in
-# place; to encrypt existing data, restore an encrypted snapshot copy through
-# var.db_snapshot_identifier).
+# place; to encrypt existing data, see the recipe at
+# aws_db_instance.n8n.storage_encrypted below).
 #
 # Also gated on var.create_db_kms_key: when a caller supplies their own KMS key
 # (e.g. a centrally-managed CMK a security team already owns), the module must
@@ -535,9 +535,17 @@ resource "aws_db_instance" "n8n" {
   # null preserves the prior unencrypted default so existing applies see no
   # plan change. Flipping db_storage_encrypted from false to true on an
   # existing instance forces a replacement: AWS does not support enabling
-  # storage encryption in place. To keep the data, snapshot the instance, copy
-  # the snapshot with encryption enabled, and restore the copy through
-  # var.db_snapshot_identifier.
+  # storage encryption in place. To keep the data of a previously unencrypted
+  # instance, stop writes, snapshot it, copy the snapshot encrypted with the
+  # key you want (aws rds copy-db-snapshot --kms-key-id), then restore the
+  # copy with db_snapshot_identifier, db_storage_encrypted = true,
+  # create_db_kms_key = false and db_kms_key_arn = <the copy's key>. Also set
+  # db_engine_version and db_allocated_storage to match the snapshot. A
+  # restored instance keeps the snapshot's key and kms_key_id is ForceNew, so
+  # a module-created CMK never matches it and every plan would replace the
+  # instance. The cutover replaces the old instance: if db_deletion_protection
+  # is true, set it to false and apply first. db_skip_final_snapshot defaults
+  # to true, so any write made after the snapshot is lost.
   storage_encrypted = var.db_storage_encrypted
   kms_key_id        = local.db_kms_key_arn
 

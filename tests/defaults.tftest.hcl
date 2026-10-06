@@ -2034,9 +2034,10 @@ run "rds_hardened_defaults" {
 
   # ARN-linkage between aws_kms_key.db[0].arn and its three consumers
   # (aws_db_instance.kms_key_id, performance_insights_kms_key_id, and the
-  # postgresql log group's kms_key_id) is not asserted at plan time: the ARN
-  # is computed, so it is unknown under the mock provider. Only a real apply
-  # verifies it.
+  # postgresql log group's kms_key_id) is not asserted in these runs: the ARN
+  # is computed, so it is unknown under the mock provider. An
+  # override_resource with override_during = plan could pin it; that the key
+  # actually encrypts the data is only visible after a real apply.
 }
 
 run "db_storage_encrypted_false_skips_cmk" {
@@ -2423,8 +2424,8 @@ run "db_kms_key_arn_defaults_to_module_managed_cmk" {
   # aws_db_instance.n8n[0].kms_key_id == aws_kms_key.db[0].arn is NOT asserted
   # here: aws_kms_key.db[0].arn is computed, so under the mock provider it is
   # unknown at plan time ("Unknown condition value"). The ARN-linkage between
-  # the CMK and its three consumers is only verified by a real apply, the
-  # same limitation already called out next to the rds_hardened_defaults run
+  # the CMK and its three consumers is not asserted in these runs, the same
+  # limitation already called out next to the rds_hardened_defaults run
   # above.
 }
 
