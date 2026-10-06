@@ -545,7 +545,10 @@ resource "aws_db_instance" "n8n" {
   # a module-created CMK never matches it and every plan would replace the
   # instance. The cutover replaces the old instance: if db_deletion_protection
   # is true, set it to false and apply first. db_skip_final_snapshot defaults
-  # to true, so any write made after the snapshot is lost.
+  # to true, so any write made after the snapshot is lost. After the restore,
+  # set db_snapshot_identifier back to null, so a later replacement does not
+  # restore this stale copy. snapshot_identifier is Optional and Computed, so
+  # clearing it plans no change.
   storage_encrypted = var.db_storage_encrypted
   kms_key_id        = local.db_kms_key_arn
 
