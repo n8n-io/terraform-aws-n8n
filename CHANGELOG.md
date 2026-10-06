@@ -239,14 +239,15 @@ this project adheres to the stability contract in
   needed because EKS bootstraps vpc-cni as a self-managed workload at
   cluster creation) and sets `configuration_values` to turn on the VPC
   CNI's native Kubernetes NetworkPolicy enforcement
-  (`enableNetworkPolicy = "true"`). Requires VPC CNI >= 1.14 and
-  Kubernetes >= 1.25; a plan-time validation on the input itself rejects
-  an older `kubernetes_version` rather than letting the combination reach
-  an apply-time failure or a silently inert enforcement engine. Creates no
-  Kubernetes NetworkPolicy objects itself (write your own once enforcement
-  is on); this is the port of terraform-azurerm-n8n PR #44's
-  `aks_network_policy` to EKS's addon-based equivalent. Default false
-  leaves EKS's own self-managed vpc-cni untouched, so every existing
+  (`enableNetworkPolicy = "true"`). A plan-time validation requires
+  `kubernetes_version` 1.27 or later, the module's minor-version floor.
+  AWS documents 1.26.7 (platform `eks.6`) or 1.27.4 (`eks.5`) as the
+  minimum; the validation checks the minor version only. The validation is skipped when
+  `create_eks = false`. Creates no Kubernetes NetworkPolicy objects itself
+  (write your own once enforcement is on); enforcement applies to every
+  NetworkPolicy in the cluster. This is the port of terraform-azurerm-n8n
+  PR #44's `aks_network_policy` to EKS's addon-based equivalent. Default
+  false leaves EKS's own self-managed vpc-cni untouched, so every existing
   caller sees no plan diff. Ignored, with a plan-time warning
   (`check.existing_eks_cluster_needs_its_own_network_policy_toggle`),
   when `create_eks = false`: the module manages no vpc-cni addon on an
@@ -256,11 +257,14 @@ this project adheres to the stability contract in
   variable's description. Adopting with `OVERWRITE` resets any existing
   vpc-cni configuration, including hand-edited `aws-node` DaemonSet
   settings that predate this addon, to the module's single key, and
-  `resolve_conflicts_on_update = "OVERWRITE"` repeats that reset on every
-  later apply while the toggle stays true. The addon sets `preserve =
-  true`, so flipping the toggle back to `false` leaves the running
-  vpc-cni DaemonSet in place as a self-managed installation instead of
-  EKS deleting it, avoiding a pod-networking outage on a live cluster.
+  `resolve_conflicts_on_update = "OVERWRITE"` applies the same reset on
+  any later addon update. The module exposes no other vpc-cni settings.
+  The addon sets `preserve = true`, so flipping the toggle back to
+  `false` leaves the running vpc-cni DaemonSet in place as a self-managed
+  installation instead of EKS deleting it, avoiding a pod-networking
+  outage. **That also means `false` does not disable enforcement** once it
+  has been on; README → "Kubernetes NetworkPolicy enforcement" links AWS's
+  disable procedure.
 
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
