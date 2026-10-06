@@ -256,7 +256,8 @@ this project adheres to the stability contract in
   `examples/large`'s `WARM_ENI_TARGET`/`WARM_IP_TARGET` tuning); see the
   variable's description. Adopting with `OVERWRITE` resets any existing
   vpc-cni configuration, including hand-edited `aws-node` DaemonSet
-  settings that predate this addon, to the module's single key, and
+  settings that predate this addon, to the addon's own defaults plus the
+  module's single key, and
   `resolve_conflicts_on_update = "OVERWRITE"` applies the same reset on
   any later addon update. The module exposes no other vpc-cni settings.
   The addon sets `preserve = true`, so flipping the toggle back to
