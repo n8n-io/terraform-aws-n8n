@@ -1900,9 +1900,10 @@ variable "db_max_allocated_storage" {
     # match the live size before lowering the ceiling.
     #
     # Written as `null ? true : (...)` rather than `null || (...)`: Terraform
-    # only short-circuits `||` from 1.12, and the module allows 1.11, where the
-    # right side is still evaluated and arithmetic on the null default aborts
-    # the plan for every caller who leaves this input unset.
+    # only short-circuits `||` from 1.12, and the module allowed 1.11 when
+    # this was written, where the right side is still evaluated and arithmetic
+    # on the null default aborted the plan for every caller who left this
+    # input unset. The floor is now 1.13; the guard stays for consistency.
     condition = var.db_max_allocated_storage == null ? true : (
       var.db_max_allocated_storage * 10 >= var.db_allocated_storage * 11 &&
       var.db_max_allocated_storage <= 65536
@@ -1915,7 +1916,7 @@ variable "db_max_allocated_storage" {
   # aws_db_instance.n8n inside the module rather than this input. Failing
   # here names the variable and the line the caller actually wrote, the same
   # reasoning as db_backup_retention_period below. Same `null ? true : (...)`
-  # guard as above: floor(null) fails on Terraform 1.11.
+  # guard as above: floor(null) failed on Terraform 1.11, the floor then.
   validation {
     condition     = var.db_max_allocated_storage == null ? true : var.db_max_allocated_storage == floor(var.db_max_allocated_storage)
     error_message = "db_max_allocated_storage must be a whole number of GiB."

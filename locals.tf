@@ -461,7 +461,7 @@ locals {
   # Shared by the validations on n8n_image_repository and
   # n8n_task_runner_image_repository (variables.tf), so the two cannot drift.
   # A validation may reference a local since Terraform 1.9, and the floor is
-  # 1.11. The examples are separate root modules and carry their own copy.
+  # 1.13. The examples are separate root modules and carry their own copy.
   #
   # Docker's own reference grammar (distribution/reference), narrowed to the
   # repository half: no tag, no digest. Reading it in pieces, since it is one

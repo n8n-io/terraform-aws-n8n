@@ -40,7 +40,7 @@ no follower to race, so this failure mode cannot occur.
 ### General
 
 - An **n8n Enterprise license key** (`n8n_license_key`): the module does not provision a community-edition deployment. A Business-tier key also works, but only at `n8n_main_hpa_min_replicas = 1` (single main pod, no multi-main entitlement required) — see above.
-- **Terraform CLI `>= 1.11`**, with the `aws`, `kubernetes`, and `helm` providers configured by the caller. The module declares `required_providers` but does not configure them (see [`examples/small/providers.tf`](./examples/small/providers.tf)).
+- **Terraform CLI `>= 1.13`**, with the `aws`, `kubernetes`, and `helm` providers configured by the caller. The module declares `required_providers` but does not configure them (see [`examples/small/providers.tf`](./examples/small/providers.tf)).
 - Read [Stability & versioning](#stability--versioning) before pinning a module version, and [Compatibility](#compatibility) for the provider/chart majors this module ships against.
 
 ### Networking
@@ -172,7 +172,15 @@ This module ships against specific provider majors. Notably:
   fails to find a version satisfying both. Callers who must stay on
   Kubernetes provider 2.x should pin this module to `~> 0.4.0` (see
   `CHANGELOG.md`).
-- **Terraform CLI:** `>= 1.11`.
+- **Terraform CLI:** `>= 1.13`, raised from `>= 1.11`. The module's
+  validations rely on `&&` and `||` short-circuiting, which Terraform added in
+  1.12, and `terraform test` only runs this repo's suites reliably from 1.13.
+  On 1.12 or older, `terraform init` stops with an unsupported-version error.
+  Upgrade the CLI used locally and in automation, and widen any narrower
+  `required_version` in your own configuration (for example `~> 1.12.0`). No
+  module inputs or state change. See the upgrade note in
+  [`CHANGELOG.md`](./CHANGELOG.md). CI runs every test suite on both the
+  latest Terraform and `1.13.0`.
 - **n8n Helm chart:** default `1.14.0`. Other chart versions can be
   selected via `n8n_chart_version`.
 - **n8n application image:** `n8n_image_tag = null` uses the selected chart's default. Chart `1.14.0` resolves to `docker.n8n.io/n8nio/n8n:2.41.4`, not the floating `stable` tag used by `1.11.0`. **Pin the running application version before upgrading the chart to avoid an accidental downgrade.** See [Upgrading n8n](./docs/upgrading-n8n.md). `n8n_image_repository` points the release at a custom image (see [Custom n8n images](#custom-n8n-images)).
@@ -2533,7 +2541,7 @@ doing at this node count, but neither removes the fivefold waste at source.
 
 | Name | Version |
 | ---- | ------- |
-| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.11 |
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.13 |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.0 |
 | <a name="requirement_helm"></a> [helm](#requirement\_helm) | ~> 3.0 |
 | <a name="requirement_kubernetes"></a> [kubernetes](#requirement\_kubernetes) | ~> 3.0 |

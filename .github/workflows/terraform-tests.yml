@@ -11,21 +11,21 @@ permissions:
   pull-requests: write
 
 env:
-  # Every job runs this one version: the current latest stable, so there is one
-  # deliberately tracked version to bump rather than a moving target.
-  #
-  # Bumped from 1.9.8 because examples/customer-managed-redis, -s3 and -cluster
-  # need override_resource's override_during attribute to assert a plan-time
-  # value on a resource the same configuration creates, and that attribute
-  # arrived in Terraform 1.11 (hashicorp/terraform#36227).
-  #
-  # The module's own floor moved with it: every versions.tf in the repo now
-  # declares required_version = ">= 1.11" rather than the ">= 1.9" that no job
-  # here exercised. Keep the two in step. A floor CI never runs is a claim
-  # nobody is checking, and this repo has already been bitten by the specific
-  # version-skew hazard that hides behind one (`check` blocks did not
-  # short-circuit && / || before Terraform 1.10; see AGENTS.md).
+  # Every job except test-floor runs this version: the current latest stable,
+  # so there is one deliberately tracked latest version to bump rather than a
+  # moving target. TF_FLOOR_VERSION below tracks the module's floor instead.
   TF_VERSION: "1.16.4"
+  # The `test-floor` job also runs the `terraform test` suites on the lowest
+  # release the module's required_version admits. A floor CI never runs is a
+  # claim nobody is checking: on the previous `>= 1.11` floor, two validations
+  # (#167, #175) broke on 1.11 and passed here, because && and || only
+  # short-circuit from Terraform 1.12. The floor is 1.13 rather than 1.12
+  # because `terraform test` on 1.12.x and older leaks about one provider
+  # process per run block, which exhausts a 16 GB runner on the root suite
+  # (see versions.tf). Must be X.Y.0 for a `>= X.Y` floor, and
+  # move together with all thirteen required_version declarations;
+  # tests/scripts/check-terraform-floor.sh fails the job otherwise.
+  TF_FLOOR_VERSION: "1.13.0"
   TFLINT_VERSION: "v0.64.0"
   # Tracks the version `brew install markdownlint-cli` installs, so
   # contributors don't need a special install path — the same trap
@@ -188,6 +188,50 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
+
+      - name: cache terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: tf-providers-${{ hashFiles('**/.terraform.lock.hcl') }}
+          restore-keys: tf-providers-
+
+      - name: terraform init
+        working-directory: ${{ matrix.target }}
+        run: mkdir -p "$TF_PLUGIN_CACHE_DIR" && terraform init -backend=false
+
+      - name: terraform test
+        working-directory: ${{ matrix.target }}
+        run: terraform test -verbose
+
+  # The same suites as `test`, on TF_FLOOR_VERSION instead of TF_VERSION. A
+  # separate job rather than a matrix dimension on `test`, so the existing
+  # check names stay unchanged and each version is defined once (matrix values
+  # cannot read `env`).
+  test-floor:
+    name: terraform test on floor (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    needs: validate
+    permissions:
+      contents: read
+    env:
+      # Same stub credentials as the `test` job, for the same reason.
+      GODADDY_API_KEY: "ci-stub-not-real"
+      GODADDY_API_SECRET: "ci-stub-not-real"
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/worker-pools", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: required_version matches TF_FLOOR_VERSION
+        if: matrix.target == '.'
+        run: tests/scripts/check-terraform-floor.sh
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_FLOOR_VERSION }}
 
       - name: cache terraform providers
         uses: actions/cache@v4

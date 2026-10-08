@@ -28,8 +28,9 @@ mock_provider "aws" {
   # Terraform >= 1.11: the attribute was added by hashicorp/terraform#36227
   # and shipped in v1.11 (#36312 is only the docs update for it, and is the
   # wrong thing to cite when tracing the requirement). This example's own
-  # versions.tf declares that floor, and CI's single pinned Terraform version
-  # sits above it (see terraform-tests.yml).
+  # versions.tf declares a floor at or above it, and both CI Terraform
+  # versions (TF_VERSION and TF_FLOOR_VERSION) sit above it (see
+  # terraform-tests.yml).
   # command = apply is not a substitute at any Terraform version: this
   # example still creates a real EKS cluster (create_eks defaults to true
   # here), and a full mocked apply makes every computed AWS attribute in

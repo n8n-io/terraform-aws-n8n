@@ -7,7 +7,7 @@ terraform {
   # data.aws_eks_cluster.existing "known after apply" problem the header
   # comment there documents, and it did not work. Its only run blocks are
   # expect_failures ones, which need no version above the module's floor.
-  required_version = ">= 1.11"
+  required_version = ">= 1.13"
 
   required_providers {
     aws = {

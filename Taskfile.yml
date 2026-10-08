@@ -8,8 +8,8 @@ version: "3"
 
 vars:
   # Must stay in lockstep with the `target:` matrix lists in
-  # .github/workflows/terraform-tests.yml (validate, test, tflint and the
-  # per-example terraform-docs steps all enumerate the same set). This list
+  # .github/workflows/terraform-tests.yml (validate, test, test-floor, tflint
+  # and the per-example terraform-docs steps all enumerate the same set). This list
   # sat at six entries while the four customer-managed examples were added,
   # which made `task ci` pass locally on a change that broke
   # examples/customer-managed-everything in CI: an example this wrapper never
@@ -101,6 +101,14 @@ tasks:
     cmds:
       - ./tests/scripts/check-checkov.sh
 
+  terraform-floor:
+    desc: >-
+      Check every required_version declaration (root, modules/*, examples/*)
+      matches TF_FLOOR_VERSION in .github/workflows/terraform-tests.yml, the
+      version CI's test-floor job runs (see docs/versioning.md).
+    cmds:
+      - ./tests/scripts/check-terraform-floor.sh
+
   banners:
     desc: >-
       Check every variable/output block in variables.tf and outputs.tf sits under
@@ -144,11 +152,13 @@ tasks:
   ci:
     desc: >-
       Run the full local loop (fmt, validate, test, chart, chart-coverage, lint,
-      banners, example-parity, docs, markdown). Mirrors every CI job except
-      checkov, which is a hard-fail gate in CI but is left out here because it
-      needs a pinned checkov install that the other tasks do not: run
-      `task checkov` separately once you have it. Also runs banners and
-      example-parity, which CI does not gate on at all.
+      terraform-floor, banners, example-parity, docs, markdown). Mirrors every
+      CI job except checkov, which is a hard-fail gate in CI but is left out
+      here because it needs a pinned checkov install that the other tasks do
+      not: run `task checkov` separately once you have it. `test` runs on the
+      local terraform only; CI's test-floor job repeats it on
+      TF_FLOOR_VERSION. Also runs banners and example-parity, which CI does
+      not gate on at all.
     cmds:
       - task: fmt
       - task: validate
@@ -156,6 +166,7 @@ tasks:
       - task: chart
       - task: chart-coverage
       - task: lint
+      - task: terraform-floor
       - task: banners
       - task: example-parity
       - task: docs
