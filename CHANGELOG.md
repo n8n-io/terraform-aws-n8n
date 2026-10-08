@@ -492,6 +492,22 @@ this project adheres to the stability contract in
 
 ### Fixed
 
+- **`n8n_dns_config` accepts a valueless option on Terraform 1.11.** The
+  `ndots` validation chained `||` and `&&`, which only short-circuit from
+  Terraform 1.12. On 1.11, the module's floor, it still ran
+  `tonumber(o.value) <= 15` for every option, so a valid option without a
+  value, such as `{ name = "edns0" }`, failed the plan with "argument must not
+  be null", and a non-numeric `ndots` value failed with a `tonumber` error
+  instead of the validation's own message. The condition now uses nested
+  ternaries, which behave the same on every supported version. Callers on
+  1.12 or newer see no change. This also corrects the `[0.3.0]` entry on the
+  raised floor: short-circuit evaluation arrived in Terraform 1.12
+  (hashicorp/terraform#36224), not 1.10, so the `guard ? body : true` shape
+  is still a correctness requirement on 1.11. `AGENTS.md` now says so, and
+  the two `check` blocks that still used `guard || body`
+  (`otel_tuning_requires_master_switch`,
+  `log_streaming_destinations_require_managed_by_env`) use the ternary form.
+  Their warning messages and their results for known inputs are unchanged.
 - **`n8n_image_repository` applies Docker's 255-character limit to the
   repository path, not the whole string.** Docker measures the path after
   normalizing the reference (`distribution/reference` v0.6.0): the registry

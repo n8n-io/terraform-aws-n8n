@@ -12793,6 +12793,33 @@ run "n8n_dns_config_accepts_an_ndots_override" {
   }
 }
 
+# A valueless option is valid in the pod spec (edns0, single-request-reopen).
+# The ndots validation once rejected it on Terraform 1.11, whose eager `||`
+# still evaluated `tonumber(null) <= 15` and errored. This run passes on any
+# newer CLI either way; it pins the contract for the floor.
+run "n8n_dns_config_accepts_a_valueless_option_beside_ndots" {
+  command = plan
+
+  variables {
+    n8n_dns_config = {
+      options = [
+        { name = "edns0" },
+        { name = "ndots", value = "2" },
+      ]
+    }
+  }
+
+  assert {
+    condition     = local.n8n_dns_config.options[0].name == "edns0" && local.n8n_dns_config.options[1].value == "2"
+    error_message = "local.n8n_dns_config must carry through a valueless option such as edns0 unchanged, beside a valid ndots option."
+  }
+
+  assert {
+    condition     = !contains(keys(local.n8n_dns_config.options[0]), "value")
+    error_message = "A valueless option must render as {name: edns0}, without a value key, so the chart's toYaml does not emit `value: null`."
+  }
+}
+
 run "n8n_dns_config_empty_object_resolves_to_null" {
   command = plan
 

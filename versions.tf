@@ -20,11 +20,10 @@ terraform {
   #          there; that example's floor is inherited from the module's,
   #          not from override_during.
   #
-  # 1.10 is also load-bearing in passing: it added short-circuit evaluation of
-  # && and ||, which this module's `check` blocks used to have to work around
-  # by hand (see AGENTS.md). Declared as >= 1.11 in every versions.tf in the
-  # repo and matched by CI's TF_VERSION pin, so the floor is a claim CI
-  # actually exercises rather than one nobody checks.
+  # This floor is below 1.12, which added short-circuit evaluation of && and
+  # ||, so `check` and `validation` conditions must not rely on it: guard with
+  # a ternary instead (see AGENTS.md). Declared as >= 1.11 in every
+  # versions.tf in the repo.
   required_version = ">= 1.11"
 
   required_providers {

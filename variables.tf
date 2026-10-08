@@ -344,9 +344,9 @@ variable "n8n_encryption_key_secret_ref" {
   }
 
   # Written as a nested ternary rather than `== null ||`, per AGENTS.md's
-  # consistency rule for guard-style conditions: the null guard gates the
-  # `.key` access structurally rather than relying on short-circuit
-  # evaluation.
+  # rule for guard-style conditions: the null guard gates the `.key` access
+  # structurally rather than relying on short-circuit evaluation, which
+  # Terraform 1.11 (the floor) does not do.
   validation {
     condition     = var.n8n_encryption_key_secret_ref == null ? true : coalesce(var.n8n_encryption_key_secret_ref.key, "N8N_ENCRYPTION_KEY") == "N8N_ENCRYPTION_KEY"
     error_message = "n8n_encryption_key_secret_ref.key must be \"N8N_ENCRYPTION_KEY\" or unset. The chart's coreSecretsEnv helper reads this exact key name from secretRefs.existingSecret and takes no override, unlike the other three secret-reference inputs, whose key the chart does honor."
@@ -2515,10 +2515,10 @@ variable "redis_host" {
   # has nowhere to connect: the same succeeds-then-fails-at-runtime shape the
   # check blocks in redis.tf exist to prevent.
   #
-  # Written as nested ternaries rather than `||` and `&&` because Terraform 1.9,
-  # which CI pins, does not short-circuit either operator. trimspace(null) is a
-  # hard error, so the null test has to gate the blank test structurally rather
-  # than by evaluation order. See AGENTS.md.
+  # Written as nested ternaries rather than `||` and `&&` because Terraform
+  # before 1.12 (the module's floor is 1.11) does not short-circuit either
+  # operator. trimspace(null) is a hard error, so the null test has to gate the
+  # blank test structurally rather than by evaluation order. See AGENTS.md.
   validation {
     condition = var.create_elasticache ? true : (
       var.redis_host != null ? trimspace(var.redis_host) != "" : false
@@ -2600,7 +2600,7 @@ variable "redis_username" {
   # Blank is rejected as well as null, for the same reason redis_host rejects it:
   # an empty string satisfies "is set" and then reaches n8n and KEDA as an empty
   # username, which authenticates as nobody. Nested ternaries rather than `&&`,
-  # per AGENTS.md's consistency rule for guard-style conditions: the null test
+  # per AGENTS.md's rule for guard-style conditions: the null test
   # gates the blank test structurally (trimspace(null) is a hard error) rather
   # than relying on short-circuit evaluation.
   validation {
@@ -3549,10 +3549,10 @@ variable "n8n_dns_config" {
 
   default = null
 
-  # All four guard-style conditions below are written as `guard ? body : true`
-  # rather than `guard-inverted || body`, per AGENTS.md's consistency rule: the
-  # null guard gates the attribute access structurally rather than relying on
-  # short-circuit evaluation.
+  # The null guard on every condition below is written as `guard ? body : true`
+  # rather than `guard-inverted || body`, per AGENTS.md's rule for guard-style
+  # conditions: it gates the attribute access structurally rather than relying
+  # on short-circuit evaluation, which Terraform 1.11 (the floor) does not do.
   validation {
     condition = var.n8n_dns_config == null ? true : (
       length(coalesce(var.n8n_dns_config.nameservers, [])) <= 3
@@ -3587,10 +3587,21 @@ variable "n8n_dns_config" {
     error_message = "n8n_dns_config.searches entries must each be a lowercase RFC 1123 subdomain of at most 253 characters, with underscores permitted and a bare \".\" or a single trailing dot accepted. This matches Kubernetes' relaxed search-path validation (RelaxedDNSSearchValidation: on by default since 1.33, GA in 1.34); clusters on 1.32 or older validate strictly at admission and additionally reject \".\" and any underscore, so avoid both if you target one. The plan-time check exists because a malformed entry otherwise surfaces as a failed rollout rather than a Helm error."
   }
 
+  # Nested ternaries, not `o.name != "ndots" || (o.value != null && ... &&
+  # tonumber(o.value) <= 15)`: Terraform before 1.12 evaluates every operand,
+  # so the comparison still runs on a value the earlier tests already decided.
+  # That turned a non-numeric ndots ("many") into a tonumber error rather than
+  # this message, and failed the plan outright for a valid valueless option
+  # such as { name = "edns0" }, because `null <= 15` is an error. Only a
+  # ternary's untaken branch is skipped.
   validation {
     condition = var.n8n_dns_config == null ? true : alltrue([
       for o in coalesce(var.n8n_dns_config.options, []) :
-      o.name != "ndots" || (o.value != null && can(regex("^[0-9]+$", o.value)) && tonumber(o.value) <= 15)
+      o.name != "ndots" ? true : (
+        o.value == null ? false : (
+          can(regex("^[0-9]+$", o.value)) ? tonumber(o.value) <= 15 : false
+        )
+      )
     ])
     error_message = "n8n_dns_config: the ndots option must carry a whole number between 0 and 15, written as a string (\"1\", not \"1.5\"). glibc parses ndots with strtol and silently ignores a fractional, non-numeric or out-of-range value, falling back to its default of 1, which looks like the setting worked while leaving resolution behaviour unchanged."
   }

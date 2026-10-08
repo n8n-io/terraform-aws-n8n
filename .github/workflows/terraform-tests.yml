@@ -21,10 +21,12 @@ env:
   #
   # The module's own floor moved with it: every versions.tf in the repo now
   # declares required_version = ">= 1.11" rather than the ">= 1.9" that no job
-  # here exercised. Keep the two in step. A floor CI never runs is a claim
-  # nobody is checking, and this repo has already been bitten by the specific
-  # version-skew hazard that hides behind one (`check` blocks did not
-  # short-circuit && / || before Terraform 1.10; see AGENTS.md).
+  # here exercised. This pin satisfies the floor but does not exercise it, so
+  # keep it at or above the floor when bumping either. A floor CI never runs is
+  # a claim nobody is checking, and this repo has already been bitten by the
+  # specific version-skew hazard that hides behind one (&& and || do not
+  # short-circuit before Terraform 1.12, so conditions must guard with a
+  # ternary; see AGENTS.md).
   TF_VERSION: "1.16.4"
   TFLINT_VERSION: "v0.64.0"
   # Tracks the version `brew install markdownlint-cli` installs, so

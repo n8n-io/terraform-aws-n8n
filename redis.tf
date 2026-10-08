@@ -428,9 +428,10 @@ resource "aws_elasticache_replication_group" "n8n" {
 # applies cleanly while quietly discarding what the caller asked for. That is
 # what these cover.
 #
-# Written as `guard ? body : true` rather than `!guard || body`: Terraform 1.9,
-# which CI pins, does not short-circuit `||`, so the second operand is evaluated
-# even when the first already decides the result. See AGENTS.md.
+# Written as `guard ? body : true` rather than `!guard || body`: Terraform
+# before 1.12 (the module's floor is 1.11) does not short-circuit `||`, so the
+# second operand is evaluated even when the first already decides the result.
+# See AGENTS.md.
 
 # create_elasticache defaults to true, so a caller who sets redis_host expecting
 # the module to use their Redis gets a module-managed ElastiCache instead, and

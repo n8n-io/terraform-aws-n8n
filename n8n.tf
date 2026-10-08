@@ -1561,7 +1561,7 @@ check "alb_source_restrictions_not_overridden_by_annotations" {
 check "alb_source_restrictions_require_controller_managed_security_group" {
   assert {
     # concat rather than `||`: check conditions in this module avoid chained
-    # boolean operators, which do not short-circuit on Terraform 1.9.
+    # boolean operators, which do not short-circuit before Terraform 1.12.
     condition = var.create_ingress ? (
       length(concat(var.alb_inbound_cidrs, var.alb_inbound_prefix_list_ids)) > 0 ? !contains(
         keys(var.ingress_annotations), "alb.ingress.kubernetes.io/security-groups"
@@ -1618,7 +1618,7 @@ check "ingress_annotations_preserve_session_stickiness" {
 
 check "otel_tuning_requires_master_switch" {
   assert {
-    condition = var.n8n_otel_enabled || (
+    condition = var.n8n_otel_enabled ? true : (
       var.n8n_otel_exporter_otlp_endpoint == null &&
       var.n8n_otel_exporter_otlp_headers == null &&
       var.n8n_otel_exporter_service_name == null &&
@@ -1640,9 +1640,10 @@ check "otel_tuning_requires_master_switch" {
 # Only a tag shaped like MAJOR.MINOR.<rest> is compared (this covers "2.27.4"
 # and "2.27.4-alpine"); anything else, including null (the chart's floating
 # `stable`) and pre-release or channel tags, is left alone rather than guessed
-# at. Written as nested ternaries because Terraform 1.9 does not short-circuit
-# `&&`/`||` (see AGENTS.md), so the numeric comparisons must sit on a branch
-# that is only taken once the regex has confirmed they are numbers.
+# at. Written as nested ternaries because Terraform before 1.12 (the module's
+# floor is 1.11) does not short-circuit `&&`/`||` (see AGENTS.md), so the
+# numeric comparisons must sit on a branch that is only taken once the regex
+# has confirmed they are numbers.
 
 check "execution_data_s3_requires_n8n_2_27" {
   assert {
@@ -1670,7 +1671,7 @@ check "execution_data_s3_requires_n8n_2_27" {
 
 check "log_streaming_destinations_require_managed_by_env" {
   assert {
-    condition = var.n8n_log_streaming_managed_by_env || (
+    condition = var.n8n_log_streaming_managed_by_env ? true : (
       length(var.n8n_log_streaming_destinations) == 0
     )
     error_message = "n8n_log_streaming_destinations is set, but n8n_log_streaming_managed_by_env is false — the destinations will be ignored and no N8N_LOG_STREAMING_* env vars will be set on the n8n pods. Set n8n_log_streaming_managed_by_env = true to apply them, or clear the destinations to silence this warning."
@@ -1727,8 +1728,8 @@ check "graceful_shutdown_fits_grace_period" {
 # meant. All are warnings rather than errors: each is legitimate in some
 # deployment, and none can be decided with certainty from the inputs alone.
 #
-# Written as `guard ? body : true` per AGENTS.md, since Terraform 1.9 (the
-# version floor) does not short-circuit && and ||.
+# Written as `guard ? body : true` per AGENTS.md, since Terraform before 1.12
+# (the module's floor is 1.11) does not short-circuit && and ||.
 
 check "custom_image_repository_needs_an_explicit_tag" {
   assert {

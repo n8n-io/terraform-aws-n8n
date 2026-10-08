@@ -367,34 +367,44 @@ condition = var.create_database ? (var.db_host == null && var.db_password == nul
 condition = !var.create_database || (var.db_host == null && var.db_password == null)
 ```
 
-Both forms behave identically on the versions this module now supports, so
-this is a consistency rule rather than a correctness one, and the existing
-`check` blocks all use the first form. Keep matching them: nest rather than
-chaining `||` inside the body.
+This is a correctness rule, not only a consistency one. Short-circuit
+evaluation of `&&` and `||` arrived in Terraform 1.12
+([hashicorp/terraform#36224](https://github.com/hashicorp/terraform/issues/36224),
+listed in the v1.12.0 changelog), and the module's floor is `>= 1.11`. Below
+1.12 both operands are always evaluated, which breaks the `||` form in two
+ways:
 
-It used to be a correctness rule, and the history is worth knowing before
-anyone "simplifies" one of these back. `required_version` was `>= 1.9` and CI
-pinned 1.9.8. Short-circuit evaluation of `&&` and `||` arrived in Terraform
-1.10, so on 1.9 both operands were always evaluated, making
-`known_true || unknown` *unknown*, and a `check` whose condition is unknown at
-plan fails `terraform test` with "Check block assertion known after apply".
-The `!guard || body` shape therefore broke whenever the right side read an
-input a caller wired from a resource attribute, `examples/large` being the
-canary because it wires `db_password` from `random_password.aurora.result`.
-Worse, any local Terraform newer than 1.9 short-circuited and passed, so the
-whole class of bug was invisible locally and only ever failed in CI.
+- `known_true || unknown` is *unknown*. A real plan defers a `check` whose
+  condition is unknown to apply, but a plan-only `terraform test` run fails it
+  with "Check block assertion known after apply". The `!guard || body` shape
+  therefore breaks whenever the right side is still unknown at plan, for
+  example because it reads an input a caller wired from a resource attribute.
+  `examples/large` is the canary: it wires `db_password` from
+  `random_password.aurora.result`.
+- `var.x == null || <expression on var.x>` still evaluates the right side when
+  `var.x` is null, so attribute access, arithmetic, or a function call on the
+  null default aborts the plan (for example "Invalid function argument ...
+  argument must not be null"). The same applies to `validation` conditions;
+  `|| try(..., false)` and `|| can(...)` stay safe because they cannot error.
 
-The floor is now `>= 1.11` (every `versions.tf`, and CI's `TF_VERSION`), which
-is above the 1.10 that fixed it, so the hazard is retired. It is written down
-because "this reads more naturally as `!guard || body`" is a reasonable
-instinct that was, for a long stretch of this repo's history, wrong.
+Both failures reproduce on 1.11.4 and pass on 1.12.0. CI pins a newer
+`TF_VERSION`, so it does not catch them; a caller on 1.11 does. Every
+existing guard-style `check` block, one whose body only matters when a guard
+holds, uses the first form. Keep matching them, and use
+`x == null ? true : (...)` for null guards in `validation` blocks. Inside a
+body, nest rather than chain `||` whenever an operand could error or stay
+unknown; a plain `||` between known inputs is safe, and there is no need to
+rewrite one just for symmetry. Raising the floor to `>= 1.12` would retire the
+hazard; until then, "this reads more naturally as `!guard || body`" is a
+reasonable instinct that is wrong here.
 
 #### The floor is `>= 1.11`
 
 Declared as `required_version = ">= 1.11"` everywhere: root, `modules/controllers`,
 and all eleven examples, though not all in a `versions.tf` — nine examples have
 one, but `cloudflare` and `godaddy` declare it inline in `providers.tf`
-instead. Matched by CI's single `TF_VERSION` pin either way. It moved up from
+instead. CI's single `TF_VERSION` pin is newer: it satisfies the floor but
+does not exercise it. It moved up from
 `>= 1.9` because `override_resource`'s `override_during` attribute, which
 `examples/customer-managed-redis` and `-s3` need to assert a plan-time value
 on a resource the same configuration creates, arrived in 1.11
@@ -405,8 +415,11 @@ about a version constraint. `-cluster` tried the same technique for an
 unrelated problem and it didn't work there; its floor is inherited from the
 module's, not from `override_during` (see its own `versions.tf`).
 
-Keep all thirteen declarations and the CI pin in step when bumping. A floor the
-CI does not exercise is a claim nobody is checking.
+Keep all thirteen declarations in step when bumping, and keep the CI pin at or
+above the floor. Because CI does not run the floor itself, a construct that
+behaves differently on 1.11, such as the operator short-circuit above, passes
+CI and fails for a caller on 1.11. Check such changes against a 1.11 binary by
+hand, or raise the floor.
 
 **Recommended pattern** when end-to-end wiring cannot be tested under mocks:
 
