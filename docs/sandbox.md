@@ -66,6 +66,14 @@ is:
 db_postgresdb_pool_size * (main replicas + worker replicas + webhook replicas + any n8n_worker_pools ceilings)
 ```
 
+These are configured steady-state ceilings. Pods added during a rolling
+update are not counted, so leave some headroom. While
+`n8n_worker_keda_pause = true`, the worker term uses
+`n8n_worker_keda_paused_replica_count` when that is larger than
+`n8n_worker_keda_max_replicas`. If you clear the count while still paused,
+KEDA keeps the workers at their current number, which can still be above
+the maximum. The check then counts only the maximum.
+
 At the single-main sandbox sizes above (1 main + 1 worker + 1 webhook = 3
 pods), `db_postgresdb_pool_size = 3` requests up to 9 connections,
 well below the nominal-memory estimate, but confirm the instance's connection budget before relying on it. The module's own shipped defaults

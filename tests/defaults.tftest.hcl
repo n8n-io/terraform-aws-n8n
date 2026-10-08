@@ -3950,6 +3950,116 @@ run "connection_budget_counts_worker_pools" {
   expect_failures = [check.db_postgresdb_pool_size_fits_known_max_connections]
 }
 
+# While n8n_worker_keda_pause is true, KEDA holds the worker Deployment at
+# n8n_worker_keda_paused_replica_count, which can exceed
+# n8n_worker_keda_max_replicas (#180). The defaults alone fit (180 of 184), so
+# the warning here can only come from the paused count: (6 + 15 + 4) x 9 = 225.
+# A model that kept counting only the worker maximum would stay silent and
+# fail this run with a missing expected failure.
+run "connection_budget_counts_a_paused_replica_count_above_the_worker_max" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause                = true
+    n8n_worker_keda_paused_replica_count = 15
+  }
+
+  assert {
+    condition     = local.n8n_worker_modeled_max_replicas == 15 && local.n8n_pg_peak_connections == 225
+    error_message = "A paused count of 15 above the worker max of 10 must be modeled (worker 15, peak 225), got worker ${local.n8n_worker_modeled_max_replicas} and peak ${local.n8n_pg_peak_connections}."
+  }
+
+  expect_failures = [check.db_postgresdb_pool_size_fits_known_max_connections]
+}
+
+# Pausing without a count freezes workers at their current count, which the
+# model assumes is within the autoscaler maximum, so the worker term stays at
+# the default 10 and the defaults still plan clean.
+run "connection_budget_keeps_the_worker_max_when_paused_without_a_count" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause = true
+  }
+
+  assert {
+    condition     = local.n8n_worker_modeled_max_replicas == 10 && local.n8n_pg_peak_connections == 180
+    error_message = "Pausing without a paused count must keep the worker term at the default max of 10 (peak 180), got worker ${local.n8n_worker_modeled_max_replicas} and peak ${local.n8n_pg_peak_connections}."
+  }
+}
+
+# A paused count below the worker maximum must not lower the modeled ceiling:
+# the model is max(maximum, paused count), not the paused count alone. Count 0
+# keeps the worker term at 10 (peak 180) rather than 0 (peak 90).
+run "connection_budget_keeps_the_worker_max_when_paused_below_it" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause                = true
+    n8n_worker_keda_paused_replica_count = 0
+  }
+
+  assert {
+    condition     = local.n8n_worker_modeled_max_replicas == 10 && local.n8n_pg_peak_connections == 180
+    error_message = "A paused count of 0 below the worker max of 10 must keep the worker term at 10 (peak 180), got worker ${local.n8n_worker_modeled_max_replicas} and peak ${local.n8n_pg_peak_connections}."
+  }
+}
+
+# A paused count while pause is off is inert: the chart only renders
+# pausedReplicaCount while the ScaledObject is paused, so the budget must not
+# count it. Only the inert-count warning fires; the budget check must stay
+# silent at the default 180.
+run "connection_budget_ignores_a_paused_replica_count_while_pause_is_off" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_paused_replica_count = 15
+  }
+
+  assert {
+    condition     = local.n8n_worker_modeled_max_replicas == 10 && local.n8n_pg_peak_connections == 180
+    error_message = "A paused count while n8n_worker_keda_pause is false must not be modeled (worker 10, peak 180), got worker ${local.n8n_worker_modeled_max_replicas} and peak ${local.n8n_pg_peak_connections}."
+  }
+
+  expect_failures = [check.worker_keda_paused_replica_count_requires_pause]
+}
+
+# The exact boundary on db.t3.small: 191 known minus 7 reserved leaves 184
+# usable. A peak of exactly 184 must stay silent and 185 must warn, which pins
+# the comparison as <= rather than <. The reserved-margin run above proves the
+# subtraction, not the operator. Webhook ceilings are raised rather than worker
+# ones because webhook pods are the cheapest in CPU (300m), so neither run
+# trips the unrelated node-capacity check at the default node_max.
+run "connection_budget_stays_silent_at_exactly_the_usable_limit" {
+  command = plan
+
+  variables {
+    db_postgresdb_pool_size      = 8
+    n8n_webhook_hpa_max_replicas = 7
+  }
+
+  assert {
+    condition     = local.n8n_pg_peak_connections == 184 && local.db_max_connections_known - local.db_max_connections_reserved == 184
+    error_message = "Main 6 + worker 10 + webhook 7 = 23 pods x pool_size 8 must model exactly the 184 usable connections, got ${local.n8n_pg_peak_connections}."
+  }
+}
+
+run "connection_budget_warns_one_above_the_usable_limit" {
+  command = plan
+
+  variables {
+    db_postgresdb_pool_size      = 5
+    n8n_webhook_hpa_max_replicas = 21
+  }
+
+  assert {
+    condition     = local.n8n_pg_peak_connections == 185
+    error_message = "Main 6 + worker 10 + webhook 21 = 37 pods x pool_size 5 must model 185 connections, one above the 184 usable, got ${local.n8n_pg_peak_connections}."
+  }
+
+  expect_failures = [check.db_postgresdb_pool_size_fits_known_max_connections]
+}
+
 # An instance class outside the curated table must stay silent rather than
 # warn from a guessed limit, no matter how large the arithmetic gets.
 run "connection_budget_unknown_instance_class_is_silent" {
