@@ -207,6 +207,58 @@ jq -e --arg want "$default_timeout" '.data.N8N_GRACEFUL_SHUTDOWN_TIMEOUT == $wan
 jq -e '.data.N8N_GRACEFUL_SHUTDOWN_TIMEOUT == "45"' "$tmp/configmap-overridden.json" >/dev/null
 echo "PASS: chart $chart_version, n8n_graceful_shutdown_timeout reaches N8N_GRACEFUL_SHUTDOWN_TIMEOUT in the ConfigMap"
 
+# db_postgresdb_ssl_ca_pem -> database.ssl.ca (issue #178). The module passes
+# the CA through local.postgres_ssl_ca_values and keeps
+# DB_POSTGRESDB_SSL_ENABLED / DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED in
+# config.extraEnv (local.n8n_postgres_ssl_env). The tftest.hcl runs can only
+# pin the locals' shape, because helm_release.values is unknown under plan
+# mocks. This renders the real chart from both locals and proves the chart
+# side: the CA lands in the chart ConfigMap, every n8n container gets exactly
+# one DB_POSTGRESDB_SSL_CA and one DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED (the
+# chart must not render a second one next to the module's), and without a CA
+# the chart renders no DB_POSTGRESDB_SSL* key at all.
+ca_pem=$'\n-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n'
+ca_trimmed=$'-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----'
+for scenario in default ca; do
+  ca_vars=()
+  if [[ "$scenario" == ca ]]; then
+    ca_vars=(-var="db_postgresdb_ssl_ca_pem=$ca_pem" -var='db_postgresdb_ssl_reject_unauthorized=true')
+  fi
+  console ${ca_vars[@]+"${ca_vars[@]}"} \
+    <<< 'jsonencode({database=local.postgres_ssl_ca_values,config={extraEnv=local.n8n_postgres_ssl_env}})' \
+    > "$tmp/postgres-ssl-values-$scenario.json"
+  for template in configmap deployment-main deployment-worker deployment-webhook-processor; do
+    helm template n8n "$tmp/n8n" -f "$tmp/values.json" -f "$tmp/postgres-ssl-values-$scenario.json" \
+      --set secretRefs.existingSecret=test-core \
+      --set license.enabled=true --set license.existingSecret.name=test-license \
+      --set queueMode.enabled=true --set webhookProcessor.enabled=true \
+      --set keda.enabled=true --set taskRunners.enabled=true \
+      --show-only "templates/$template.yaml" > "$tmp/postgres-ssl-$scenario-$template.yaml"
+    console <<< "jsonencode(yamldecode(file(\"$tmp/postgres-ssl-$scenario-$template.yaml\")))" \
+      > "$tmp/postgres-ssl-$scenario-$template.json"
+  done
+done
+jq -e '.data | keys | map(select(startswith("DB_POSTGRESDB_SSL"))) | length == 0' \
+  "$tmp/postgres-ssl-default-configmap.json" >/dev/null
+jq -e --arg ca "$ca_trimmed" \
+  '.data.DB_POSTGRESDB_SSL_CA == $ca and (.data | has("DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED") | not)' \
+  "$tmp/postgres-ssl-ca-configmap.json" >/dev/null
+# The env reference must point at the ConfigMap checked above, by name and key,
+# so a chart-side rename or retarget fails here instead of at pod start.
+ca_configmap_name=$(jq -er '.metadata.name' "$tmp/postgres-ssl-ca-configmap.json")
+for template in deployment-main deployment-worker deployment-webhook-processor; do
+  jq -e '[.spec.template.spec.containers[] | select(.name != "task-runner") | [.env[] | select(.name == "DB_POSTGRESDB_SSL_CA")] | length] | (length > 0 and all(. == 0))' \
+    "$tmp/postgres-ssl-default-$template.json" >/dev/null
+  jq -e '[.spec.template.spec.containers[] | select(.name != "task-runner") | [.env[] | select(.name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED") | .value] == ["false"]] | (length > 0 and all)' \
+    "$tmp/postgres-ssl-default-$template.json" >/dev/null
+  jq -e --arg name "$ca_configmap_name" \
+    '[.spec.template.spec.containers[] | select(.name != "task-runner") | [.env[] | select(.name == "DB_POSTGRESDB_SSL_CA") | .valueFrom.configMapKeyRef | {name, key}] == [{"name": $name, "key": "DB_POSTGRESDB_SSL_CA"}]] | (length > 0 and all)' \
+    "$tmp/postgres-ssl-ca-$template.json" >/dev/null
+  jq -e '[.spec.template.spec.containers[] | select(.name != "task-runner") | [.env[] | select(.name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED") | .value] == ["true"]] | (length > 0 and all)' \
+    "$tmp/postgres-ssl-ca-$template.json" >/dev/null
+done
+echo "PASS: chart $chart_version, db_postgresdb_ssl_ca_pem reaches the chart ConfigMap as DB_POSTGRESDB_SSL_CA with no duplicate SSL env names"
+
 # n8n_worker_keda_min_replicas = 0 (issue #146): n8n.tf feeds
 # queueMode.workerReplicaCount from local.n8n_worker_replica_count (floored at
 # 1 in scaling.tf) and keda.worker.minReplicaCount from the raw input. Both

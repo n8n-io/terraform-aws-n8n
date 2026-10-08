@@ -6059,19 +6059,19 @@ run "rds_final_snapshot_identifier_rejects_blank_even_for_external_database" {
 }
 
 # ── Forced-rollout pod annotations ───────────────────────────────────────────
-# Two independent sources feed local.n8n_pod_annotations (locals.tf), which is
-# what n8n.tf actually merges into podAnnotations: the Redis AUTH token
-# reaches pods through a Secret referenced by name, and the PostgreSQL SSL CA
-# bundle reaches pods through a ConfigMap referenced by a constant name.
-# Either way, changing the underlying content produces no Helm diff and
-# nothing restarts on its own. Asserted here, not on helm_release.n8n.values,
-# because values is unknown at plan time (it embeds the Redis endpoint).
+# local.n8n_pod_annotations (locals.tf) is what n8n.tf merges into
+# podAnnotations. Only the Redis AUTH token feeds it: the token reaches pods
+# through a Secret referenced by name, so changing it produces no Helm diff
+# and nothing restarts on its own. The PostgreSQL SSL CA bundle needs no such
+# annotation: it is rendered into the chart's own ConfigMap through
+# database.ssl.ca, so the chart's checksum/config annotation rolls the pods
+# when it changes. Asserted here, not on helm_release.n8n.values, because
+# values is unknown at plan time (it embeds the Redis endpoint).
 #
-# The hash itself is unknown at plan time for the Redis half, since
-# random_password.result is. What these pin is the shape: which paths carry
-# which annotation at all, that it is a checksum key rather than the secret
-# itself, and that the two sources merge into one map instead of one
-# clobbering the other.
+# The hash itself is unknown at plan time, since random_password.result is.
+# What these pin is the shape: which paths carry the annotation at all, that
+# it is a checksum key rather than the secret itself, and that a CA bundle
+# adds nothing to the map.
 
 run "no_pod_annotations_by_default" {
   command = plan
@@ -6119,67 +6119,30 @@ run "pod_annotations_carry_the_token_checksum_when_enabled" {
   }
 }
 
-run "no_pod_annotations_for_postgres_ssl_ca_pem_with_ssl_disabled" {
+run "postgres_ssl_ca_pem_adds_no_pod_annotation" {
   command = plan
 
-  # db_postgresdb_ssl_enabled = false is the gate postgres_ssl_ca_pod_annotations
-  # shares with the ConfigMap itself (locals.tf): both must stay empty/absent
-  # together. Listed in expect_failures for the same reason
-  # db_postgresdb_ssl_disabled_omits_reject_unauthorized_and_ca lists it above:
-  # check.db_postgresdb_ssl_ca_pem_requires_verification is expected to warn
-  # about exactly this combination.
-  variables {
-    db_postgresdb_ssl_enabled = false
-    db_postgresdb_ssl_ca_pem  = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
-  }
-
-  assert {
-    condition     = length(local.postgres_ssl_ca_pod_annotations) == 0
-    error_message = "db_postgresdb_ssl_enabled = false must omit the CA checksum annotation, matching the ConfigMap it would otherwise be pointless to roll pods for."
-  }
-
-  expect_failures = [check.db_postgresdb_ssl_ca_pem_requires_verification]
-}
-
-run "pod_annotations_carry_the_ca_checksum_when_ssl_enabled_and_ca_set" {
-  command = plan
-
+  # The CA bundle is part of the chart's own ConfigMap (database.ssl.ca, see
+  # local.postgres_ssl_ca_values), so the chart's checksum/config annotation
+  # already rolls main, worker and webhook processor pods when it changes. The
+  # module must not add a second checksum for it.
   variables {
     db_postgresdb_ssl_reject_unauthorized = true
     db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
   }
 
   assert {
-    condition = (
-      length(local.postgres_ssl_ca_pod_annotations) == 1 &&
-      contains(keys(local.postgres_ssl_ca_pod_annotations), "checksum/postgres-ssl-ca")
-    )
-    error_message = "A set CA bundle with db_postgresdb_ssl_enabled = true must add exactly the CA checksum annotation, so a CA rotation rolls main, worker and webhook processor pods. The annotation does not depend on db_postgresdb_ssl_reject_unauthorized."
-  }
-
-  assert {
-    # length()/contains() rather than a direct map equality: local.redis_pod_annotations
-    # (and therefore local.n8n_pod_annotations, once merged) is tainted
-    # sensitive by Terraform whenever its "true" branch touches
-    # local.redis_auth_token_value, even on this run where that branch isn't
-    # taken and the map is actually empty. Comparing a sensitive-tainted map
-    # to a plain one for equality fails the assertion outright rather than
-    # evaluating the values, so key presence is what this pins instead.
-    condition = (
-      length(local.n8n_pod_annotations) == 1 &&
-      contains(keys(local.n8n_pod_annotations), "checksum/postgres-ssl-ca")
-    )
-    error_message = "With no Redis AUTH token in play, the merged local.n8n_pod_annotations must carry exactly the CA checksum annotation."
+    condition     = length(local.n8n_pod_annotations) == 0
+    error_message = "A CA bundle must add no podAnnotations: the chart's checksum/config annotation covers it, because the CA is rendered into the chart ConfigMap."
   }
 }
 
-run "pod_annotations_merge_both_sources_without_clobbering" {
+run "pod_annotations_carry_only_the_token_checksum_with_ca_pem" {
   command = plan
 
-  # Proves the merge in locals.tf's n8n_pod_annotations composes rather than
-  # one source overwriting the other: both conditions below independently set
-  # a top-level podAnnotations key in n8n.tf's merge() call before this local
-  # existed, and merge() keeps only the last map that sets a given key.
+  # With both a Redis AUTH token and a CA bundle in play, only the token
+  # checksum is the module's to add: the token lives in a Secret the chart
+  # does not hash, while the CA lives in the chart ConfigMap it does hash.
   variables {
     redis_transit_encryption_enabled      = true
     db_postgresdb_ssl_reject_unauthorized = true
@@ -6187,12 +6150,14 @@ run "pod_annotations_merge_both_sources_without_clobbering" {
   }
 
   assert {
+    # length()/contains() rather than a direct map equality: the map is
+    # tainted sensitive through local.redis_auth_token_value, and comparing a
+    # sensitive-tainted map to a plain one fails the assertion outright.
     condition = (
-      length(local.n8n_pod_annotations) == 2 &&
-      contains(keys(local.n8n_pod_annotations), "checksum/redis-auth-token") &&
-      contains(keys(local.n8n_pod_annotations), "checksum/postgres-ssl-ca")
+      length(local.n8n_pod_annotations) == 1 &&
+      contains(keys(local.n8n_pod_annotations), "checksum/redis-auth-token")
     )
-    error_message = "Both the Redis AUTH token checksum and the PostgreSQL CA checksum must be present together: a rotation of either input must still roll pods, and neither source may clobber the other's annotation."
+    error_message = "With Redis AUTH and a CA bundle both set, local.n8n_pod_annotations must carry exactly the Redis token checksum."
   }
 }
 
@@ -12470,10 +12435,11 @@ run "db_postgresdb_connection_timeout_ms_rejects_a_node_timer_overflow" {
 
 # ── PostgreSQL SSL certificate verification ───────────────────────────────────
 # (db_postgresdb_ssl_reject_unauthorized / db_postgresdb_ssl_ca_pem). Asserted
-# on local.n8n_postgres_ssl_env / local.n8n_extra_volumes /
-# local.n8n_extra_volume_mounts rather than helm_release.n8n.values, per
-# AGENTS.md's documented mock-provider limitation (values is unknown at plan
-# time once kubernetes_namespace is in the dependency chain).
+# on local.n8n_postgres_ssl_env / local.postgres_ssl_ca_values rather than
+# helm_release.n8n.values, per AGENTS.md's documented mock-provider limitation
+# (values is unknown at plan time once kubernetes_namespace is in the
+# dependency chain). tests/scripts/check-main-chart.sh renders the real chart
+# with the same locals, which is what proves the chart side.
 
 run "db_postgresdb_ssl_defaults_match_prior_behavior" {
   command = plan
@@ -12485,7 +12451,7 @@ run "db_postgresdb_ssl_defaults_match_prior_behavior" {
 
   assert {
     condition     = var.db_postgresdb_ssl_ca_pem == null
-    error_message = "db_postgresdb_ssl_ca_pem must default to null, so no ConfigMap, volume, or mount renders unless a caller opts in."
+    error_message = "db_postgresdb_ssl_ca_pem must default to null, so no database.ssl chart value renders unless a caller opts in."
   }
 
   assert {
@@ -12500,18 +12466,8 @@ run "db_postgresdb_ssl_defaults_match_prior_behavior" {
   }
 
   assert {
-    condition     = length(kubernetes_config_map_v1.postgres_ssl_ca) == 0
-    error_message = "The CA ConfigMap must not exist when db_postgresdb_ssl_ca_pem is unset."
-  }
-
-  assert {
-    condition     = length([for v in local.n8n_extra_volumes : v if v.name == "postgres-ssl-ca"]) == 0
-    error_message = "No postgres-ssl-ca volume should render by default."
-  }
-
-  assert {
-    condition     = length([for m in local.n8n_extra_volume_mounts : m if m.name == "postgres-ssl-ca"]) == 0
-    error_message = "No postgres-ssl-ca mount should render by default."
+    condition     = length(local.postgres_ssl_ca_values) == 0
+    error_message = "local.postgres_ssl_ca_values must be empty by default, so the database values carry no ssl key and an existing deployment sees no Helm values diff."
   }
 }
 
@@ -12546,18 +12502,18 @@ run "db_postgresdb_ssl_disabled_omits_reject_unauthorized_and_ca" {
       local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_ENABLED" &&
       local.n8n_postgres_ssl_env[0].value == "false"
     )
-    error_message = "db_postgresdb_ssl_enabled = false must omit DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED and DB_POSTGRESDB_SSL_CA_FILE entirely, matching the module's prior behavior for this input."
+    error_message = "db_postgresdb_ssl_enabled = false must omit DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED entirely, matching the module's prior behavior for this input."
   }
 
   assert {
-    condition     = length(kubernetes_config_map_v1.postgres_ssl_ca) == 0
-    error_message = "The CA ConfigMap must not exist while db_postgresdb_ssl_enabled = false, even with a CA bundle supplied."
+    condition     = length(local.postgres_ssl_ca_values) == 0
+    error_message = "The CA must not reach the chart while db_postgresdb_ssl_enabled = false, even with a CA bundle supplied: a CA alone makes n8n build a TLS options object."
   }
 
   expect_failures = [check.db_postgresdb_ssl_ca_pem_requires_verification]
 }
 
-run "db_postgresdb_ssl_ca_pem_renders_configmap_volume_and_env" {
+run "db_postgresdb_ssl_ca_pem_renders_chart_ssl_values" {
   command = plan
 
   variables {
@@ -12565,33 +12521,65 @@ run "db_postgresdb_ssl_ca_pem_renders_configmap_volume_and_env" {
     db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
   }
 
+  # rejectUnauthorized is always true in the chart values: the chart renders
+  # DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED only when it is false, and the
+  # module's own config.extraEnv entry owns that name, so a false here would
+  # give every n8n container the same env name twice.
+  # Field by field rather than comparing the whole map to a literal: the
+  # conditional in locals.tf unifies its two branches into a type the literal
+  # does not share, and == across types is false rather than a type error.
   assert {
     condition = (
-      length(kubernetes_config_map_v1.postgres_ssl_ca) == 1 &&
-      kubernetes_config_map_v1.postgres_ssl_ca[0].data["ca.pem"] == "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----" &&
-      kubernetes_config_map_v1.postgres_ssl_ca[0].metadata[0].name == local.postgres_ssl_ca_configmap_name
+      length(local.postgres_ssl_ca_values) == 1 &&
+      contains(keys(local.postgres_ssl_ca_values), "ssl") &&
+      length(local.postgres_ssl_ca_values.ssl) == 3 &&
+      local.postgres_ssl_ca_values.ssl.enabled == true &&
+      local.postgres_ssl_ca_values.ssl.rejectUnauthorized == true &&
+      local.postgres_ssl_ca_values.ssl.ca == "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----"
     )
-    error_message = "db_postgresdb_ssl_ca_pem must create exactly one ConfigMap carrying the supplied PEM (trailing newline trimmed) under the ca.pem key, named local.postgres_ssl_ca_configmap_name."
+    error_message = "db_postgresdb_ssl_ca_pem must render database.ssl = { enabled = true, rejectUnauthorized = true, ca = <trimmed PEM> } for the chart."
   }
 
   assert {
-    condition     = one([for v in local.n8n_extra_volumes : v if v.name == "postgres-ssl-ca"]).configMap.name == local.postgres_ssl_ca_configmap_name
-    error_message = "local.n8n_extra_volumes must carry a postgres-ssl-ca entry sourced from the module-managed ConfigMap."
+    condition = (
+      length(local.n8n_postgres_ssl_env) == 2 &&
+      length([for e in local.n8n_postgres_ssl_env : e if e.name == "DB_POSTGRESDB_SSL_CA_FILE" || e.name == "DB_POSTGRESDB_SSL_CA"]) == 0
+    )
+    error_message = "The CA must reach n8n only through the chart ConfigMap: local.n8n_postgres_ssl_env must carry neither DB_POSTGRESDB_SSL_CA_FILE nor DB_POSTGRESDB_SSL_CA."
   }
 
   assert {
-    condition = one([for m in local.n8n_extra_volume_mounts : m if m.name == "postgres-ssl-ca"]) == {
-      name      = "postgres-ssl-ca"
-      mountPath = "/etc/n8n/postgres-ssl-ca"
-      readOnly  = true
-    }
-    error_message = "local.n8n_extra_volume_mounts must mount postgres-ssl-ca read-only at /etc/n8n/postgres-ssl-ca."
+    condition = (
+      length([for v in local.n8n_extra_volumes : v if v.name == "postgres-ssl-ca"]) == 0 &&
+      length([for m in local.n8n_extra_volume_mounts : m if m.name == "postgres-ssl-ca"]) == 0
+    )
+    error_message = "The CA must not be mounted as a volume: the chart value replaces the module-managed ConfigMap and mount."
+  }
+}
+
+run "db_postgresdb_ssl_ca_pem_delivered_without_verification" {
+  command = plan
+
+  # The gate is db_postgresdb_ssl_enabled alone, not also
+  # db_postgresdb_ssl_reject_unauthorized: the module always sets
+  # DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED explicitly while SSL is on, so n8n
+  # receives { ca, rejectUnauthorized = false } and keeps the connection
+  # encrypted but unverified. The check still warns that the CA is unused.
+  variables {
+    db_postgresdb_ssl_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
   }
 
   assert {
-    condition     = one([for e in local.n8n_postgres_ssl_env : e.value if e.name == "DB_POSTGRESDB_SSL_CA_FILE"]) == "/etc/n8n/postgres-ssl-ca/ca.pem"
-    error_message = "local.n8n_postgres_ssl_env must set DB_POSTGRESDB_SSL_CA_FILE to the mounted file path."
+    condition     = local.postgres_ssl_ca_values.ssl.ca == "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----"
+    error_message = "With db_postgresdb_ssl_enabled = true, the CA must reach the chart even while db_postgresdb_ssl_reject_unauthorized = false."
   }
+
+  assert {
+    condition     = one([for e in local.n8n_postgres_ssl_env : e.value if e.name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"]) == "false"
+    error_message = "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED must stay false in config.extraEnv, so the delivered CA does not turn verification on."
+  }
+
+  expect_failures = [check.db_postgresdb_ssl_ca_pem_requires_verification]
 }
 
 run "rejects_empty_db_postgresdb_ssl_ca_pem" {
@@ -12609,62 +12597,10 @@ run "rejects_malformed_non_pem_db_postgresdb_ssl_ca_pem" {
 
   # Non-empty but not PEM-framed: a DER blob, a truncated download, or plain
   # text would previously pass this validation (it only rejected an empty
-  # string), reach the ConfigMap and the mounted file, and only surface as a
-  # connection failure once n8n tried to use it.
+  # string), reach the chart value, and only surface as a connection failure
+  # once n8n tried to use it.
   variables {
     db_postgresdb_ssl_ca_pem = "this is not a certificate, just some text"
-  }
-
-  expect_failures = [var.db_postgresdb_ssl_ca_pem]
-}
-
-run "db_postgresdb_ssl_ca_pem_rejects_a_conflicting_extra_volume_name" {
-  command = plan
-
-  variables {
-    db_postgresdb_ssl_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
-    n8n_extra_volumes = [
-      { name = "postgres-ssl-ca", config_map = { name = "caller-owned" } },
-    ]
-    n8n_extra_volume_mounts = [
-      { name = "postgres-ssl-ca", mount_path = "/opt/caller-owned" },
-    ]
-  }
-
-  expect_failures = [var.db_postgresdb_ssl_ca_pem]
-}
-
-run "db_postgresdb_ssl_ca_pem_rejects_a_conflicting_extra_volume_mount_path" {
-  command = plan
-
-  variables {
-    db_postgresdb_ssl_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
-    n8n_extra_volumes = [
-      { name = "caller-owned", config_map = { name = "caller-owned" } },
-    ]
-    n8n_extra_volume_mounts = [
-      { name = "caller-owned", mount_path = "/etc/n8n/postgres-ssl-ca" },
-    ]
-  }
-
-  expect_failures = [var.db_postgresdb_ssl_ca_pem]
-}
-
-run "db_postgresdb_ssl_ca_pem_rejects_a_mount_under_the_reserved_path" {
-  command = plan
-
-  # A sub_path mount at the CA file itself would replace the managed bundle
-  # while the checksum annotation still hashes db_postgresdb_ssl_ca_pem, so
-  # the reservation covers every path under the directory, not only the
-  # directory.
-  variables {
-    db_postgresdb_ssl_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
-    n8n_extra_volumes = [
-      { name = "caller-owned", config_map = { name = "caller-owned" } },
-    ]
-    n8n_extra_volume_mounts = [
-      { name = "caller-owned", mount_path = "/etc/n8n/postgres-ssl-ca/ca.pem", sub_path = "ca.pem" },
-    ]
   }
 
   expect_failures = [var.db_postgresdb_ssl_ca_pem]
@@ -12673,60 +12609,83 @@ run "db_postgresdb_ssl_ca_pem_rejects_a_mount_under_the_reserved_path" {
 run "db_postgresdb_ssl_ca_pem_accepts_a_multi_certificate_bundle" {
   command = plan
 
-  # AWS's global-bundle.pem concatenates many certificates. The PEM
-  # validation must accept the whole bundle, and the ConfigMap and checksum
-  # must both use the trimmed value n8n's _FILE loader would read anyway.
+  # A regional RDS bundle concatenates several certificates. The PEM
+  # validation must accept the whole bundle, and the chart value must carry
+  # it whole with only the surrounding whitespace trimmed.
   variables {
     db_postgresdb_ssl_reject_unauthorized = true
     db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFakeOne\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIFakeTwo\n-----END CERTIFICATE-----\n"
   }
 
   assert {
-    condition     = kubernetes_config_map_v1.postgres_ssl_ca[0].data["ca.pem"] == "-----BEGIN CERTIFICATE-----\nMIIFakeOne\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIFakeTwo\n-----END CERTIFICATE-----"
-    error_message = "A multi-certificate bundle must reach the ConfigMap whole, with only the surrounding whitespace trimmed."
+    condition     = local.postgres_ssl_ca_values.ssl.ca == "-----BEGIN CERTIFICATE-----\nMIIFakeOne\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIFakeTwo\n-----END CERTIFICATE-----"
+    error_message = "A multi-certificate bundle must reach database.ssl.ca whole, with only the surrounding whitespace trimmed."
+  }
+}
+
+# The chart passes database.ssl.ca to every n8n container as the environment
+# variable DB_POSTGRESDB_SSL_CA. Linux refuses to start a process when one
+# environment string ("NAME=value" plus its terminating NUL) exceeds 32 pages,
+# 131072 bytes with 4 KiB pages, so the value may be at most 131050 bytes.
+# Measured in Docker: 131050 bytes starts, 131051 fails with "argument list
+# too long". The framing below is 54 characters, so the zero-padded body is
+# sized to land exactly on each side of that limit.
+
+run "db_postgresdb_ssl_ca_pem_accepts_a_bundle_at_the_size_limit" {
+  command = plan
+
+  # Surrounding whitespace pushes the raw input over the limit on purpose: the
+  # validation measures the trimmed value, which is what reaches the chart.
+  variables {
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "\n  -----BEGIN CERTIFICATE-----\n${format("%0130996d", 0)}\n-----END CERTIFICATE-----\n\n"
   }
 
   assert {
-    condition     = local.postgres_ssl_ca_pod_annotations["checksum/postgres-ssl-ca"] == sha256("-----BEGIN CERTIFICATE-----\nMIIFakeOne\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIFakeTwo\n-----END CERTIFICATE-----")
-    error_message = "The CA checksum annotation must hash the same trimmed value the ConfigMap stores."
+    condition     = length(local.postgres_ssl_ca_values.ssl.ca) == 131050
+    error_message = "A bundle of exactly 131050 characters after trimming must be accepted and delivered whole."
   }
 }
 
-run "db_postgresdb_ssl_ca_pem_collision_checks_skip_when_ssl_disabled" {
+run "rejects_db_postgresdb_ssl_ca_pem_over_the_size_limit" {
   command = plan
 
-  # db_postgresdb_ssl_enabled = false means the module itself never creates
-  # the "postgres-ssl-ca" volume or mount (n8n.tf, locals.tf), so a caller's
-  # n8n_extra_volumes / n8n_extra_volume_mounts entry reusing those exact
-  # names is not actually a collision. Before gating both validations on
-  # db_postgresdb_ssl_enabled, this otherwise-valid combination was rejected
-  # anyway. check.db_postgresdb_ssl_ca_pem_requires_verification still fires
-  # (ca_pem is set without verification), so it is listed in expect_failures;
-  # the variable's own validations must NOT be in it.
+  # AWS's global-bundle.pem (about 170 KB) is the real-world case this
+  # catches: it would make every n8n container fail to start.
   variables {
-    db_postgresdb_ssl_enabled = false
-    db_postgresdb_ssl_ca_pem  = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
-    n8n_extra_volumes = [
-      { name = "postgres-ssl-ca", config_map = { name = "caller-owned" } },
-    ]
-    n8n_extra_volume_mounts = [
-      { name = "postgres-ssl-ca", mount_path = "/etc/n8n/postgres-ssl-ca" },
-    ]
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\n${format("%0130997d", 0)}\n-----END CERTIFICATE-----\n"
   }
 
-  expect_failures = [check.db_postgresdb_ssl_ca_pem_requires_verification]
+  expect_failures = [var.db_postgresdb_ssl_ca_pem]
 }
 
-run "rejects_reserved_ssl_ca_file_environment_name" {
+run "rejects_non_ascii_db_postgresdb_ssl_ca_pem" {
   command = plan
 
-  # DB_POSTGRESDB_SSL_CA_FILE needs no dedicated reservation: it already falls
-  # under the generic "DB_" prefix in local.n8n_managed_env_prefixes. This run
-  # exists to catch a future refactor of that prefix list silently narrowing
-  # it to miss this name.
+  # The size validation counts characters, and Linux limits bytes. A PEM is
+  # ASCII, so the two agree only because non-ASCII text is rejected: without
+  # this, a bundle with multibyte characters between the delimiters could pass
+  # the size check and still exceed the environment string limit.
+  variables {
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFak\u00e9\n-----END CERTIFICATE-----\n"
+  }
+
+  expect_failures = [var.db_postgresdb_ssl_ca_pem]
+}
+
+run "rejects_reserved_ssl_ca_environment_name" {
+  command = plan
+
+  # DB_POSTGRESDB_SSL_CA is rendered by the chart from database.ssl.ca. It
+  # needs no dedicated reservation: it already falls under the generic "DB_"
+  # prefix in local.n8n_managed_env_prefixes. This run exists to catch a
+  # future refactor of that prefix list silently narrowing it to miss this
+  # name, which would let config.extraEnv shadow the chart's CA.
   variables {
     n8n_extra_env = [
-      { name = "DB_POSTGRESDB_SSL_CA_FILE", value = "/tmp/override.pem" },
+      { name = "DB_POSTGRESDB_SSL_CA", value = "-----BEGIN CERTIFICATE-----\nMIIOverride\n-----END CERTIFICATE-----" },
     ]
   }
 

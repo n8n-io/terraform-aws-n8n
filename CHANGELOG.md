@@ -118,32 +118,34 @@ this project adheres to the stability contract in
   chains to Amazon's own RDS-specific CA (`rds-ca-rsa2048-g1` and friends),
   not a root in Node.js's default trust store. Setting
   `db_postgresdb_ssl_reject_unauthorized = true` turns verification on;
-  `db_postgresdb_ssl_ca_pem` supplies the RDS CA bundle (download from
-  https://truststore.pki.rds.amazonaws.com) via a module-managed
-  `kubernetes_config_map_v1`, mounted read-only at
-  `/etc/n8n/postgres-ssl-ca/ca.pem` on the main, worker, and
-  webhook-processor pods and wired to `DB_POSTGRESDB_SSL_CA_FILE`. The
-  bundle is stored with surrounding whitespace trimmed, matching what n8n's
-  `_FILE` loader reads, so n8n does not log a whitespace warning on every
-  pod start. The volume name `postgres-ssl-ca` and the mount path
-  `/etc/n8n/postgres-ssl-ca`, including every path under it, are reserved
-  in `n8n_extra_volumes` / `n8n_extra_volume_mounts` while the CA is in
-  use. A
-  `checksum/postgres-ssl-ca` pod annotation (merged with the existing Redis
-  AUTH token checksum, if any, via `podAnnotations`) forces a rollout of all
-  three deployments whenever the CA bundle's content changes, so a rotated
-  RDS CA (AWS retires older CAs on a schedule; see
-  `docs/postgresql-tls.md`) reaches running pods instead of only the
-  ConfigMap. Both inputs default to the prior behavior (`false` / `null`), so
-  existing deployments see no plan diff. A non-blocking `check` warns when a CA is supplied
-  without verification actually turned on, and another when verification is
-  requested while `db_postgresdb_ssl_enabled = false`, so the input is never
-  silently inert. See
+  `db_postgresdb_ssl_ca_pem` supplies the RDS CA bundle for your region
+  (`https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem`).
+  The module passes the bundle, with surrounding whitespace trimmed, to the
+  n8n Helm chart's `database.ssl.ca` value, which the chart renders into its
+  own ConfigMap as `DB_POSTGRESDB_SSL_CA` for the main, worker, and
+  webhook-processor pods. Because the CA is part of the Helm release, a
+  failed upgrade's atomic rollback restores the previous CA, removing the CA
+  is a Helm-only change, and the chart's `checksum/config` annotation rolls
+  the pods when the CA changes (#178). The trimmed bundle may be at most
+  131,050 bytes, checked at plan time: the chart passes it to each container
+  as an environment variable, and Linux refuses to start a container whose
+  single environment string exceeds 128 KiB. That rules out the combined
+  `global-bundle.pem` (about 170 KB); concatenate the regional bundles you
+  need instead. The bundle must also be ASCII text. Both inputs default to the
+  prior behavior (`false` / `null`), so deployments that leave both at their
+  defaults see no plan diff. Deployments built from unreleased `main` with
+  `db_postgresdb_ssl_ca_pem` already set switch on upgrade from the earlier
+  module-managed ConfigMap and mount to the chart value; if that one upgrade
+  fails and rolls back, recreate the ConfigMap (see `docs/postgresql-tls.md`,
+  "Upgrading from an unreleased build"). A non-blocking `check` warns when
+  a CA is supplied without verification actually turned on, and another when
+  verification is requested while `db_postgresdb_ssl_enabled = false`, so the
+  input is never silently inert. See
   [`docs/postgresql-tls.md`](./docs/postgresql-tls.md) for the full
-  procedure, the `db_host` hostname requirement, AWS's CA rotation
-  schedule, recovering from a failed Helm upgrade when rotating or removing
-  the CA, and the PgBouncer caveat (`examples/large`): PgBouncer terminates TLS on its own upstream leg to
-  Aurora, which this module has no visibility into.
+  procedure, the bundle size limit, the `db_host` hostname requirement, AWS's
+  CA rotation schedule, what a wrong bundle does during an upgrade, and the
+  PgBouncer caveat (`examples/large`): PgBouncer terminates TLS on its own
+  upstream leg to Aurora, which this module has no visibility into.
 
 - **`db_password_write_only`, `db_password_wo`, and
   `db_password_wo_version`** let the module-managed RDS instance
