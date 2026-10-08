@@ -125,8 +125,8 @@ locals {
   # tags prove the image is current, and sends it whenever they cannot.
   #
   # The version, when one can be read:
-  #   - n8n_image_tag starts with a version ("2.27.4", "2.27.4-mypackages"):
-  #     that version decides.
+  #   - n8n_image_tag starts with a full MAJOR.MINOR.PATCH version ("2.27.4",
+  #     "2.27.4-mypackages"): that version decides.
   #   - Otherwise, for a custom image (n8n_image_repository set) with a
   #     non-null tag and task runners enabled, n8n_task_runner_image_tag,
   #     since that is where docs tell callers to put the underlying n8n
@@ -144,7 +144,11 @@ locals {
   # n8n_image_repository override with a null tag still counts as current:
   # the chart then tags it with that same concrete appVersion.
   # Everything else gets WEBHOOK_URL.
-  n8n_version_regex = "^v?([0-9]+)\\.([0-9]+)\\."
+  #
+  # The numeric patch is required, for both tags (#173): a custom tag such as
+  # "2.30.mypackages" carries no full version and must not count as proof of
+  # 2.30.0. Matches terraform-google-n8n.
+  n8n_version_regex = "^v?([0-9]+)\\.([0-9]+)\\.[0-9]+"
   n8n_image_version_core = var.n8n_image_tag == null ? null : try(
     regex(local.n8n_version_regex, var.n8n_image_tag),
     var.n8n_image_repository != null && var.n8n_task_runners_enabled && var.n8n_task_runner_image_tag != null

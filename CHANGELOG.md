@@ -366,7 +366,9 @@ this project adheres to the stability contract in
     `n8n_image_tag` (or, for a custom image whose tag is not a version and
     with task runners enabled, `n8n_task_runner_image_tag`) of `2.30.0` or
     newer, or a null tag on the default chart repository at chart `1.12.0`
-    or newer. Floating tags (`stable`, `latest`), a private chart mirror
+    or newer. A tag only counts as versioned with a full numeric
+    `MAJOR.MINOR.PATCH` prefix, optionally preceded by a lowercase `v`, so
+    a custom tag such as `2.30.mypackages` proves nothing (#173). Floating tags (`stable`, `latest`), a private chart mirror
     with a null tag, and a custom image whose tags carry no version still
     get `WEBHOOK_URL` and its warning. Pinning a tag of `2.30.0` or newer
     removes it; an older image keeps `WEBHOOK_URL` because it needs it. `WEBHOOK_URL` moves onto

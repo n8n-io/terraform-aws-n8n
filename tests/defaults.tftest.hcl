@@ -14118,6 +14118,68 @@ run "legacy_webhook_url_uses_runner_tag_for_custom_image_tag" {
   }
 }
 
+# #173: "2.30.mypackages" carries no full version, so it must not count as
+# proof of 2.30.0; the pre-2.30.0 runner tag decides instead. Ported from
+# terraform-google-n8n, plus an assert that the version really came from the
+# runner tag, since an unreadable version would also emit WEBHOOK_URL.
+run "legacy_webhook_url_ignores_tag_without_a_numeric_patch" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "registry.example.com/n8n"
+    n8n_image_tag             = "2.30.mypackages"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = local.n8n_needs_legacy_webhook_url_env
+    error_message = "A tag without a numeric patch (2.30.mypackages) must not prove n8n 2.30.0; the 2.27.4 runner tag must decide, so WEBHOOK_URL is emitted."
+  }
+
+  assert {
+    condition     = local.n8n_image_version_core[0] == "2" && local.n8n_image_version_core[1] == "27"
+    error_message = "The version must come from the 2.27.4 runner tag, not from the 2.30.mypackages image tag."
+  }
+}
+
+# The same rule on the runner side: both tags go through local.n8n_version_regex.
+run "legacy_webhook_url_ignores_runner_tag_without_a_numeric_patch" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "registry.example.com/n8n"
+    n8n_image_tag             = "mypackages"
+    n8n_task_runner_image_tag = "2.30.mypackages"
+  }
+
+  assert {
+    condition     = local.n8n_image_version_core == null
+    error_message = "A runner tag without a numeric patch (2.30.mypackages) must not yield a version."
+  }
+
+  assert {
+    condition     = local.n8n_needs_legacy_webhook_url_env
+    error_message = "With no readable version, a custom image must still receive WEBHOOK_URL."
+  }
+}
+
+# Guards against over-tightening: a numeric patch followed by a suffix still
+# parses, and the image tag's own version wins over an older runner tag.
+run "legacy_webhook_url_omitted_for_suffixed_versioned_tag" {
+  command = plan
+
+  variables {
+    n8n_image_repository      = "registry.example.com/n8n"
+    n8n_image_tag             = "2.30.0-mypackages"
+    n8n_task_runner_image_tag = "2.27.4"
+  }
+
+  assert {
+    condition     = !local.n8n_needs_legacy_webhook_url_env
+    error_message = "2.30.0-mypackages carries a full version of 2.30.0, which must decide over the 2.27.4 runner tag and omit WEBHOOK_URL."
+  }
+}
+
 # cubic on #160: n8n_task_runner_image_tag only tags the sidecar, so an old
 # runner tag must not pull the deprecated WEBHOOK_URL onto a current app image.
 run "legacy_webhook_url_ignores_runner_tag_when_image_tag_is_null" {
