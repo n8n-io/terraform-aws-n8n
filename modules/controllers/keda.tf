@@ -32,16 +32,19 @@
 # directly instead; examples/customer-managed-everything/providers.tf shows
 # the shape.
 #
-# Install ordering: depends_on helm_release.lbc. The AWS Load Balancer
-# Controller registers a cluster-wide MutatingWebhookConfiguration
+# Install ordering: KEDA installs last of the four controllers, after
+# cluster_autoscaler, metrics_server and lbc (see the "Install ordering"
+# section in controllers.tf). The lbc edge is the one with a reason specific
+# to KEDA: the AWS Load Balancer Controller registers a cluster-wide
+# MutatingWebhookConfiguration
 # (mservice.elbv2.k8s.aws) that intercepts Service creations everywhere — not
 # just for ALB-targeted services. If KEDA runs in parallel with the LBC chart,
 # the LBC webhook may already be registered while LBC pods aren't yet Ready,
 # causing KEDA's metrics/admission Services to fail with:
 #   "failed calling webhook ... no endpoints available for service
 #    aws-load-balancer-webhook-service".
-# Serializing on lbc (which has wait = true) guarantees LBC pods are Ready
-# before any KEDA Service hits the webhook.
+# Ordering after lbc (which has wait = true) means LBC's install has finished
+# and its pods were Ready before any KEDA Service hits the webhook.
 #
 # Toggling install_keda off on a LIVE stack (var.install_keda: true -> false,
 # not a full terraform destroy) is not covered by either dependency above and
@@ -74,6 +77,8 @@ resource "helm_release" "keda" {
   cleanup_on_fail  = true
 
   depends_on = [
+    helm_release.cluster_autoscaler,
+    helm_release.metrics_server,
     helm_release.lbc,
   ]
 }
