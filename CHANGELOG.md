@@ -9,6 +9,17 @@ this project adheres to the stability contract in
 
 ### Added
 
+- `aws_partner_attribution_tag` adds the tag `aws-apn-id` to every taggable
+  resource the module creates, through `local.common_tags`, and to the ALB,
+  through the AWS Load Balancer Controller's `defaultTags` when `install_lbc` is
+  true. AWS Partner Revenue Measurement uses it to attribute the spend to n8n.
+  The EC2 instances of the EKS node group stay untagged, because EKS does not
+  copy node group tags to them. It defaults to the product code of n8n's AWS
+  Marketplace container listing. Set it to `""` to remove the tag from the
+  resources Terraform manages and stop the controller adding it to the load
+  balancers it creates. Upgrade note: the first plan after upgrading updates the tags of
+  every tagged resource in place and upgrades the AWS Load Balancer Controller
+  release. See README.md → AWS Partner Revenue Measurement tag.
 - A plan-time advisory `check.db_postgresdb_pool_size_fits_known_max_connections`
   (`database.tf`) warns when `db_postgresdb_pool_size` times the modeled main,
   worker, webhook-processor, and `n8n_worker_pools` replica ceilings would

@@ -23,6 +23,18 @@ variable "tags" {
   default     = {}
 }
 
+variable "aws_partner_attribution_tag" {
+  description = "Value of the aws-apn-id tag added to the AWS resources this module and the AWS Load Balancer Controller create. AWS Partner Revenue Measurement uses it to attribute their AWS spend to n8n as usage data. Set to an empty string to remove the tag."
+  type        = string
+  default     = "pc:26au7o6cdeh7fqdt376h9m9xk"
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^(|pc:[a-z0-9]+)$", var.aws_partner_attribution_tag))
+    error_message = "aws_partner_attribution_tag must be empty, or an AWS Marketplace product code such as pc:abc123."
+  }
+}
+
 variable "namespace" {
   description = "Kubernetes namespace to deploy n8n into. Names the namespace the module creates when create_namespace = true (the default), or the existing namespace the module deploys into when create_namespace = false."
   type        = string

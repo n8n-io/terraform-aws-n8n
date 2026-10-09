@@ -23,6 +23,10 @@ resource "helm_release" "lbc" {
   atomic          = true
   cleanup_on_fail = true
 
+  # The ALB is created by the controller, not by Terraform, so common_tags never
+  # reach it. defaultTags is how the controller tags what it creates.
+  values = length(var.lbc_default_tags) > 0 ? [yamlencode({ defaultTags = var.lbc_default_tags })] : []
+
   set = [
     {
       name  = "clusterName"

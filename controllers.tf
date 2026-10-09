@@ -28,6 +28,7 @@ module "controllers" {
 
   iam_permissions_boundary_arn = var.iam_permissions_boundary_arn
   common_tags                  = local.common_tags
+  lbc_default_tags             = local.aws_partner_attribution_tags
 
   install_lbc                = var.install_lbc
   install_cluster_autoscaler = var.install_cluster_autoscaler

@@ -14298,3 +14298,51 @@ run "legacy_webhook_url_emitted_for_custom_chart_repository_default" {
     error_message = "A custom chart repository's default appVersion cannot be verified, so a null n8n_image_tag there must emit WEBHOOK_URL"
   }
 }
+
+# ── AWS Partner Revenue Measurement tag ───────────────────────────────────────
+# Terraform tags what it creates through local.common_tags. The ALB is created by
+# the AWS Load Balancer Controller, so it is tagged through the chart's
+# defaultTags instead. Both must carry the tag by default and both must drop it
+# when the caller opts out.
+
+run "aws_partner_attribution_tag_is_on_by_default" {
+  command = plan
+
+  assert {
+    condition     = aws_eks_cluster.n8n[0].tags["aws-apn-id"] == "pc:26au7o6cdeh7fqdt376h9m9xk"
+    error_message = "Resources the module creates must carry the aws-apn-id tag by default"
+  }
+
+  assert {
+    condition     = yamldecode(module.controllers.lbc_helm_release[0].values[0]).defaultTags["aws-apn-id"] == "pc:26au7o6cdeh7fqdt376h9m9xk"
+    error_message = "The AWS Load Balancer Controller must tag the resources it creates with aws-apn-id by default"
+  }
+}
+
+run "aws_partner_attribution_tag_empty_removes_the_tag" {
+  command = plan
+
+  variables {
+    aws_partner_attribution_tag = ""
+  }
+
+  assert {
+    condition     = !contains(keys(aws_eks_cluster.n8n[0].tags), "aws-apn-id")
+    error_message = "An empty aws_partner_attribution_tag must remove the tag, not leave it with an empty value"
+  }
+
+  assert {
+    condition     = length(module.controllers.lbc_helm_release[0].values) == 0
+    error_message = "An empty aws_partner_attribution_tag must not pass defaultTags to the AWS Load Balancer Controller"
+  }
+}
+
+run "aws_partner_attribution_tag_rejects_a_value_that_is_not_a_product_code" {
+  command = plan
+
+  variables {
+    aws_partner_attribution_tag = "26au7o6cdeh7fqdt376h9m9xk"
+  }
+
+  expect_failures = [var.aws_partner_attribution_tag]
+}
