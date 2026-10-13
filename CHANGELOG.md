@@ -15,7 +15,11 @@ this project adheres to the stability contract in
   exceed the connections n8n can use on the selected `db_instance_class`:
   `max_connections` from a curated table, minus the 7 slots PostgreSQL 18.6
   on RDS reserves for superusers (`superuser_reserved_connections`, 3) and
-  RDS's internal role (`rds.rds_reserved_connections`, 4). The `db.t3.small`
+  RDS's internal role (`rds.rds_reserved_connections`, 4). While
+  `n8n_worker_keda_pause = true`, the worker term uses
+  `n8n_worker_keda_paused_replica_count` when that is larger than
+  `n8n_worker_keda_max_replicas`
+  ([#180](https://github.com/n8n-io/terraform-aws-n8n/issues/180)). The `db.t3.small`
   entry is measured on a live instance (191; RDS's formula against nominal
   memory would give 225), and `db.t4g.small`, which has the same nominal
   memory, reuses that figure without being measured. The other entries evaluate
