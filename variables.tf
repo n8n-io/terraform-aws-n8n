@@ -3590,10 +3590,21 @@ variable "n8n_dns_config" {
     error_message = "n8n_dns_config.searches entries must each be a lowercase RFC 1123 subdomain of at most 253 characters, with underscores permitted and a bare \".\" or a single trailing dot accepted. This matches Kubernetes' relaxed search-path validation (RelaxedDNSSearchValidation: on by default since 1.33, GA in 1.34); clusters on 1.32 or older validate strictly at admission and additionally reject \".\" and any underscore, so avoid both if you target one. The plan-time check exists because a malformed entry otherwise surfaces as a failed rollout rather than a Helm error."
   }
 
+  # Nested ternaries, not `o.name != "ndots" || (o.value != null && ... &&
+  # tonumber(o.value) <= 15)`: Terraform before 1.12 evaluates every operand,
+  # so the comparison still runs on a value the earlier tests already decided.
+  # That turned a non-numeric ndots ("many") into a tonumber error rather than
+  # this message, and failed the plan outright for a valid valueless option
+  # such as { name = "edns0" }, because `null <= 15` is an error. Only a
+  # ternary's untaken branch is skipped.
   validation {
     condition = var.n8n_dns_config == null ? true : alltrue([
       for o in coalesce(var.n8n_dns_config.options, []) :
-      o.name != "ndots" || (o.value != null && can(regex("^[0-9]+$", o.value)) && tonumber(o.value) <= 15)
+      o.name != "ndots" ? true : (
+        o.value == null ? false : (
+          can(regex("^[0-9]+$", o.value)) ? tonumber(o.value) <= 15 : false
+        )
+      )
     ])
     error_message = "n8n_dns_config: the ndots option must carry a whole number between 0 and 15, written as a string (\"1\", not \"1.5\"). glibc parses ndots with strtol and silently ignores a fractional, non-numeric or out-of-range value, falling back to its default of 1, which looks like the setting worked while leaving resolution behaviour unchanged."
   }

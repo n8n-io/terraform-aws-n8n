@@ -1571,7 +1571,7 @@ check "ingress_annotations_preserve_session_stickiness" {
 
 check "otel_tuning_requires_master_switch" {
   assert {
-    condition = var.n8n_otel_enabled || (
+    condition = var.n8n_otel_enabled ? true : (
       var.n8n_otel_exporter_otlp_endpoint == null &&
       var.n8n_otel_exporter_otlp_headers == null &&
       var.n8n_otel_exporter_service_name == null &&
@@ -1623,7 +1623,7 @@ check "execution_data_s3_requires_n8n_2_27" {
 
 check "log_streaming_destinations_require_managed_by_env" {
   assert {
-    condition = var.n8n_log_streaming_managed_by_env || (
+    condition = var.n8n_log_streaming_managed_by_env ? true : (
       length(var.n8n_log_streaming_destinations) == 0
     )
     error_message = "n8n_log_streaming_destinations is set, but n8n_log_streaming_managed_by_env is false — the destinations will be ignored and no N8N_LOG_STREAMING_* env vars will be set on the n8n pods. Set n8n_log_streaming_managed_by_env = true to apply them, or clear the destinations to silence this warning."
