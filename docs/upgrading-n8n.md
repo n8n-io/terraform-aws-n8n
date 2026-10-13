@@ -203,7 +203,11 @@ The upgrade rolls every n8n pod once, because the module's env list changes
   when the tags prove the image is current:
   - `n8n_image_tag` is a version of `2.30.0` or newer. For a custom image
     (`n8n_image_repository` set) whose tag is not a version, with task
-    runners enabled, `n8n_task_runner_image_tag` is read instead.
+    runners enabled, `n8n_task_runner_image_tag` is read instead. A tag
+    only counts as a version when it starts with a full numeric
+    `MAJOR.MINOR.PATCH`, optionally preceded by a lowercase `v`, so
+    `2.30.0-mypackages` and `v2.30.0` count but `2.30.mypackages` does
+    not.
   - `n8n_image_tag` is null on the default chart repository at chart
     `1.12.0` or newer, whose `appVersion` is a concrete `2.39.6` or newer.
 
