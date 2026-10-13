@@ -6,8 +6,8 @@ This covers bumping the deployed n8n version on an existing deployment. It does 
 
 | Variable | Controls | Default |
 | --- | --- | --- |
-| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.14.0"`, pinned |
-| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.41.4` in chart `1.14.0`) |
+| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.15.0"`, pinned |
+| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.42.4` in chart `1.15.0`) |
 | `n8n_task_runner_image_tag` | Task runner image tag; keep aligned with the underlying n8n version when using a custom application tag. | `null`, meaning the application image tag |
 
 Bumping the image tag alone gets you a new n8n version without changing the chart's templates or value schema. Bumping the chart version can also change what values the chart accepts, so treat it as the larger-blast-radius change of the two.
@@ -224,6 +224,47 @@ The upgrade rolls every n8n pod once, because the module's env list changes
   stopping at the first. Messages only.
 
 The worker-only task-runner capacity accounting covers `1.14.0`.
+
+## Moving from chart 1.14.0 to 1.15.0
+
+**Pin `n8n_image_tag` before upgrading if it is still null.** The fallback
+moves with `appVersion`, `2.41.4` → `2.42.4`. This is a forward move, but it
+still runs that release's database migrations. A pinned deployment keeps its
+running application version. The n8n 2.42.0 through 2.42.4 release notes list
+no breaking changes.
+
+Every n8n pod rolls once on this bump, whether or not the image is pinned:
+the chart's `helm.sh/chart` and `app.kubernetes.io/version` labels and its
+`checksum/config` annotation change, as on any chart bump (a render of both
+charts with the image tag pinned differs only in those three). With a null tag
+the application changes too. On a live `examples/small` upgrade from `1.14.0`
+with a null tag the plan was 0 to add, 2 to change and 0 to destroy (the n8n
+and AWS Load Balancer Controller Helm releases), all five n8n pods were
+replaced within about two minutes, and the smoke test passed afterwards. Take the RDS snapshot first, as for any
+upgrade: Helm cannot roll back database migrations.
+
+- **PostgreSQL TLS.** The chart now renders `database.ssl.enabled` as
+  `DB_POSTGRESDB_SSL_ENABLED`, the name n8n reads (n8n-io/n8n-hosting#175).
+  The module delivers `database.ssl.*` only with `db_postgresdb_ssl_ca_pem`,
+  and sets `DB_POSTGRESDB_SSL_ENABLED` itself through `config.extraEnv`. On
+  the upstream chart at `1.15.0` or newer, with a CA delivered, it now leaves
+  that name to the chart; in every other case it keeps setting it. You do not
+  need to change any input. After the upgrade a container with a CA delivered
+  carries the name once, from the chart's ConfigMap, and one without a CA
+  carries it once, from the module. If you set `n8n_chart_repository` to a
+  private mirror, the module cannot verify that mirror's version numbers and
+  keeps its own entry, so the name may appear twice with the same value, which
+  Kubernetes resolves last-wins.
+- **"Postgres TLS now applies" in the chart's release notes** concerns
+  `database.ssl.enabled: true` without a CA, which this module never sends.
+  Callers who manage that value in their own chart values are the audience.
+- **AWS Load Balancer Controller `3.5.0` → `3.6.0`** upgrades in place in the
+  same apply (`lbc_chart_version`). Helm does not apply the new CRDs; see the
+  `CHANGELOG` for what changed in them and why it does not matter here.
+- The chart's new `extraObjects` and `database.ssl.existingSecret` are not
+  exposed by this module.
+
+The worker-only task-runner capacity accounting covers `1.15.0`.
 
 ## Before bumping
 

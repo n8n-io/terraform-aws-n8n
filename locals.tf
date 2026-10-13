@@ -622,23 +622,35 @@ locals {
   # known mock-provider limitations), so a list built inline inside that
   # resource's config.extraEnv could not be.
   #
-  # Set here rather than through the chart's database.ssl.* values. The chart
-  # renders database.ssl.enabled as DB_POSTGRESDB_SSL, a name n8n does not
-  # read (n8n-io/n8n-hosting#175), so DB_POSTGRESDB_SSL_ENABLED has to come
-  # from config.extraEnv. DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED stays here too,
-  # which is why local.postgres_ssl_ca_values below pins the chart's
-  # rejectUnauthorized to true: the chart then never renders a second entry
-  # under the same name.
-  n8n_postgres_ssl_env = var.db_postgresdb_ssl_enabled ? [
-    { name = "DB_POSTGRESDB_SSL_ENABLED", value = "true" },
-    { name = "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED", value = tostring(var.db_postgresdb_ssl_reject_unauthorized) },
-    ] : [
+  # Set here rather than through the chart's database.ssl.* values, except for
+  # the one case below. Charts before 1.15.0 render database.ssl.enabled as
+  # DB_POSTGRESDB_SSL, a name n8n does not read (n8n-io/n8n-hosting#175), so
+  # DB_POSTGRESDB_SSL_ENABLED has to come from config.extraEnv.
+  # DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED stays here too, which is why
+  # local.postgres_ssl_ca_values below pins the chart's rejectUnauthorized to
+  # true: the chart then never renders a second entry under the same name.
+  #
+  # The exception: chart >= 1.15.0 renders database.ssl.enabled as
+  # DB_POSTGRESDB_SSL_ENABLED itself, and the module sends database.ssl.* only
+  # while postgres_ssl_ca_active. In that one case the chart already supplies
+  # the entry, so the module omits its own rather than give every n8n
+  # container the same env name twice. With no CA, with SSL off, or on a chart
+  # that does not render it (older, or from a custom repository), the module's
+  # entry stays; see local.n8n_chart_renders_postgres_ssl_enabled below.
+  n8n_postgres_ssl_env = var.db_postgresdb_ssl_enabled ? concat(
+    local.postgres_ssl_ca_active && local.n8n_chart_renders_postgres_ssl_enabled ? [] : [
+      { name = "DB_POSTGRESDB_SSL_ENABLED", value = "true" },
+    ],
+    [
+      { name = "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED", value = tostring(var.db_postgresdb_ssl_reject_unauthorized) },
+    ],
+    ) : [
     { name = "DB_POSTGRESDB_SSL_ENABLED", value = "false" },
   ]
 
   # ── PostgreSQL SSL CA bundle (chart database.ssl.ca) ───────────────────────
   # The CA bundle reaches n8n through the chart's own database.ssl.ca value,
-  # merged into the database values in n8n.tf. Chart 1.14.0 renders it into
+  # merged into the database values in n8n.tf. Charts 1.14.0 and 1.15.0 render it into
   # its ConfigMap as DB_POSTGRESDB_SSL_CA, only inside `if database.ssl.enabled`,
   # and n8n passes that string to the TLS socket as PEM content. Keeping the
   # CA inside the Helm release means a failed upgrade's atomic rollback
@@ -666,13 +678,29 @@ locals {
   #
   # The ssl key is omitted entirely when the CA is not delivered, so a
   # deployment without a CA renders byte-identical Helm values to before.
-  postgres_ssl_ca_values = (var.db_postgresdb_ssl_enabled && var.db_postgresdb_ssl_ca_pem != null) ? {
+  postgres_ssl_ca_active = var.db_postgresdb_ssl_enabled && var.db_postgresdb_ssl_ca_pem != null
+  postgres_ssl_ca_values = local.postgres_ssl_ca_active ? {
     ssl = {
       enabled            = true
       rejectUnauthorized = true
       ca                 = trimspace(var.db_postgresdb_ssl_ca_pem)
     }
   } : {}
+
+  # True only when the pinned chart is known to render
+  # DB_POSTGRESDB_SSL_ENABLED from database.ssl.enabled: the upstream
+  # repository at chart 1.15.0 or newer (n8n-io/n8n-hosting#175; earlier charts
+  # rendered DB_POSTGRESDB_SSL, which n8n does not read). For any other
+  # repository the chart contents cannot be verified, and the safe error is a
+  # duplicate env entry (same value "true"), not a silently disabled TLS
+  # connection, so the module keeps emitting its own entry there. Nested
+  # ternaries, the repo's guard shape (AGENTS.md); same shape as
+  # local.n8n_worker_keda_pause_supported in scaling.tf.
+  n8n_chart_renders_postgres_ssl_enabled = var.n8n_chart_repository != "oci://ghcr.io/n8n-io/n8n-helm-chart" ? false : (
+    tonumber(local.n8n_chart_version_parts[0]) > 1 ? true : (
+      tonumber(local.n8n_chart_version_parts[0]) < 1 ? false : tonumber(local.n8n_chart_version_parts[1]) >= 15
+    )
+  )
 
   # ── n8n_extra_env collision guard ──────────────────────────────────────────
   # config.extraEnv is appended LAST in every n8n container's env list (see the
@@ -886,7 +914,7 @@ locals {
   )
 
   # The chart's values.yaml default for redis.worker.timeout, in seconds, as of
-  # the pinned n8n_chart_version (1.14.0). Used only by n8n.tf's
+  # the pinned n8n_chart_version (1.15.0). Used only by n8n.tf's
   # graceful_shutdown_fits_grace_period check, for callers who leave
   # n8n_graceful_shutdown_timeout null. tests/scripts/check-main-chart.sh
   # renders the real chart and fails if its default drifts from 30, so update

@@ -10147,8 +10147,8 @@ run "autoscaling_defaults_fit_the_default_node_group" {
   command = plan
 
   assert {
-    condition     = var.n8n_chart_version == "1.14.0" && local.n8n_peak_cpu_request_millis == 14200
-    error_message = "Upstream chart 1.14.0 must count runners only on workers: 14200m at default ceilings."
+    condition     = var.n8n_chart_version == "1.15.0" && local.n8n_peak_cpu_request_millis == 14200
+    error_message = "Upstream chart 1.15.0 must count runners only on workers: 14200m at default ceilings."
   }
 
   # No expect_failures: a warning from the capacity check would fail this run,
@@ -12650,12 +12650,17 @@ run "db_postgresdb_ssl_ca_pem_renders_chart_ssl_values" {
     error_message = "db_postgresdb_ssl_ca_pem must render database.ssl = { enabled = true, rejectUnauthorized = true, ca = <trimmed PEM> } for the chart."
   }
 
+  # The default chart (1.15.0) renders database.ssl.enabled as
+  # DB_POSTGRESDB_SSL_ENABLED itself, so with a CA delivered the module must
+  # leave that name to the chart and set only REJECT_UNAUTHORIZED.
   assert {
     condition = (
-      length(local.n8n_postgres_ssl_env) == 2 &&
-      length([for e in local.n8n_postgres_ssl_env : e if e.name == "DB_POSTGRESDB_SSL_CA_FILE" || e.name == "DB_POSTGRESDB_SSL_CA"]) == 0
+      local.n8n_chart_renders_postgres_ssl_enabled == true &&
+      length(local.n8n_postgres_ssl_env) == 1 &&
+      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED" &&
+      length([for e in local.n8n_postgres_ssl_env : e if e.name == "DB_POSTGRESDB_SSL_CA_FILE" || e.name == "DB_POSTGRESDB_SSL_CA" || e.name == "DB_POSTGRESDB_SSL_ENABLED"]) == 0
     )
-    error_message = "The CA must reach n8n only through the chart ConfigMap: local.n8n_postgres_ssl_env must carry neither DB_POSTGRESDB_SSL_CA_FILE nor DB_POSTGRESDB_SSL_CA."
+    error_message = "With a CA delivered on chart 1.15.0 or later, local.n8n_postgres_ssl_env must carry only DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: the chart renders DB_POSTGRESDB_SSL_ENABLED and the CA, and a second SSL_ENABLED would give every n8n container the name twice."
   }
 
   assert {
@@ -12664,6 +12669,53 @@ run "db_postgresdb_ssl_ca_pem_renders_chart_ssl_values" {
       length([for m in local.n8n_extra_volume_mounts : m if m.name == "postgres-ssl-ca"]) == 0
     )
     error_message = "The CA must not be mounted as a volume: the chart value replaces the module-managed ConfigMap and mount."
+  }
+}
+
+# The module's own DB_POSTGRESDB_SSL_ENABLED entry is dropped only where the
+# chart is known to render that name. Before 1.15.0 the chart rendered
+# DB_POSTGRESDB_SSL, which n8n ignores, so without the module's entry TLS would
+# silently never be enabled.
+run "db_postgresdb_ssl_enabled_stays_in_extra_env_on_a_chart_before_1_15_0" {
+  command = plan
+
+  variables {
+    n8n_chart_version                     = "1.14.0"
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition = (
+      local.n8n_chart_renders_postgres_ssl_enabled == false &&
+      length(local.n8n_postgres_ssl_env) == 2 &&
+      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_ENABLED" &&
+      local.n8n_postgres_ssl_env[0].value == "true"
+    )
+    error_message = "On chart 1.14.0 the chart renders DB_POSTGRESDB_SSL, not _ENABLED, so the module must keep DB_POSTGRESDB_SSL_ENABLED=true in config.extraEnv even with a CA delivered."
+  }
+}
+
+# A custom chart repository carries version numbers this module cannot verify,
+# so it keeps its own entry (a duplicate with the same value is harmless; a
+# missing one would disable TLS).
+run "db_postgresdb_ssl_enabled_stays_in_extra_env_on_a_custom_chart_repository" {
+  command = plan
+
+  variables {
+    n8n_chart_repository                  = "oci://registry.example.com/charts"
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition = (
+      local.n8n_chart_renders_postgres_ssl_enabled == false &&
+      length(local.n8n_postgres_ssl_env) == 2 &&
+      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_ENABLED" &&
+      local.n8n_postgres_ssl_env[0].value == "true"
+    )
+    error_message = "A custom n8n_chart_repository must keep DB_POSTGRESDB_SSL_ENABLED=true in config.extraEnv, since the module cannot verify that chart renders it."
   }
 }
 
