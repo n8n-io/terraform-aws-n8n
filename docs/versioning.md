@@ -17,7 +17,7 @@ waiting for a user to report a version nobody re-checked.
 | `helm` provider constraint | same 12 files | Verification-required |
 | `random` provider constraint | `versions.tf` (root, `examples/large`) | Patch-safe |
 | `time` provider constraint | `versions.tf` (root only) | Patch-safe |
-| `required_version` (Terraform CLI floor) | same 12 `versions.tf`/`providers.tf` files | Verification-required |
+| `required_version` (Terraform CLI floor) | 13 `versions.tf`/`providers.tf` files: root, `modules/controllers`, and every `examples/*` | Verification-required. Must stay equal to `TF_FLOOR_VERSION` (below) |
 | `n8n_chart_version` default | `variables.tf` | Minor-required |
 | `lbc_chart_version`, `cluster_autoscaler_chart_version`, `metrics_server_chart_version`, `keda_chart_version` defaults | `variables.tf` | Minor-required |
 | `kubernetes_version` default | `variables.tf`, and independently in `examples/customer-managed-cluster` and `examples/customer-managed-everything` | Verification-required (stays `1.35`; see below for why `1.36` isn't a currency gap) |
@@ -27,6 +27,7 @@ waiting for a user to report a version nobody re-checked.
 | Redis engine version (`redis.tf`, hardcoded `"7.1"`) | `redis.tf` | Verification-required (`7.1` is the ceiling for Redis OSS on ElastiCache; anything newer is Valkey-only, a different engine family, out of scope for a version-currency pass) |
 | EKS add-on versions (Pod Identity Agent, EBS CSI, and vpc-cni when `eks_network_policy_enabled = true`) | `eks.tf`, `modules/controllers/storage.tf` | Not pinned at all: `aws_eks_addon` omits `addon_version`, so AWS selects its default version for the cluster's Kubernetes version when the add-on is created. Terraform does not upgrade it on later applies. This is a deliberate design choice, not an oversight, and there is nothing to bump |
 | `TF_VERSION`, `TFLINT_VERSION`, `CHECKOV_VERSION` | `.github/workflows/terraform-tests.yml` | Verification-required (`CHECKOV_VERSION` doubles as the pin `tests/scripts/check-checkov.sh` enforces locally) |
+| `TF_FLOOR_VERSION` (`test-floor` job) | `.github/workflows/terraform-tests.yml` | Not bumped on its own: always `X.Y.0` for a `required_version = ">= X.Y"` floor, the lowest release the floor admits. Moves only when the floor moves, in the same commit. `tests/scripts/check-terraform-floor.sh` (`task terraform-floor`) fails CI if the two disagree. `check-version-drift.sh` does not report it, because it is not meant to track the latest Terraform |
 | `MARKDOWNLINT_VERSION` (markdownlint job) | `.github/workflows/terraform-tests.yml` | Patch-safe, but keep in step with the `brew install markdownlint-cli` default contributors use locally, for the same reason as `TERRAFORM_DOCS_VERSION` |
 | `TERRAFORM_DOCS_VERSION` (docs job) | `.github/workflows/terraform-tests.yml` | Patch-safe, but keep in step with the `brew install terraform-docs` default contributors use locally (see `AGENTS.md`) |
 | `azure/setup-helm` version (chart job) | `.github/workflows/terraform-tests.yml` | Patch-safe |

@@ -158,12 +158,13 @@ expected by the Terraform Registry:
 | `tests/scripts/verify-worker-pools.sh` | Post-`apply` check that `n8n_worker_pools` actually rendered: counts pool Deployments and ScaledObjects against the declared list, which is the only place a chart that ignored `queueMode.workerGroups` is visible. |
 | `tests/scripts/check-main-chart.sh` | Renders the pinned n8n chart for one, two, and three mains and checks the topology locals against it (CI `chart` job). |
 | `tests/scripts/check-helm-chart-coverage.sh` | Fails when `docs/helm-chart-coverage.md`'s version line or top-level key set is stale against the pinned chart (CI `chart-coverage` job). |
+| `tests/scripts/check-terraform-floor.sh` | Fails unless every `required_version` (root, `modules/*`, `examples/*`) is exactly `">= X.Y"` and `TF_FLOOR_VERSION` is exactly `X.Y.0` (CI `test-floor` job, `task terraform-floor`). |
 | `tests/scripts/check-checkov.sh`  | Runs checkov at exactly `CHECKOV_VERSION`; refuses any other local version (CI `checkov` job). Two passes: defaults, then `tests/checkov/opt-in.tfvars` so count-gated opt-in resources are evaluated too. |
 | `tests/scripts/check-version-drift.sh` | Report-only: every pin reachable from a public API versus upstream latest. Weekly via `version-drift.yml`; never gates. |
 | `tests/scripts/chart-values-diff.sh` | Diffs the pinned n8n chart's `values.yaml` against a candidate version via `helm show values` (`task chart-diff CANDIDATE=<version>`). Informational, never bumps a pin, not in CI. |
 | `tests/scripts/lib/tf-defaults.sh` | Shared `read_default` awk helper that reads a variable's string default out of `variables.tf`. Sourced by `check-version-drift.sh`, `check-helm-chart-coverage.sh` and `chart-values-diff.sh`; the one place that knows the format. |
 | `docs/`                           | Long-form supplementary docs (troubleshooting, post-deploy, cleanup, upgrades, Pod Identity, Helm chart coverage, Istio ingress routing, version currency policy). |
-| `.github/workflows/`              | `terraform-tests.yml`: fmt, validate, test, chart, chart-coverage, tflint, checkov, docs, markdownlint. `version-drift.yml`: weekly report-only pin drift, synced to a tracking issue. |
+| `.github/workflows/`              | `terraform-tests.yml`: fmt, validate, test, test-floor, chart, chart-coverage, tflint, checkov, docs, markdownlint. `version-drift.yml`: weekly report-only pin drift, synced to a tracking issue. |
 | `.github/CODEOWNERS`              | Default reviewers for PRs.                                  |
 | `Taskfile.yml`                    | Optional convenience wrapper (`task ci`) around the local dev loop below; CI does not depend on it. |
 
@@ -268,6 +269,11 @@ pin, and probes, the way `tests/defaults.tftest.hcl`'s
   `large`, `cloudflare`, `godaddy`, `split-ingress`, `worker-pools`) that exercises the example end-to-end with
   the same mocking strategy, catching wiring mistakes between the module and a
   realistic caller.
+- CI runs these suites twice: the `test` job on `TF_VERSION` and the
+  `test-floor` job on `TF_FLOOR_VERSION`, the lowest release the declared
+  `required_version` admits (see "The floor is `>= 1.13`" below).
+  `tests/scripts/check-terraform-floor.sh` runs in `test-floor` and fails if
+  any of the thirteen declarations disagrees with `TF_FLOOR_VERSION`.
 - `tests/scripts/check-main-chart.sh` renders the pinned n8n chart with the
   topology locals for one, two, and three mains. It checks the main rollout
   strategy, HPA bounds, and disruption budget, and verifies that worker and
@@ -370,32 +376,62 @@ condition = !var.create_database || (var.db_host == null && var.db_password == n
 Both forms behave identically on the versions this module now supports, so
 this is a consistency rule rather than a correctness one, and the existing
 `check` blocks all use the first form. Keep matching them: nest rather than
-chaining `||` inside the body.
+chaining `||` inside the body. The same shape is used for null guards in
+`validation` blocks (`var.x == null ? true : (...)`).
 
 It used to be a correctness rule, and the history is worth knowing before
-anyone "simplifies" one of these back. `required_version` was `>= 1.9` and CI
-pinned 1.9.8. Short-circuit evaluation of `&&` and `||` arrived in Terraform
-1.10, so on 1.9 both operands were always evaluated, making
-`known_true || unknown` *unknown*, and a `check` whose condition is unknown at
-plan fails `terraform test` with "Check block assertion known after apply".
-The `!guard || body` shape therefore broke whenever the right side read an
-input a caller wired from a resource attribute, `examples/large` being the
-canary because it wires `db_password` from `random_password.aurora.result`.
-Worse, any local Terraform newer than 1.9 short-circuited and passed, so the
-whole class of bug was invisible locally and only ever failed in CI.
+anyone "simplifies" one of these back. Short-circuit evaluation of `&&` and
+`||` arrived in Terraform **1.12**
+([hashicorp/terraform#36224](https://github.com/hashicorp/terraform/issues/36224),
+listed in the v1.12.0 changelog), not 1.10 as this file once claimed. Before
+1.12 both operands were evaluated, which broke the `||` form in two ways:
 
-The floor is now `>= 1.11` (every `versions.tf`, and CI's `TF_VERSION`), which
-is above the 1.10 that fixed it, so the hazard is retired. It is written down
-because "this reads more naturally as `!guard || body`" is a reasonable
-instinct that was, for a long stretch of this repo's history, wrong.
+- `known_true || unknown` was *unknown*, and a `check` whose condition is
+  unknown at plan fails `terraform test` with "Check block assertion known
+  after apply". The `!guard || body` shape broke whenever the right side read
+  an input a caller wired from a resource attribute, `examples/large` being
+  the canary because it wires `db_password` from
+  `random_password.aurora.result`. This bit while `required_version` was
+  `>= 1.9` and CI pinned 1.9.8.
+- `var.x == null || <expression on var.x>` still evaluated the right side
+  when `var.x` was null, so arithmetic or a function call on it aborted the
+  plan instead of passing or failing the validation. This bit on the
+  `>= 1.11` floor: #167 (`db_max_allocated_storage`, fixed before merge) and
+  #175 (the `n8n_dns_config` `ndots` validation). CI ran only a newer
+  Terraform, so neither failed there; #175 shipped and hit callers on 1.11.
 
-#### The floor is `>= 1.11`
+The floor is now `>= 1.13` and CI tests it (see below), so the hazard is
+retired. It is written down because "this reads more naturally as
+`!guard || body`" is a reasonable instinct that was, for a long stretch of
+this repo's history, wrong, and that an untested floor hid twice.
 
-Declared as `required_version = ">= 1.11"` everywhere: root, `modules/controllers`,
+#### The floor is `>= 1.13`
+
+Declared as `required_version = ">= 1.13"` everywhere: root, `modules/controllers`,
 and all eleven examples, though not all in a `versions.tf` — nine examples have
 one, but `cloudflare` and `godaddy` declare it inline in `providers.tf`
-instead. Matched by CI's single `TF_VERSION` pin either way. It moved up from
-`>= 1.9` because `override_resource`'s `override_during` attribute, which
+instead. CI's `test-floor` job runs every `terraform test` suite on
+`TF_FLOOR_VERSION` (`1.13.0`, the lowest release the floor admits), next to
+the `test` job on `TF_VERSION`, and `tests/scripts/check-terraform-floor.sh`
+(`task terraform-floor`) fails it if the declarations and `TF_FLOOR_VERSION`
+disagree.
+
+It moved to `>= 1.13` from `>= 1.11` in one step, for two reasons:
+
+- **1.12** added short-circuit evaluation of `&&` and `||` (see above),
+  after #167 and #175 broke on 1.11 while CI ran only 1.16.
+- **1.13** fixed `terraform test` leaving about one provider plugin process
+  (~70 MB) running per run block, on 1.12.x and older (also seen on 1.9.8
+  and 1.11.4). Measured locally, 1.12.0 reached 199
+  provider processes and 14 GB after ~185 runs (1.12.2 leaks the same
+  way), so the 806-run `tests/defaults.tftest.hcl` was killed with exit code
+  143 at ~430 runs on a 16 GB CI runner. 1.13.0 stays at 5 processes. On
+  1.12 the floor could not run this repo's own suite, which is what makes a
+  floor a checked claim. The leak is specific to `terraform test`, not to
+  the module code, but the floor now makes `init` reject 1.12 as well.
+
+It had moved to `>= 1.11` from `>= 1.9` because `override_resource`'s
+`override_during` attribute, which
 `examples/customer-managed-redis` and `-s3` need to assert a plan-time value
 on a resource the same configuration creates, arrived in 1.11
 (hashicorp/terraform#36227) and is silently ignored before it. A silently
@@ -405,8 +441,8 @@ about a version constraint. `-cluster` tried the same technique for an
 unrelated problem and it didn't work there; its floor is inherited from the
 module's, not from `override_during` (see its own `versions.tf`).
 
-Keep all thirteen declarations and the CI pin in step when bumping. A floor the
-CI does not exercise is a claim nobody is checking.
+Keep all thirteen declarations and `TF_FLOOR_VERSION` in step when bumping.
+A floor the CI does not exercise is a claim nobody is checking.
 
 **Recommended pattern** when end-to-end wiring cannot be tested under mocks:
 
@@ -566,15 +602,19 @@ terraform validate
 terraform test -verbose                        # plan-time, no AWS creds needed
 tests/scripts/check-main-chart.sh              # chart rendering, Helm + jq needed
 tests/scripts/check-helm-chart-coverage.sh     # helm-chart-coverage.md drift, Helm needed
+tests/scripts/check-terraform-floor.sh         # required_version == TF_FLOOR_VERSION
 tflint --init && tflint --format compact
 terraform-docs --output-check .                # README drift check
 markdownlint README.md CONTRIBUTING.md AGENTS.md docs/*.md
 
 # Repeat under each example. This list mirrors the CI matrix (the `target:`
 # lists in .github/workflows/terraform-tests.yml) and Taskfile.yml's EXAMPLES
-# var, so a green local run means CI will be green too. Keep all three in sync
-# when adding an example: one that no local wrapper visits is one nobody
-# validates before pushing.
+# var, so a green local run means CI will be green too, on the Terraform you
+# ran it with. CI also repeats `terraform test` on TF_FLOOR_VERSION (the
+# test-floor job); run the tests with that binary too when a change could
+# depend on the Terraform version. Keep all three lists in sync when adding an
+# example: one that no local wrapper visits is one nobody validates before
+# pushing.
 for ex in small medium large cloudflare godaddy split-ingress worker-pools \
           customer-managed-redis customer-managed-s3 \
           customer-managed-cluster customer-managed-everything; do
