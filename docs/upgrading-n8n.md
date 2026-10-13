@@ -235,8 +235,8 @@ no breaking changes.
 
 Every n8n pod rolls once on this bump, whether or not the image is pinned:
 the chart's `helm.sh/chart` and `app.kubernetes.io/version` labels and its
-`checksum/config` annotation change, as on any chart bump (a render of both
-charts with the image tag pinned differs only in those three). With a null tag
+`checksum/config` annotation change, as on any chart bump. With the image tag pinned,
+the rendered pod templates differ only in those three fields. With a null tag
 the application changes too. On a live `examples/small` upgrade from `1.14.0`
 with a null tag the plan was 0 to add, 2 to change and 0 to destroy (the n8n
 and AWS Load Balancer Controller Helm releases), all five n8n pods were

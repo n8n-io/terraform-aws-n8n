@@ -96,7 +96,7 @@ its running version before changing the chart; see
 
 Rendering tests cover fallback and explicit image tags, custom repositories,
 and worker-only task runners in queue mode. The capacity model removes main
-runner requests for upstream `1.12.0` through `1.15.0`, ignoring build metadata
+runner requests for upstream `1.12.0`, `1.13.0`, `1.14.0` and `1.15.0`, ignoring build metadata
 but not prerelease suffixes. Verify topology before extending that
 exception to any other release or repository. Worker pools still require
 their separate preview or verified custom chart.

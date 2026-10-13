@@ -428,8 +428,8 @@ this project adheres to the stability contract in
     **Unpinned callers move too:** with a null tag, the next apply upgrades
     the application. Every n8n pod rolls once on this bump even with the image
     pinned, because the chart's `helm.sh/chart` and `app.kubernetes.io/version`
-    labels and its `checksum/config` annotation change (a render of both
-    charts with the tag pinned differs only in those three). Observed on a
+    labels and its `checksum/config` annotation change (with the tag pinned,
+    the rendered pod templates differ only in those three fields). Observed on a
     live `examples/small` upgrade from `1.14.0` with a null tag: the plan was
     0 to add, 2 to change, 0 to destroy (the n8n and LBC Helm releases), all
     five pods were replaced within about two minutes, and the smoke test
