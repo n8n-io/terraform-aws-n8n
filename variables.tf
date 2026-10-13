@@ -344,9 +344,9 @@ variable "n8n_encryption_key_secret_ref" {
   }
 
   # Written as a nested ternary rather than `== null ||`, per AGENTS.md's
-  # rule for guard-style conditions: the null guard gates the `.key` access
-  # structurally rather than relying on short-circuit evaluation, which
-  # Terraform 1.11 (the floor) does not do.
+  # consistency rule for guard-style conditions: the null guard gates the
+  # `.key` access structurally rather than relying on short-circuit
+  # evaluation.
   validation {
     condition     = var.n8n_encryption_key_secret_ref == null ? true : coalesce(var.n8n_encryption_key_secret_ref.key, "N8N_ENCRYPTION_KEY") == "N8N_ENCRYPTION_KEY"
     error_message = "n8n_encryption_key_secret_ref.key must be \"N8N_ENCRYPTION_KEY\" or unset. The chart's coreSecretsEnv helper reads this exact key name from secretRefs.existingSecret and takes no override, unlike the other three secret-reference inputs, whose key the chart does honor."
@@ -1900,9 +1900,10 @@ variable "db_max_allocated_storage" {
     # match the live size before lowering the ceiling.
     #
     # Written as `null ? true : (...)` rather than `null || (...)`: Terraform
-    # only short-circuits `||` from 1.12, and the module allows 1.11, where the
-    # right side is still evaluated and arithmetic on the null default aborts
-    # the plan for every caller who leaves this input unset.
+    # only short-circuits `||` from 1.12, and the module allowed 1.11 when
+    # this was written, where the right side is still evaluated and arithmetic
+    # on the null default aborted the plan for every caller who left this
+    # input unset. The floor is now 1.13; the guard stays for consistency.
     condition = var.db_max_allocated_storage == null ? true : (
       var.db_max_allocated_storage * 10 >= var.db_allocated_storage * 11 &&
       var.db_max_allocated_storage <= 65536
@@ -1915,7 +1916,7 @@ variable "db_max_allocated_storage" {
   # aws_db_instance.n8n inside the module rather than this input. Failing
   # here names the variable and the line the caller actually wrote, the same
   # reasoning as db_backup_retention_period below. Same `null ? true : (...)`
-  # guard as above: floor(null) fails on Terraform 1.11.
+  # guard as above: floor(null) failed on Terraform 1.11, the floor then.
   validation {
     condition     = var.db_max_allocated_storage == null ? true : var.db_max_allocated_storage == floor(var.db_max_allocated_storage)
     error_message = "db_max_allocated_storage must be a whole number of GiB."
@@ -2322,47 +2323,49 @@ variable "db_postgresdb_ssl_reject_unauthorized" {
 }
 
 variable "db_postgresdb_ssl_ca_pem" {
-  description = "PEM-encoded CA certificate bundle n8n trusts for the database TLS connection, covering both the module-managed RDS path and the external db_host path. When set, the module renders it into a module-managed kubernetes_config_map_v1, mounts it read-only at /etc/n8n/postgres-ssl-ca/ca.pem on the main, worker, and webhook-processor pods, and sets DB_POSTGRESDB_SSL_CA_FILE to that path. Required in practice for db_postgresdb_ssl_reject_unauthorized = true against the module-managed RDS instance: AWS's RDS CA is not a publicly trusted root, so Node.js rejects the server certificate without it. Download the regional or combined bundle from https://truststore.pki.rds.amazonaws.com (e.g. global-bundle.pem) and pass it with file(); the module never fetches it itself. See docs/postgresql-tls.md for the full procedure and AWS's CA rotation schedule. Ignored (with a plan-time warning) when db_postgresdb_ssl_enabled = false or db_postgresdb_ssl_reject_unauthorized = false, since nothing validates the certificate against it in that case. Defaults to null, which omits the ConfigMap, volume, and mount entirely and changes nothing for existing deployments."
+  description = "PEM-encoded CA certificate bundle n8n trusts for the database TLS connection, covering both the module-managed RDS path and the external db_host path. When set while db_postgresdb_ssl_enabled = true, the module passes it, with surrounding whitespace trimmed, to the n8n Helm chart's database.ssl.ca value. The chart renders it into its own ConfigMap as DB_POSTGRESDB_SSL_CA for the main, worker, and webhook-processor pods, so a Helm rollback restores the previous CA and a CA change rolls the pods. Required in practice for db_postgresdb_ssl_reject_unauthorized = true against the module-managed RDS instance: AWS's RDS CA is not a publicly trusted root, so Node.js rejects the server certificate without it. Use the bundle for your region, https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem, and pass it with file(); the module never fetches it itself. The trimmed bundle may be at most 131050 bytes, because the chart passes it to each container as an environment variable and Linux refuses to start a process whose single environment string exceeds 128 KiB. That rules out the combined global-bundle.pem (about 170 KB); concatenate only the regional bundles you need instead. See docs/postgresql-tls.md for the full procedure and AWS's CA rotation schedule. Not delivered when db_postgresdb_ssl_enabled = false, and delivered but unused when db_postgresdb_ssl_reject_unauthorized = false; a plan-time warning fires in both cases. Defaults to null, which omits the database.ssl chart value entirely and changes nothing for existing deployments."
   type        = string
   default     = null
 
   # Requires PEM certificate framing rather than only rejecting an empty
   # string: a non-empty value that is not actually PEM-encoded (e.g. a DER
   # blob, a truncated download, or plain text) previously passed this
-  # validation unnoticed, reached kubernetes_config_map_v1.postgres_ssl_ca
-  # and the mounted file, and only surfaced as a connection failure once n8n
-  # tried to parse it. (?s) makes "." match newlines so a multi-certificate
-  # bundle (e.g. AWS's global-bundle.pem) still matches end to end; this does
+  # validation unnoticed, reached the chart value, and only surfaced as a
+  # connection failure once n8n tried to parse it. (?s) makes "." match
+  # newlines so a multi-certificate bundle still matches end to end; this does
   # not parse the certificate itself, only its framing.
   validation {
     condition     = var.db_postgresdb_ssl_ca_pem == null ? true : can(regex("(?s)^\\s*-----BEGIN CERTIFICATE-----.*-----END CERTIFICATE-----\\s*$", var.db_postgresdb_ssl_ca_pem))
     error_message = "db_postgresdb_ssl_ca_pem must be null or a PEM-encoded CA bundle (containing -----BEGIN CERTIFICATE----- / -----END CERTIFICATE----- delimiters)."
   }
 
-  # Both collision checks below are gated on db_postgresdb_ssl_enabled, not
-  # only on db_postgresdb_ssl_ca_pem being set: the volume and mount they
-  # guard are themselves gated on db_postgresdb_ssl_enabled (see n8n.tf and
-  # locals.tf's n8n_extra_volumes / n8n_extra_volume_mounts), so with SSL off
-  # (e.g. an in-cluster pooler terminating TLS on its own upstream leg) the
-  # module never creates either one, and there is nothing for a caller's
-  # n8n_extra_volumes / n8n_extra_volume_mounts entry to collide with.
+  # PEM is ASCII (RFC 7468), and the size validation below counts characters
+  # while Linux limits bytes. The framing regex above does not stop non-ASCII
+  # text between the delimiters, so without this a bundle with multibyte
+  # characters could pass the size check and still exceed the environment
+  # string limit.
   validation {
-    condition = (var.db_postgresdb_ssl_ca_pem == null || !var.db_postgresdb_ssl_enabled) ? true : alltrue([
-      for volume in var.n8n_extra_volumes : volume.name != "postgres-ssl-ca"
-    ])
-    error_message = "db_postgresdb_ssl_ca_pem reserves the volume name \"postgres-ssl-ca\" while db_postgresdb_ssl_enabled = true. Rename or remove the conflicting n8n_extra_volumes entry."
+    condition     = var.db_postgresdb_ssl_ca_pem == null ? true : can(regex("^[[:ascii:]]*$", var.db_postgresdb_ssl_ca_pem))
+    error_message = "db_postgresdb_ssl_ca_pem must contain only ASCII text. A PEM-encoded CA bundle is ASCII; check that the file was not altered or saved with a non-ASCII encoding."
   }
 
-  # Reserves the directory and everything under it, not only the exact path:
-  # a caller mount at /etc/n8n/postgres-ssl-ca/ca.pem (with sub_path) would
-  # replace the managed CA file, while the checksum/postgres-ssl-ca pod
-  # annotation would still hash db_postgresdb_ssl_ca_pem.
+  # The chart passes database.ssl.ca to every n8n container as the
+  # environment variable DB_POSTGRESDB_SSL_CA (chart 1.14.0,
+  # templates/_configmap-env.tpl). Linux caps a single environment string,
+  # "NAME=value" plus its terminating NUL, at 32 pages (MAX_ARG_STRLEN), which
+  # is 131072 bytes with 4 KiB pages. Above that the container fails to start
+  # with "argument list too long". 131072 minus "DB_POSTGRESDB_SSL_CA=" (21)
+  # minus the NUL leaves 131050, the boundary measured in Docker. Larger pages
+  # only raise the kernel limit, so this never rejects a value that would
+  # work. length() counts characters, not bytes; the ASCII validation above
+  # makes the two equal.
+  # Measures the trimmed value, which is what reaches the chart
+  # (local.postgres_ssl_ca_values). Not gated on db_postgresdb_ssl_enabled:
+  # a bundle this large can never work, so it fails now rather than in the
+  # apply that turns SSL on.
   validation {
-    condition = (var.db_postgresdb_ssl_ca_pem == null || !var.db_postgresdb_ssl_enabled) ? true : alltrue([
-      for mount in var.n8n_extra_volume_mounts :
-      mount.mount_path != "/etc/n8n/postgres-ssl-ca" && !startswith(mount.mount_path, "/etc/n8n/postgres-ssl-ca/")
-    ])
-    error_message = "db_postgresdb_ssl_ca_pem reserves the mount path \"/etc/n8n/postgres-ssl-ca\" and every path under it while db_postgresdb_ssl_enabled = true. Move or remove the conflicting n8n_extra_volume_mounts entry."
+    condition     = var.db_postgresdb_ssl_ca_pem == null ? true : length(trimspace(var.db_postgresdb_ssl_ca_pem)) <= 131050
+    error_message = "db_postgresdb_ssl_ca_pem is ${var.db_postgresdb_ssl_ca_pem == null ? 0 : length(trimspace(var.db_postgresdb_ssl_ca_pem))} bytes after trimming, but may be at most 131050: the chart passes it to each n8n container as an environment variable, and Linux refuses to start a container with a larger one. Use the bundle for your region instead of global-bundle.pem: https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem. If n8n connects to databases in several regions, concatenate only those regional bundles."
   }
 }
 
@@ -2515,10 +2518,10 @@ variable "redis_host" {
   # has nowhere to connect: the same succeeds-then-fails-at-runtime shape the
   # check blocks in redis.tf exist to prevent.
   #
-  # Written as nested ternaries rather than `||` and `&&` because Terraform
-  # before 1.12 (the module's floor is 1.11) does not short-circuit either
-  # operator. trimspace(null) is a hard error, so the null test has to gate the
-  # blank test structurally rather than by evaluation order. See AGENTS.md.
+  # Written as nested ternaries rather than `||` and `&&` because Terraform 1.9,
+  # which CI pins, does not short-circuit either operator. trimspace(null) is a
+  # hard error, so the null test has to gate the blank test structurally rather
+  # than by evaluation order. See AGENTS.md.
   validation {
     condition = var.create_elasticache ? true : (
       var.redis_host != null ? trimspace(var.redis_host) != "" : false
@@ -2600,7 +2603,7 @@ variable "redis_username" {
   # Blank is rejected as well as null, for the same reason redis_host rejects it:
   # an empty string satisfies "is set" and then reaches n8n and KEDA as an empty
   # username, which authenticates as nobody. Nested ternaries rather than `&&`,
-  # per AGENTS.md's rule for guard-style conditions: the null test
+  # per AGENTS.md's consistency rule for guard-style conditions: the null test
   # gates the blank test structurally (trimspace(null) is a hard error) rather
   # than relying on short-circuit evaluation.
   validation {
@@ -3549,10 +3552,10 @@ variable "n8n_dns_config" {
 
   default = null
 
-  # The null guard on every condition below is written as `guard ? body : true`
-  # rather than `guard-inverted || body`, per AGENTS.md's rule for guard-style
-  # conditions: it gates the attribute access structurally rather than relying
-  # on short-circuit evaluation, which Terraform 1.11 (the floor) does not do.
+  # All four guard-style conditions below are written as `guard ? body : true`
+  # rather than `guard-inverted || body`, per AGENTS.md's consistency rule: the
+  # null guard gates the attribute access structurally rather than relying on
+  # short-circuit evaluation.
   validation {
     condition = var.n8n_dns_config == null ? true : (
       length(coalesce(var.n8n_dns_config.nameservers, [])) <= 3

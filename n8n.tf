@@ -125,8 +125,8 @@ locals {
   # tags prove the image is current, and sends it whenever they cannot.
   #
   # The version, when one can be read:
-  #   - n8n_image_tag starts with a version ("2.27.4", "2.27.4-mypackages"):
-  #     that version decides.
+  #   - n8n_image_tag starts with a full MAJOR.MINOR.PATCH version ("2.27.4",
+  #     "2.27.4-mypackages"): that version decides.
   #   - Otherwise, for a custom image (n8n_image_repository set) with a
   #     non-null tag and task runners enabled, n8n_task_runner_image_tag,
   #     since that is where docs tell callers to put the underlying n8n
@@ -144,7 +144,11 @@ locals {
   # n8n_image_repository override with a null tag still counts as current:
   # the chart then tags it with that same concrete appVersion.
   # Everything else gets WEBHOOK_URL.
-  n8n_version_regex = "^v?([0-9]+)\\.([0-9]+)\\."
+  #
+  # The numeric patch is required, for both tags (#173): a custom tag such as
+  # "2.30.mypackages" carries no full version and must not count as proof of
+  # 2.30.0. Matches terraform-google-n8n.
+  n8n_version_regex = "^v?([0-9]+)\\.([0-9]+)\\.[0-9]+"
   n8n_image_version_core = var.n8n_image_tag == null ? null : try(
     regex(local.n8n_version_regex, var.n8n_image_tag),
     var.n8n_image_repository != null && var.n8n_task_runners_enabled && var.n8n_task_runner_image_tag != null
@@ -295,36 +299,6 @@ resource "kubernetes_secret" "n8n_redis" {
 
   data = {
     password = local.redis_auth_token_value
-  }
-
-  # See the comment on kubernetes_secret.n8n above.
-  depends_on = [aws_eks_node_group.n8n]
-}
-
-# ── PostgreSQL SSL CA bundle ──────────────────────────────────────────────────
-# Opt-in: only created when db_postgresdb_ssl_enabled = true and
-# db_postgresdb_ssl_ca_pem is set. Mounted read-only on main, worker and
-# webhook-processor pods (see locals.tf's n8n_extra_volumes /
-# n8n_extra_volume_mounts) and pointed at by DB_POSTGRESDB_SSL_CA_FILE
-# (locals.tf's n8n_postgres_ssl_env). A ConfigMap, not a Secret: a CA
-# certificate is public information (it certifies the server, not the
-# client), so there is nothing to protect read access to.
-
-resource "kubernetes_config_map_v1" "postgres_ssl_ca" {
-  count = var.db_postgresdb_ssl_enabled && var.db_postgresdb_ssl_ca_pem != null ? 1 : 0
-
-  metadata {
-    name      = local.postgres_ssl_ca_configmap_name
-    namespace = local.namespace_name
-  }
-
-  # trimspace: n8n reads DB_POSTGRESDB_SSL_CA_FILE through its _FILE loader,
-  # which trims the file contents and logs a warning on every process start
-  # when it had to. A downloaded PEM bundle always ends in a newline, so
-  # storing it untrimmed would log that warning on every pod start. n8n uses
-  # the trimmed value either way, so nothing else changes.
-  data = {
-    "ca.pem" = trimspace(var.db_postgresdb_ssl_ca_pem)
   }
 
   # See the comment on kubernetes_secret.n8n above.
@@ -511,7 +485,12 @@ resource "helm_release" "n8n" {
       disableProductionWebhooksOnMainProcess = true
     }
 
-    database = {
+    # The ssl key comes from local.postgres_ssl_ca_values and is present only
+    # while db_postgresdb_ssl_ca_pem is delivered: database.ssl.ca carries the
+    # CA bundle into the chart's own ConfigMap as DB_POSTGRESDB_SSL_CA, so a
+    # Helm rollback restores the previous CA and a CA change rolls the pods
+    # through the chart's checksum/config annotation. See locals.tf.
+    database = merge({
       type        = "postgresdb"
       useExternal = true
       # Module-managed RDS when create_database = true, otherwise the caller-supplied
@@ -538,7 +517,7 @@ resource "helm_release" "n8n" {
         name = var.db_password_secret_ref != null ? var.db_password_secret_ref.name : kubernetes_secret.n8n_db[0].metadata[0].name
         key  = var.db_password_secret_ref != null ? local.db_password_secret_ref_key : "password"
       }
-    }
+    }, local.postgres_ssl_ca_values)
 
     # passwordSecret is merged in rather than set inline so the default path
     # renders exactly the five keys it always has. The chart's default for it is
@@ -1168,29 +1147,22 @@ resource "helm_release" "n8n" {
     # the token therefore updates the Secret and the replication group but
     # produces no Helm diff, and nothing restarts: env vars sourced from a
     # secretKeyRef are resolved once at pod start, so every running pod keeps
-    # the old token indefinitely. kubernetes_config_map_v1.postgres_ssl_ca has
-    # the same problem for a different reason: it is referenced by a constant
-    # name (local.postgres_ssl_ca_configmap_name), so a changed db_postgresdb_ssl_ca_pem
-    # updates the ConfigMap's data but produces no Helm diff either, and a
-    # mounted ConfigMap's content only refreshes on the kubelet's periodic
-    # sync, not immediately: a rotated RDS CA (docs/postgresql-tls.md) could
-    # reach already-running pods well after it reaches the ConfigMap.
+    # the old token indefinitely.
     #
-    # auth_token_update_strategy = "ROTATE" (redis.tf) is what stops the Redis
-    # half being an immediate outage: AWS keeps the previous token valid
-    # alongside the new one. It is not a fix, only a grace period. The next
-    # rotation invalidates the token those pods are still holding, and the
-    # queue stops. RDS similarly overlaps CA validity windows across a
-    # rotation (see docs/postgresql-tls.md), which is what this annotation's
-    # forced rollout needs to land inside.
+    # auth_token_update_strategy = "ROTATE" (redis.tf) is what stops this
+    # being an immediate outage: AWS keeps the previous token valid alongside
+    # the new one. It is not a fix, only a grace period. The next rotation
+    # invalidates the token those pods are still holding, and the queue stops.
     #
     # The chart computes its own checksum/config and checksum/secret pod
     # annotations, but checksum/secret hashes templates/secrets.yaml, which
-    # renders secretRefs.env only, and neither ever hashes a ConfigMap this
-    # module creates outside the chart. podAnnotations is the seam that works
-    # for both cases: the chart merges it into all three pod templates (main,
-    # worker, webhook processor), so a changed value rolls exactly the pods
-    # that hold the token or the CA.
+    # renders secretRefs.env only, and never a Secret this module creates
+    # outside the chart. podAnnotations is the seam that works: the chart
+    # merges it into all three pod templates (main, worker, webhook
+    # processor), so a changed value rolls exactly the pods that hold the
+    # token. The PostgreSQL CA bundle needs no such annotation: it is rendered
+    # into the chart's own ConfigMap (database.ssl.ca), which checksum/config
+    # already hashes.
     #
     # CAVEAT: podAnnotations is accepted by the templates but is NOT documented
     # in the chart's values.yaml, so it is an implicit interface that could be
@@ -1200,25 +1172,21 @@ resource "helm_release" "n8n" {
     # than breaking anything, and the tests in defaults.tftest.hcl pin the shape.
     #
     # The hash, never the secret itself: annotations are readable by anyone who
-    # can get a pod. The CA bundle is already public information (it certifies
-    # the server, not the client), and sha256 is enough either way to change
-    # when the underlying content changes.
+    # can get a pod, and sha256 is enough to change when the token changes.
     #
     # Merged conditionally rather than emitted as an empty map, for the same
     # reason redis.timeout is: a default deployment must render byte-identical
     # values to what it renders today, or every existing release sees a Helm
-    # diff on upgrade. local.n8n_pod_annotations (locals.tf) merges
-    # redis_pod_annotations and postgres_ssl_ca_pod_annotations into one map,
-    # so either source, both, or neither can be present without one clobbering
-    # the other the way two separate `podAnnotations = ...` entries in this
-    # same merge() call would (merge() keeps only the last map that sets a
-    # given top-level key).
+    # diff on upgrade. local.n8n_pod_annotations (locals.tf) is the one seam
+    # every forced-rollout annotation goes through, so a future source cannot
+    # clobber this one the way two separate `podAnnotations = ...` entries in
+    # this same merge() call would (merge() keeps only the last map that sets
+    # a given top-level key).
     #
-    # Also gated on redis_auth_token_secret_ref for the Redis half: with a
-    # caller-managed Secret the module never reads the token value, so it has
-    # nothing to hash, and local.redis_pod_annotations resolves to {} on that
-    # path for the same reason. That gate lives inside redis_pod_annotations
-    # itself, not here, so it composes with the CA half unconditionally.
+    # Also gated on redis_auth_token_secret_ref: with a caller-managed Secret
+    # the module never reads the token value, so it has nothing to hash, and
+    # local.redis_pod_annotations resolves to {} on that path. That gate lives
+    # inside redis_pod_annotations itself, not here.
     length(local.n8n_pod_annotations) > 0 ? { podAnnotations = local.n8n_pod_annotations } : {},
 
     # Pod DNS. Omitted entirely unless n8n_dns_config is set, so this is a no-op
@@ -1275,21 +1243,6 @@ resource "helm_release" "n8n" {
     aws_elasticache_replication_group.n8n,
     aws_iam_role_policy_attachment.s3,
     aws_eks_pod_identity_association.s3,
-    # The CA bundle is mounted by a constant name (see
-    # local.postgres_ssl_ca_configmap_name), so nothing else orders the
-    # ConfigMap before the pods that mount it. Empty when the CA is unset.
-    #
-    # The same edge orders removal the wrong way round: when the CA is
-    # removed (or SSL turned off), Terraform deletes the ConfigMap before it
-    # updates this release. If that upgrade then fails, atomic = true rolls
-    # back to a release whose pods still mount the deleted ConfigMap, and any
-    # pod that starts afterwards waits in ContainerCreating. Not fixed with
-    # create_before_destroy on the ConfigMap: Terraform propagates that
-    # setting to every resource the ConfigMap depends on (the node group, the
-    # namespace and, through them, the cluster), which would change how those
-    # resources are replaced for every caller. docs/postgresql-tls.md
-    # ("Removing the CA") documents the recovery instead.
-    kubernetes_config_map_v1.postgres_ssl_ca,
     kubernetes_service_account_v1.n8n, # empty list unless the module owns it
   ]
 }
@@ -1561,7 +1514,7 @@ check "alb_source_restrictions_not_overridden_by_annotations" {
 check "alb_source_restrictions_require_controller_managed_security_group" {
   assert {
     # concat rather than `||`: check conditions in this module avoid chained
-    # boolean operators, which do not short-circuit before Terraform 1.12.
+    # boolean operators, which do not short-circuit on Terraform 1.9.
     condition = var.create_ingress ? (
       length(concat(var.alb_inbound_cidrs, var.alb_inbound_prefix_list_ids)) > 0 ? !contains(
         keys(var.ingress_annotations), "alb.ingress.kubernetes.io/security-groups"
@@ -1640,10 +1593,9 @@ check "otel_tuning_requires_master_switch" {
 # Only a tag shaped like MAJOR.MINOR.<rest> is compared (this covers "2.27.4"
 # and "2.27.4-alpine"); anything else, including null (the chart's floating
 # `stable`) and pre-release or channel tags, is left alone rather than guessed
-# at. Written as nested ternaries because Terraform before 1.12 (the module's
-# floor is 1.11) does not short-circuit `&&`/`||` (see AGENTS.md), so the
-# numeric comparisons must sit on a branch that is only taken once the regex
-# has confirmed they are numbers.
+# at. Written as nested ternaries because Terraform 1.9 does not short-circuit
+# `&&`/`||` (see AGENTS.md), so the numeric comparisons must sit on a branch
+# that is only taken once the regex has confirmed they are numbers.
 
 check "execution_data_s3_requires_n8n_2_27" {
   assert {
@@ -1728,8 +1680,8 @@ check "graceful_shutdown_fits_grace_period" {
 # meant. All are warnings rather than errors: each is legitimate in some
 # deployment, and none can be decided with certainty from the inputs alone.
 #
-# Written as `guard ? body : true` per AGENTS.md, since Terraform before 1.12
-# (the module's floor is 1.11) does not short-circuit && and ||.
+# Written as `guard ? body : true` per AGENTS.md, since Terraform 1.9 (the
+# version floor) does not short-circuit && and ||.
 
 check "custom_image_repository_needs_an_explicit_tag" {
   assert {

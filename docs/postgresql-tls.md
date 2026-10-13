@@ -26,45 +26,60 @@ deployment.
 
 ```hcl
 db_postgresdb_ssl_reject_unauthorized = true
-db_postgresdb_ssl_ca_pem              = file("${path.module}/global-bundle.pem")
+db_postgresdb_ssl_ca_pem              = file("${path.module}/us-east-1-bundle.pem")
 ```
 
-1. Download the RDS CA bundle from AWS's trust store endpoint:
-   `https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem` is the
-   combined bundle covering every AWS region and every CA generation RDS has
-   issued from, so it works regardless of which region or CA your instance
-   currently uses. Per-region bundles
-   (`https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem`)
-   are also published if you would rather pin to a smaller, region-scoped
-   file. The module never fetches this itself: Terraform has no HTTP data
-   source for an arbitrary file download without an extra provider, and
-   fetching a trust anchor at plan time from a URL the plan cannot pin a
-   checksum against is exactly the kind of supply-chain surface this module
-   avoids elsewhere. Download it once, commit it alongside your Terraform
-   configuration (it is public information, safe to commit), and pass it in
-   with `file()`.
+1. Download the RDS CA bundle for your region from AWS's trust store
+   endpoint:
+   `https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem`.
+   A regional bundle holds the root CAs RDS uses in that region, one per CA
+   generation (for example RSA2048 G1, RSA4096 G1 and ECC384 G1), so it keeps
+   working when your instance moves to another generation. The module never
+   fetches it itself: Terraform has no HTTP data source for an arbitrary file
+   download without an extra provider, and fetching a trust anchor at plan
+   time from a URL the plan cannot pin a checksum against is exactly the kind
+   of supply-chain surface this module avoids elsewhere. Download it once,
+   commit it alongside your Terraform configuration (it is public
+   information, safe to commit), and pass it in with `file()`.
 2. Set `db_postgresdb_ssl_ca_pem` to the bundle's contents and
-   `db_postgresdb_ssl_reject_unauthorized = true`. The module renders the PEM
-   into a module-managed `kubernetes_config_map_v1`
-   (`kubernetes_config_map_v1.postgres_ssl_ca` in `n8n.tf`), mounts it
-   read-only at `/etc/n8n/postgres-ssl-ca/ca.pem` on the main, worker, and
-   webhook-processor pods, and sets `DB_POSTGRESDB_SSL_CA_FILE` to that path.
-   n8n's configuration loader reads any `<NAME>_FILE` variable from disk, so
-   it reads the file, trims surrounding whitespace, and passes the PEM
-   contents to the Postgres connection as `DB_POSTGRESDB_SSL_CA`. The module
-   stores the bundle already trimmed, so n8n does not log a whitespace
-   warning on every pod start.
+   `db_postgresdb_ssl_reject_unauthorized = true`. The module trims
+   surrounding whitespace and passes the bundle to the n8n Helm chart's
+   `database.ssl.ca` value. The chart renders it into its own ConfigMap as
+   `DB_POSTGRESDB_SSL_CA`, which the main, worker, and webhook-processor pods
+   read as an environment variable, and n8n passes it to the PostgreSQL
+   connection as PEM content.
 3. Both inputs default to the prior behavior (`false` / `null`), so setting
    neither changes an existing deployment's rendered Helm values at all.
 
+Because the CA is part of the Helm release, a CA change rolls the pods
+through the chart's own `checksum/config` annotation, and a failed upgrade's
+rollback restores the previous CA (see [AWS's CA rotation](#awss-ca-rotation)).
+
+### Bundle size limit
+
+The trimmed bundle may be at most 131,050 bytes. The chart passes it to each
+container as one environment variable, and Linux refuses to start a process
+when a single environment string is longer than 128 KiB: the container fails
+with `argument list too long`. The module checks the size at plan time.
+
+This rules out the combined `global-bundle.pem` (about 170 KB, every region
+and every CA generation). A regional bundle is about 5 KB. If n8n connects to
+databases in more than one region, concatenate only those regional bundles:
+
+```hcl
+db_postgresdb_ssl_ca_pem = join("\n", [
+  file("${path.module}/us-east-1-bundle.pem"),
+  file("${path.module}/eu-west-1-bundle.pem"),
+])
+```
+
 `db_postgresdb_ssl_ca_pem` applies on both the module-managed RDS path
 (`create_database = true`) and the external `db_host` path
-(`create_database = false`): the ConfigMap, mount, and
-`DB_POSTGRESDB_SSL_CA_FILE` wiring do not depend on which path provisioned
-the database, only on `db_postgresdb_ssl_enabled` and the CA input itself.
-If `db_host` points at a non-RDS PostgreSQL server (e.g. a self-managed
-instance or a different provider's managed database), supply that server's
-own CA bundle instead of the RDS one.
+(`create_database = false`): the chart value does not depend on which path
+provisioned the database, only on `db_postgresdb_ssl_enabled` and the CA
+input itself. If `db_host` points at a non-RDS PostgreSQL server (e.g. a
+self-managed instance or a different provider's managed database), supply
+that server's own CA bundle instead of the RDS one.
 
 Verification also checks the server's name, not only its CA. The host n8n
 connects to (the module-managed RDS endpoint, or `db_host`) must match a name
@@ -84,15 +99,15 @@ can be set to something that renders but does nothing:
   is no TLS connection in that case for `DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED`
   to apply to, and the module never renders the key at all when SSL is off.
 - `db_postgresdb_ssl_ca_pem_requires_verification` warns if a CA bundle is
-  supplied while verification is not actually turned on. Which resources
-  exist depends on which half is off:
+  supplied while verification is not actually turned on. What happens to
+  the CA depends on which half is off:
   - `db_postgresdb_ssl_reject_unauthorized = false` (verification itself off,
-    `db_postgresdb_ssl_enabled` still `true`): the ConfigMap, volume, and
-    mount still render, but n8n never validates anything against the file
-    they carry.
-  - `db_postgresdb_ssl_enabled = false` (SSL itself off): the ConfigMap,
-    volume, and mount never render at all, since all three are gated on
-    `db_postgresdb_ssl_enabled` in addition to the CA input.
+    `db_postgresdb_ssl_enabled` still `true`): the CA still reaches the
+    chart's `database.ssl.ca` value, but n8n never validates anything
+    against it. The connection stays encrypted but unverified, because the
+    module sets `DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=false` explicitly.
+  - `db_postgresdb_ssl_enabled = false` (SSL itself off): the CA is not
+    passed to the chart at all.
 
 Neither check fails the plan. Both exist so a caller who sets one input and
 forgets the other learns about it before the next `terraform apply`, not
@@ -105,47 +120,40 @@ retirement of older CAs; see
 [Using SSL/TLS to encrypt a connection to a DB instance or cluster](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html)
 for the current rotation schedule, the certificate expiration dates for each
 CA generation, and the `aws rds describe-certificates` CLI command that
-reports which CA your instance currently presents. If you pin
-`db_postgresdb_ssl_ca_pem` to a bundle fetched at a point in time rather than
-re-fetching the combined `global-bundle.pem` on every apply, track that page
-and refresh the input before your instance's CA is retired, or verified
-connections will start failing closed once the certificate rotates to a CA
-your bundle does not include. The combined `global-bundle.pem` is
-AWS-maintained and already includes every CA generation still valid, so
-re-downloading it occasionally (rather than hand-picking a single
-region/generation bundle) is the lower-maintenance option if you are not
-tracking a specific pinned CA for other reasons.
+reports which CA your instance currently presents. A regional bundle already
+includes every CA generation RDS currently issues from in that region, so
+switching your instance to another generation needs no change here. Track
+that page and refresh the bundle file when AWS adds a CA your instance will
+use, or verified connections fail closed once the certificate rotates to a
+CA your bundle does not include.
 
 `db_postgresdb_ssl_enabled = true` with `db_postgresdb_ssl_reject_unauthorized
 = false` (the module's default) is unaffected by CA rotation: it never
 validates the certificate chain, so a rotated CA changes nothing it checks.
 
-A Helm rollback does not restore the previous CA bundle. The module updates
-the ConfigMap in place before the Helm release rolls the pods. If the new
-bundle does not cover the server's certificate and the Helm upgrade fails,
-`atomic = true` rolls the release back, but the rolled-back pods still mount
-the same ConfigMap, which now holds the new bundle. Keep the previous bundle
-file until the new one is confirmed.
+### When a new bundle is wrong
 
-A live test with a wrong CA showed what this looks like:
+A bundle that does not cover the server's certificate makes every new pod
+fail to connect. The Helm release uses `atomic = true`, so the apply fails
+when the upgrade reaches `n8n_helm_timeout` (600 seconds by default) and Helm
+rolls the release back. The CA is part of the release, so the rollback also
+restores the previous CA, and pods recreated after the rollback start with
+it. No further apply is needed to recover. Applying the previous bundle file
+again afterwards produces no change. The terraform-azurerm-n8n module, which
+delivers its CA the same way, verified this in a live test
+(n8n-io/terraform-azurerm-n8n#41); it has not been repeated on AWS.
 
-- The failure is slow. New pods cannot connect and crash-loop, and the apply
-  only fails when the Helm upgrade reaches `n8n_helm_timeout` (600 seconds
-  by default) and rolls back.
-- Workers stop processing the queue. The chart's worker Deployment has no
-  readiness probe, so a new worker counts as ready as soon as it starts, and
-  the healthy old worker is removed before the new one fails. After the
-  rollback, the recreated worker mounts the same ConfigMap, which still holds
-  the wrong bundle, so it keeps crash-looping.
-- Main and webhook-processor pods keep serving. They read the CA when they
-  start, so the old pods are not affected by the changed file.
-
-To recover, set `db_postgresdb_ssl_ca_pem` back to the previous bundle and
-apply again. The plan updates only the ConfigMap, with no Helm change and no
-pod rollout: Helm's stored values already match the previous bundle after
-the rollback. The kubelet syncs the corrected file into the pods, and
-crash-looping workers recover on their next restart (about a minute in the
-live test).
+While the failing upgrade runs, workers stop processing the queue. The
+chart's worker readiness probe does not check the database connection, so a
+new worker counts as ready before it fails, and the healthy old worker is
+removed. This lasts until the rollback finishes and needs a chart change to
+fix (n8n-io/n8n-hosting#225). Webhook-processor pods, and main pods in the
+default multi-main topology, keep serving from their old replicas. With a
+single main (`n8n_main_hpa_min_replicas = 1`) the main Deployment uses the
+`Recreate` strategy, so the old main stops before the new one fails and the
+editor is unavailable until the rollback. Roll out a new bundle in a non-production
+environment first, and at a time when a queue stall of up to
+`n8n_helm_timeout` is acceptable.
 
 ## Upgrading an existing deployment
 
@@ -162,32 +170,38 @@ connection closed after the rollout completes, which takes down the main,
 worker, and webhook-processor pods alike (there is no fallback to an
 unverified connection once the setting is live).
 
+### Upgrading from an unreleased build
+
+This only applies if you deployed from unreleased `main` between PR #165 and
+issue #178 with `db_postgresdb_ssl_ca_pem` set. That build delivered the CA through
+a module-managed ConfigMap, `n8n-postgres-ssl-ca`, mounted into the pods.
+The upgrade deletes that ConfigMap and moves the CA into the chart value in
+the same apply. If that one Helm upgrade fails, `atomic = true` rolls back to
+the previous release, whose pods still mount the deleted ConfigMap, and any
+pod that starts afterwards waits in `ContainerCreating`.
+
+- Run this upgrade while you can watch the apply finish.
+- If it rolls back, recreate the ConfigMap the previous release mounts, then
+  fix the cause and apply again:
+
+  ```bash
+  kubectl -n <namespace> create configmap n8n-postgres-ssl-ca \
+    --from-file=ca.pem=<your-bundle>.pem
+  ```
+
+  Delete it again after the next successful apply, since the module no longer
+  manages it.
+
+No released module version created that ConfigMap, so upgrades from a
+release are not affected.
+
 ## Removing the CA
 
 Setting `db_postgresdb_ssl_ca_pem` back to `null`, or setting
-`db_postgresdb_ssl_enabled = false`, removes the ConfigMap and the mount
-together. Terraform deletes the ConfigMap first and then upgrades the Helm
-release, which drops the mount. Pods that are already running are not
-affected by the deletion, and the upgrade replaces them with pods that no
-longer mount the ConfigMap.
-
-The risk is the Helm upgrade failing after the ConfigMap is gone. The release
-uses `atomic = true`, so a failed upgrade rolls back to the previous release,
-whose pods still mount the deleted ConfigMap. Running pods keep working, but
-any pod that starts later (a node drain, an autoscaler scale-up, a crash
-restart) waits in `ContainerCreating` because the ConfigMap does not exist.
-
-- Remove the CA at a time when you can watch the apply finish, not during a
-  node rotation or a traffic peak.
-- If the Helm upgrade fails, set `db_postgresdb_ssl_ca_pem` back to its
-  previous value and apply again. That recreates the ConfigMap the
-  rolled-back release mounts. Fix the cause of the failed upgrade before you
-  remove the CA again.
-
-The module does not reorder this with `create_before_destroy`, because
-Terraform applies that setting to every resource the ConfigMap depends on,
-including the EKS node group and cluster. That would change how those
-resources are replaced for every caller.
+`db_postgresdb_ssl_enabled = false`, removes `database.ssl` from the chart
+values. This is a Helm-only change: there is no separate Kubernetes object
+for Terraform to delete first, so a failed upgrade rolls back to a release
+that still carries the CA.
 
 ## PgBouncer topologies (`examples/large`)
 

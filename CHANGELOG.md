@@ -15,7 +15,11 @@ this project adheres to the stability contract in
   exceed the connections n8n can use on the selected `db_instance_class`:
   `max_connections` from a curated table, minus the 7 slots PostgreSQL 18.6
   on RDS reserves for superusers (`superuser_reserved_connections`, 3) and
-  RDS's internal role (`rds.rds_reserved_connections`, 4). The `db.t3.small`
+  RDS's internal role (`rds.rds_reserved_connections`, 4). While
+  `n8n_worker_keda_pause = true`, the worker term uses
+  `n8n_worker_keda_paused_replica_count` when that is larger than
+  `n8n_worker_keda_max_replicas`
+  ([#180](https://github.com/n8n-io/terraform-aws-n8n/issues/180)). The `db.t3.small`
   entry is measured on a live instance (191; RDS's formula against nominal
   memory would give 225), and `db.t4g.small`, which has the same nominal
   memory, reuses that figure without being measured. The other entries evaluate
@@ -118,32 +122,34 @@ this project adheres to the stability contract in
   chains to Amazon's own RDS-specific CA (`rds-ca-rsa2048-g1` and friends),
   not a root in Node.js's default trust store. Setting
   `db_postgresdb_ssl_reject_unauthorized = true` turns verification on;
-  `db_postgresdb_ssl_ca_pem` supplies the RDS CA bundle (download from
-  https://truststore.pki.rds.amazonaws.com) via a module-managed
-  `kubernetes_config_map_v1`, mounted read-only at
-  `/etc/n8n/postgres-ssl-ca/ca.pem` on the main, worker, and
-  webhook-processor pods and wired to `DB_POSTGRESDB_SSL_CA_FILE`. The
-  bundle is stored with surrounding whitespace trimmed, matching what n8n's
-  `_FILE` loader reads, so n8n does not log a whitespace warning on every
-  pod start. The volume name `postgres-ssl-ca` and the mount path
-  `/etc/n8n/postgres-ssl-ca`, including every path under it, are reserved
-  in `n8n_extra_volumes` / `n8n_extra_volume_mounts` while the CA is in
-  use. A
-  `checksum/postgres-ssl-ca` pod annotation (merged with the existing Redis
-  AUTH token checksum, if any, via `podAnnotations`) forces a rollout of all
-  three deployments whenever the CA bundle's content changes, so a rotated
-  RDS CA (AWS retires older CAs on a schedule; see
-  `docs/postgresql-tls.md`) reaches running pods instead of only the
-  ConfigMap. Both inputs default to the prior behavior (`false` / `null`), so
-  existing deployments see no plan diff. A non-blocking `check` warns when a CA is supplied
-  without verification actually turned on, and another when verification is
-  requested while `db_postgresdb_ssl_enabled = false`, so the input is never
-  silently inert. See
+  `db_postgresdb_ssl_ca_pem` supplies the RDS CA bundle for your region
+  (`https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem`).
+  The module passes the bundle, with surrounding whitespace trimmed, to the
+  n8n Helm chart's `database.ssl.ca` value, which the chart renders into its
+  own ConfigMap as `DB_POSTGRESDB_SSL_CA` for the main, worker, and
+  webhook-processor pods. Because the CA is part of the Helm release, a
+  failed upgrade's atomic rollback restores the previous CA, removing the CA
+  is a Helm-only change, and the chart's `checksum/config` annotation rolls
+  the pods when the CA changes (#178). The trimmed bundle may be at most
+  131,050 bytes, checked at plan time: the chart passes it to each container
+  as an environment variable, and Linux refuses to start a container whose
+  single environment string exceeds 128 KiB. That rules out the combined
+  `global-bundle.pem` (about 170 KB); concatenate the regional bundles you
+  need instead. The bundle must also be ASCII text. Both inputs default to the
+  prior behavior (`false` / `null`), so deployments that leave both at their
+  defaults see no plan diff. Deployments built from unreleased `main` with
+  `db_postgresdb_ssl_ca_pem` already set switch on upgrade from the earlier
+  module-managed ConfigMap and mount to the chart value; if that one upgrade
+  fails and rolls back, recreate the ConfigMap (see `docs/postgresql-tls.md`,
+  "Upgrading from an unreleased build"). A non-blocking `check` warns when
+  a CA is supplied without verification actually turned on, and another when
+  verification is requested while `db_postgresdb_ssl_enabled = false`, so the
+  input is never silently inert. See
   [`docs/postgresql-tls.md`](./docs/postgresql-tls.md) for the full
-  procedure, the `db_host` hostname requirement, AWS's CA rotation
-  schedule, recovering from a failed Helm upgrade when rotating or removing
-  the CA, and the PgBouncer caveat (`examples/large`): PgBouncer terminates TLS on its own upstream leg to
-  Aurora, which this module has no visibility into.
+  procedure, the bundle size limit, the `db_host` hostname requirement, AWS's
+  CA rotation schedule, what a wrong bundle does during an upgrade, and the
+  PgBouncer caveat (`examples/large`): PgBouncer terminates TLS on its own
+  upstream leg to Aurora, which this module has no visibility into.
 
 - **`db_password_write_only`, `db_password_wo`, and
   `db_password_wo_version`** let the module-managed RDS instance
@@ -157,10 +163,10 @@ this project adheres to the stability contract in
   `db_password_secret_ref` (the module cannot copy a write-only value into
   the Kubernetes Secret it would otherwise manage), makes the `db_password`
   output `null`, and is fully opt-in: the default
-  (`db_password_write_only = false`) behavior is unchanged, and no
-  `versions.tf` floor changes: the required Terraform (`>= 1.11`) and AWS
-  provider (`~> 6.0`) constraints already satisfy write-only arguments
-  (added in AWS provider `5.88.0`). Safe to enable from the first apply of a
+  (`db_password_write_only = false`) behavior is unchanged. Write-only
+  arguments need Terraform 1.11 or newer and AWS provider `5.88.0` or newer,
+  which the module's own constraints already satisfy, so this feature raises
+  no version floor. Safe to enable from the first apply of a
   new deployment. On an existing password-managed instance, follow the
   migration recipe in README.md -> "Switching to the write-only RDS password"
   instead of flipping it directly, because of an open AWS provider bug
@@ -304,6 +310,41 @@ this project adheres to the stability contract in
 
 ### Changed
 
+- **Breaking: the minimum Terraform version is now `>= 1.13`** (was
+  `>= 1.11`) in all thirteen `required_version` declarations: the module
+  root, `modules/controllers`, and all eleven examples. Two Terraform
+  releases set it: 1.12 and 1.13. Several validations and `check` blocks guard an expression with `||` or `&&`, which only
+  short-circuit from Terraform 1.12 (hashicorp/terraform#36224). On 1.11
+  both sides are evaluated, so a guarded expression could abort the plan
+  with an evaluation error instead of passing or failing cleanly. This hit
+  `db_max_allocated_storage` while it was in review (#167) and the
+  `n8n_dns_config` `ndots` validation (#175); CI ran only Terraform 1.16.4,
+  so neither failed there. Terraform 1.13 is needed on top of that for the
+  floor to be testable: `terraform test` on 1.12.x and older leaves about
+  one provider process running per run block, so the 806-run
+  `tests/defaults.tftest.hcl` exhausts a 16 GB CI runner (measured: 199
+  provider processes and 14 GB after ~185 runs on 1.12.0, while 1.13.0 stays
+  at 5). The leak is specific to `terraform test`, not to the module code,
+  but the new floor makes `init` reject 1.12 as well. CI now also runs every
+  `terraform test` suite on Terraform `1.13.0` in a new `test-floor` job, and
+  `tests/scripts/check-terraform-floor.sh` (`task terraform-floor`) fails it
+  if `TF_FLOOR_VERSION` and the declared floor disagree (#177).
+
+  **Upgrade note.** Under
+  [Stability & versioning](./README.md#stability--versioning), a raised
+  version floor is a minor-version boundary. No inputs, outputs, resources
+  or state change. Upgrade the Terraform CLI to 1.13 or newer wherever you
+  run this module: locally, in CI, and in any runner or workspace pin
+  (HCP Terraform, Atlantis and similar). Also widen any `required_version`
+  in your own configuration that excludes 1.13, such as `~> 1.12.0`. This
+  includes direct callers of `modules/controllers`. On 1.12 or older, `terraform init`
+  stops with an unsupported Terraform Core version error before planning
+  anything, so nothing is half-applied. To stay on Terraform 1.11 or 1.12,
+  pin this module to `~> 0.5.0`. On Terraform 1.11, 0.5.x still has #175: an
+  `n8n_dns_config` option without a `value` (for example `edns0`) aborts the
+  plan with "argument must not be null". Avoid value-less options there, or
+  upgrade Terraform.
+
 - Default `keda_chart_version` `2.20.2` to `2.21.0` (root module and
   `modules/controllers`). Callers that do not pin `keda_chart_version` move
   too: their next apply runs an in-place `helm upgrade` of KEDA. KEDA is
@@ -366,7 +407,9 @@ this project adheres to the stability contract in
     `n8n_image_tag` (or, for a custom image whose tag is not a version and
     with task runners enabled, `n8n_task_runner_image_tag`) of `2.30.0` or
     newer, or a null tag on the default chart repository at chart `1.12.0`
-    or newer. Floating tags (`stable`, `latest`), a private chart mirror
+    or newer. A tag only counts as versioned with a full numeric
+    `MAJOR.MINOR.PATCH` prefix, optionally preceded by a lowercase `v`, so
+    a custom tag such as `2.30.mypackages` proves nothing (#173). Floating tags (`stable`, `latest`), a private chart mirror
     with a null tag, and a custom image whose tags carry no version still
     get `WEBHOOK_URL` and its warning. Pinning a tag of `2.30.0` or newer
     removes it; an older image keeps `WEBHOOK_URL` because it needs it. `WEBHOOK_URL` moves onto
@@ -451,7 +494,7 @@ this project adheres to the stability contract in
   release; the module supports them from chart `1.13.0` (see **Added**
   above).
 - CI Terraform pin `1.16.2` to `1.16.4` and Checkov `3.3.17` to `3.3.20`.
-  The Terraform requirement remains `>= 1.11`. The new `CKV_AWS_394`
+  The new `CKV_AWS_394`
   findings (from Checkov `3.3.19`) have scoped exceptions on all eleven
   examples' dynamic Availability Zone lookups to preserve their
   region-portable behavior. Zone identities can still change between
@@ -492,22 +535,28 @@ this project adheres to the stability contract in
 
 ### Fixed
 
-- **`n8n_dns_config` accepts a valueless option on Terraform 1.11.** The
-  `ndots` validation chained `||` and `&&`, which only short-circuit from
-  Terraform 1.12. On 1.11, the module's floor, it still ran
-  `tonumber(o.value) <= 15` for every option, so a valid option without a
-  value, such as `{ name = "edns0" }`, failed the plan with "argument must not
-  be null", and a non-numeric `ndots` value failed with a `tonumber` error
-  instead of the validation's own message. The condition now uses nested
-  ternaries, which behave the same on every supported version. Callers on
-  1.12 or newer see no change. This also corrects the `[0.3.0]` entry on the
-  raised floor: short-circuit evaluation arrived in Terraform 1.12
-  (hashicorp/terraform#36224), not 1.10, so the `guard ? body : true` shape
-  is still a correctness requirement on 1.11. `AGENTS.md` now says so, and
-  the two `check` blocks that still used `guard || body`
-  (`otel_tuning_requires_master_switch`,
-  `log_streaming_destinations_require_managed_by_env`) use the ternary form.
-  Their warning messages and their results for known inputs are unchanged.
+- **Controller Helm releases install one at a time** (#174). In
+  `modules/controllers`, the Cluster Autoscaler, metrics-server, the AWS
+  Load Balancer Controller, and KEDA used to install in parallel (only KEDA
+  waited for the Load Balancer Controller). On a fresh cluster, one release
+  failed on a transient API timeout, the others still installing were
+  cancelled (cause not confirmed), and a cancelled release was left in
+  Helm's `pending-install` state, which blocks the next apply until it is
+  removed by hand. They now install in that order, and each release depends
+  on every earlier one, so the order holds for any combination of
+  `install_*` toggles. When one release fails, Terraform skips the later
+  ones, so none of them is in flight when the run stops. No inputs,
+  defaults, or resource addresses change, and existing releases see no
+  resource changes. The first apply and a full destroy take longer: a
+  fresh apply takes about the sum of the four install times, and a full
+  destroy about the sum of the four uninstall times, rather than the
+  longest one. The same
+  order applies to any apply that changes several controller releases at
+  once, such as chart version bumps, and a targeted destroy of one
+  controller release now also selects every release after it. Direct callers of
+  `modules/controllers` get the same order.
+  [`docs/troubleshooting.md`](./docs/troubleshooting.md) has a new entry for
+  finding and removing a stranded `pending-install` release.
 - **`n8n_image_repository` applies Docker's 255-character limit to the
   repository path, not the whole string.** Docker measures the path after
   normalizing the reference (`distribution/reference` v0.6.0): the registry

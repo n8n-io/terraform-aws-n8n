@@ -954,21 +954,21 @@ check "db_postgresdb_ssl_ca_pem_requires_verification" {
     condition = var.db_postgresdb_ssl_ca_pem != null ? (
       var.db_postgresdb_ssl_enabled && var.db_postgresdb_ssl_reject_unauthorized
     ) : true
-    # The "still render, for nothing" clause only ever applies on the
+    # The "still delivered, for nothing" clause only ever applies on the
     # reject_unauthorized = false branch: there, db_postgresdb_ssl_enabled is
-    # true, so the ConfigMap, volume, and mount (n8n.tf, locals.tf) all exist,
-    # just unused. On the ssl_enabled = false branch none of the three exist
-    # at all (all three are gated on ssl_enabled && ca_pem != null), so saying
-    # they "render" would send a caller hunting for a ConfigMap that was never
-    # created.
+    # true, so the CA reaches the chart's database.ssl.ca value
+    # (local.postgres_ssl_ca_values in locals.tf), just unused. On the
+    # ssl_enabled = false branch the chart value is never rendered at all
+    # (gated on ssl_enabled && ca_pem != null), so saying it is delivered
+    # would send a caller hunting for a value that was never set.
     error_message = var.db_postgresdb_ssl_enabled ? join("", [
       "db_postgresdb_ssl_ca_pem is set, but db_postgresdb_ssl_reject_unauthorized is false, so n8n never ",
-      "validates the database server certificate against it: the ConfigMap and volume mount still render, ",
-      "for nothing. Set db_postgresdb_ssl_reject_unauthorized = true to actually verify the certificate, or ",
+      "validates the database server certificate against it: the CA still reaches the chart's database.ssl.ca ",
+      "value, for nothing. Set db_postgresdb_ssl_reject_unauthorized = true to actually verify the certificate, or ",
       "remove db_postgresdb_ssl_ca_pem.",
       ]) : join("", [
       "db_postgresdb_ssl_ca_pem is set, but db_postgresdb_ssl_enabled is false, so there is no TLS connection ",
-      "for n8n to verify a certificate on: the ConfigMap and volume mount never render. Set ",
+      "for n8n to verify a certificate on: the CA is not passed to the chart. Set ",
       "db_postgresdb_ssl_enabled = true and db_postgresdb_ssl_reject_unauthorized = true to actually verify ",
       "the certificate, or remove db_postgresdb_ssl_ca_pem.",
     ])
@@ -988,13 +988,13 @@ check "db_postgresdb_ssl_ca_pem_requires_verification" {
 #
 # This check catches the other direction db_postgresdb_pool_size's
 # description already asks callers to budget by hand: pool_size times the
-# modeled pod ceiling (effective main, worker, webhook-processor, and any
-# n8n_worker_pools) against the known table below, the same arithmetic
-# examples/worker-pools/README.md's "Budget database connections before
-# raising these ceilings" note walks through by hand today. An unrecognized
-# db_instance_class stays silent rather than warn from a guessed limit,
-# following the node_vcpus_derived / n8n_capacity_model_readable pattern in
-# scaling.tf.
+# modeled pod ceiling (effective main, worker or the paused worker count when
+# larger, webhook-processor, and any n8n_worker_pools) against the known
+# table below, the same arithmetic examples/worker-pools/README.md's "Budget
+# database connections before raising these ceilings" note walks through by
+# hand today. An unrecognized db_instance_class stays silent rather than
+# warn from a guessed limit, following the node_vcpus_derived /
+# n8n_capacity_model_readable pattern in scaling.tf.
 #
 # db.t3.small, the module's default class, holds a MEASURED value: SHOW
 # max_connections returned 191 on a live db.t3.small running PostgreSQL 18.6
@@ -1087,9 +1087,22 @@ locals {
   # maximum is the conservative stand-in rather than the pinned minimum.
   n8n_worker_pool_max_replicas_sum = sum(concat([0], [for p in var.n8n_worker_pools : p.max_replicas]))
 
+  # While n8n_worker_keda_pause is true, KEDA holds the worker Deployment at
+  # n8n_worker_keda_paused_replica_count, which may exceed
+  # n8n_worker_keda_max_replicas (#180). A null count freezes workers at their
+  # current count, which the model assumes is within the maximum. That is an
+  # assumption, not a guarantee: workers held at a larger explicit count
+  # stay there if the count is cleared while the pause is still on. A count
+  # set while pause is off is inert (the chart only renders it while paused),
+  # so it is not counted.
+  n8n_worker_modeled_max_replicas = max(
+    var.n8n_worker_keda_max_replicas,
+    var.n8n_worker_keda_pause ? coalesce(var.n8n_worker_keda_paused_replica_count, 0) : 0,
+  )
+
   n8n_pg_peak_connections = var.db_postgresdb_pool_size * (
     local.n8n_main_hpa_effective_max_replicas +
-    var.n8n_worker_keda_max_replicas +
+    local.n8n_worker_modeled_max_replicas +
     var.n8n_webhook_hpa_max_replicas +
     local.n8n_worker_pool_max_replicas_sum
   )
@@ -1102,7 +1115,7 @@ check "db_postgresdb_pool_size_fits_known_max_connections" {
     ) : true
     error_message = join("", [
       "db_postgresdb_pool_size (${var.db_postgresdb_pool_size}) times the modeled pod ceiling (main ",
-      "${local.n8n_main_hpa_effective_max_replicas} + worker ${var.n8n_worker_keda_max_replicas} + webhook ",
+      "${local.n8n_main_hpa_effective_max_replicas} + worker ${local.n8n_worker_modeled_max_replicas} + webhook ",
       tostring(var.n8n_webhook_hpa_max_replicas),
       local.n8n_worker_pool_max_replicas_sum > 0 ? " + worker pools ${local.n8n_worker_pool_max_replicas_sum}" : "",
       ") requests up to ${local.n8n_pg_peak_connections} connections, more than the ",
@@ -1110,8 +1123,14 @@ check "db_postgresdb_pool_size_fits_known_max_connections" {
       "on db_instance_class = \"${var.db_instance_class}\" (max_connections ${coalesce(local.db_max_connections_known, 0)} ",
       "from the table in database.tf, minus ${local.db_max_connections_reserved} slots reserved for superusers and ",
       "RDS's internal role; the table is measured for db.t3.small, reuses that figure for db.t4g.small, and is ",
-      "estimated from nominal memory for other classes, where the live value can be lower). Lower db_postgresdb_pool_size or the autoscaler maxima, ",
-      "or raise db_instance_class, and confirm the live connection budget (SHOW max_connections, reserved ",
+      "estimated from nominal memory for other classes, where the live value can be lower). Lower db_postgresdb_pool_size or the autoscaler maxima",
+      # Only named when the paused count is what the model counts: below the
+      # worker maximum, lowering it further changes nothing.
+      local.n8n_worker_modeled_max_replicas > var.n8n_worker_keda_max_replicas ? join("", [
+        ", or n8n_worker_keda_paused_replica_count (the paused count, ${local.n8n_worker_modeled_max_replicas}, is above ",
+        "n8n_worker_keda_max_replicas, ${var.n8n_worker_keda_max_replicas}, and only counts while it stays above it)",
+      ]) : "",
+      ", or raise db_instance_class, and confirm the live connection budget (SHOW max_connections, reserved ",
       "connections, and other clients). This diagnostic is advisory and does not fail the plan.",
     ])
   }
