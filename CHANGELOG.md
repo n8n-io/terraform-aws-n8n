@@ -54,6 +54,15 @@ this project adheres to the stability contract in
   `create_database = false`. This is documented in the new
   [`docs/sandbox.md`](./docs/sandbox.md), alongside a cheaper single-main
   sandbox profile built from existing inputs.
+- `check.autoscaling_maxima_fit_node_group_capacity` (`scaling.tf`) models the
+  same worker ceiling as the connection-budget check: while
+  `n8n_worker_keda_pause = true`, the worker term uses
+  `n8n_worker_keda_paused_replica_count` when that is larger than
+  `n8n_worker_keda_max_replicas`, so paused workers that do not fit the node
+  group are no longer missed
+  ([#186](https://github.com/n8n-io/terraform-aws-n8n/issues/186)). The shared
+  `local.n8n_worker_modeled_max_replicas` moved from `database.tf` to
+  `scaling.tf`. Advisory only: plan and apply are unaffected.
 - `docs/shared-responsibility.md`: a single table summarizing what the
   module does versus what the caller owns across cluster security add-ons,
   network egress and DNS, secrets and Terraform state custody, backup and

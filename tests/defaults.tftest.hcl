@@ -4024,6 +4024,84 @@ run "connection_budget_ignores_a_paused_replica_count_while_pause_is_off" {
   expect_failures = [check.worker_keda_paused_replica_count_requires_pause]
 }
 
+# The node-capacity check models the same worker ceiling as the connection
+# budget (#186). At the defaults the CPU peak is 14,200m against 21,720m
+# schedulable on 6 x t3.xlarge, with the worker term at 10 x 700m. A paused
+# count of 25 adds 15 x 700m that only the shared local sees: 24,700m. The
+# connection budget check also fires here ((6 + 25 + 4) x 9 = 315 > 184), so
+# both are expected; the capacity check is the one this run exists for, and a
+# model that kept counting only the worker maximum would leave it out of the
+# failures.
+run "capacity_check_counts_a_paused_replica_count_above_the_worker_max" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause                = true
+    n8n_worker_keda_paused_replica_count = 25
+  }
+
+  assert {
+    condition     = local.n8n_worker_modeled_max_replicas == 25 && local.n8n_peak_cpu_request_millis == 24700 && local.n8n_peak_cpu_request_millis > local.n8n_schedulable_cpu_millis
+    error_message = "A paused count of 25 above the worker max of 10 must be modeled in the CPU peak (24700m expected, got ${local.n8n_peak_cpu_request_millis}m vs ${local.n8n_schedulable_cpu_millis}m schedulable), got worker ${local.n8n_worker_modeled_max_replicas}."
+  }
+
+  expect_failures = [
+    check.autoscaling_maxima_fit_node_group_capacity,
+    check.db_postgresdb_pool_size_fits_known_max_connections,
+  ]
+}
+
+# A paused count above the maximum that still fits the node group must not warn
+# on capacity: 20 workers peak at 21,200m, under 21,720m schedulable. Only the
+# connection budget fires ((6 + 20 + 4) x 9 = 270 > 184). This pins the other
+# side of the boundary, so the check is not simply failing on any count above
+# the maximum.
+run "capacity_check_stays_silent_when_a_paused_count_above_the_max_still_fits" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause                = true
+    n8n_worker_keda_paused_replica_count = 20
+  }
+
+  assert {
+    condition     = local.n8n_peak_cpu_request_millis == 21200 && local.n8n_peak_cpu_request_millis <= local.n8n_schedulable_cpu_millis
+    error_message = "A paused count of 20 must peak at 21200m and fit 21720m schedulable, got ${local.n8n_peak_cpu_request_millis}m vs ${local.n8n_schedulable_cpu_millis}m."
+  }
+
+  expect_failures = [check.db_postgresdb_pool_size_fits_known_max_connections]
+}
+
+# Pause with a null count, a count below the maximum, and a count while pause is
+# off all keep the worker term at the maximum, so the defaults still fit and the
+# capacity check stays silent (an unexpected check failure fails the run).
+run "capacity_check_keeps_the_worker_max_when_paused_count_is_null_or_below_it" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause                = true
+    n8n_worker_keda_paused_replica_count = 2
+  }
+
+  assert {
+    condition     = local.n8n_worker_modeled_max_replicas == 10 && local.n8n_peak_cpu_request_millis <= local.n8n_schedulable_cpu_millis
+    error_message = "A paused count of 2 below the worker max of 10 must keep the worker term at 10 and fit the node group, got worker ${local.n8n_worker_modeled_max_replicas} and ${local.n8n_peak_cpu_request_millis}m."
+  }
+}
+
+run "capacity_check_keeps_the_worker_max_when_pause_has_no_count" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_pause = true
+  }
+
+  assert {
+    condition     = local.n8n_worker_modeled_max_replicas == 10 && local.n8n_peak_cpu_request_millis <= local.n8n_schedulable_cpu_millis
+    error_message = "Pausing without a count must keep the worker term at 10 and fit the node group, got worker ${local.n8n_worker_modeled_max_replicas} and ${local.n8n_peak_cpu_request_millis}m."
+  }
+}
+
 # The exact boundary on db.t3.small: 191 known minus 7 reserved leaves 184
 # usable. A peak of exactly 184 must stay silent and 185 must warn, which pins
 # the comparison as <= rather than <. The reserved-margin run above proves the

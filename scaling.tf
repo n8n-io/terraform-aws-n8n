@@ -227,13 +227,27 @@ locals {
     p.max_replicas * (local.n8n_pool_cpu_request_millis[p.name] + local.n8n_cpu_request_millis["task_runner"])
   ]))
 
+  # While n8n_worker_keda_pause is true, KEDA holds the worker Deployment at
+  # n8n_worker_keda_paused_replica_count, which may exceed
+  # n8n_worker_keda_max_replicas (#180, #186). A null count freezes workers at
+  # their current count, which the model assumes is within the maximum. That is
+  # an assumption, not a guarantee: workers held at a larger explicit count
+  # stay there if the count is cleared while the pause is still on. A count
+  # set while pause is off is inert (the chart only renders it while paused),
+  # so it is not counted. Shared by the connection-budget check (database.tf)
+  # and the node-capacity check below.
+  n8n_worker_modeled_max_replicas = max(
+    var.n8n_worker_keda_max_replicas,
+    var.n8n_worker_keda_pause ? coalesce(var.n8n_worker_keda_paused_replica_count, 0) : 0,
+  )
+
   # What the pod families request when every autoscaler sits at its ceiling
   # simultaneously. Not a forecast: the point is that this number must be
   # schedulable at all, because each autoscaler can independently reach its own
   # maximum, and every declared pool adds one more autoscaler that can.
   n8n_peak_cpu_request_millis = local.n8n_cpu_requests_readable ? (
     local.n8n_main_hpa_effective_max_replicas * (local.n8n_cpu_request_millis["main"] + local.n8n_main_task_runner_cpu_millis) +
-    var.n8n_worker_keda_max_replicas * (local.n8n_cpu_request_millis["worker"] + local.n8n_cpu_request_millis["task_runner"]) +
+    local.n8n_worker_modeled_max_replicas * (local.n8n_cpu_request_millis["worker"] + local.n8n_cpu_request_millis["task_runner"]) +
     var.n8n_webhook_hpa_max_replicas * local.n8n_cpu_request_millis["webhook"] +
     local.n8n_pool_peak_cpu_request_millis
   ) : 0
@@ -379,7 +393,7 @@ check "autoscaling_maxima_fit_node_group_capacity" {
       "Autoscaler maxima exceed the CPU the node group can ever schedule. At their ceilings the n8n pods ",
       "request ${local.n8n_peak_cpu_request_millis}m CPU ",
       "(main ${local.n8n_main_hpa_effective_max_replicas} × ${local.n8n_cpu_request_millis["main"] + local.n8n_main_task_runner_cpu_millis}m, ",
-      "worker ${var.n8n_worker_keda_max_replicas} × ${local.n8n_cpu_request_millis["worker"] + local.n8n_cpu_request_millis["task_runner"]}m, ",
+      "worker ${local.n8n_worker_modeled_max_replicas} × ${local.n8n_cpu_request_millis["worker"] + local.n8n_cpu_request_millis["task_runner"]}m, ",
       "webhook ${var.n8n_webhook_hpa_max_replicas} × ${local.n8n_cpu_request_millis["webhook"]}m",
       length(var.n8n_worker_pools) > 0 ? join("", [
         ", worker pools ${local.n8n_pool_peak_cpu_request_millis}m across ",
@@ -392,6 +406,10 @@ check "autoscaling_maxima_fit_node_group_capacity" {
       "DaemonSets, and this module's cluster add-ons). The autoscalers will still scale toward those ",
       "maxima, leaving pods Pending with \"Insufficient cpu\" once the Cluster Autoscaler reaches node_max. ",
       "Either lower the maxima (including any n8n_worker_pools max_replicas), lower the CPU requests, ",
+      local.n8n_worker_modeled_max_replicas > var.n8n_worker_keda_max_replicas ? join("", [
+        "lower n8n_worker_keda_paused_replica_count (the paused count, ${local.n8n_worker_modeled_max_replicas}, is above ",
+        "n8n_worker_keda_max_replicas, ${var.n8n_worker_keda_max_replicas}, and only counts while it stays above it), ",
+      ]) : "",
       "or raise node_max / node_instance_type. ",
       "See README.md → \"Sizing autoscaling against node capacity\".",
     ])

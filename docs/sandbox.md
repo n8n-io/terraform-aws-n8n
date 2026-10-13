@@ -72,7 +72,9 @@ update are not counted, so leave some headroom. While
 `n8n_worker_keda_paused_replica_count` when that is larger than
 `n8n_worker_keda_max_replicas`. If you clear the count while still paused,
 KEDA keeps the workers at their current number, which can still be above
-the maximum. The check then counts only the maximum.
+the maximum. The check then counts only the maximum. The node-capacity check
+(`check.autoscaling_maxima_fit_node_group_capacity`) models the worker term the
+same way.
 
 At the single-main sandbox sizes above (1 main + 1 worker + 1 webhook = 3
 pods), `db_postgresdb_pool_size = 3` requests up to 9 connections,

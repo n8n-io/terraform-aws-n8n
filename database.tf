@@ -1087,19 +1087,6 @@ locals {
   # maximum is the conservative stand-in rather than the pinned minimum.
   n8n_worker_pool_max_replicas_sum = sum(concat([0], [for p in var.n8n_worker_pools : p.max_replicas]))
 
-  # While n8n_worker_keda_pause is true, KEDA holds the worker Deployment at
-  # n8n_worker_keda_paused_replica_count, which may exceed
-  # n8n_worker_keda_max_replicas (#180). A null count freezes workers at their
-  # current count, which the model assumes is within the maximum. That is an
-  # assumption, not a guarantee: workers held at a larger explicit count
-  # stay there if the count is cleared while the pause is still on. A count
-  # set while pause is off is inert (the chart only renders it while paused),
-  # so it is not counted.
-  n8n_worker_modeled_max_replicas = max(
-    var.n8n_worker_keda_max_replicas,
-    var.n8n_worker_keda_pause ? coalesce(var.n8n_worker_keda_paused_replica_count, 0) : 0,
-  )
-
   n8n_pg_peak_connections = var.db_postgresdb_pool_size * (
     local.n8n_main_hpa_effective_max_replicas +
     local.n8n_worker_modeled_max_replicas +
