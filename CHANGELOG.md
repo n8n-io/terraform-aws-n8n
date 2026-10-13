@@ -628,7 +628,7 @@ this project adheres to the stability contract in
   image is pinned by tag and digest, and the default pass is clean. The
   checks' source is identical in both releases, so the difference is in how
   Checkov resolves the resource, not in what the checks look for. Held
-  until that is understood. See #150.
+  until that is understood. Tracked in #193; see also #150.
 - AWS provider locks `6.64.0` to `6.65.0` in the root, all eleven examples,
   and `modules/controllers`, with checksums for Linux amd64, Linux arm64,
   and macOS arm64. The `~> 6.0` constraint and all other provider selections
