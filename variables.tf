@@ -3602,13 +3602,15 @@ variable "n8n_dns_config" {
     error_message = "n8n_dns_config.searches entries must each be a lowercase RFC 1123 subdomain of at most 253 characters, with underscores permitted and a bare \".\" or a single trailing dot accepted. This matches Kubernetes' relaxed search-path validation (RelaxedDNSSearchValidation: on by default since 1.33, GA in 1.34); clusters on 1.32 or older validate strictly at admission and additionally reject \".\" and any underscore, so avoid both if you target one. The plan-time check exists because a malformed entry otherwise surfaces as a failed rollout rather than a Helm error."
   }
 
-  # Nested ternaries, not `o.name != "ndots" || (o.value != null && ... &&
-  # tonumber(o.value) <= 15)`: Terraform before 1.12 evaluates every operand,
-  # so the comparison still runs on a value the earlier tests already decided.
-  # That turned a non-numeric ndots ("many") into a tonumber error rather than
-  # this message, and failed the plan outright for a valid valueless option
-  # such as { name = "edns0" }, because `null <= 15` is an error. Only a
-  # ternary's untaken branch is skipped.
+  # Nested ternaries, the repo's guard shape (see AGENTS.md), rather than
+  # `o.name != "ndots" || (o.value != null && ... && tonumber(o.value) <= 15)`.
+  # Before Terraform 1.12 the `||` form evaluated every operand, so the
+  # comparison still ran on a value the earlier tests had already decided: a
+  # non-numeric ndots ("many") became a tonumber error instead of this message,
+  # and a valid valueless option such as { name = "edns0" } failed the plan,
+  # because `null <= 15` is an error (#175). The floor is now 1.13, so both
+  # forms behave the same; the ternary keeps this validation matching the
+  # module's other guards.
   validation {
     condition = var.n8n_dns_config == null ? true : alltrue([
       for o in coalesce(var.n8n_dns_config.options, []) :
