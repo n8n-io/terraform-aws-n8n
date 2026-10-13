@@ -57,7 +57,55 @@ The AWS Load Balancer Controller registers a cluster-wide `MutatingWebhookConfig
 
 ### Fix
 
-The module serializes KEDA on `helm_release.lbc` (which has `wait = true`), so LBC pods are guaranteed Ready before KEDA installs. If you hit this on an older revision of the module, simply re-run `terraform apply` — by the time the second apply starts, LBC is up and KEDA installs cleanly.
+The module installs the controllers one at a time, and KEDA installs last, after `helm_release.lbc`. LBC has `wait = true`, so its install has finished and its pods were Ready before KEDA's Services reach the webhook. If you hit this on an older revision of the module, re-run `terraform apply`. By the time the second apply starts, LBC is up and KEDA installs cleanly.
+
+## `terraform apply`: interrupted controller install leaves a Helm release in `pending-install`
+
+### Symptom
+
+On a fresh apply, one controller release fails, often on a transient API timeout from the new EKS control plane:
+
+```text
+Error: installation failed
+  with module.n8n.module.controllers.helm_release.metrics_server[0],
+unable to build kubernetes objects from release manifest: error validating
+"": error validating data: failed to download openapi: unexpected error when
+reading response body. Please retry. Original error: context deadline
+exceeded
+```
+
+On module versions that installed the controllers in parallel, Terraform could then report `Error: Request cancelled` for the other controller releases that were still installing. That error indicates a provider operation was cancelled; it does not establish why, and the cause in the observed case was not confirmed. One of them can be left behind as a Helm release in `pending-install` with no Kubernetes objects behind it. Terraform does not track that release, so the next `terraform apply` is expected to fail on it with `cannot re-use a name that is still in use`. That retry error follows from Helm's source; it has not been observed directly.
+
+### Cause
+
+The install was interrupted before Helm's own failure handling ran. A failure inside Helm either happens before the release is recorded, leaving nothing behind, or is rolled back by `atomic = true`. Neither applies to an install that was interrupted after the release was recorded. `cleanup_on_fail` applies to upgrades only. Helm's install then refuses to reuse the name: `replace` only allows it for a release in `uninstalled` or `failed` state, and an upgrade refuses any release in a pending state. So neither `replace` nor `upgrade_install` gets past it (Helm v3.20.2, `pkg/action/install.go` and `pkg/action/upgrade.go`, the SDK that `hashicorp/helm` 3.3.0 vendors).
+
+The module now installs the controllers one at a time (the Cluster Autoscaler, then metrics-server, then the AWS Load Balancer Controller, then KEDA). When one release fails, Terraform skips every later one, so none of them is in flight when the run stops, and a re-run retries them. A release can still be stranded if the apply itself is interrupted while a release is mid-install, for example by pressing Ctrl+C twice or losing the runner.
+
+### Fix
+
+Find the module's controller releases in a pending state:
+
+```bash
+kubectl get secret -A \
+  -l 'owner=helm,status=pending-install,name in (cluster-autoscaler,metrics-server,aws-load-balancer-controller,keda)'
+```
+
+Only touch releases this module owns: `cluster-autoscaler`, `metrics-server` and `aws-load-balancer-controller` in `kube-system`, and `keda` in `keda`. On a shared cluster (`create_eks = false`, or a direct call to `modules/controllers`), other teams' Helm releases can be pending for their own reasons. The `name` label on each secret is the release name. Before removing anything, confirm it is an interrupted first install and not an operation still in progress:
+
+```bash
+helm history <release> -n <namespace>
+```
+
+Uninstall only when the history shows a single revision in `pending-install` and no apply or `helm` command is running against the cluster. For a release stuck in `pending-upgrade` or `pending-rollback`, do not uninstall it. Delete only the newest pending release secret, as in steps 1 and 2 of [Recovery from a stuck `pending-rollback` release](#recovery-from-a-stuck-pending-rollback-release); step 3 there is specific to the n8n release.
+
+```bash
+helm uninstall <release> -n <namespace> --wait --timeout 5m
+terraform plan    # expect only the missing releases and what depends on them
+terraform apply
+```
+
+If the uninstall fails or leaves resources in `Terminating`, stop and resolve that before applying again.
 
 ## Smoke test reports `HTTP 000` after a recent destroy + re-apply
 

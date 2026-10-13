@@ -1,3 +1,37 @@
+# ── Install ordering ──────────────────────────────────────────────────────────
+# The four controller releases install one at a time, in this order:
+#
+#   cluster_autoscaler -> metrics_server -> lbc -> keda (keda.tf)
+#
+# Each release lists every earlier release in depends_on, not only the one
+# before it. The install_* toggles are independent, and a depends_on on a
+# release whose count is 0 is a no-op. Listing every earlier release makes
+# the order independent of which releases are turned off, without relying on
+# how Terraform passes ordering through a release whose count is 0.
+#
+# Why serialize at all (issue #174): on a fresh cluster, one release failed on
+# a transient API timeout while the others were still installing. The other
+# in-flight releases were then cancelled (cause not confirmed), and one was
+# left in Helm's pending-install state with nothing behind it. Neither atomic
+# nor cleanup_on_fail covers that case, and the next apply fails on the
+# release name. With one release at a time, a failed release makes Terraform
+# skip every later one, so none of them is in flight when the run stops. A
+# stranded release is then only possible if the run is interrupted while a
+# release is mid-install. See docs/troubleshooting.md for the cleanup.
+#
+# Why this order: Cluster Autoscaler needs none of the others and goes first,
+# so it can add nodes if a later controller's pods do not fit on the node
+# group's starting nodes. Cluster Autoscaler and metrics-server install before
+# LBC registers its cluster-wide Service mutating webhook (see keda.tf), and
+# KEDA installs only once LBC's own install has finished with wait = true.
+# The cost is a longer first apply and destroy: a fresh apply takes about the
+# sum of the install times, and a full destroy about the sum of the uninstall
+# times, rather than the longest one.
+#
+# The mocked terraform test suites cannot assert this: assert reads values,
+# not dependency edges, and the mock providers do not enforce ordering. Only a
+# live fresh apply shows the releases installing one at a time.
+
 # ── AWS Load Balancer Controller ──────────────────────────────────────────────
 # The Helm chart creates its own ServiceAccount (aws-load-balancer-controller
 # in kube-system) and EKS Pod Identity binds it to the IAM role via iam.tf.
@@ -53,6 +87,8 @@ resource "helm_release" "lbc" {
   depends_on = [
     aws_iam_role_policy_attachment.lbc,
     aws_eks_pod_identity_association.lbc,
+    helm_release.cluster_autoscaler,
+    helm_release.metrics_server,
   ]
 }
 
@@ -132,5 +168,9 @@ resource "helm_release" "metrics_server" {
       name  = "args[1]"
       value = "--kubelet-preferred-address-types=InternalIP"
     },
+  ]
+
+  depends_on = [
+    helm_release.cluster_autoscaler,
   ]
 }
