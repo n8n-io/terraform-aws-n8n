@@ -289,20 +289,38 @@ module itself consumes a pre-existing VPC and performs no zone discovery.
 `tests/scripts/check-version-drift.sh` (run weekly by
 `.github/workflows/version-drift.yml`, and on demand via `task
 version-drift`) checks every pin reachable from a public API without AWS
-credentials: the five Terraform providers (registry.terraform.io), the CI
-toolchain (GitHub releases, including `markdownlint-cli`), the four controller charts this module installs
-(their own chart repositories' `index.yaml`), the n8n chart (`n8n-io/n8n-hosting`'s
-latest Git tag, not its `oci://ghcr.io` registry, which has no equivalent
-public index; the chart's own `Chart.yaml` is release-please-automated to
-match that tag exactly, confirmed at `1.11.0` as of this PR, so the tag is a
-reliable proxy for the published chart version rather than a literal registry
-query), and `kubernetes_version` against EKS's supported-version list via
+credentials: the five Terraform providers (registry.terraform.io, compared
+against each constraint rather than a single pinned version -- a
+`~> N[.N[.N]]` constraint that already admits the latest release reports
+`OK`, not drift), the CI toolchain (GitHub releases, including
+`markdownlint-cli`), the four controller charts this module installs (their
+own chart repositories' `index.yaml`), the n8n chart (its own
+`oci://ghcr.io/n8n-io/n8n-helm-chart` registry's anonymous tag list, via a
+short-lived unauthenticated token and the Docker Distribution `tags/list`
+API, filtered to plain `X.Y.Z` release tags -- ghcr.io does expose a public,
+unauthenticated tag index; an earlier version of this doc and the script
+itself claimed otherwise and read `n8n-io/n8n-hosting`'s latest Git tag
+instead, which can also exist before the chart is actually published to
+GHCR), and `kubernetes_version` against EKS's supported-version list via
 `endoflife.date`'s public JSON API (an aggregator over AWS's own
 release-calendar docs; AWS itself does not publish this behind an API),
 cross-checked against checkov's `CKV_AWS_339` allow-list (see the
-`kubernetes_version` entry above). It
-always exits 0: it is a report, not a gate, and everything it would flag is
-release-sized work per the tiers above, not an auto-bump.
+`kubernetes_version` entry above).
+
+Every line is classified `DRIFT` (behind upstream, or a provider constraint
+that no longer admits the latest release), `OK` (current, or a constraint
+that already admits the latest release), or `ERROR` (the upstream lookup
+failed, or this script cannot evaluate the pin's form, e.g. a provider
+constraint other than a single `~> N[.N[.N]]` range -- reported explicitly
+rather than silently treated as current), closing with a one-line summary
+count. It always exits 0, even when a lookup fails:
+`.github/workflows/version-drift.yml`'s only consumer of this output is an
+unguarded step with no `if: always()` that syncs it to a single tracking
+issue, and a non-zero exit here would make GitHub Actions skip that step
+entirely, silently stopping the tracking issue from ever reflecting a run
+that hit a lookup failure. Every `ERROR` is already visible in the synced
+report text, so a report, not a gate, is still the right contract here;
+revisit if that workflow step ever gains `if: always()`.
 
 Even the EKS check only proves a version exists and its support window,
 not that it is creatable in one specific account and region right now;
