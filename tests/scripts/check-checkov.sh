@@ -82,7 +82,6 @@ OPT_IN_TFVARS="tests/checkov/opt-in.tfvars"
 OPT_IN_RESOURCES=(
   "kubernetes_deployment_v1.redis_exporter[0]"
   "kubernetes_service_v1.redis_exporter[0]"
-  "kubernetes_config_map_v1.postgres_ssl_ca[0]"
 )
 
 echo "checkov pass 2/2: opt-in resources (--var-file $OPT_IN_TFVARS)"
