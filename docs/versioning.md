@@ -329,7 +329,7 @@ the script cannot evaluate, so it is not strictly a lookup-failure count). The
 `kubernetes_version` hold tracked in #158 is the one pin without a
 classification: it is not actionable, so it is listed separately under "Known
 and expected". The script exits 0 even when a lookup fails (it still exits 1 if
-`curl` or `jq` is missing):
+`curl`, `jq` or `python3` is missing):
 `.github/workflows/version-drift.yml`'s only consumer of this output is an
 unguarded step with no `if: always()` that syncs it to a single tracking
 issue, and a non-zero exit here would make GitHub Actions skip that step
