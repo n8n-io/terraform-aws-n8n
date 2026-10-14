@@ -96,7 +96,7 @@ its running version before changing the chart; see
 
 Rendering tests cover fallback and explicit image tags, custom repositories,
 and worker-only task runners in queue mode. The capacity model removes main
-runner requests for upstream `1.12.0`, `1.13.0`, `1.14.0` and `1.15.0`, ignoring build metadata
+runner requests for upstream `1.12.0`, `1.13.0`, `1.14.0`, `1.15.0` and `1.16.0`, ignoring build metadata
 but not prerelease suffixes. Verify topology before extending that
 exception to any other release or repository. Worker pools still require
 their separate preview or verified custom chart.
@@ -184,6 +184,36 @@ The same release's upgrade note, that `database.ssl.enabled: true` now actually
 negotiates TLS and verifies the certificate, does not affect this module,
 which never sets `database.ssl.enabled` without `database.ssl.ca`. See
 [Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1140-to-1150).
+
+## Chart 1.16.0 upgrade requirements
+
+The default moves from `1.15.0` to `1.16.0`. `n8n_image_tag = null` moves from
+`appVersion: 2.42.4` to `appVersion: 2.43.5`; pin first if unpinned. The
+module sends the same Helm values on both charts, so the only differences are
+in what the chart itself renders:
+
+- n8n-io/n8n-hosting#228: the chart renders the main `PodDisruptionBudget`
+  only while main can run more than one replica, so single-main
+  (`n8n_main_hpa_min_replicas = 1`) loses the `minAvailable: 0` budget this
+  module still sends; multi-main keeps `minAvailable: 1`. That budget already
+  permitted every voluntary eviction, so this changes nothing observable.
+  `tests/scripts/check-main-chart.sh` renders both topologies and expects no
+  single-main PDB from `1.16.0`; `tests/scripts/smoke-test.sh` accepts either
+  shape for single-main.
+- n8n-io/n8n-hosting#223: the worker task-runner sidecar gains a liveness
+  probe on the launcher's `/healthz`, port 5680. The module sets nothing that
+  moves that port; `tests/scripts/check-main-chart.sh` asserts the probe.
+- n8n-io/n8n-hosting#229: more than one main now requires
+  `multiMain.enabled` and `license.enabled` at render time. Every
+  configuration this module accepts already satisfies both.
+- The task-runner sidecar moved into a shared `n8n.taskRunnerContainer`
+  template helper with the same placement and resources, so `1.16.0` joins
+  the capacity model's worker-only accounting above.
+- New, not exposed by this module: `editor.url`, `hostAliases`, image
+  digests, `persistence.annotations`, per-role `podSecurityContext` and
+  `containerSecurityContext`, and `secretRefs.env.N8N_ENCRYPTION_KEY_FILE`.
+
+See [Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1150-to-1160).
 
 ## Controller chart: AWS Load Balancer Controller 3.6.0
 

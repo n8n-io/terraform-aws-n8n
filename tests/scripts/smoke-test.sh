@@ -9,7 +9,8 @@
 # main topology is detected from N8N_MULTI_MAIN_SETUP_ENABLED on the main
 # Deployment: unset means single-main (n8n_main_hpa_min_replicas = 1,
 # Business-tier path) and the script then asserts HPA min=max=1, Recreate and
-# PDB minAvailable=0 instead of the multi-main leader-election checks.
+# no main PDB (chart 1.16.0+) or PDB minAvailable=0 (older charts) instead of
+# the multi-main leader-election checks.
 #
 # Usage:
 #   # Run from the example directory — outputs are read automatically:
@@ -209,7 +210,7 @@ if [[ "$main_deploy_readable" == false || -n "$multi_main_flag" ]]; then
 else
   MAIN_TOPOLOGY="single-main"
   MAIN_MIN=1
-  info "Single-main topology (N8N_MULTI_MAIN_SETUP_ENABLED absent): expecting HPA 1/1, Recreate, PDB minAvailable=0"
+  info "Single-main topology (N8N_MULTI_MAIN_SETUP_ENABLED absent): expecting HPA 1/1, Recreate, no main PDB (chart 1.16.0+) or PDB minAvailable=0 (older charts)"
 fi
 info "Checks: queue mode, HPA/KEDA, Redis, main topology"
 
@@ -463,14 +464,27 @@ if [[ "$MAIN_TOPOLOGY" == "single-main" ]]; then
     fail "Main Deployment strategy is '${main_strategy:-<unset>}' — expected Recreate for single-main"
   fi
 
-  pdb_min=$(kubectl get pdb n8n-main -n "$NAMESPACE" \
-    -o jsonpath='{.spec.minAvailable}' 2>/dev/null || echo "")
-  pdb_allowed=$(kubectl get pdb n8n-main -n "$NAMESPACE" \
-    -o jsonpath='{.status.disruptionsAllowed}' 2>/dev/null || echo "")
-  if [[ "$pdb_min" == "0" ]]; then
-    pass "Main PDB minAvailable=0 (disruptionsAllowed=${pdb_allowed:-?}) — node drains can evict the only main"
+  # Chart 1.16.0 (n8n-hosting #228) renders no main PDB at all while main runs
+  # one replica; older charts still render the module's minAvailable=0
+  # budget. Both permit every voluntary eviction, so accept either shape.
+  # --ignore-not-found keeps a missing PDB (empty output, exit 0) apart from
+  # a failed lookup (non-zero exit), which must still fail loudly.
+  if pdb_lookup=$(kubectl get pdb n8n-main -n "$NAMESPACE" --ignore-not-found \
+      -o jsonpath='{.metadata.name}|{.spec.minAvailable}' 2>/dev/null); then
+    if [[ -z "$pdb_lookup" ]]; then
+      pass "Main has no PDB (chart 1.16.0+ skips a single-replica budget) — node drains can evict the only main"
+    else
+      pdb_min="${pdb_lookup#*|}"
+      pdb_allowed=$(kubectl get pdb n8n-main -n "$NAMESPACE" \
+        -o jsonpath='{.status.disruptionsAllowed}' 2>/dev/null || echo "")
+      if [[ "$pdb_min" == "0" ]]; then
+        pass "Main PDB minAvailable=0 (disruptionsAllowed=${pdb_allowed:-?}) — node drains can evict the only main"
+      else
+        fail "Main PDB minAvailable is '${pdb_min:-<unset>}' — expected no PDB (chart 1.16.0+) or minAvailable 0 for single-main"
+      fi
+    fi
   else
-    fail "Main PDB minAvailable is '${pdb_min:-<unset>}' — expected 0, otherwise node drains stall on the single main"
+    fail "Main PDB lookup failed — expected no PDB (chart 1.16.0+) or minAvailable 0 for single-main"
   fi
 
 elif [[ -n "$main_pod" ]]; then

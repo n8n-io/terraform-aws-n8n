@@ -37,7 +37,16 @@ chart_version=$(console <<< 'var.n8n_chart_version')
 chart_repository=$(console <<< 'var.n8n_chart_repository')
 helm pull "$chart_repository/n8n" --version "$chart_version" --untar --untardir "$tmp"
 app_version=$(console <<< "yamldecode(file(\"$tmp/n8n/Chart.yaml\")).appVersion")
-[[ "$app_version" == "2.42.4" ]] || { echo "Review image fallback tests for appVersion=$app_version" >&2; exit 1; }
+[[ "$app_version" == "2.43.5" ]] || { echo "Review image fallback tests for appVersion=$app_version" >&2; exit 1; }
+
+# Chart 1.16.0 skips the single-main PDB (n8n-hosting #228) and adds the
+# task-runner liveness probe (#223); the assertions for both branch on this.
+IFS=. read -r chart_major chart_minor _ <<< "${chart_version%%-*}"
+if (( chart_major > 1 || (chart_major == 1 && chart_minor >= 16) )); then
+  chart_at_least_1_16=true
+else
+  chart_at_least_1_16=false
+fi
 
 # Include a larger multi-main floor, plus an explicitly high ceiling for the
 # single-main case. Expected results below are independent of the locals.
@@ -47,7 +56,7 @@ for replicas in 1 2 3; do
 jsonencode({strategy=local.n8n_main_strategy,pdb={enabled=true,minAvailable=local.n8n_main_pdb_min_available},multiMain={enabled=local.n8n_multi_main_enabled,replicas=var.n8n_main_hpa_min_replicas},replicaCount=var.n8n_main_hpa_min_replicas,hpa={main={enabled=true,minReplicas=var.n8n_main_hpa_min_replicas,maxReplicas=local.n8n_main_hpa_effective_max_replicas}}})
 HCL
 
-  for template in deployment-main deployment-worker deployment-webhook-processor hpa-main pdb; do
+  for template in deployment-main deployment-worker deployment-webhook-processor hpa-main; do
     helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
       --set secretRefs.existingSecret=test-core \
       --set license.enabled=true --set license.existingSecret.name=test-license \
@@ -57,15 +66,49 @@ HCL
     console <<< "jsonencode(yamldecode(file(\"$tmp/$template.yaml\")))" > "$tmp/$template.json"
   done
 
+  # Charts from 1.16.0 (n8n-hosting #228) render the main PDB only while main
+  # can run more than one replica, so single-main gets none there; every
+  # multi-main replica count above, and every replica count on older charts,
+  # still renders the module's budget. `--show-only` errors on a template
+  # that renders nothing, so render the whole chart and look for the PDB's
+  # source marker instead of matching Helm's error text.
+  helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
+    --set secretRefs.existingSecret=test-core \
+    --set license.enabled=true --set license.existingSecret.name=test-license \
+    --set queueMode.enabled=true --set webhookProcessor.enabled=true \
+    --set keda.enabled=true --set taskRunners.enabled=true \
+    > "$tmp/all.yaml"
+  if grep -qx '# Source: n8n/templates/pdb.yaml' "$tmp/all.yaml"; then
+    helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
+      --set secretRefs.existingSecret=test-core \
+      --set license.enabled=true --set license.existingSecret.name=test-license \
+      --set queueMode.enabled=true --set webhookProcessor.enabled=true \
+      --set keda.enabled=true --set taskRunners.enabled=true \
+      --show-only templates/pdb.yaml > "$tmp/pdb.yaml"
+    console <<< "jsonencode(yamldecode(file(\"$tmp/pdb.yaml\")))" > "$tmp/pdb.json"
+    pdb_rendered=true
+  else
+    pdb_rendered=false
+  fi
+
   if [[ "$replicas" == 1 ]]; then
     jq -e '.spec.strategy == {"type":"Recreate","rollingUpdate":null} and .spec.replicas == 1' "$tmp/deployment-main.json" >/dev/null
     jq -e '.spec.minReplicas == 1 and .spec.maxReplicas == 1' "$tmp/hpa-main.json" >/dev/null
-    jq -e '.spec.minAvailable == 0' "$tmp/pdb.json" >/dev/null
+    if [[ "$chart_at_least_1_16" == false ]]; then
+      [[ "$pdb_rendered" == true ]] \
+        || { echo "FAIL: chart ${chart_version} predates 1.16.0 and must render the single-main PDB" >&2; exit 1; }
+      jq -e '.spec.minAvailable == 0' "$tmp/pdb.json" >/dev/null
+    else
+      [[ "$pdb_rendered" == false ]] \
+        || { echo "FAIL: chart ${chart_version} must render no main PDB for single-main (n8n-hosting #228 skips it while main runs one replica)" >&2; exit 1; }
+    fi
   else
     jq -e --argjson replicas "$replicas" \
       '(.spec | has("strategy") | not) and .spec.replicas == $replicas' "$tmp/deployment-main.json" >/dev/null
     jq -e --argjson replicas "$replicas" \
       '.spec.minReplicas == $replicas and .spec.maxReplicas == 6' "$tmp/hpa-main.json" >/dev/null
+    [[ "$pdb_rendered" == true ]] \
+      || { echo "FAIL: chart ${chart_version} must render the main PDB while main can run more than one replica" >&2; exit 1; }
     jq -e '.spec.minAvailable == 1' "$tmp/pdb.json" >/dev/null
   fi
 
@@ -73,7 +116,9 @@ HCL
   for template in deployment-worker deployment-webhook-processor; do
     jq -e '.spec | has("strategy") | not' "$tmp/$template.json" >/dev/null
   done
-  jq -e '.spec.selector.matchLabels["app.kubernetes.io/component"] == "main"' "$tmp/pdb.json" >/dev/null
+  if [[ "$pdb_rendered" == true ]]; then
+    jq -e '.spec.selector.matchLabels["app.kubernetes.io/component"] == "main"' "$tmp/pdb.json" >/dev/null
+  fi
   # Omitted image tags use appVersion, and queue-mode runners are worker-only.
   for template in deployment-main deployment-worker deployment-webhook-processor; do
     jq -e --arg image "docker.n8n.io/n8nio/n8n:$app_version" \
@@ -89,10 +134,26 @@ HCL
   echo "PASS: chart $chart_version, main replicas=$replicas, image fallback and worker-only runners"
 done
 
+# Chart 1.16.0 (n8n-hosting #223) probes the launcher's /healthz on port 5680
+# on the worker task-runner sidecar; main and webhook-processor pods carry no
+# sidecar in queue mode, so only the worker gets it. The module never sets
+# N8N_RUNNERS_LAUNCHER_HEALTH_CHECK_PORT, and a caller-managed launcher file
+# (n8n_task_runner_custom_config) cannot move the port: the launcher reads it
+# from the environment only. $tmp/deployment-worker.json is left over from the
+# last replicas iteration above, which always sets taskRunners.enabled=true.
+if [[ "$chart_at_least_1_16" == true ]]; then
+  jq -e '
+    [.spec.template.spec.containers[] | select(.name == "task-runner") | .livenessProbe.httpGet]
+    == [{"path": "/healthz", "port": 5680}]
+  ' "$tmp/deployment-worker.json" >/dev/null \
+    || { echo "FAIL: worker task-runner sidecar must carry the chart's launcher liveness probe on /healthz:5680" >&2; exit 1; }
+  echo "PASS: chart $chart_version, worker task-runner sidecar carries the launcher liveness probe on /healthz:5680"
+fi
+
 # Explicit app tags must override appVersion; runner tags follow the app unless
 # explicitly set. Custom repositories must not reset either explicit tag.
 # The explicit scenario deliberately picks a tag other than the pinned
-# chart's appVersion (2.42.4): using the same value would make "explicit tag
+# chart's appVersion (2.43.5): using the same value would make "explicit tag
 # wins" indistinguishable from "fallback to appVersion" wins by coincidence.
 for scenario in explicit custom; do
   args=(--set-string image.tag=2.39.6)

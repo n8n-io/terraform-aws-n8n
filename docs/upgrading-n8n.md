@@ -6,8 +6,8 @@ This covers bumping the deployed n8n version on an existing deployment. It does 
 
 | Variable | Controls | Default |
 | --- | --- | --- |
-| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.15.0"`, pinned |
-| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.42.4` in chart `1.15.0`) |
+| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.16.0"`, pinned |
+| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.43.5` in chart `1.16.0`) |
 | `n8n_task_runner_image_tag` | Task runner image tag; keep aligned with the underlying n8n version when using a custom application tag. | `null`, meaning the application image tag |
 
 Bumping the image tag alone gets you a new n8n version without changing the chart's templates or value schema. Bumping the chart version can also change what values the chart accepts, so treat it as the larger-blast-radius change of the two.
@@ -266,6 +266,80 @@ upgrade: Helm cannot roll back database migrations.
   exposed by this module.
 
 The worker-only task-runner capacity accounting covers `1.15.0`.
+
+## Moving from chart 1.15.0 to 1.16.0
+
+`helm_release.n8n` plans only the `version` change: the module sends `1.16.0`
+the same values it sent `1.15.0`. Every n8n pod still rolls once, because the
+chart version is a pod template label (`helm.sh/chart`) and also changes each
+pod's `checksum/config` annotation. With `n8n_image_tag = null` (the default)
+the upgrade also moves n8n from `appVersion: 2.42.4` to `2.43.5` across its
+database migrations; take the RDS snapshot first, as for any upgrade. Pin
+`n8n_image_tag` to upgrade the chart alone. Rendering the module's fixtures
+against both charts shows two changes beyond those labels and that checksum:
+
+- **No main PodDisruptionBudget in single-main** (n8n-io/n8n-hosting#228).
+  The chart now renders the main PDB only while main can run more than one
+  replica. Multi-main (`n8n_main_hpa_min_replicas` of 2 or more, the module
+  default) keeps its `minAvailable: 1` budget. Single-main
+  (`n8n_main_hpa_min_replicas = 1`) loses its `minAvailable: 0` budget, and
+  Helm deletes `pdb/n8n-main` on the upgrade. That budget already permitted
+  every voluntary eviction, so node drains and EKS upgrades behave as before.
+  The module still sends `pdb.minAvailable = 0` for single-main, which older
+  charts render. `tests/scripts/smoke-test.sh` now accepts either shape for
+  single-main and still requires `minAvailable: 1` for multi-main.
+- **Liveness probe on the worker task-runner sidecar** (n8n-io/n8n-hosting#223):
+  an HTTP GET on `/healthz`, port 5680, the launcher's own health server,
+  every 10 seconds; Kubernetes restarts the sidecar after 6 failures. The
+  module never sets `N8N_RUNNERS_LAUNCHER_HEALTH_CHECK_PORT`, and a
+  caller-managed launcher file (`n8n_task_runner_custom_config`) cannot move
+  that port, because the launcher reads it from the environment only. Main
+  pods carry no sidecar in queue mode, so only workers get the probe.
+
+No change needed: the chart's new render-time guards (more than one main
+requires `multiMain.enabled` and `license.enabled`, n8n-io/n8n-hosting#229)
+always pass here, because `multiMain.enabled` is derived from
+`n8n_main_hpa_min_replicas`, the single-main HPA is clamped to 1, and the
+license is always enabled (`n8n.tf`). The task-runner sidecar moved into a
+shared template helper with the same placement and resources, so `1.16.0`
+joins the worker-only task-runner capacity accounting alongside `1.12.0`
+through `1.15.0`.
+
+Not exposed by this module: `editor.url` (#243; the module keeps rendering
+its own `N8N_EDITOR_BASE_URL` and manages its own Ingress outside the chart,
+so neither `ingress` nor `webhook.url` reaches the chart either), `hostAliases`
+(#167), image digests and `persistence.annotations` (#240), per-role
+`podSecurityContext` and `containerSecurityContext` (#236; their defaults
+render the same security contexts as `1.15.0`), and
+`secretRefs.env.N8N_ENCRYPTION_KEY_FILE` (#183; the module passes its key
+through `secretRefs.existingSecret`). See
+[docs/helm-chart-coverage.md](./helm-chart-coverage.md) for the full table.
+
+**Check after the upgrade** (namespace `n8n` unless you changed it):
+
+1. `helm history n8n -n n8n`: the newest revision is `deployed` with chart
+   `n8n-1.16.0`, and no `failed` or rolled-back revision came after the
+   previous one.
+2. `kubectl rollout status deploy/n8n-main -n n8n && kubectl rollout status deploy/n8n-worker -n n8n && kubectl rollout status deploy/n8n-webhook-processor -n n8n`.
+3. `kubectl get deploy n8n-main -n n8n -o jsonpath='{.spec.template.spec.containers[0].image}'`
+   prints `docker.n8n.io/n8nio/n8n:2.43.5` with `n8n_image_tag = null`, or
+   your pinned tag.
+4. `kubectl get pdb -n n8n`: multi-main lists `n8n-main` with
+   `MIN AVAILABLE` 1; single-main lists no `n8n-main`.
+5. `kubectl get deploy n8n-worker -n n8n -o json | jq '.spec.template.spec.containers[] | select(.name == "task-runner") | .livenessProbe.httpGet'`
+   prints path `/healthz` and port `5680`. Over the next few minutes the
+   worker pods' restart counts stay flat and
+   `kubectl get events -n n8n --field-selector reason=Unhealthy` lists no
+   `task-runner` liveness failures.
+6. `tests/scripts/smoke-test.sh` passes.
+
+Failure signs: the Helm upgrade fails with an `n8n` values-validation error
+naming `multiMain`, `replicaCount`, or `hpa.main` (not expected from any
+configuration the module accepts; report it), worker `task-runner`
+containers restarting on `Liveness probe failed` (read the sidecar logs for
+the launcher's health server), or the apply rolling back to `1.15.0`.
+
+The worker-only task-runner capacity accounting covers `1.16.0`.
 
 ## Before bumping
 
