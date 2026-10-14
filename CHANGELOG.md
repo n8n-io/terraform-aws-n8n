@@ -9,6 +9,29 @@ this project adheres to the stability contract in
 
 ### Added
 
+- `aws_partner_attribution_tag` adds the tag `aws-apn-id` to every taggable
+  resource the module creates, through `local.common_tags`; to the ALB and the
+  listeners, target groups and security groups the AWS Load Balancer Controller
+  creates, through the controller's `defaultTags` when `install_lbc` is true;
+  and to every EBS volume the EBS CSI driver provisions, through the addon's
+  `controller.extraVolumeTags` when `create_ebs_csi` is true. AWS Partner
+  Revenue Measurement uses it to attribute the spend to n8n. It defaults to the
+  product code of n8n's AWS Marketplace container listing. The input owns the
+  tag: an `aws-apn-id` key in `tags` is ignored, and `""` removes the tag from
+  the resources Terraform manages and stops the controller adding it to the load
+  balancers it creates. Every example takes the same input and merges it into
+  its own tags, so its VPC and Redis, RDS and S3 stand-ins carry it too; the
+  stand-in EKS clusters in `customer-managed-cluster` and
+  `customer-managed-everything` tag their node groups only.
+  The EKS node group's EC2 instances, their root volumes, the node
+  launch template and the EKS-created cluster security group stay untagged,
+  because EKS does not copy tags to them. Upgrade note: the first plan after
+  upgrading updates the tags of every tagged resource in place, upgrades the AWS
+  Load Balancer Controller release and reconfigures the EBS CSI addon, which
+  tags volumes it provisions from then on; volumes that already exist are not
+  retagged, and opting out does not untag them. The one Pod Identity
+  association owned by the EBS CSI addon keeps its old tags until the addon is
+  recreated. See README.md → AWS Partner Revenue Measurement tag.
 - A plan-time advisory `check.db_postgresdb_pool_size_fits_known_max_connections`
   (`database.tf`) warns when `db_postgresdb_pool_size` times the modeled main,
   worker, webhook-processor, and `n8n_worker_pools` replica ceilings would

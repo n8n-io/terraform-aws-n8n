@@ -223,3 +223,47 @@ run "deletion_controls_pass_through_to_module" {
     error_message = "s3_force_destroy must pass from the example to the module"
   }
 }
+
+# ── AWS Partner Revenue Measurement tag ───────────────────────────────────────
+# The example merges the tag into its own tags (VPC, NAT gateway, stand-in
+# infrastructure) and passes the same value to the module. Whether the module
+# then tags what it creates is asserted in the root tests/defaults.tftest.hcl.
+# local.common_tags is built entirely from known inputs, so it is also known
+# at plan time and is asserted here directly: deleting the tag merge from this
+# example's own main.tf would leave only the variable-contract assertion
+# green, so both are checked.
+
+run "aws_partner_attribution_tag_defaults_to_the_product_code" {
+  command = plan
+
+  assert {
+    condition     = var.aws_partner_attribution_tag == "pc:26au7o6cdeh7fqdt376h9m9xk"
+    error_message = "The example must default to the same product code as the module root"
+  }
+
+  assert {
+    condition     = local.common_tags["aws-apn-id"] == "pc:26au7o6cdeh7fqdt376h9m9xk"
+    error_message = "The example must merge the attribution tag into its own common_tags"
+  }
+}
+
+run "aws_partner_attribution_tag_rejects_a_value_that_is_not_a_product_code" {
+  command = plan
+
+  variables {
+    aws_partner_attribution_tag = "26au7o6cdeh7fqdt376h9m9xk"
+  }
+
+  expect_failures = [var.aws_partner_attribution_tag]
+}
+
+run "aws_partner_attribution_tag_rejects_a_value_over_the_aws_tag_value_limit" {
+  command = plan
+
+  variables {
+    # "pc:" plus 254 characters is 257, one over the 256-character tag value limit.
+    aws_partner_attribution_tag = "pc:${join("", [for i in range(254) : "a"])}"
+  }
+
+  expect_failures = [var.aws_partner_attribution_tag]
+}

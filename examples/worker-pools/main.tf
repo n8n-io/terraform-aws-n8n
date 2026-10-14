@@ -1,9 +1,14 @@
 locals {
+  aws_partner_attribution_tags = {
+    for k, v in { "aws-apn-id" = var.aws_partner_attribution_tag } : k => v if v != ""
+  }
+
   common_tags = merge(
     {
       ManagedBy = "terraform"
       Project   = "n8n"
     },
+    local.aws_partner_attribution_tags,
     var.tags,
   )
 
@@ -118,6 +123,8 @@ module "vpc" {
 
 module "n8n" {
   source = "../.."
+
+  aws_partner_attribution_tag = var.aws_partner_attribution_tag
 
   aws_region      = var.aws_region
   cluster_name    = var.cluster_name

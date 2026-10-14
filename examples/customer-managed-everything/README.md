@@ -40,6 +40,10 @@ This example is two things layered together, same shape as the single-layer exam
 
 `providers.tf` configures the `kubernetes`/`helm` providers against `module.n8n`'s `cluster_endpoint`/`cluster_certificate_authority_data` outputs, the same as every other example. `module.controllers` uses those same providers (it has its own `helm_release` and `kubernetes_storage_class_v1` resources), which means `module.controllers` already depends on `module.n8n` implicitly, through the provider configuration, before any explicit `depends_on` is written. `module.n8n` deliberately has no `depends_on module.controllers`: adding one creates a genuine dependency cycle (confirmed directly: `terraform validate` reports one). `ingress.tf`'s own Ingress depends on both modules explicitly instead, since it needs the Services `module.n8n` creates and the LBC `module.controllers` installs.
 
+## AWS Partner Revenue Measurement tag
+
+`aws_partner_attribution_tag` reaches every taggable stand-in resource through `local.common_tags`, the module's resources through the same input, and `modules/controllers` through `lbc_default_tags` and `ebs_volume_tags`. The stand-in node group is tagged as a node group only: EKS does not copy those tags to the instances and volumes it launches, and this example attaches no launch template, so those carry no `aws-apn-id`. On a real customer-managed cluster the node group is yours. Giving an existing node group a launch template with `tag_specifications` replaces its nodes, so plan the rotation (surge capacity, drain order, a maintenance window) before you make that change.
+
 ## Adapting to your real infrastructure
 
 To point this at infrastructure you actually run instead of the stand-ins, layer by layer:
@@ -136,6 +140,7 @@ Same structural limitation as [`examples/customer-managed-cluster`](../customer-
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
+| <a name="input_aws_partner_attribution_tag"></a> [aws\_partner\_attribution\_tag](#input\_aws\_partner\_attribution\_tag) | Value of the aws-apn-id tag added to every taggable AWS resource this example and the module create, so AWS Partner Revenue Measurement attributes their spend to n8n. Passed to the module's aws\_partner\_attribution\_tag and merged into this example's own tags, which is how the VPC, NAT gateway and any stand-in infrastructure get it. This input owns the tag: an aws-apn-id key in tags is ignored. Set to an empty string to remove the tag from resources Terraform manages and stop new load balancers and volumes receiving it; EBS volumes that already exist keep it. Keep the default and validation in sync with the module root's variables.tf. | `string` | `"pc:26au7o6cdeh7fqdt376h9m9xk"` | no |
 | <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1). | `string` | `"us-east-1"` | no |
 | <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | Name for the EKS cluster. Keep to 14 characters or fewer: the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. | `string` | `"n8n-cluster"` | no |
 | <a name="input_customer_managed_db_engine_version"></a> [customer\_managed\_db\_engine\_version](#input\_customer\_managed\_db\_engine\_version) | PostgreSQL engine version for the stand-in database this example creates. Matches the module's own db\_engine\_version default. | `string` | `"18.6"` | no |

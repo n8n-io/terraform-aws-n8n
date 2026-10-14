@@ -375,12 +375,21 @@ locals {
   # resolved value instead of three separately-maintained literals.
   redis_key_prefix_value = coalesce(var.redis_key_prefix, "bull")
 
+  # Empty when var.aws_partner_attribution_tag is "", so opting out removes the
+  # tag rather than leaving it with an empty value.
+  aws_partner_attribution_tags = {
+    for k, v in { "aws-apn-id" = var.aws_partner_attribution_tag } : k => v if v != ""
+  }
+
   common_tags = merge(
     {
       ManagedBy = "terraform"
       Project   = "n8n"
     },
-    var.tags,
+    # aws-apn-id is reserved for aws_partner_attribution_tag, so a tags entry
+    # cannot override it or bring it back after the input is set to "".
+    { for k, v in var.tags : k => v if k != "aws-apn-id" },
+    local.aws_partner_attribution_tags,
   )
 
   # cluster_name + last 6 digits of the account ID keeps names unique across

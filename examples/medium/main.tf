@@ -1,10 +1,17 @@
 locals {
+  aws_partner_attribution_tags = {
+    for k, v in { "aws-apn-id" = var.aws_partner_attribution_tag } : k => v if v != ""
+  }
+
   common_tags = merge(
     {
       ManagedBy = "terraform"
       Project   = "n8n"
     },
-    var.tags,
+    # aws-apn-id is reserved for aws_partner_attribution_tag, so a tags entry
+    # cannot override it or bring it back after the input is set to "".
+    { for k, v in var.tags : k => v if k != "aws-apn-id" },
+    local.aws_partner_attribution_tags,
   )
 }
 
@@ -55,6 +62,8 @@ module "vpc" {
 
 module "n8n" {
   source = "../.."
+
+  aws_partner_attribution_tag = var.aws_partner_attribution_tag
 
   aws_region      = var.aws_region
   cluster_name    = var.cluster_name

@@ -95,6 +95,20 @@ variable "common_tags" {
   nullable    = false
 }
 
+variable "lbc_default_tags" {
+  description = "Tags the AWS Load Balancer Controller applies to every AWS resource it creates, such as the ALB. Passed to the chart's defaultTags value."
+  type        = map(string)
+  default     = {}
+  nullable    = false
+}
+
+variable "ebs_volume_tags" {
+  description = "Tags the EBS CSI driver applies to every EBS volume it provisions, passed to the addon's controller.extraVolumeTags. Ignored when create_ebs_csi = false."
+  type        = map(string)
+  default     = {}
+  nullable    = false
+}
+
 # ── Controller toggles ────────────────────────────────────────────────────────
 # Same names, defaults and semantics as the root module's variables of the same
 # name (variables.tf); the root module passes them straight through so the

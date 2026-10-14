@@ -211,3 +211,11 @@ run "customer_managed_node_max_rejects_below_min" {
 # webhook_hpa_needs_metrics_server_somewhere) as any other ordinary plan
 # here, regardless of the assertion's own correctness. Not testable in this
 # file; covered at the repo root's tests/defaults.tftest.hcl instead.
+
+# aws_partner_attribution_tag has no run here, for the same reason as the
+# n8n_task_runner_image_repository note above: it passes through to module "n8n"
+# and no root-level resource reads it directly, so a run hits the same
+# unresolvable check blocks as any other ordinary plan in this file. Its default
+# and validation are identical to the other examples', which do assert them, and
+# the module's own behaviour is covered at the repo root's
+# tests/defaults.tftest.hcl.

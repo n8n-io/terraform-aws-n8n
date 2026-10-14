@@ -174,3 +174,8 @@ run "customer_managed_node_desired_rejects_above_max" {
 # asserted in every other example's test file and the module's own contract in
 # tests/defaults.tftest.hcl at the repo root; `terraform validate` here still
 # proves each is an accepted module input.
+
+# aws_partner_attribution_tag has no run here for the same reason as every other
+# pass-through on this example: a run that plans the module cannot complete. The
+# variable's default and validation are identical to the other examples', which
+# do assert them, and `terraform validate` covers the wiring.
