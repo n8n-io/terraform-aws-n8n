@@ -365,6 +365,20 @@ this project adheres to the stability contract in
   that sync instead of surfacing in it. The existing `eks/kubernetes_version`
   "Known and expected" section for #158 is unchanged in content; see #150.
 
+- `tests/scripts/check-version-drift.sh`'s provider-constraint evaluator now
+  understands any comma-separated combination of `~>`, `>=`, `>`, `<=`, `<`,
+  `!=`, `=`, or a bare version, not only a single `~> N[.N[.N]]` range (the
+  shared evaluator this entry's drift-classification rework above
+  introduced): a constraint like `>= 1.2, < 3.0` is now evaluated against
+  the latest release instead of reported as an explicit `ERROR`. Only a
+  constraint the evaluator cannot parse still reports `ERROR`. The logic
+  lives in the new `tests/scripts/lib/constraints.sh`, shared with the new
+  offline unit test `tests/scripts/test-version-drift-constraints.sh`
+  (ported from the sibling terraform-google-n8n module,
+  n8n-io/terraform-google-n8n#40). This module's own five provider
+  constraints are all a single `~>` range today, so the drift report's
+  output is unchanged for them.
+
 - **`cluster_name` is now checked at plan time against S3's bucket-name
   rules while the module creates the bucket**
   ([#194](https://github.com/n8n-io/terraform-aws-n8n/issues/194)). The name is

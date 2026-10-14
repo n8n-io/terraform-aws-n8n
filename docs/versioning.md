@@ -292,9 +292,11 @@ module itself consumes a pre-existing VPC and performs no zone discovery.
 `.github/workflows/version-drift.yml`, and on demand via `task
 version-drift`) checks every pin reachable from a public API without AWS
 credentials: the five Terraform providers (registry.terraform.io, compared
-against each constraint rather than a single pinned version: a
-`~> N[.N[.N]]` constraint that already admits the latest release reports
-`OK`, not drift), the CI toolchain (GitHub releases, including
+against each constraint rather than a single pinned version: any
+comma-separated combination of `~>`, `>=`, `>`, `<=`, `<`, `!=`, `=` or a
+bare version, evaluated by `tests/scripts/lib/constraints.sh`, so a
+constraint that already admits the latest release reports `OK`, not drift),
+the CI toolchain (GitHub releases, including
 `markdownlint-cli`), the four controller charts this module installs (their
 own chart repositories' `index.yaml`), the n8n chart (its own
 `oci://ghcr.io/n8n-io/n8n-helm-chart` registry's anonymous tag list, via a
@@ -314,9 +316,10 @@ Each pin is classified `DRIFT` (behind upstream, or a provider constraint
 that no longer admits the latest release), `OK` (current, or a constraint
 that already admits the latest release), or `ERROR` (the upstream lookup
 failed, or this script cannot evaluate the pin's form, e.g. a provider
-constraint other than a single `~> N[.N[.N]]` range, or a latest provider
-release that is not a plain `X.Y.Z` version; these are reported explicitly
-rather than silently treated as current), closing with a one-line summary
+constraint using an operator `tests/scripts/lib/constraints.sh` does not
+understand, or a latest provider release that is not a plain `X.Y.Z`
+version; these are reported explicitly rather than silently treated as
+current), closing with a one-line summary
 count of pins behind upstream and errors (an error is a failed lookup or a pin
 the script cannot evaluate, so it is not strictly a lookup-failure count). The
 `kubernetes_version` hold tracked in #158 is the one pin without a

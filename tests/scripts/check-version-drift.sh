@@ -10,10 +10,12 @@
 #   OK:    the pin matches upstream, or its constraint already admits the
 #          latest release.
 #   ERROR: the upstream lookup failed, or this script cannot evaluate the
-#          pin's form (e.g. a provider constraint that isn't a single
-#          "~> N[.N[.N]]" range). Printed to both stdout and stderr: stdout
-#          so it lands in the report this script's only consumer syncs to a
-#          tracking issue (see "Why this still exits 0" below), stderr so it
+#          pin's form (e.g. a provider constraint using an operator
+#          tests/scripts/lib/constraints.sh does not understand, or a
+#          latest provider release that is not a plain X.Y.Z version).
+#          Printed to both stdout and stderr: stdout so it lands in the
+#          report this script's only consumer syncs to a tracking issue (see
+#          "Why this still exits 0" below), stderr so it
 #          is also visible immediately in CI logs. Never reported as quiet
 #          "up to date": an unreadable pin and a current one must never
 #          look the same. One exception, inherited from before this
@@ -45,13 +47,14 @@
 # `if: always()`.
 #
 # Checks pins reachable from public, unauthenticated APIs:
-#   - Terraform providers (registry.terraform.io), constraint-aware: a
-#     "~> N[.N[.N]]" constraint that already admits the latest release is OK,
-#     not drift (this repo's five provider constraints, e.g. "~> 6.0", admit
-#     a wide range of latest releases by design). Any other constraint form
-#     (an exact pin, ">=", a comma-separated combination, ...) cannot be
-#     evaluated this way and is reported as an explicit ERROR asking for a
-#     manual compare, never silently as OK.
+#   - Terraform providers (registry.terraform.io), constraint-aware: any
+#     comma-separated combination of ~>, >=, >, <=, <, != and = (or a bare
+#     version) is evaluated against the latest release via
+#     tests/scripts/lib/constraints.sh: OK when the constraint already
+#     admits it, DRIFT when it does not (this repo's five provider
+#     constraints, e.g. "~> 6.0", admit a wide range of latest releases by
+#     design). Only a constraint this evaluator cannot parse is reported as
+#     an explicit ERROR asking for a manual compare, never silently as OK.
 #   - CLI tools this repo's CI pins (GitHub releases)
 #   - Helm charts: the four controller charts against their own chart
 #     repositories' index.yaml; the n8n chart against its own
@@ -83,7 +86,7 @@
 # from CI). That is a manual check on the same cadence as everything here.
 #
 # Usage: tests/scripts/check-version-drift.sh
-# Requires: curl, jq. No terraform, no AWS credentials, no cluster.
+# Requires: curl, jq, python3 (for tests/scripts/lib/constraints.sh). No terraform, no AWS credentials, no cluster.
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -96,6 +99,8 @@ done
 
 # shellcheck disable=SC1091 # path is $SCRIPT_DIR-relative, resolved at runtime, not statically
 source "$SCRIPT_DIR/lib/tf-defaults.sh"
+# shellcheck disable=SC1091 # path is $SCRIPT_DIR-relative, resolved at runtime, not statically
+source "$SCRIPT_DIR/lib/constraints.sh"
 
 WORKFLOW=".github/workflows/terraform-tests.yml"
 
@@ -145,61 +150,6 @@ read_provider_constraint() {
   ' versions.tf
 }
 
-# $1: dotted version (up to 3 segments, e.g. "6.68.0"); missing trailing
-# segments count as 0. Prints a fixed-width, directly comparable string.
-numify() {
-  local v="$1"
-  local IFS=.
-  local -a p
-  read -r -a p <<<"$v"
-  printf '%05d%05d%05d' "${p[0]:-0}" "${p[1]:-0}" "${p[2]:-0}"
-}
-
-# $1: provider constraint (e.g. "~> 6.0"). $2: latest release (e.g.
-# "6.68.0"). Prints yes/no when the constraint admits/excludes the latest
-# release, or "unknown" when this script cannot evaluate the constraint's
-# form, so the caller reports an explicit ERROR instead of guessing.
-#
-# Only a single "~> N[.N[.N]]" constraint is understood. Per Terraform's
-# pessimistic-constraint-operator semantics
-# (https://developer.hashicorp.com/terraform/language/expressions/version-constraints):
-# everything but the rightmost given component is frozen, and the rightmost
-# given component is free to increase. So "~> 6.0" admits any 6.x.y (only
-# the major, 6, is frozen) and "~> 1.2.3" admits any 1.2.z (the major and
-# minor, 1 and 2, are frozen). A bare "~> N" (one segment) freezes nothing
-# and admits any N.x.y. Any other constraint form (an exact pin, ">=", a
-# comma-separated combination, ...) is "unknown": say so rather than
-# evaluate it wrong.
-provider_admits_latest() {
-  local constraint="$1" latest="$2"
-  [[ "$constraint" =~ ^~[\>][[:space:]]*([0-9]+(\.[0-9]+){0,2})$ ]] || { echo unknown; return; }
-  local spec="${BASH_REMATCH[1]}"
-  [[ "$latest" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || { echo unknown; return; }
-  local IFS=.
-  local -a segs
-  read -r -a segs <<<"$spec"
-  local n=${#segs[@]}
-  local -a lower=(0 0 0) upper=(0 0 0)
-  local i
-  for ((i = 0; i < n; i++)); do lower[i]=${segs[i]}; done
-  if (( n == 1 )); then
-    upper=( $(( 10#${segs[0]} + 1 )) 0 0 )
-  else
-    local fixed=$(( n - 1 ))
-    for ((i = 0; i < fixed - 1; i++)); do upper[i]=${segs[i]}; done
-    upper[fixed - 1]=$(( 10#${segs[fixed - 1]} + 1 ))
-  fi
-  local lower_n upper_n latest_n
-  lower_n="$(numify "${lower[0]}.${lower[1]}.${lower[2]}")"
-  upper_n="$(numify "${upper[0]}.${upper[1]}.${upper[2]}")"
-  latest_n="$(numify "$latest")"
-  if (( 10#$latest_n >= 10#$lower_n && 10#$latest_n < 10#$upper_n )); then
-    echo yes
-  else
-    echo no
-  fi
-}
-
 echo "## Version drift report"
 echo
 
@@ -215,17 +165,19 @@ for provider in aws kubernetes helm random time; do
     report_error "provider/$provider: constraint \"$constraint\", registry.terraform.io lookup failed"
     continue
   fi
-  # Checked here, not only inside provider_admits_latest, so a prerelease or
+  # Checked here, not only inside constraint_accepts, so a prerelease or
   # otherwise unexpected "latest" is reported as such rather than blamed on
   # the constraint.
   if [[ ! "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     report_error "provider/$provider: registry.terraform.io returned latest \"$latest\", which is not a plain X.Y.Z release; compare constraint \"$constraint\" by hand"
     continue
   fi
-  case "$(provider_admits_latest "$constraint" "$latest")" in
-    yes) report_ok "provider/$provider: constraint \"$constraint\" already admits latest $latest" ;;
-    no)  report_drift "provider/$provider: constraint \"$constraint\" does not admit latest $latest" ;;
-    *)   report_error "provider/$provider: constraint \"$constraint\" is not a single \"~> N[.N[.N]]\" range; cannot evaluate automatically against latest $latest, compare by hand" ;;
+  verdict=0
+  constraint_accepts "$constraint" "$latest" || verdict=$?
+  case "$verdict" in
+    0) report_ok "provider/$provider: constraint \"$constraint\" already admits latest $latest" ;;
+    1) report_drift "provider/$provider: constraint \"$constraint\" does not admit latest $latest" ;;
+    *) report_error "provider/$provider: constraint \"$constraint\" could not be parsed; cannot evaluate automatically against latest $latest, compare by hand" ;;
   esac
 done
 
