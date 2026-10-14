@@ -14753,7 +14753,7 @@ run "aws_partner_attribution_tag_empty_is_not_restored_by_tags" {
 
 # ── cluster_name and the generated S3 bucket name (#194) ──────────────────────
 # The module builds the bucket as n8n-<cluster_name>-<id>. S3 rejects uppercase
-# letters and underscores (InvalidBucketName) and the AWS provider does not
+# letters, underscores and misplaced periods (InvalidBucketName) and the AWS provider does not
 # validate bucket names at plan time. On the default configuration the RDS and
 # ElastiCache identifiers built from the same name are validated by the provider
 # and reject these names first, so the gap only shows when the caller supplies
@@ -14821,6 +14821,78 @@ run "cluster_name_accepts_lowercase_letters_digits_and_hyphens_for_the_bucket" {
   }
 }
 
+run "cluster_name_rejects_consecutive_periods_in_the_bucket_name" {
+  command = plan
+
+  variables {
+    cluster_name = "foo..bar"
+  }
+
+  expect_failures = [var.cluster_name]
+}
+
+run "cluster_name_rejects_a_period_followed_by_a_hyphen_in_the_bucket_name" {
+  command = plan
+
+  variables {
+    cluster_name = "foo.-bar"
+  }
+
+  expect_failures = [var.cluster_name]
+}
+
+run "cluster_name_rejects_a_leading_period_in_the_bucket_name" {
+  command = plan
+
+  # n8n-.foo-<id> puts a hyphen next to a period.
+  variables {
+    cluster_name = ".foo"
+  }
+
+  expect_failures = [var.cluster_name]
+}
+
+run "cluster_name_rejects_a_trailing_period_in_the_bucket_name" {
+  command = plan
+
+  # n8n-foo.-<id> puts a period next to a hyphen.
+  variables {
+    cluster_name = "foo."
+  }
+
+  expect_failures = [var.cluster_name]
+}
+
+run "cluster_name_allows_a_well_placed_period_for_the_bucket" {
+  command = plan
+
+  # S3 accepts a period that is not at either end and not next to a period or a
+  # hyphen, so the name that plans today must still plan. A period name only gets
+  # through the provider's other validators (EKS name, KMS alias) when the cluster
+  # and the S3 CMK are not module-created, hence this configuration.
+  variables {
+    cluster_name                                 = "foo.bar"
+    create_eks                                   = false
+    existing_eks_cluster_name                    = "platform-shared-cluster"
+    existing_eks_cluster_prerequisites_confirmed = true
+    create_database                              = false
+    db_host                                      = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password_secret_ref                       = { name = "caller-db-secret" }
+    create_elasticache                           = false
+    redis_host                                   = "redis.internal.example.com"
+    s3_kms_encryption_enabled                    = false
+  }
+
+  # The storage check always fires on the create_eks = false path (see
+  # storage.tf); listing it proves nothing else unexpected also fired.
+  expect_failures = [check.existing_eks_cluster_needs_its_own_storage_toggle]
+
+  assert {
+    condition     = local.s3_bucket_name_generated == "n8n-foo.bar-${substr(data.aws_caller_identity.current.account_id, 6, 6)}"
+    error_message = "A well-placed period must be accepted and flow into the generated bucket name"
+  }
+}
+
 run "cluster_name_allows_uppercase_and_underscore_when_the_caller_brings_everything" {
   command = plan
 
@@ -14838,8 +14910,7 @@ run "cluster_name_allows_uppercase_and_underscore_when_the_caller_brings_everyth
     redis_host              = "redis.internal.example.com"
   }
 
-  assert {
-    condition     = var.cluster_name == "My_Cluster"
-    error_message = "The S3 rule must not apply when create_s3_bucket = false"
-  }
+  # No assertion: the plan succeeding is the proof. The name is not used to build
+  # any bucket, and asserting var.cluster_name against the literal set above
+  # would be true by construction.
 }
