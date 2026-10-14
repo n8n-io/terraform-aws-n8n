@@ -14750,3 +14750,96 @@ run "aws_partner_attribution_tag_empty_is_not_restored_by_tags" {
     error_message = "An aws-apn-id key in tags must not bring the tag back once aws_partner_attribution_tag is empty"
   }
 }
+
+# ── cluster_name and the generated S3 bucket name (#194) ──────────────────────
+# The module builds the bucket as n8n-<cluster_name>-<id>. S3 rejects uppercase
+# letters and underscores (InvalidBucketName) and the AWS provider does not
+# validate bucket names at plan time. On the default configuration the RDS and
+# ElastiCache identifiers built from the same name are validated by the provider
+# and reject these names first, so the gap only shows when the caller supplies
+# the database and Redis: that is the configuration these runs use. The
+# validation is guarded by create_s3_bucket.
+
+run "cluster_name_rejects_an_underscore_while_the_module_creates_the_bucket" {
+  command = plan
+
+  variables {
+    cluster_name           = "my_cluster"
+    create_database        = false
+    db_host                = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password_secret_ref = { name = "caller-db-secret" }
+    create_elasticache     = false
+    redis_host             = "redis.internal.example.com"
+  }
+
+  expect_failures = [var.cluster_name]
+}
+
+run "cluster_name_rejects_uppercase_while_the_module_creates_the_bucket" {
+  command = plan
+
+  variables {
+    cluster_name           = "My-Cluster"
+    create_database        = false
+    db_host                = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password_secret_ref = { name = "caller-db-secret" }
+    create_elasticache     = false
+    redis_host             = "redis.internal.example.com"
+  }
+
+  expect_failures = [var.cluster_name]
+}
+
+run "cluster_name_rejects_uppercase_on_the_default_configuration_with_the_module_message" {
+  command = plan
+
+  # The provider's RDS and ElastiCache validators would also reject this on the
+  # default configuration, but the variable validation fires first and names the
+  # bucket, which is what the caller should fix.
+  variables {
+    cluster_name = "My-Cluster"
+  }
+
+  expect_failures = [var.cluster_name]
+}
+
+run "cluster_name_accepts_lowercase_letters_digits_and_hyphens_for_the_bucket" {
+  command = plan
+
+  variables {
+    cluster_name           = "n8n-prod-2"
+    create_database        = false
+    db_host                = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password_secret_ref = { name = "caller-db-secret" }
+    create_elasticache     = false
+    redis_host             = "redis.internal.example.com"
+  }
+
+  assert {
+    condition     = local.s3_bucket_name_generated == "n8n-n8n-prod-2-${substr(data.aws_caller_identity.current.account_id, 6, 6)}"
+    error_message = "A lowercase, hyphenated name must be accepted and flow into the generated bucket name"
+  }
+}
+
+run "cluster_name_allows_uppercase_and_underscore_when_the_caller_brings_everything" {
+  command = plan
+
+  # No generated bucket name exists, so the rule must not apply: the name that
+  # works today stays valid. The database and Redis are also the caller's, so the
+  # provider's own identifier validators have nothing to reject.
+  variables {
+    cluster_name            = "My_Cluster"
+    create_s3_bucket        = false
+    existing_s3_bucket_name = "my-existing-n8n-bucket"
+    create_database         = false
+    db_host                 = "aurora-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+    db_password_secret_ref  = { name = "caller-db-secret" }
+    create_elasticache      = false
+    redis_host              = "redis.internal.example.com"
+  }
+
+  assert {
+    condition     = var.cluster_name == "My_Cluster"
+    error_message = "The S3 rule must not apply when create_s3_bucket = false"
+  }
+}

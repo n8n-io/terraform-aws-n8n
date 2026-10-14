@@ -365,6 +365,22 @@ this project adheres to the stability contract in
   that sync instead of surfacing in it. The existing `eks/kubernetes_version`
   "Known and expected" section for #158 is unchanged in content; see #150.
 
+- **`cluster_name` is now checked at plan time against S3's bucket-name
+  rules while the module creates the bucket**
+  ([#194](https://github.com/n8n-io/terraform-aws-n8n/issues/194)). The name is
+  embedded in the bucket name `n8n-<cluster_name>-<id>`, which S3 accepts only
+  with lowercase letters, digits and hyphens: `create-bucket` rejects an
+  uppercase letter or an underscore with `InvalidBucketName`, but the AWS
+  provider does not validate bucket names at plan time, so the name was
+  validated for length only and failed during `apply`. On the default
+  configuration the provider already rejected such names at plan time through
+  the RDS and ElastiCache identifiers built from the same name, so the
+  outcome changes only when the database and Redis are caller-supplied
+  (`create_database = false` and `create_elasticache = false`). The check is
+  skipped when `create_s3_bucket = false`, so a caller who brings their own
+  bucket keeps every name that works today. **Upgrade note:** a name that now
+  fails planned cleanly before but could not have applied while the module
+  created the bucket, so no deployment that applied successfully is affected.
 - **Breaking: the minimum Terraform version is now `>= 1.13`** (was
   `>= 1.11`) in all thirteen `required_version` declarations: the module
   root, `modules/controllers`, and all eleven examples. Two Terraform

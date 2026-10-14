@@ -7,13 +7,26 @@
 # match would be a breaking change with no functional benefit (see #81).
 
 variable "cluster_name" {
-  description = "Name for the EKS cluster. Keep to 14 characters or fewer — the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars."
+  description = "Name for the EKS cluster. Keep to 14 characters or fewer — the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. While create_s3_bucket = true the name is also embedded in the S3 bucket name `n8n-<cluster_name>-<id>`, which S3 only accepts with lowercase letters, digits and hyphens, so uppercase letters and underscores are rejected at plan time."
   type        = string
   default     = "n8n-cluster"
 
   validation {
     condition     = length(var.cluster_name) <= 14
     error_message = "cluster_name must be 14 characters or fewer (ElastiCache cluster ID <cluster_name>-redis must stay <= 20 chars)."
+  }
+
+  # The generated S3 bucket name n8n-<cluster_name>-<id> is not validated by the
+  # AWS provider at plan time, and S3 rejects uppercase letters and underscores
+  # at apply (InvalidBucketName, checked against the API; see #194). On the
+  # default configuration the RDS and ElastiCache identifiers built from the
+  # same name are validated by the provider at plan time and reject these names
+  # first, so this only changes the outcome when the caller supplies the
+  # database and Redis. Guarded by the toggle that creates the bucket, so a
+  # caller who brings their own keeps every name that works today.
+  validation {
+    condition     = var.create_s3_bucket ? can(regex("^[a-z0-9-]+$", var.cluster_name)) : true
+    error_message = "cluster_name must use only lowercase letters, digits and hyphens while create_s3_bucket = true: the generated bucket name n8n-<cluster_name>-<id> is rejected by S3 (InvalidBucketName) for uppercase letters and underscores, but only at apply. Use a lowercase name, or set create_s3_bucket = false and supply existing_s3_bucket_name."
   }
 }
 
