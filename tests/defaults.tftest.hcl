@@ -12477,8 +12477,35 @@ run "node_disk_size_accepts_a_larger_volume" {
   }
 
   assert {
+    condition     = aws_launch_template.node[0].block_device_mappings[0].ebs[0].volume_size == 100
+    error_message = "node_disk_size must reach the launch template's block_device_mappings, otherwise the root volume keeps the 20 GiB EKS default however the variable is set."
+  }
+
+  # The node group's own disk_size is Optional+Computed in the AWS provider
+  # schema, so once launch_template is attached it plans as (known after
+  # apply) rather than null — verified live (examples/node-tags-test, #198):
+  # the real plan shows disk_size = 20 -> (known after apply) on this same
+  # transition. Not assertable at plan time under mocks either, hence no
+  # assertion on it here; the block_device_mappings assert above is what
+  # actually proves node_disk_size reaches the volume.
+}
+
+run "node_disk_size_reaches_the_node_group_directly_when_launch_template_disabled" {
+  command = plan
+
+  variables {
+    node_disk_size               = 100
+    node_launch_template_enabled = false
+  }
+
+  assert {
     condition     = aws_eks_node_group.n8n[0].disk_size == 100
-    error_message = "node_disk_size must reach the node group's disk_size, otherwise the root volume keeps the 20 GiB EKS default however the variable is set."
+    error_message = "With node_launch_template_enabled = false, node_disk_size must reach the node group's own disk_size, matching this module's behavior before #198."
+  }
+
+  assert {
+    condition     = length(aws_launch_template.node) == 0
+    error_message = "node_launch_template_enabled = false must create no launch template."
   }
 }
 
@@ -14683,6 +14710,16 @@ run "aws_partner_attribution_tag_is_on_by_default" {
     condition     = jsondecode(module.controllers.ebs_csi_addon[0].configuration_values).controller.extraVolumeTags["aws-apn-id"] == "pc:26au7o6cdeh7fqdt376h9m9xk"
     error_message = "The EBS CSI driver must tag the volumes it provisions with aws-apn-id by default"
   }
+
+  assert {
+    condition     = [for ts in aws_launch_template.node[0].tag_specifications : ts.tags["aws-apn-id"] if ts.resource_type == "instance"][0] == "pc:26au7o6cdeh7fqdt376h9m9xk"
+    error_message = "The node group's launch template must tag instances with aws-apn-id by default"
+  }
+
+  assert {
+    condition     = [for ts in aws_launch_template.node[0].tag_specifications : ts.tags["aws-apn-id"] if ts.resource_type == "volume"][0] == "pc:26au7o6cdeh7fqdt376h9m9xk"
+    error_message = "The node group's launch template must tag root volumes with aws-apn-id by default"
+  }
 }
 
 run "aws_partner_attribution_tag_empty_removes_the_tag" {
@@ -14705,6 +14742,11 @@ run "aws_partner_attribution_tag_empty_removes_the_tag" {
   assert {
     condition     = jsondecode(module.controllers.ebs_csi_addon[0].configuration_values).controller.extraVolumeTags == {}
     error_message = "An empty aws_partner_attribution_tag must send an empty extraVolumeTags, so a previously applied tag is cleared from the EBS CSI addon rather than left in place"
+  }
+
+  assert {
+    condition     = alltrue([for ts in aws_launch_template.node[0].tag_specifications : !contains(keys(ts.tags), "aws-apn-id")])
+    error_message = "An empty aws_partner_attribution_tag must remove aws-apn-id from every launch template tag_specifications block, not leave it with an empty value"
   }
 }
 
@@ -14923,4 +14965,63 @@ run "cluster_name_allows_uppercase_and_underscore_when_the_caller_brings_everyth
   # No assertion: the plan succeeding is the proof. The name is not used to build
   # any bucket, and asserting var.cluster_name against the literal set above
   # would be true by construction.
+}
+
+# ── Node group launch template (#198) ─────────────────────────────────────────
+# aws_launch_template.node is what actually gets aws-apn-id (and the rest of
+# local.common_tags) onto the worker EC2 instances and their root volumes;
+# the AWS Partner Revenue Measurement runs above assert its tag content. These
+# assert the toggle itself: on by default, and the node group falls back to
+# its pre-#198 shape (direct disk_size, no launch_template) when disabled.
+
+run "node_launch_template_enabled_defaults_to_true" {
+  command = plan
+
+  assert {
+    condition     = var.node_launch_template_enabled == true
+    error_message = "node_launch_template_enabled must default to true so a fresh deployment tags its worker instances and volumes without extra configuration."
+  }
+
+  assert {
+    condition     = length(aws_launch_template.node) == 1
+    error_message = "node_launch_template_enabled defaults to true, so the module must plan exactly one launch template."
+  }
+
+  assert {
+    condition     = length(aws_eks_node_group.n8n[0].launch_template) == 1
+    error_message = "node_launch_template_enabled defaults to true, so the node group must reference the launch template."
+  }
+
+  assert {
+    condition     = one(aws_eks_node_group.n8n[0].instance_types) == "t3.xlarge"
+    error_message = "instance_types must still reach the node group directly even with a launch template attached, since the launch template sets no instance_type of its own."
+  }
+
+  assert {
+    condition     = aws_eks_node_group.n8n[0].update_config[0].max_unavailable == 1
+    error_message = "update_config.max_unavailable must default to 1 so a launch template version bump rolls one node at a time."
+  }
+}
+
+run "node_launch_template_disabled_restores_pre_198_node_group_shape" {
+  command = plan
+
+  variables {
+    node_launch_template_enabled = false
+  }
+
+  assert {
+    condition     = length(aws_launch_template.node) == 0
+    error_message = "node_launch_template_enabled = false must create no launch template."
+  }
+
+  assert {
+    condition     = length(aws_eks_node_group.n8n[0].launch_template) == 0
+    error_message = "node_launch_template_enabled = false must leave the node group with no launch_template block, matching this module's behavior before #198."
+  }
+
+  assert {
+    condition     = one(aws_eks_node_group.n8n[0].instance_types) == "t3.xlarge"
+    error_message = "instance_types must still reach the node group directly with the launch template disabled."
+  }
 }

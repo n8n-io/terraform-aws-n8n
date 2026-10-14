@@ -233,9 +233,24 @@ minutes after the apply. The input owns the tag: an `aws-apn-id` key in `tags` i
 ignored, so it can neither change the value nor bring the tag back once the
 input is empty.
 
-Some resources stay untagged, because EKS creates them and does not copy tags
-to them: the EC2 instances in the EKS node group, their root volumes, the node
-launch template, and the cluster security group `eks-cluster-sg-*`.
+The EKS-created cluster security group `eks-cluster-sg-*` stays untagged: EKS
+creates it and does not copy tags to it, and nothing in the module can reach
+it.
+
+EKS does not copy the node group's own tags to the EC2 instances, EBS volumes
+or network interfaces it launches either, so `aws_eks_node_group.n8n` attaches
+an `aws_launch_template` (`node_launch_template_enabled`, `true` by default)
+whose `tag_specifications` carry the same tags, including `aws-apn-id`. The
+first apply after upgrading to a module version with this launch template
+replaces the entire node group — every node is destroyed, then re-created,
+and every pod is down until the new nodes join — because attaching a launch
+template changes `launch_template.id`, which the AWS provider treats as
+forcing replacement. Set `node_launch_template_enabled = false` before that
+first apply to defer the replacement to a deliberate maintenance window, then
+flip it to `true` later. Once the launch template is in place, further
+changes (a new `aws_partner_attribution_tag`, a different `node_disk_size`)
+only bump its version, which EKS rolls out node-by-node via `update_config`
+instead of a Terraform replacement.
 
 The EBS CSI driver applies its tags when it creates a volume. Upgrading does not
 retag volumes that already exist, and setting `aws_partner_attribution_tag = ""`
@@ -2660,6 +2675,7 @@ doing at this node count, but neither removes the fivefold waste at source.
 | [aws_kms_key.eks](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key) | resource |
 | [aws_kms_key.redis](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key) | resource |
 | [aws_kms_key.s3](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key) | resource |
+| [aws_launch_template.node](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/launch_template) | resource |
 | [aws_route53_record.cert_validation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_record) | resource |
 | [aws_route53_record.n8n_alias](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_record) | resource |
 | [aws_route53_record.n8n_alias_additional](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_record) | resource |
@@ -2880,6 +2896,7 @@ doing at this node count, but neither removes the fivefold waste at source.
 | <a name="input_node_desired"></a> [node\_desired](#input\_node\_desired) | Initial number of worker nodes. Only applies at creation: the node group's desired\_size ignores changes afterward so the Cluster Autoscaler can own it without fighting plans/applies. | `number` | `3` | no |
 | <a name="input_node_disk_size"></a> [node\_disk\_size](#input\_node\_disk\_size) | Root EBS volume size in GiB for the EKS worker nodes. Leave null for the EKS<br/>managed-node-group default, which is 20 GiB. Previously unsettable: the node<br/>group set no disk\_size at all and the module exposed no input, so every<br/>deployment silently took the 20 GiB default regardless of pod density.<br/><br/>20 GiB is not much once the node's own baseline is accounted for. Measured on<br/>a 42-node m7i.4xlarge cluster running n8n at load, about 7.7 GiB per node is<br/>consumed before any workload growth, of which roughly 2.3 GiB is OS files<br/>under /usr and 3.5 to 3.8 GiB is container images and layers under<br/>/var/lib/containerd. The kubelet begins evicting pods at around 2.1 GiB<br/>available. That leaves roughly 11 GiB of usable headroom on a 20 GiB volume,<br/>which is a good deal less than the volume size suggests.<br/><br/>Size it for TRANSIENT SPIKES, not for steady-state growth. The same cluster<br/>was observed sitting flat for an hour and then consuming 13 to 14 GiB per node<br/>within about four minutes, across 40 of 42 nodes simultaneously, before<br/>releasing it again just as quickly. A volume sized to the steady state has no<br/>margin for that and the kubelet evicts, which on this workload took out 279<br/>pods in one episode.<br/><br/>NOTE: changing this on an existing cluster replaces every node in the group.<br/>Plan for the rollout, and do not change it during a measurement run. | `number` | `null` | no |
 | <a name="input_node_instance_type"></a> [node\_instance\_type](#input\_node\_instance\_type) | EC2 instance type for EKS worker nodes. t3.xlarge (4 vCPU, 16GB) is the recommended minimum for multi-main: the 6 n8n pods (main × 2, worker × 2, webhook × 2) request ~3,600m CPU at minimum replicas, leaving t3.medium nodes with insufficient headroom for HPA to scale. Changing this on an existing deployment replaces the node group: Terraform deletes the old group before it creates the new one, so every pod is down until the new nodes join. See docs/build-time-decisions.md. | `string` | `"t3.xlarge"` | no |
+| <a name="input_node_launch_template_enabled"></a> [node\_launch\_template\_enabled](#input\_node\_launch\_template\_enabled) | When true (the default), aws\_eks\_node\_group.n8n attaches an<br/>aws\_launch\_template so the worker EC2 instances, their root EBS volumes,<br/>and their primary network interfaces carry local.common\_tags, including<br/>aws-apn-id for AWS Partner Revenue Measurement. EKS does not copy the node<br/>group's own tags to the resources it launches, so an explicit launch<br/>template is the only way to get them tagged (#198).<br/><br/>Attaching or detaching the launch template changes the node group's<br/>launch\_template.id, which the AWS provider's aws\_eks\_node\_group schema<br/>marks ForceNew: the first apply after flipping this replaces the entire<br/>node group — every node destroyed, then re-created — so every pod is down<br/>until the new nodes join. Every apply after that only bumps the launch<br/>template's version, which is NOT ForceNew: EKS rolls that out node-by-node<br/>via UpdateNodegroupVersion, honoring update\_config, instead of a Terraform<br/>replacement. Set this to false before the first apply on an existing<br/>deployment to defer that one-time replacement to a deliberate maintenance<br/>window, then flip it to true later. See README.md → "AWS Partner Revenue<br/>Measurement tag".<br/><br/>node\_disk\_size reaches the launch template's block\_device\_mappings instead<br/>of the node group's own disk\_size when this is true, because the EKS API<br/>rejects disk\_size outright once a launch template is attached; the<br/>resulting volume size is unaffected by this toggle either way. | `bool` | `true` | no |
 | <a name="input_node_max"></a> [node\_max](#input\_node\_max) | Maximum number of worker nodes. This is the ceiling the Cluster Autoscaler scales to, so node\_max × node\_instance\_type is the hard cap on schedulable CPU: the autoscaler maxima (n8n\_main\_hpa\_max\_replicas, n8n\_webhook\_hpa\_max\_replicas, n8n\_worker\_keda\_max\_replicas, or n8n\_worker\_keda\_paused\_replica\_count while paused and larger) and the per-pod CPU requests have to fit inside it. The module warns at plan time when they do not; see README.md → "Sizing autoscaling against node capacity". | `number` | `6` | no |
 | <a name="input_node_min"></a> [node\_min](#input\_node\_min) | Minimum number of worker nodes | `number` | `3` | no |
 | <a name="input_private_subnets"></a> [private\_subnets](#input\_private\_subnets) | IDs of private subnets (one per AZ, minimum two AZs). RDS, ElastiCache, and EKS nodes attach here. | `list(string)` | n/a | yes |

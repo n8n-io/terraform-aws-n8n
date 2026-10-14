@@ -665,6 +665,39 @@ variable "node_max" {
   }
 }
 
+# ── Node group launch template ────────────────────────────────────────────────
+
+variable "node_launch_template_enabled" {
+  description = <<-EOT
+    When true (the default), aws_eks_node_group.n8n attaches an
+    aws_launch_template so the worker EC2 instances, their root EBS volumes,
+    and their primary network interfaces carry local.common_tags, including
+    aws-apn-id for AWS Partner Revenue Measurement. EKS does not copy the node
+    group's own tags to the resources it launches, so an explicit launch
+    template is the only way to get them tagged (#198).
+
+    Attaching or detaching the launch template changes the node group's
+    launch_template.id, which the AWS provider's aws_eks_node_group schema
+    marks ForceNew: the first apply after flipping this replaces the entire
+    node group — every node destroyed, then re-created — so every pod is down
+    until the new nodes join. Every apply after that only bumps the launch
+    template's version, which is NOT ForceNew: EKS rolls that out node-by-node
+    via UpdateNodegroupVersion, honoring update_config, instead of a Terraform
+    replacement. Set this to false before the first apply on an existing
+    deployment to defer that one-time replacement to a deliberate maintenance
+    window, then flip it to true later. See README.md → "AWS Partner Revenue
+    Measurement tag".
+
+    node_disk_size reaches the launch template's block_device_mappings instead
+    of the node group's own disk_size when this is true, because the EKS API
+    rejects disk_size outright once a launch template is attached; the
+    resulting volume size is unaffected by this toggle either way.
+  EOT
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 # ── Cluster controllers ────────────────────────────────────────────────────────
 # Four Helm-installed controllers run alongside n8n in kube-system (LBC, Cluster
 # Autoscaler, metrics-server) and its own keda namespace. All four default to

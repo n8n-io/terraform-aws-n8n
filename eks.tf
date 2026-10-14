@@ -230,10 +230,86 @@ resource "aws_eks_cluster" "n8n" {
   ]
 }
 
+# ── Managed node group launch template ────────────────────────────────────────
+# EKS does not copy aws_eks_node_group.n8n's own tags to the EC2 instances,
+# EBS volumes or network interfaces it launches (#198), so tagging them (for
+# AWS Partner Revenue Measurement, among anything else in local.common_tags)
+# needs an explicit launch template with tag_specifications. No image_id,
+# iam_instance_profile, or network_interfaces/subnet_id/security group: EKS
+# rejects a node group launch template that sets any of those
+# (CreateNodegroup's launchTemplate docs), and omitting them keeps the same
+# AMI, instance profile and cluster security group resolution EKS performs
+# with no launch template at all. instance_types stays on the node group
+# itself (unaffected by this launch template, which defines no instance_type
+# of its own) rather than moving here, which keeps room for more than one
+# type later: EKS rejects a node group whose launch template AND instanceTypes
+# both set an instance type.
+#
+# block_device_mappings replaces the node group's own disk_size, which the EKS
+# API rejects outright once a launch template is attached. device_name,
+# volume_type and delete_on_termination are measured off the implicit launch
+# template EKS generates when no launch_template is set at all (live
+# DescribeLaunchTemplateVersions on a deployment from #187): gp3, /dev/xvda,
+# delete-on-termination enabled, no EBS encryption (matching this AWS
+# account's EbsEncryptionByDefault = false). volume_size is left unset when
+# var.node_disk_size is null so the volume still inherits the AMI snapshot's
+# 20 GiB default instead of a hard-coded one.
+#
+# metadata_options matches that same implicit launch template's IMDS posture
+# (IMDSv2 required, hop limit 1, instance metadata tags disabled) rather than
+# the aws_launch_template resource's own defaults, so a future EKS default
+# change cannot silently loosen it.
+
+resource "aws_launch_template" "node" {
+  # checkov:skip=CKV_AWS_341:IMDSv2 already required (http_tokens = "required" below); this ID also checks the hop limit, which metadata_options sets to 1 to match the EKS-managed implicit launch template's own default, measured live (see comment above).
+  # checkov:skip=CKV_AWS_8:Root volume encryption is intentionally left at this AWS account's default (unencrypted; EbsEncryptionByDefault = false), matching the node group's own behavior before this launch template existed. Encrypting it is a separate, deliberate change outside #198's tagging scope.
+  count = var.create_eks && var.node_launch_template_enabled ? 1 : 0
+
+  name_prefix = "${local.cluster_name}-node-"
+
+  block_device_mappings {
+    device_name = "/dev/xvda"
+
+    ebs {
+      volume_size           = var.node_disk_size
+      volume_type           = "gp3"
+      delete_on_termination = true
+    }
+  }
+
+  metadata_options {
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+    instance_metadata_tags      = "disabled"
+  }
+
+  tag_specifications {
+    resource_type = "instance"
+    tags          = local.common_tags
+  }
+
+  tag_specifications {
+    resource_type = "volume"
+    tags          = local.common_tags
+  }
+
+  tag_specifications {
+    resource_type = "network-interface"
+    tags          = local.common_tags
+  }
+
+  tags = local.common_tags
+}
+
 # ── Managed node group ────────────────────────────────────────────────────────
 # 3 nodes by default — enough for 6 pods at minimum replicas.
 # HPA scales pods horizontally; Cluster Autoscaler (controllers.tf) adds/removes
 # nodes between node_min and node_max as pod demand changes.
+#
+# update_config caps one unavailable node per rolling update — a launch
+# template version bump (tag or node_disk_size change) or a kubernetes_version
+# bump — so capacity never drops to zero while nodes roll, as long as node_min
+# stays above 1.
 
 resource "aws_eks_node_group" "n8n" {
   count = var.create_eks ? 1 : 0
@@ -243,12 +319,36 @@ resource "aws_eks_node_group" "n8n" {
   node_role_arn   = aws_iam_role.nodes[0].arn
   subnet_ids      = local.private_subnets
   instance_types  = [var.node_instance_type]
-  disk_size       = var.node_disk_size
+  # The EKS API rejects disk_size outright once launch_template is set below,
+  # so this only takes effect with the launch template disabled.
+  disk_size = var.node_launch_template_enabled ? null : var.node_disk_size
 
   scaling_config {
     desired_size = var.node_desired
     min_size     = var.node_min
     max_size     = var.node_max
+  }
+
+  update_config {
+    max_unavailable = 1
+  }
+
+  # Attaching or detaching the launch template changes launch_template.id,
+  # which the AWS provider marks ForceNew: the first apply after flipping
+  # var.node_launch_template_enabled replaces the whole node group (every node
+  # destroyed, then re-created), so every pod is down until the new nodes
+  # join. Every apply after that only bumps launch_template.version, which is
+  # NOT ForceNew: EKS rolls that out node-by-node via UpdateNodegroupVersion,
+  # honoring update_config above instead of a Terraform replacement. See
+  # var.node_launch_template_enabled and README.md → "AWS Partner Revenue
+  # Measurement tag".
+  dynamic "launch_template" {
+    for_each = var.node_launch_template_enabled ? [1] : []
+
+    content {
+      id      = aws_launch_template.node[0].id
+      version = aws_launch_template.node[0].latest_version
+    }
   }
 
   # Required for Cluster Autoscaler auto-discovery. The CA scans for ASGs

@@ -22,16 +22,32 @@ this project adheres to the stability contract in
   balancers it creates. Every example takes the same input and merges it into
   its own tags, so its VPC and Redis, RDS and S3 stand-ins carry it too; the
   stand-in EKS clusters in `customer-managed-cluster` and
-  `customer-managed-everything` tag their node groups only.
-  The EKS node group's EC2 instances, their root volumes, the node
-  launch template and the EKS-created cluster security group stay untagged,
-  because EKS does not copy tags to them. Upgrade note: the first plan after
+  `customer-managed-everything` tag their node groups only. The EKS-created
+  cluster security group stays untagged, because EKS does not copy tags to it
+  and nothing in the module can reach it. Upgrade note: the first plan after
   upgrading updates the tags of every tagged resource in place, upgrades the AWS
   Load Balancer Controller release and reconfigures the EBS CSI addon, which
   tags volumes it provisions from then on; volumes that already exist are not
   retagged, and opting out does not untag them. The one Pod Identity
   association owned by the EBS CSI addon keeps its old tags until the addon is
   recreated. See README.md → AWS Partner Revenue Measurement tag.
+- `node_launch_template_enabled` (default `true`) attaches an
+  `aws_launch_template` to `aws_eks_node_group.n8n` so the worker EC2
+  instances, their root EBS volumes and their network interfaces carry
+  `local.common_tags`, including `aws-apn-id`, which EKS does not copy from
+  the node group itself (#198). `node_disk_size` now reaches the launch
+  template's `block_device_mappings` instead of the node group's own
+  `disk_size`, which the EKS API rejects once a launch template is attached;
+  the resulting volume size is unchanged. `update_config { max_unavailable =
+  1 }` is now explicit on the node group so a launch template version bump —
+  from a new `aws_partner_attribution_tag` or `node_disk_size` — rolls nodes
+  one at a time instead of implicitly. Upgrade note: the first apply after
+  upgrading replaces the entire node group, because attaching a launch
+  template for the first time changes `launch_template.id`, which forces
+  replacement; every pod is down until the new nodes join. Set
+  `node_launch_template_enabled = false` before that apply to defer the
+  replacement, then flip it to `true` in a deliberate maintenance window. See
+  README.md → AWS Partner Revenue Measurement tag.
 - A plan-time advisory `check.db_postgresdb_pool_size_fits_known_max_connections`
   (`database.tf`) warns when `db_postgresdb_pool_size` times the modeled main,
   worker, webhook-processor, and `n8n_worker_pools` replica ceilings would
