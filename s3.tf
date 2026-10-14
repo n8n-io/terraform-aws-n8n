@@ -51,10 +51,17 @@ resource "aws_s3_bucket" "n8n" {
   # data source read during apply whenever the dependency has a pending change,
   # so the name becomes "known after apply" and, with it, a forced replacement
   # of a bucket that holds binary execution data (force_destroy = true by
-  # default deletes it). The account id and cluster name that make up the name
-  # never change for a live bucket: a new cluster_name replaces the whole stack.
+  # default deletes it). ignore_changes = [bucket] stops that. It would also
+  # stop a deliberate rename, because the name is derived from cluster_name and
+  # n8n.tf hands the pods the new name. aws_iam_role.s3 is named from
+  # cluster_name alone, never from the deferred account id, so a change to its
+  # name is a reliable signal that cluster_name changed. replace_triggered_by
+  # turns that back into the replacement the bucket needs. It names the
+  # attribute, not the resource: the resource form also fires on an in-place
+  # update, such as a tag edit, which must not replace the bucket.
   lifecycle {
-    ignore_changes = [bucket]
+    ignore_changes       = [bucket]
+    replace_triggered_by = [aws_iam_role.s3.name]
   }
 }
 

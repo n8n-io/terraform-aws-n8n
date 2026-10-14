@@ -711,9 +711,12 @@ this project adheres to the stability contract in
   `aws_s3_bucket_server_side_encryption_configuration.n8n` and
   `aws_kms_alias.s3`; with the default `s3_force_destroy = true` that deletes
   the binary data in the bucket. `aws_s3_bucket.n8n` now ignores changes to
-  `bucket` and `aws_kms_alias.s3` to `name_prefix`. Reproduced and fixed
-  against real AWS. A bucket's name is fixed for its life: renaming a
-  deployment's `cluster_name` still replaces the whole stack.
+  `bucket` and `aws_kms_alias.s3` to `name_prefix`. A change to `cluster_name`
+  still replaces the bucket, as before: `replace_triggered_by` on
+  `aws_iam_role.s3.name`, which is derived from `cluster_name` alone, keeps
+  that rename working. Reproduced and fixed against real AWS: a change to the
+  module's `depends_on` target and an in-place tag update on the role replace
+  nothing, and a `cluster_name` change replaces the bucket.
 
 - `check.autoscaling_maxima_fit_node_group_capacity` (`scaling.tf`) models the
   same worker ceiling as the connection-budget check: while
