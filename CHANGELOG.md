@@ -700,6 +700,21 @@ this project adheres to the stability contract in
 
 ### Fixed
 
+- **The module-managed S3 bucket could be destroyed and recreated by an
+  unrelated change in the caller.** The bucket name embeds
+  `data.aws_caller_identity.current.account_id`. A caller that sets
+  `depends_on` on the module call, as every example does with the VPC, has
+  that data source deferred to apply whenever the dependency has a pending
+  change (for example a tag edit on the VPC). The name then planned as
+  "known after apply" and forced a replacement of `aws_s3_bucket.n8n`,
+  `aws_s3_bucket_public_access_block.n8n`,
+  `aws_s3_bucket_server_side_encryption_configuration.n8n` and
+  `aws_kms_alias.s3`; with the default `s3_force_destroy = true` that deletes
+  the binary data in the bucket. `aws_s3_bucket.n8n` now ignores changes to
+  `bucket` and `aws_kms_alias.s3` to `name_prefix`. Reproduced and fixed
+  against real AWS. A bucket's name is fixed for its life: renaming a
+  deployment's `cluster_name` still replaces the whole stack.
+
 - `check.autoscaling_maxima_fit_node_group_capacity` (`scaling.tf`) models the
   same worker ceiling as the connection-budget check: while
   `n8n_worker_keda_pause = true`, the worker term uses
@@ -709,6 +724,7 @@ this project adheres to the stability contract in
   ([#186](https://github.com/n8n-io/terraform-aws-n8n/issues/186)). The shared
   `local.n8n_worker_modeled_max_replicas` moved from `database.tf` to
   `scaling.tf`. Advisory only: plan and apply are unaffected.
+
 - **Controller Helm releases install one at a time** (#174). In
   `modules/controllers`, the Cluster Autoscaler, metrics-server, the AWS
   Load Balancer Controller, and KEDA used to install in parallel (only KEDA

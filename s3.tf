@@ -45,6 +45,17 @@ resource "aws_s3_bucket" "n8n" {
   force_destroy = var.s3_force_destroy
 
   tags = merge(local.common_tags, { Name = local.s3_bucket_name_generated })
+
+  # The name embeds data.aws_caller_identity.current.account_id. A caller that
+  # puts `depends_on` on this module (every example does, on the VPC) has that
+  # data source read during apply whenever the dependency has a pending change,
+  # so the name becomes "known after apply" and, with it, a forced replacement
+  # of a bucket that holds binary execution data (force_destroy = true by
+  # default deletes it). The account id and cluster name that make up the name
+  # never change for a live bucket: a new cluster_name replaces the whole stack.
+  lifecycle {
+    ignore_changes = [bucket]
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "n8n" {
@@ -111,6 +122,14 @@ resource "aws_kms_alias" "s3" {
 
   name_prefix   = "alias/${local.s3_bucket_name}-"
   target_key_id = aws_kms_key.s3[0].key_id
+
+  # Same reason as aws_s3_bucket.n8n: the prefix embeds the bucket name, which
+  # turns unknown when the module's data sources are deferred, and a changed
+  # prefix forces replacement of an alias the key policy and S3 encryption
+  # already depend on.
+  lifecycle {
+    ignore_changes = [name_prefix]
+  }
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "n8n" {
