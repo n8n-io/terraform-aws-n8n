@@ -307,20 +307,30 @@ release-calendar docs; AWS itself does not publish this behind an API),
 cross-checked against checkov's `CKV_AWS_339` allow-list (see the
 `kubernetes_version` entry above).
 
-Every line is classified `DRIFT` (behind upstream, or a provider constraint
+Each pin is classified `DRIFT` (behind upstream, or a provider constraint
 that no longer admits the latest release), `OK` (current, or a constraint
 that already admits the latest release), or `ERROR` (the upstream lookup
 failed, or this script cannot evaluate the pin's form, e.g. a provider
 constraint other than a single `~> N[.N[.N]]` range -- reported explicitly
 rather than silently treated as current), closing with a one-line summary
-count. It always exits 0, even when a lookup fails:
+count of pins behind upstream and errors (an error is a failed lookup or a pin
+the script cannot evaluate, so it is not strictly a lookup-failure count). The
+`kubernetes_version` hold tracked in #158 is the one pin without a
+classification: it is not actionable, so it is listed separately under "Known
+and expected". The script exits 0 even when a lookup fails (it still exits 1 if
+`curl` or `jq` is missing):
 `.github/workflows/version-drift.yml`'s only consumer of this output is an
 unguarded step with no `if: always()` that syncs it to a single tracking
 issue, and a non-zero exit here would make GitHub Actions skip that step
 entirely, silently stopping the tracking issue from ever reflecting a run
 that hit a lookup failure. Every `ERROR` is already visible in the synced
 report text, so a report, not a gate, is still the right contract here;
-revisit if that workflow step ever gains `if: always()`.
+revisit if that workflow step ever gains `if: always()`. One lookup does not
+report an `ERROR` when it fails: the optional lookup of the latest checkov
+release behind the #158 hold. The pinned checkov's `CKV_AWS_339` is what holds
+`kubernetes_version`, so the line stays under "Known and expected" and only
+that run's early warning, that a newer checkov release allows the next minor,
+is skipped.
 
 Even the EKS check only proves a version exists and its support window,
 not that it is creatable in one specific account and region right now;

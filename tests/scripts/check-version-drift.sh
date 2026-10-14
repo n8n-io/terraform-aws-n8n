@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check-version-drift.sh: report every pin that has fallen behind upstream.
 #
-# Every line is classified DRIFT / OK / ERROR (ported from the sibling
+# Each pin is classified DRIFT / OK / ERROR (ported from the sibling
 # terraform-google-n8n module's check-version-drift.sh,
 # n8n-io/terraform-google-n8n#36, for a consistent report shape across the
 # three Terraform modules):
@@ -15,10 +15,20 @@
 #          so it lands in the report this script's only consumer syncs to a
 #          tracking issue (see "Why this still exits 0" below), stderr so it
 #          is also visible immediately in CI logs. Never reported as quiet
-#          "up to date": an unreadable pin and a current one must never look
-#          the same.
-# A one-line summary count closes the report, matching the sibling's
-# "N pin(s) behind upstream, M lookup(s) failed" shape.
+#          "up to date": an unreadable pin and a current one must never
+#          look the same. One exception, inherited from before this
+#          classification: the optional lookup of the latest checkov release
+#          behind the #158 hold. If it fails, the line stays under "Known and
+#          expected" (the pinned checkov's CKV_AWS_339 is what holds it) and
+#          that run skips the early warning that a newer checkov release
+#          allows the next minor.
+# A one-line summary count closes the report: "N pin(s) behind upstream, M
+# error(s)". M counts every ERROR, whether a failed upstream lookup or a pin
+# this script cannot evaluate, so it is not a count of failed lookups (the
+# sibling's "M lookup(s) failed" wording would overstate that). The #158
+# kubernetes_version hold is the one pin that carries no classification: it is
+# not actionable, so it is listed separately under "Known and expected" and
+# counted in neither total.
 #
 # Why this still exits 0 (unlike the sibling, which exits 2 on any lookup
 # failure): .github/workflows/version-drift.yml pipes this script straight
@@ -375,14 +385,14 @@ ckv_allows() {
 }
 
 known_holds=""
-if [[ "$latest_k8s" == "unknown" ]]; then
-  report_error "$k8s_detail -- could not read the EKS release list from endoflife.date"
-elif [[ "$pinned_eol" == "true" ]]; then
+if [[ "$pinned_eol" == "true" ]]; then
   report_drift "$k8s_detail -- ACTIONABLE: pinned $pinned_k8s is past the end of EKS standard support, so the checkov hold tracked in #158 no longer justifies staying on it"
-elif [[ "$latest_k8s" == "$pinned_k8s" ]]; then
-  report_ok "$k8s_detail"
+elif [[ "$latest_k8s" == "unknown" ]]; then
+  report_error "$k8s_detail -- could not read the EKS release list from endoflife.date"
 elif [[ -z "$pinned_eol" ]]; then
   report_error "$k8s_detail -- could not read isEol for $pinned_k8s from endoflife.date, so the #158 hold is not applied"
+elif [[ "$latest_k8s" == "$pinned_k8s" ]]; then
+  report_ok "$k8s_detail"
 else
   next_k8s="${pinned_k8s%.*}.$(( ${pinned_k8s#*.} + 1 ))"
   pinned_checkov="$(sed -n 's/^[[:space:]]*CHECKOV_VERSION:[[:space:]]*"\([^"]*\)".*/\1/p' "$WORKFLOW" | head -1)"
@@ -411,7 +421,7 @@ if [[ -n "$known_holds" ]]; then
 fi
 
 echo
-echo "check-version-drift.sh: ${drift_count} pin(s) behind upstream, ${error_count} lookup(s) failed"
+echo "check-version-drift.sh: ${drift_count} pin(s) behind upstream, ${error_count} error(s)"
 echo
 echo "See docs/versioning.md for the bump policy and what this report cannot see."
 exit 0

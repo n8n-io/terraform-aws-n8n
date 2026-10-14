@@ -333,8 +333,9 @@ this project adheres to the stability contract in
 
 ### Changed
 
-- `tests/scripts/check-version-drift.sh` now classifies every pin `DRIFT`,
-  `OK`, or `ERROR` and closes with a one-line summary count (ported from the
+- `tests/scripts/check-version-drift.sh` now classifies each pin `DRIFT`,
+  `OK`, or `ERROR` and closes with a one-line summary count of pins behind
+  upstream and errors (ported from the
   sibling terraform-google-n8n module's drift script,
   n8n-io/terraform-google-n8n#36). Terraform provider constraints are
   compared against the constraint itself rather than printed as a bare
@@ -342,16 +343,20 @@ this project adheres to the stability contract in
   admits the latest release (e.g. this module's own `~> 6.0` on the `aws`
   provider) now reports `OK` instead of looking like drift; a constraint
   form the script cannot evaluate reports an explicit `ERROR` asking for a
-  manual compare instead of silently passing as current. Every upstream
-  lookup failure is now an explicit `ERROR` line, never silently read as
-  "up to date". The n8n chart check now reads its own
+  manual compare instead of silently passing as current. Upstream lookup
+  failures are now explicit `ERROR` lines, never silently read as "up to
+  date", with one exception that predates this change: if the optional
+  lookup of the latest checkov release behind the #158 hold fails, the line
+  stays under "Known and expected" and that run skips the early warning that
+  a newer checkov release allows the next minor. The n8n chart check now reads its own
   `oci://ghcr.io/n8n-io/n8n-helm-chart` registry's anonymous tag list
   (filtered to plain `X.Y.Z` release tags) instead of
   `n8n-io/n8n-hosting`'s latest Git tag: the script's own header and
   docs/versioning.md previously claimed the OCI registry had "no equivalent
   public index", which was wrong, and a Git tag can exist before the chart
-  is actually published to GHCR. The script still always exits 0, by
-  deliberate choice: `.github/workflows/version-drift.yml`'s only consumer
+  is actually published to GHCR. The script still exits 0 when a lookup
+  fails (it exits 1 only when `curl` or `jq` is missing), by deliberate
+  choice: `.github/workflows/version-drift.yml`'s only consumer
   of this output is an unguarded step with no `if: always()` that syncs it
   to a tracking issue, and a non-zero exit would make a lookup failure skip
   that sync instead of surfacing in it. The existing `eks/kubernetes_version`
