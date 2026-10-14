@@ -14720,6 +14720,11 @@ run "aws_partner_attribution_tag_is_on_by_default" {
     condition     = [for ts in aws_launch_template.node[0].tag_specifications : ts.tags["aws-apn-id"] if ts.resource_type == "volume"][0] == "pc:26au7o6cdeh7fqdt376h9m9xk"
     error_message = "The node group's launch template must tag root volumes with aws-apn-id by default"
   }
+
+  assert {
+    condition     = [for ts in aws_launch_template.node[0].tag_specifications : ts.tags["aws-apn-id"] if ts.resource_type == "network-interface"][0] == "pc:26au7o6cdeh7fqdt376h9m9xk"
+    error_message = "The node group's launch template must tag network interfaces with aws-apn-id by default"
+  }
 }
 
 run "aws_partner_attribution_tag_empty_removes_the_tag" {

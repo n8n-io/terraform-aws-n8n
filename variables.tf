@@ -665,8 +665,6 @@ variable "node_max" {
   }
 }
 
-# ── Node group launch template ────────────────────────────────────────────────
-
 variable "node_launch_template_enabled" {
   description = <<-EOT
     When true (the default), aws_eks_node_group.n8n attaches an
