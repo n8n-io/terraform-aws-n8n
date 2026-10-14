@@ -99,6 +99,16 @@ check_case ">=1.x" "1.0.0" 2
 check_case "1.2.3.4" "1.0.0" 2
 check_case "latest" "1.0.0" 2
 
+# ── Prerelease or non-numeric versions are an explicit error, not a guess ───
+# A prerelease constraint is valid Terraform but outside the numeric subset
+# this evaluator understands; a prerelease or non-numeric candidate version
+# used to raise inside the evaluator and read as "outside the constraint".
+check_case "= 1.2.0-beta" "1.2.0" 2
+check_case ">= 1.2.0-beta" "1.2.0" 2
+check_case "~> 6.0" "6.69.0-beta1" 2
+check_case "~> 6.0" "" 2
+check_case "~> 6.0" "unknown" 2
+
 # ── Extra whitespace tolerance ──────────────────────────────────────────────
 check_case "  ~>   3.0  " "3.1.0" 0
 
