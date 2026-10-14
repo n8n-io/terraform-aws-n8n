@@ -60,6 +60,10 @@ EOF
 fi
 
 cd "$REPO_ROOT"
+# Any exported TF_VAR_* makes checkov ignore --var-file (measured on 3.3.20:
+# a single unrelated TF_VAR_location left pass 2 at pass 1's counts, with the
+# opt-in resources never reached), so the scan must not inherit them.
+while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep '^TF_VAR_' || true)
 
 SCAN=(checkov -d . --framework terraform --config-file .checkov.yaml --compact)
 

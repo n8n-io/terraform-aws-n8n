@@ -247,6 +247,16 @@ shrink coverage back to zero unnoticed. **When you add an opt-in
 that list**, then curate what the pass reports exactly as for always-on
 code: fixed, or annotated at the resource.
 
+**Exported `TF_VAR_*` silently disable pass 2.** On checkov 3.3.20, a single
+exported `TF_VAR_*` (even one the module has no input for, such as
+`TF_VAR_location`) makes checkov ignore `--var-file`: pass 2 reports the same
+counts as pass 1 and `check-checkov.sh` exits 1 with "pass 2 did not reach
+`kubernetes_deployment_v1.redis_exporter[0]`". That message looks like a
+missing toggle or a renamed resource, but it is the environment. The script
+now unsets every `TF_VAR_*` itself, so it is safe to run from a shell that
+exports them (CI does not). If you invoke checkov directly, unset them first
+or pass 2 proves nothing. A real pass 2 reports more passed checks than pass 1.
+
 The scan is still not the whole story. checkov has no Terraform check at all
 for several fields the exporter hardens (`run_as_non_root`, the pinned UID,
 the probe target), so any hand-written pod spec MUST also get its own
