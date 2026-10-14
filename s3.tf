@@ -133,9 +133,11 @@ resource "aws_kms_alias" "s3" {
   # Same reason as aws_s3_bucket.n8n: the prefix embeds the bucket name, which
   # turns unknown when the module's data sources are deferred, and a changed
   # prefix forces replacement of an alias the key policy and S3 encryption
-  # already depend on.
+  # already depend on. The same replace_triggered_by keeps a cluster_name
+  # change producing an alias named for the new cluster.
   lifecycle {
-    ignore_changes = [name_prefix]
+    ignore_changes       = [name_prefix]
+    replace_triggered_by = [aws_iam_role.s3.name]
   }
 }
 
