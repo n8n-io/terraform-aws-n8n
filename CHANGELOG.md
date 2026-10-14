@@ -619,9 +619,11 @@ this project adheres to the stability contract in
   - n8n-io/n8n-hosting#228: the chart renders the main `PodDisruptionBudget`
     only while main can run more than one replica, so single-main
     (`n8n_main_hpa_min_replicas = 1`) loses the `minAvailable: 0` budget
-    this module still sends; multi-main keeps `minAvailable: 1`. That
-    budget already permitted every voluntary eviction, so this changes
-    nothing observable. `tests/scripts/check-main-chart.sh` renders both
+    this module still sends; multi-main keeps `minAvailable: 1`. Eviction
+    permissions are unchanged (that budget already permitted every
+    voluntary eviction), but Helm deletes the `n8n-main` PDB object on
+    the upgrade, and `smoke-test.sh` was adjusted for that.
+    `tests/scripts/check-main-chart.sh` renders both
     topologies and expects no single-main PDB from `1.16.0`;
     `tests/scripts/smoke-test.sh` now accepts no PDB or `minAvailable: 0`
     for single-main (it failed on a missing PDB before), tells a missing
@@ -637,7 +639,7 @@ this project adheres to the stability contract in
   - The task-runner sidecar moved into a shared `n8n.taskRunnerContainer`
     template helper with the same placement and resources, so `1.16.0`
     joins the worker-only task-runner capacity accounting alongside
-    `1.12.0` through `1.15.0`.
+    `1.12.0`, `1.13.0`, `1.14.0`, and `1.15.0`.
   - New chart keys `editor.url`, `hostAliases`, image digests,
     `persistence.annotations`, per-role `podSecurityContext` and
     `containerSecurityContext`, and `secretRefs.env.N8N_ENCRYPTION_KEY_FILE`

@@ -4,7 +4,7 @@ Terraform module for deploying [n8n](https://n8n.io) on AWS.
 
 Deploys the production-grade multi-main setup: multiple n8n main instances, dedicated worker pods, external PostgreSQL (RDS), Redis (ElastiCache), and S3 for shared file storage. An **n8n Enterprise license is required** for the default multi-main topology (`n8n_main_hpa_min_replicas > 1`). Setting `n8n_main_hpa_min_replicas = 1` instead runs a single main pod in plain queue mode (still fronted by the module's workers, webhook processors, HPA, and KEDA), which needs only a Business-tier license: n8n's multi-main leader-election gate (`feat:multipleMainInstances`) is disabled in this mode.
 
-In single-main mode the main HPA maximum is forced to one, even if configured higher, main upgrades use `Recreate`, and the disruption budget permits eviction of the only main. Expect editor, REST API, and scheduled-trigger downtime during upgrades and voluntary maintenance; plan a maintenance window. `Recreate` prevents upgrade overlap but does not ensure only one main process exists after manual pod deletion or node failure. Default multi-main deployments are unchanged, and `n8n_main_hpa_min_replicas = 1` was previously rejected by the chart's values schema, so there are no existing single-main deployments whose behavior changes. See [Single-main maintenance](docs/upgrading-n8n.md#single-main-maintenance).
+In single-main mode the main HPA maximum is forced to one, even if configured higher, main upgrades use `Recreate`, and no PodDisruptionBudget is rendered for the only main with chart `1.16.0`+ (older charts render one with `minAvailable: 0`), so voluntary eviction can cause downtime either way. Expect editor, REST API, and scheduled-trigger downtime during upgrades and voluntary maintenance; plan a maintenance window. `Recreate` prevents upgrade overlap but does not ensure only one main process exists after manual pod deletion or node failure. Default multi-main deployments are unchanged, and `n8n_main_hpa_min_replicas = 1` was previously rejected by the chart's values schema, so there are no existing single-main deployments whose behavior changes. See [Single-main maintenance](docs/upgrading-n8n.md#single-main-maintenance).
 
 The module expects a pre-existing VPC. If your parent domain is hosted in Route 53, pass `route53_zone_id` and the module issues the ACM certificate and creates the DNS alias record itself. A single `terraform apply` brings up n8n end to end with no manual DNS steps. If your DNS is elsewhere, pass a pre-validated `certificate_arn` instead.
 
@@ -1903,7 +1903,7 @@ module "n8n" {
   # The chart derives the task runner sidecar's tag from the app image's tag,
   # and no n8nio/runners:2.27.4-mypackages exists. Pin the n8n version the
   # custom image is built from, or pods carrying runners land in
-  # ImagePullBackOff (workers only in chart 1.16.0 queue mode).
+  # ImagePullBackOff (workers only in upstream chart 1.16.0 queue mode).
   n8n_task_runner_image_tag = "2.27.4"
 
   # Only needed when mirroring the runner image into your own registry too;

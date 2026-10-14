@@ -50,7 +50,7 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 | `keda.worker.pollingInterval/cooldownPeriod` | Hardcoded `15` / `60` |
 | `keda.worker.pause/pausedReplicaCount` | `n8n_worker_keda_pause` (default `false`) / `n8n_worker_keda_paused_replica_count` (default `null`). Sent to the chart only while pause is on, so an unused feature causes no values diff. Supported from chart `1.13.0`; a plan-time warning covers older charts |
 | `keda.webhookProcessor` | Not used; the module creates the webhook HPA externally in `scaling.tf` instead (the chart skips its own webhook HPA when `keda.enabled = true`) |
-| `pdb.enabled/minAvailable` | Hardcoded `true` / `1` for multi-main, `0` for single-main to allow voluntary eviction with downtime |
+| `pdb.enabled/minAvailable` | Hardcoded `true` / `1` for multi-main. For single-main, chart `1.16.0`+ renders no PDB at all; older charts got `minAvailable: 0`, allowing voluntary eviction with downtime either way |
 | `editor.url` | Not exposed, new in `1.16.0`. The module keeps rendering its own `N8N_EDITOR_BASE_URL` directly and sets neither this, `ingress`, nor `webhook.url`, so the chart emits none of its own |
 | `hostAliases` | Not exposed, new in `1.16.0` |
 | `podSecurityContext`, `containerSecurityContext` | Not exposed, new in `1.16.0`; their per-role defaults render the same security contexts as the chart-wide `securityContext` this module already leaves at chart default |
@@ -90,6 +90,8 @@ This module deploys the [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/t
 
 ## Not currently configurable
 
-Chart features with **no path to configure them through this module**, not even via an environment variable: `commonLabels`/`commonAnnotations` (governance tagging), `extraObjects` (arbitrary extra Kubernetes objects rendered into the release, new in `1.15.0`), `networkPolicy`, `extraContainers`/`extraInitContainers` (sidecars), `podLabels`, `nodePlacement` (per-component scheduling within the chart), `serviceAccount.automountServiceAccountToken`, `persistence`, image digests (`image.digest`/`taskRunners.image.digest`, new in `1.16.0`), `persistence.annotations` (new in `1.16.0`), `N8N_ENCRYPTION_KEY_FILE` (`secretRefs.env`, the module passes the key through `secretRefs.existingSecret` instead), and the chart's own `ingress.*` block (superseded by the module's own Ingress management).
+Chart features with **no path to configure them through this module**, not even via an environment variable: `commonLabels`/`commonAnnotations` (governance tagging), `extraObjects` (arbitrary extra Kubernetes objects rendered into the release, new in `1.15.0`), `networkPolicy`, `extraContainers`/`extraInitContainers` (sidecars), `podLabels`, `nodePlacement` (per-component scheduling within the chart), `serviceAccount.automountServiceAccountToken`, `persistence`, image digests (`image.digest`/`taskRunners.image.digest`, new in `1.16.0`), `persistence.annotations` (new in `1.16.0`), and the chart's own `ingress.*` block (superseded by the module's own Ingress management).
+
+The chart's `secretRefs.env.N8N_ENCRYPTION_KEY_FILE` key is unused: the module always passes the encryption key through `secretRefs.existingSecret` instead. `n8n_extra_env` does not reject an `N8N_ENCRYPTION_KEY_FILE` entry, but setting it alongside the module's key is unsupported.
 
 If you need one of these, you currently have two options: fork/patch the chart values by managing your own `helm_release` instead of this module (losing the module's other wiring), or open an issue describing the use case.

@@ -315,22 +315,23 @@ render the same security contexts as `1.15.0`), and
 through `secretRefs.existingSecret`). See
 [docs/helm-chart-coverage.md](./helm-chart-coverage.md) for the full table.
 
-**Check after the upgrade** (namespace `n8n` unless you changed it):
+**Check after the upgrade** (namespace `n8n` unless you changed it; replace
+`<namespace>` below with yours):
 
-1. `helm history n8n -n n8n`: the newest revision is `deployed` with chart
-   `n8n-1.16.0`, and no `failed` or rolled-back revision came after the
+1. `helm history n8n -n <namespace>`: the newest revision is `deployed` with
+   chart `n8n-1.16.0`, and no `failed` or rolled-back revision came after the
    previous one.
-2. `kubectl rollout status deploy/n8n-main -n n8n && kubectl rollout status deploy/n8n-worker -n n8n && kubectl rollout status deploy/n8n-webhook-processor -n n8n`.
-3. `kubectl get deploy n8n-main -n n8n -o jsonpath='{.spec.template.spec.containers[0].image}'`
+2. `kubectl rollout status deploy/n8n-main -n <namespace> && kubectl rollout status deploy/n8n-worker -n <namespace> && kubectl rollout status deploy/n8n-webhook-processor -n <namespace>`.
+3. `kubectl get deploy n8n-main -n <namespace> -o jsonpath='{.spec.template.spec.containers[0].image}'`
    prints `docker.n8n.io/n8nio/n8n:2.43.5` with `n8n_image_tag = null`, or
    your pinned tag.
-4. `kubectl get pdb -n n8n`: multi-main lists `n8n-main` with
+4. `kubectl get pdb -n <namespace>`: multi-main lists `n8n-main` with
    `MIN AVAILABLE` 1; single-main lists no `n8n-main`.
-5. `kubectl get deploy n8n-worker -n n8n -o json | jq '.spec.template.spec.containers[] | select(.name == "task-runner") | .livenessProbe.httpGet'`
+5. When `n8n_task_runners_enabled = true`, `kubectl get deploy n8n-worker -n <namespace> -o json | jq '.spec.template.spec.containers[] | select(.name == "task-runner") | .livenessProbe.httpGet'`
    prints path `/healthz` and port `5680`. Over the next few minutes the
    worker pods' restart counts stay flat and
-   `kubectl get events -n n8n --field-selector reason=Unhealthy` lists no
-   `task-runner` liveness failures.
+   `kubectl get events -n <namespace> --field-selector reason=Unhealthy` lists
+   no `task-runner` liveness failures.
 6. `tests/scripts/smoke-test.sh` passes.
 
 Failure signs: the Helm upgrade fails with an `n8n` values-validation error
@@ -358,9 +359,11 @@ but makes the editor, REST API, and scheduled triggers unavailable until the
 replacement starts. Plan a maintenance window; missed schedule times are not
 promised to replay.
 
-The main PodDisruptionBudget uses `minAvailable = 0` in this topology so node
-drains and managed node updates can evict the only main. Such maintenance also
-causes downtime. Worker and webhook rollout strategies are unchanged.
+With chart `1.16.0` and newer, no main PodDisruptionBudget is rendered in
+this topology, so node drains and managed node updates can always evict the
+only main. Older charts render a main PDB with `minAvailable = 0`, which
+permits the same eviction. Either way, such maintenance causes downtime.
+Worker and webhook rollout strategies are unchanged.
 
 Moving from single-main back to two or more mains is not overlap-free: the
 Deployment scales the existing single-main ReplicaSet up before the
@@ -389,8 +392,8 @@ before the replacement starts, and verify a node drain can evict the main.
 Rendering tests cannot establish controller behavior.
 `tests/scripts/smoke-test.sh` detects the single-main topology from the
 multi-main flag on the main Deployment and fails if the HPA is not pinned to
-`1/1`, the strategy is not `Recreate`, or the disruption budget is not
-`minAvailable = 0`.
+`1/1`, the strategy is not `Recreate`, or the disruption budget (where the
+chart renders one, before `1.16.0`) is not `minAvailable = 0`.
 
 For scale, on `examples/small` (n8n 2.37.10, `t3.xlarge` nodes) a
 `kubectl rollout restart` of the main produced about 30 seconds of ALB 503
