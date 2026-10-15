@@ -309,6 +309,13 @@ module "n8n" {
   existing_eks_cluster_prerequisites_confirmed = true
   kubernetes_version                           = var.kubernetes_version
 
+  # ── TLS proxy support ───────────────────────────────────────────────────────
+  # Outbound CA trust, inbound proxy hop count, and proxy routing env. See
+  # docs/tls-proxy.md.
+  n8n_extra_ca_pem = var.n8n_extra_ca_pem
+  n8n_proxy_hops   = var.n8n_proxy_hops
+  n8n_extra_env    = var.n8n_extra_env
+
   tags = local.common_tags
 
   # Explicit module-level dependency ensures the ENTIRE VPC (including NAT

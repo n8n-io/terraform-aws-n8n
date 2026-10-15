@@ -3366,6 +3366,51 @@ variable "n8n_extra_env" {
   }
 }
 
+variable "n8n_extra_ca_pem" {
+  description = <<-EOT
+    PEM-encoded CA certificate(s) the n8n containers trust for outbound TLS in
+    addition to Node's built-in roots. Use it when egress passes through a
+    TLS-inspecting proxy, or n8n calls endpoints signed by a private CA. The
+    module stores the PEM in a module-managed Secret (public certificates only;
+    a private key block is rejected at plan time), mounts it read-only at
+    /etc/n8n-certs/ca-bundle.crt on main, worker and webhook-processor pods and
+    sets NODE_EXTRA_CA_CERTS to that path. Changing the PEM rolls the pods
+    through a checksum annotation, because Node reads the file once at start.
+
+    Applies to the n8n containers only. The task runner sidecar's JavaScript
+    runner is a separate container and does not inherit it; see
+    docs/tls-proxy.md. Proxy routing itself (HTTP_PROXY, HTTPS_PROXY, NO_PROXY)
+    stays in n8n_extra_env.
+
+    While set, n8n_extra_env, n8n_worker_extra_env and n8n_worker_pools[*].extra_env
+    may not set NODE_EXTRA_CA_CERTS, n8n_extra_volumes may not use the volume
+    name "ca-bundle", and n8n_extra_volume_mounts may not use the mount path
+    /etc/n8n-certs/ca-bundle.crt. Null (the default) leaves all three free.
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.n8n_extra_ca_pem == null ? true : can(regex("-----BEGIN CERTIFICATE-----\\s*[A-Za-z0-9+/=][A-Za-z0-9+/=\\s]*-----END CERTIFICATE-----", var.n8n_extra_ca_pem))
+    error_message = "n8n_extra_ca_pem must contain at least one PEM-encoded certificate: a -----BEGIN CERTIFICATE----- line, non-empty base64 content, and a matching -----END CERTIFICATE----- line."
+  }
+
+  validation {
+    condition     = var.n8n_extra_ca_pem == null ? true : !can(regex("PRIVATE KEY-----", var.n8n_extra_ca_pem))
+    error_message = "n8n_extra_ca_pem must contain certificates only; remove any private key block."
+  }
+
+  validation {
+    condition     = var.n8n_extra_ca_pem == null ? true : !contains([for volume in var.n8n_extra_volumes : volume.name], "ca-bundle")
+    error_message = "n8n_extra_ca_pem reserves the volume name \"ca-bundle\" while set. Rename or remove the conflicting n8n_extra_volumes entry."
+  }
+
+  validation {
+    condition     = var.n8n_extra_ca_pem == null ? true : !contains([for mount in var.n8n_extra_volume_mounts : mount.mount_path], "/etc/n8n-certs/ca-bundle.crt")
+    error_message = "n8n_extra_ca_pem reserves the mount path \"/etc/n8n-certs/ca-bundle.crt\" while set. Move or remove the conflicting n8n_extra_volume_mounts entry."
+  }
+}
+
 # ── Credential overwrites ────────────────────────────────────────────────────
 
 variable "n8n_credentials_overwrite_secret_ref" {

@@ -159,6 +159,13 @@ module "n8n" {
   create_s3_bucket        = false
   existing_s3_bucket_name = aws_s3_bucket.customer_managed.id
 
+  # ── TLS proxy support ───────────────────────────────────────────────────────
+  # Outbound CA trust, inbound proxy hop count, and proxy routing env. See
+  # docs/tls-proxy.md.
+  n8n_extra_ca_pem = var.n8n_extra_ca_pem
+  n8n_proxy_hops   = var.n8n_proxy_hops
+  n8n_extra_env    = var.n8n_extra_env
+
   tags = local.common_tags
 
   # Explicit module-level dependency ensures the ENTIRE VPC (including NAT

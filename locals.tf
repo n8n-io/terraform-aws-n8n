@@ -265,7 +265,13 @@ locals {
   # which the chart's checksum/config annotation already hashes. A future
   # source merges in here, so no two sources set the top-level podAnnotations
   # key separately and clobber each other.
-  n8n_pod_annotations = local.redis_pod_annotations
+  n8n_pod_annotations = merge(
+    local.redis_pod_annotations,
+    # The Secret is mounted, not rendered into the chart, so a changed PEM
+    # updates the file in the pod eventually but Node only reads it at start.
+    # The hash (never the PEM) rolls the pods.
+    var.n8n_extra_ca_pem == null ? {} : { "checksum/extra-ca" = sha256(trimspace(var.n8n_extra_ca_pem)) },
+  )
 
   # The two arguments the staged HA -> HA+TLS migration needs, lifted here for
   # the same testability reason as the two locals above, though the mechanism
@@ -603,6 +609,7 @@ locals {
         }
       },
     ],
+    local.n8n_extra_ca_enabled ? [local.n8n_ca_bundle_volume] : [],
   )
 
   n8n_extra_volume_mounts = concat(
@@ -623,6 +630,7 @@ locals {
         readOnly  = true
       },
     ],
+    local.n8n_extra_ca_enabled ? [local.n8n_ca_bundle_mount] : [],
   )
 
   n8n_credentials_overwrite_env = var.n8n_credentials_overwrite_secret_ref == null ? [] : [
@@ -631,6 +639,35 @@ locals {
       value = "/etc/n8n/credentials-overwrite/${var.n8n_credentials_overwrite_secret_ref.key}"
     },
   ]
+
+  # ── Extra CA bundle (n8n_extra_ca_pem) ─────────────────────────────────────
+  # Node reads one NODE_EXTRA_CA_CERTS file. The PEM lives in a module-managed
+  # Secret (public certificates only; the variable rejects private keys) that is
+  # mounted read-only at one fixed path on every n8n role. This module sets no
+  # NODE_EXTRA_CA_CERTS of its own otherwise (ElastiCache and RDS chains are
+  # public or delivered through the chart's own CA values), so there is nothing
+  # to merge into the bundle.
+  n8n_extra_ca_enabled = var.n8n_extra_ca_pem != null
+  n8n_ca_bundle_pem    = local.n8n_extra_ca_enabled ? "${trimspace(var.n8n_extra_ca_pem)}\n" : null
+
+  n8n_ca_bundle_volume = local.n8n_extra_ca_enabled ? {
+    name = "ca-bundle"
+    secret = {
+      secretName = "n8n-ca-bundle-secret"
+      items      = [{ key = "ca.crt", path = "ca.crt" }]
+    }
+  } : null
+
+  n8n_ca_bundle_mount = local.n8n_extra_ca_enabled ? {
+    name      = "ca-bundle"
+    mountPath = "/etc/n8n-certs/ca-bundle.crt"
+    subPath   = "ca.crt"
+    readOnly  = true
+  } : null
+
+  n8n_ca_bundle_env = local.n8n_extra_ca_enabled ? [
+    { name = "NODE_EXTRA_CA_CERTS", value = "/etc/n8n-certs/ca-bundle.crt" },
+  ] : []
 
   # ── PostgreSQL SSL (DB_POSTGRESDB_SSL_ENABLED/_REJECT_UNAUTHORIZED) ─────────
   # Extracted to its own local, like n8n_credentials_overwrite_env above, so it
@@ -859,6 +896,10 @@ locals {
     # unconditionally would break those callers at plan time on upgrade, for a
     # collision that cannot occur.
     var.n8n_node_max_old_space_size_mb != null ? ["NODE_OPTIONS"] : [],
+    # NODE_EXTRA_CA_CERTS is reserved only while n8n_extra_ca_pem is set, for
+    # the same reason as NODE_OPTIONS: the module then points it at the mounted
+    # bundle, and a caller entry would replace that path wholesale.
+    var.n8n_extra_ca_pem != null ? ["NODE_EXTRA_CA_CERTS"] : [],
   )
 
   # Env vars n8n has deprecated and logs a warning for on every start, even

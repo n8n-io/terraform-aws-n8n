@@ -315,3 +315,24 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "n8n_extra_ca_pem" {
+  description = "Passed to the module's n8n_extra_ca_pem: PEM CA certificate(s) trusted by the main, worker and webhook-processor pods for outbound TLS, for a TLS-inspecting egress proxy or a private CA; task-runner sidecars are not covered. Certificates only, never a private key. Leave null (the default) to add none. See [TLS proxy guide](../../docs/tls-proxy.md)."
+  type        = string
+  default     = null
+}
+
+variable "n8n_proxy_hops" {
+  description = "Passed to the module's n8n_proxy_hops: number of proxies in front of n8n that add an X-Forwarded-For entry. Applies to every n8n pod, so both of this example's own ALBs (create_ingress = false: the public webhook ALB and the internal editor ALB) need the same hop count: each ALB alone counts as 1, and an additional proxy in front of both that adds its own entry makes 2. A WAF attached directly to the public ALB via waf_acl_arn does not add a hop and stays part of its 1. At any hop count of 1 or more, a caller that bypasses the declared proxy chain can forge X-Forwarded-For and spoof its client IP, so restrict both ALBs to the declared proxy's egress addresses. Leave null (the default) to use the module's default of 1. See [TLS proxy guide](../../docs/tls-proxy.md)."
+  type        = number
+  default     = null
+}
+
+variable "n8n_extra_env" {
+  description = "Passed to the module's n8n_extra_env: extra environment variables for the n8n containers on every role (main, worker, webhook processor), not the task runner sidecars, e.g. HTTP_PROXY, HTTPS_PROXY and NO_PROXY for an egress proxy. The module rejects names it manages. See [TLS proxy guide](../../docs/tls-proxy.md)."
+  type = list(object({
+    name  = string
+    value = string
+  }))
+  default = []
+}

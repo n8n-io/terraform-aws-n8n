@@ -510,7 +510,7 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
 - Each example has its own `README.md` documenting the runnable example.
 - `docs/troubleshooting.md`, `docs/post-deployment.md`,
   `docs/destroy-cleanup.md`, `docs/upgrading-n8n.md`, `docs/pod-identity.md`,
-  `docs/helm-chart-coverage.md`, `docs/istio-ingress.md`,
+  `docs/helm-chart-coverage.md`, `docs/istio-ingress.md`, `docs/tls-proxy.md`,
   `docs/shared-responsibility.md`, `docs/build-time-decisions.md`, and
   `docs/sandbox.md` cover operator-facing concerns that don't belong inline
   in `README.md`. `docs/versioning.md` is the contributor-facing

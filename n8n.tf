@@ -305,6 +305,25 @@ resource "kubernetes_secret" "n8n_redis" {
   depends_on = [aws_eks_node_group.n8n]
 }
 
+# ── Extra CA bundle ───────────────────────────────────────────────────────────
+# Caller-supplied CA certificate(s) (n8n_extra_ca_pem), mounted on every n8n
+# role and pointed at by NODE_EXTRA_CA_CERTS. Public certificates only.
+resource "kubernetes_secret" "n8n_ca_bundle" {
+  count = local.n8n_extra_ca_enabled ? 1 : 0
+
+  metadata {
+    name      = "n8n-ca-bundle-secret"
+    namespace = local.namespace_name
+  }
+
+  data = {
+    "ca.crt" = local.n8n_ca_bundle_pem
+  }
+
+  # See the comment on kubernetes_secret.n8n above.
+  depends_on = [aws_eks_node_group.n8n]
+}
+
 # ── Service account ───────────────────────────────────────────────────────────
 # Only created when var.n8n_image_pull_secrets is non-empty. Otherwise the chart
 # creates the account and this resource does not exist; see the note on
@@ -1001,6 +1020,12 @@ resource "helm_release" "n8n" {
         # exactly that reason.
         local.n8n_credentials_overwrite_env,
 
+        # Outbound CA trust (n8n_extra_ca_pem): points Node at the bundle
+        # mounted from kubernetes_secret.n8n_ca_bundle. Reaches the n8n
+        # containers only; the task runner sidecar is a separate container
+        # this value does not touch (see docs/tls-proxy.md).
+        local.n8n_ca_bundle_env,
+
         # Worker pools (n8n alpha). The feature is inert unless this is set on
         # the mains, which resolve a project's pool and enqueue to it, as well
         # as the workers, which read N8N_WORKER_POOL_NAME. Webhook pods ignore
@@ -1249,6 +1274,7 @@ resource "helm_release" "n8n" {
     aws_iam_role_policy_attachment.s3,
     aws_eks_pod_identity_association.s3,
     kubernetes_service_account_v1.n8n, # empty list unless the module owns it
+    kubernetes_secret.n8n_ca_bundle,   # empty list unless n8n_extra_ca_pem is set
   ]
 }
 
