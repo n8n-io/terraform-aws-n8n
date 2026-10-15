@@ -34,8 +34,17 @@ with `feat:multipleMainInstances`. A **Business license** works with
 `n8n_main_hpa_min_replicas = 1`: multi-main is disabled, the main HPA is
 clamped to one, upgrades use `Recreate`, and the main PodDisruptionBudget
 allows eviction with downtime. The module does not provision a
-community-edition deployment. Supply the license through `n8n_license_key`
-or `n8n_license_key_secret_ref`.
+community-edition deployment. Supply the license through `n8n_license_key`,
+`n8n_license_key_secret_ref`, or, for air-gapped or egress-restricted
+clusters that cannot reach n8n's license server,
+`n8n_license_cert_secret_ref` (a caller-managed Secret holding an offline
+license certificate rendered as `N8N_LICENSE_CERT`). The three are mutually
+exclusive; exactly one must be set. The certificate renders through
+`config.extraEnv`, not the chart's `license.existingSecret` block; that
+block's license helper only ever maps to `N8N_LICENSE_ACTIVATION_KEY`.
+`license.enabled` stays `true` on the certificate path because the chart
+also gates `N8N_MULTI_MAIN_SETUP_ENABLED` on `license.enabled`, not on which
+credential backs it.
 
 The module **expects a pre-existing VPC**. Reference deployments that include
 the VPC are organized as **three sizing tiers** on Route 53:
