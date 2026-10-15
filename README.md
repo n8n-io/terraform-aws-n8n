@@ -2373,8 +2373,12 @@ block, because the pinned chart's license helper only ever maps
 `true` on this path, because the chart separately gates
 `N8N_MULTI_MAIN_SETUP_ENABLED` on `license.enabled`, not on which credential
 backs it; multi-main leader election still requires
-`feat:multipleMainInstances` on the certificate itself. The module never
-reads the Secret's value.
+`feat:multipleMainInstances` on the certificate itself. While
+`n8n_license_cert_secret_ref` is set, `N8N_LICENSE_CERT` is reserved: the
+module rejects an `n8n_extra_env` entry with that name at plan time, so do not
+set the variable there as well. With the reference unset the name stays
+settable through `n8n_extra_env`, as before. The module never reads the
+Secret's value.
 
 ## Credential overwrites
 

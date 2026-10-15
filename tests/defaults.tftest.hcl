@@ -8197,11 +8197,8 @@ run "extra_env_accepts_license_cert_name_when_cert_mode_is_inactive" {
       { name = "N8N_LICENSE_CERT", value = "not-actually-reserved-here" },
     ]
   }
-
-  assert {
-    condition     = var.n8n_extra_env[0].name == "N8N_LICENSE_CERT"
-    error_message = "N8N_LICENSE_CERT must stay settable through n8n_extra_env while n8n_license_cert_secret_ref is null, or this change is not additive for existing callers."
-  }
+  # No assert: a successful plan is the proof that the reservation does not
+  # apply while n8n_license_cert_secret_ref is null.
 }
 
 run "extra_env_rejects_aws_credentials_name" {
