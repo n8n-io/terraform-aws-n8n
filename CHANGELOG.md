@@ -9,6 +9,14 @@ this project adheres to the stability contract in
 
 ### Added
 
+- `lbc_pdb_enabled` (default `true`) renders a PodDisruptionBudget with
+  `maxUnavailable = 1` for the AWS Load Balancer Controller, so a node drain no
+  longer stops both replicas at once. During the live test of #200 both were
+  stopped together, which probably caused one 502. Set it to `false` to opt out.
+  Existing deployments gain the budget on the next apply (a Helm values change
+  to the `aws-load-balancer-controller` release). Ignored when
+  `install_lbc = false`.
+
 - `aws_partner_attribution_tag` adds the tag `aws-apn-id` to every taggable
   resource the module creates, through `local.common_tags`; to the ALB and the
   listeners, target groups and security groups the AWS Load Balancer Controller

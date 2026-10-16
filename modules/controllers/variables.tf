@@ -122,6 +122,13 @@ variable "install_lbc" {
   nullable    = false
 }
 
+variable "lbc_pdb_enabled" {
+  description = "When true (the default), the AWS Load Balancer Controller chart renders a PodDisruptionBudget with maxUnavailable = 1. Ignored when install_lbc = false."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "install_cluster_autoscaler" {
   description = "When true (the default), installs the Kubernetes Cluster Autoscaler via Helm. Its IAM role, policy and Pod Identity association (iam.tf) follow the same create_eks-aware rule as install_lbc's: created whenever this is true, or whenever var.create_eks is true (a freshly created cluster cannot yet have a conflicting association), and skipped only when both this and var.create_eks are false, since that combination means an existing cluster already carries this ServiceAccount's association and a second one would collide with it (409 ResourceInUseException). Set to false when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps, or when the node group is meant to stay a fixed size."
   type        = bool

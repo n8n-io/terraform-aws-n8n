@@ -760,6 +760,13 @@ variable "install_lbc" {
   }
 }
 
+variable "lbc_pdb_enabled" {
+  description = "When true (the default), the AWS Load Balancer Controller chart renders a PodDisruptionBudget with maxUnavailable = 1, so a node drain (node group replacement, Cluster Autoscaler scale-down, kubectl drain) evicts at most one of its two replicas at a time. Without it both replicas can be stopped in the same second, which drops ALB target registration and can cause a brief 502 during the switch. Set to false if your own policy (e.g. a PodDisruptionBudget managed outside Terraform) already covers the controller, or if you need drains to ignore it. The budget is a voluntary-disruption guard only: EKS can still terminate nodes after a node group deletion timeout without honoring it. Ignored when install_lbc = false."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "install_cluster_autoscaler" {
   description = "When true (the default), the module installs the Kubernetes Cluster Autoscaler via Helm. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps, or when node_desired = node_max and the node group is meant to stay a fixed size. The IAM role, policy and Pod Identity association for the cluster-autoscaler ServiceAccount all follow the same create_eks-aware rule as install_lbc's (see that variable's description): created when this is true or create_eks is true, skipped only when both are false, since an existing cluster may already carry this ServiceAccount's association from elsewhere and a second one would collide with it. With no autoscaler running at all, node_max is not enforced automatically: nodes stay at whatever desired_size last converged to, and the autoscaling capacity check in scaling.tf still assumes an autoscaler will eventually add nodes up to node_max, so a caller relying on this toggle to go without one entirely should also lower the HPA/KEDA maxima to what the fixed node count can actually schedule."
   type        = bool
