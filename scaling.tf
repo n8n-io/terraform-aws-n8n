@@ -85,8 +85,9 @@ check "webhook_hpa_needs_metrics_server_somewhere" {
 # ── Autoscaling capacity model ────────────────────────────────────────────────
 # Three variable groups have to be sized together, and nothing in Kubernetes
 # couples them: the autoscaler ceilings (n8n_main_hpa_max_replicas,
-# n8n_webhook_hpa_max_replicas, n8n_worker_keda_max_replicas), the per-pod CPU
-# requests, and the node group (node_instance_type × node_max). Set a ceiling
+# n8n_webhook_hpa_max_replicas, n8n_worker_keda_max_replicas, or
+# n8n_worker_keda_paused_replica_count while n8n_worker_keda_pause is true and
+# it is larger), the per-pod CPU requests, and the node group (node_instance_type × node_max). Set a ceiling
 # above what the node group can ever hold and the autoscalers will still scale
 # toward it: pods pile up Pending with "Insufficient cpu" while the Cluster
 # Autoscaler sits at node_max with nothing left to add. That churn also delays

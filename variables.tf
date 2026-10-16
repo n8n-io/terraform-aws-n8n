@@ -630,7 +630,7 @@ variable "node_min" {
 }
 
 variable "node_max" {
-  description = "Maximum number of worker nodes. This is the ceiling the Cluster Autoscaler scales to, so node_max × node_instance_type is the hard cap on schedulable CPU: the autoscaler maxima (n8n_main_hpa_max_replicas, n8n_webhook_hpa_max_replicas, n8n_worker_keda_max_replicas) and the per-pod CPU requests have to fit inside it. The module warns at plan time when they do not; see README.md → \"Sizing autoscaling against node capacity\"."
+  description = "Maximum number of worker nodes. This is the ceiling the Cluster Autoscaler scales to, so node_max × node_instance_type is the hard cap on schedulable CPU: the autoscaler maxima (n8n_main_hpa_max_replicas, n8n_webhook_hpa_max_replicas, n8n_worker_keda_max_replicas, or n8n_worker_keda_paused_replica_count while paused and larger) and the per-pod CPU requests have to fit inside it. The module warns at plan time when they do not; see README.md → \"Sizing autoscaling against node capacity\"."
   type        = number
   default     = 6
   nullable    = false
@@ -3493,7 +3493,7 @@ variable "n8n_worker_keda_pause" {
 }
 
 variable "n8n_worker_keda_paused_replica_count" {
-  description = "Replica count the worker Deployment holds while n8n_worker_keda_pause is true (sets autoscaling.keda.sh/paused-replicas, the chart's keda.worker.pausedReplicaCount). Null (the default) freezes workers at whatever count they had when paused. 0 scales workers to zero, e.g. to stop consuming jobs while they queue in Redis ahead of a migration. Ignored, with a plan-time warning, when n8n_worker_keda_pause is false."
+  description = "Replica count the worker Deployment holds while n8n_worker_keda_pause is true (sets autoscaling.keda.sh/paused-replicas, the chart's keda.worker.pausedReplicaCount). Null (the default) freezes workers at whatever count they had when paused. 0 scales workers to zero, e.g. to stop consuming jobs while they queue in Redis ahead of a migration. Ignored, with a plan-time warning, when n8n_worker_keda_pause is false. While paused, a count above n8n_worker_keda_max_replicas replaces that maximum in the plan-time node-capacity and database connection-budget warnings."
   type        = number
   default     = null
 

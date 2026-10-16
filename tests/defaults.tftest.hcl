@@ -4072,10 +4072,10 @@ run "capacity_check_stays_silent_when_a_paused_count_above_the_max_still_fits" {
   expect_failures = [check.db_postgresdb_pool_size_fits_known_max_connections]
 }
 
-# Pause with a null count, a count below the maximum, and a count while pause is
-# off all keep the worker term at the maximum, so the defaults still fit and the
-# capacity check stays silent (an unexpected check failure fails the run).
-run "capacity_check_keeps_the_worker_max_when_paused_count_is_null_or_below_it" {
+# A paused count below the maximum keeps the worker term at the maximum, so the
+# defaults still fit and the capacity check stays silent (an unexpected check
+# failure fails the run).
+run "capacity_check_keeps_the_worker_max_when_paused_count_is_below_it" {
   command = plan
 
   variables {
@@ -4084,9 +4084,27 @@ run "capacity_check_keeps_the_worker_max_when_paused_count_is_null_or_below_it" 
   }
 
   assert {
-    condition     = local.n8n_worker_modeled_max_replicas == 10 && local.n8n_peak_cpu_request_millis <= local.n8n_schedulable_cpu_millis
-    error_message = "A paused count of 2 below the worker max of 10 must keep the worker term at 10 and fit the node group, got worker ${local.n8n_worker_modeled_max_replicas} and ${local.n8n_peak_cpu_request_millis}m."
+    condition     = local.n8n_worker_modeled_max_replicas == 10 && local.n8n_peak_cpu_request_millis == 14200 && local.n8n_peak_cpu_request_millis <= local.n8n_schedulable_cpu_millis
+    error_message = "A paused count of 2 below the worker max of 10 must keep the worker term at 10 and the CPU peak at 14200m, got worker ${local.n8n_worker_modeled_max_replicas} and ${local.n8n_peak_cpu_request_millis}m."
   }
+}
+
+# A count set while pause is off is inert, so the CPU peak stays at the default
+# 14,200m even though 15 is above the worker max. Only the pause-required
+# warning fires; a model that counted the inert value would reach 17,700m.
+run "capacity_check_ignores_a_paused_replica_count_while_pause_is_off" {
+  command = plan
+
+  variables {
+    n8n_worker_keda_paused_replica_count = 15
+  }
+
+  assert {
+    condition     = local.n8n_worker_modeled_max_replicas == 10 && local.n8n_peak_cpu_request_millis == 14200
+    error_message = "A paused count while n8n_worker_keda_pause is false must not reach the CPU peak (14200m expected), got worker ${local.n8n_worker_modeled_max_replicas} and ${local.n8n_peak_cpu_request_millis}m."
+  }
+
+  expect_failures = [check.worker_keda_paused_replica_count_requires_pause]
 }
 
 run "capacity_check_keeps_the_worker_max_when_pause_has_no_count" {
@@ -4097,8 +4115,8 @@ run "capacity_check_keeps_the_worker_max_when_pause_has_no_count" {
   }
 
   assert {
-    condition     = local.n8n_worker_modeled_max_replicas == 10 && local.n8n_peak_cpu_request_millis <= local.n8n_schedulable_cpu_millis
-    error_message = "Pausing without a count must keep the worker term at 10 and fit the node group, got worker ${local.n8n_worker_modeled_max_replicas} and ${local.n8n_peak_cpu_request_millis}m."
+    condition     = local.n8n_worker_modeled_max_replicas == 10 && local.n8n_peak_cpu_request_millis == 14200 && local.n8n_peak_cpu_request_millis <= local.n8n_schedulable_cpu_millis
+    error_message = "Pausing without a count must keep the worker term at 10 and the CPU peak at 14200m, got worker ${local.n8n_worker_modeled_max_replicas} and ${local.n8n_peak_cpu_request_millis}m."
   }
 }
 

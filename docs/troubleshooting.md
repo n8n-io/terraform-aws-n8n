@@ -461,7 +461,9 @@ kubectl describe node <node> | sed -n '/Allocated resources/,/^Events/p'
 ### Fix
 
 Size the three coupled input groups together: the autoscaler ceilings, the
-per-pod CPU requests, and `node_instance_type` × `node_max`. See
+per-pod CPU requests, and `node_instance_type` × `node_max`. While
+`n8n_worker_keda_pause = true`, a `n8n_worker_keda_paused_replica_count`
+above `n8n_worker_keda_max_replicas` takes the place of the worker ceiling. See
 [README.md → Sizing autoscaling against node capacity](../README.md#sizing-autoscaling-against-node-capacity)
 for the arithmetic and the per-node rule of thumb.
 
