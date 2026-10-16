@@ -267,9 +267,9 @@ locals {
   # key separately and clobber each other.
   n8n_pod_annotations = merge(
     local.redis_pod_annotations,
-    # The Secret is mounted, not rendered into the chart, so a changed PEM
-    # updates the file in the pod eventually but Node only reads it at start.
-    # The hash (never the PEM) rolls the pods.
+    # The Secret is mounted with subPath, which never receives Secret updates,
+    # so a changed PEM reaches a pod only when the pod restarts (and Node reads
+    # the file only at start anyway). The hash (never the PEM) rolls the pods.
     var.n8n_extra_ca_pem == null ? {} : { "checksum/extra-ca" = sha256(trimspace(var.n8n_extra_ca_pem)) },
   )
 

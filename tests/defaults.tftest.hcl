@@ -15173,7 +15173,18 @@ run "extra_ca_rejects_private_key" {
   expect_failures = [var.n8n_extra_ca_pem]
 }
 
-run "extra_ca_rejects_env_collision_on_any_role" {
+run "extra_ca_rejects_env_collision_on_extra_env" {
+  command = plan
+
+  variables {
+    n8n_extra_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    n8n_extra_env    = [{ name = "NODE_EXTRA_CA_CERTS", value = "/other.crt" }]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_ca_rejects_env_collision_on_worker_extra_env" {
   command = plan
 
   variables {
@@ -15182,6 +15193,21 @@ run "extra_ca_rejects_env_collision_on_any_role" {
   }
 
   expect_failures = [var.n8n_worker_extra_env]
+}
+
+run "extra_ca_rejects_env_collision_on_worker_pool_extra_env" {
+  command = plan
+
+  variables {
+    n8n_extra_ca_pem  = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools = [{
+      name      = "gpu"
+      extra_env = [{ name = "NODE_EXTRA_CA_CERTS", value = "/other.crt" }]
+    }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
 }
 
 run "extra_ca_rejects_volume_name_collision" {

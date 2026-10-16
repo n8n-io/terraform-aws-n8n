@@ -16,7 +16,7 @@ n8n_extra_ca_pem = file("${path.module}/proxy-ca.pem")
 n8n_extra_env = [
   { name = "HTTPS_PROXY", value = "http://proxy.example.com:3128" },
   { name = "HTTP_PROXY", value = "http://proxy.example.com:3128" },
-  { name = "NO_PROXY", value = ".svc,.cluster.local,.rds.amazonaws.com,.cache.amazonaws.com,169.254.170.23" },
+  { name = "NO_PROXY", value = ".svc,.cluster.local,169.254.170.23" },
 ]
 ```
 
@@ -31,6 +31,10 @@ the certificates to its built-in roots; it does not replace them.
   set.
 - Changing the PEM rolls every n8n pod through a `checksum/extra-ca` pod
   annotation, because Node reads the file once at start.
+- Setting the input back to `null` removes the Secret only after the Helm
+  update that drops the mount has succeeded. Old pods that are still shutting
+  down when the Secret goes can log a brief `FailedMount` event; that is
+  expected and clears once they are gone.
 - The proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`) stay in
   `n8n_extra_env`, which reaches the n8n containers on every role and not the
   task runner sidecars. They route HTTP(S) requests only. n8n's PostgreSQL and
@@ -47,8 +51,10 @@ the certificates to its built-in roots; it does not replace them.
   SDK for JavaScript needs a proxy agent configured explicitly. If a client is
   configured to proxy, keep the EKS Pod Identity agent address
   (`169.254.170.23`) in `NO_PROXY` so credential requests stay direct.
-- Credentials can be embedded in the proxy URL, which keeps them in Terraform
-  state.
+- Credentials embedded in a proxy URL (`http://user:pass@proxy`) are stored in
+  plaintext in Terraform state and the Helm release, like every other
+  `n8n_extra_env` value. Prefer a proxy that authenticates the cluster by
+  source address.
 - RDS and ElastiCache chains are unaffected: the database CA is delivered
   separately (`db_postgresdb_ssl_ca_pem`, see [postgresql-tls.md](./postgresql-tls.md))
   and the module sets no other `NODE_EXTRA_CA_CERTS`.
@@ -58,9 +64,17 @@ the certificates to its built-in roots; it does not replace them.
 The task runner sidecar is a separate container. It does not get
 `NODE_EXTRA_CA_CERTS` and this input does not mount anything into it. Code
 nodes that make their own TLS connections from inside the runner therefore do
-not trust the private CA. Making the runner trust it needs a custom runner
-image (`n8n_task_runner_image_repository`) that carries the CA, plus a launcher
-config that allows `NODE_EXTRA_CA_CERTS` through (`n8n_task_runner_custom_config`).
+not trust the private CA. Making the JavaScript runner trust it takes two
+things, because `n8n_extra_env` does not reach the sidecar either:
+
+- A custom runner image (`n8n_task_runner_image_repository`) that carries the
+  CA file.
+- `NODE_EXTRA_CA_CERTS` pointing at that file in the runner process. Either
+  set it in the image (`ENV NODE_EXTRA_CA_CERTS=...`) and add the name to the
+  JavaScript runner's `allowed-env` in the launcher config, so the launcher
+  forwards it, or set it in that runner's `env-overrides`. Mount the edited
+  launcher config with `n8n_task_runner_custom_config`.
+
 The Python runner is not covered.
 
 ## Inbound: `n8n_proxy_hops`

@@ -323,13 +323,13 @@ variable "n8n_extra_ca_pem" {
 }
 
 variable "n8n_proxy_hops" {
-  description = "Passed to the module's n8n_proxy_hops: number of proxies in front of n8n that add an X-Forwarded-For entry. Applies to every n8n pod, so both of this example's own ALBs (create_ingress = false: the public webhook ALB and the internal editor ALB) need the same hop count: each ALB alone counts as 1, and an additional proxy in front of both that adds its own entry makes 2. A WAF attached directly to the public ALB via waf_acl_arn does not add a hop and stays part of its 1. At any hop count of 1 or more, a caller that bypasses the declared proxy chain can forge X-Forwarded-For and spoof its client IP, so restrict both ALBs to the declared proxy's egress addresses. Leave null (the default) to use the module's default of 1. See [TLS proxy guide](../../docs/tls-proxy.md)."
+  description = "Passed to the module's n8n_proxy_hops: number of proxies in front of n8n that add an X-Forwarded-For entry. Applies to every n8n pod, so both of this example's own ALBs (create_ingress = false: the public webhook ALB and the internal editor ALB) need the same hop count: each ALB alone counts as 1, and an additional proxy in front of both that adds its own entry makes 2. A WAF attached directly to the public ALB via waf_acl_arn does not add a hop and stays part of its 1. At any hop count of 1 or more, a caller that bypasses the declared proxy chain can forge X-Forwarded-For and spoof its client IP, including an in-cluster caller that reaches the n8n Services directly. admin_allowed_cidr_blocks restricts only the internal editor ALB; restricting the public webhook ALB to the proxy needs an inbound-cidrs annotation on its Ingress in ingress.tf. Keep in-cluster callers off the n8n Services too. Leave null (the default) to use the module's default of 1. See [TLS proxy guide](../../docs/tls-proxy.md)."
   type        = number
   default     = null
 }
 
 variable "n8n_extra_env" {
-  description = "Passed to the module's n8n_extra_env: extra environment variables for the n8n containers on every role (main, worker, webhook processor), not the task runner sidecars, e.g. HTTP_PROXY, HTTPS_PROXY and NO_PROXY for an egress proxy. The module rejects names it manages. See [TLS proxy guide](../../docs/tls-proxy.md)."
+  description = "Passed to the module's n8n_extra_env: extra environment variables for the n8n containers on every role (main, worker, webhook processor), not the task runner sidecars, e.g. HTTP_PROXY, HTTPS_PROXY and NO_PROXY for an egress proxy. The module rejects names it manages. Values are stored in plaintext in Terraform state and the Helm release, so never embed credentials in a proxy URL (http://user:pass@proxy). See [TLS proxy guide](../../docs/tls-proxy.md)."
   type = list(object({
     name  = string
     value = string

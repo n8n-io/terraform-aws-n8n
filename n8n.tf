@@ -320,6 +320,20 @@ resource "kubernetes_secret_v1" "n8n_ca_bundle" {
     "ca.crt" = local.n8n_ca_bundle_pem
   }
 
+  # Setting n8n_extra_ca_pem back to null removes this Secret while
+  # helm_release.n8n removes the volume that references it. Without
+  # create_before_destroy, Terraform destroys a dependency before updating its
+  # dependents, so the Secret was gone for the whole Helm rollout (measured
+  # live: about a minute of FailedMount events on the old pods, and any old pod
+  # rescheduled in that window would stay in ContainerCreating). With it, the
+  # Secret is destroyed only after the Helm update succeeds, and survives a
+  # failed one. Terraform reads this flag from state, so it protects removals
+  # of Secrets created with it set. The fixed name cannot collide on
+  # replacement: only a name or namespace change replaces this resource.
+  lifecycle {
+    create_before_destroy = true
+  }
+
   # See the comment on kubernetes_secret.n8n above.
   depends_on = [aws_eks_node_group.n8n]
 }
