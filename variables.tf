@@ -690,7 +690,9 @@ variable "node_launch_template_enabled" {
     down until the new nodes join. After that, a change to the launch
     template's contents only bumps its version, which is NOT ForceNew: EKS
     rolls that out via UpdateNodegroupVersion, honoring update_config, instead
-    of a Terraform replacement. On an existing deployment, turn it on in a
+    of a Terraform replacement. That rollout surges replacement nodes before
+    it drains at most one old node at a time, so each one needs spare EC2
+    quota and free subnet IPs. On an existing deployment, turn it on in a
     deliberate maintenance window.
 
     Setting this back to false once the template is attached does not reliably

@@ -24,7 +24,7 @@ this project adheres to the stability contract in
   stand-in EKS clusters in `customer-managed-cluster` and
   `customer-managed-everything` tag their node groups only. The EKS-created
   cluster security group stays untagged, because EKS does not copy tags to it
-  and nothing in the module can reach it. Upgrade note: the first plan after
+  and the module leaves that EKS-owned group unmanaged. Upgrade note: the first plan after
   upgrading updates the tags of every tagged resource in place, upgrades the AWS
   Load Balancer Controller release and reconfigures the EBS CSI addon, which
   tags volumes it provisions from then on; volumes that already exist are not
@@ -33,7 +33,7 @@ this project adheres to the stability contract in
   recreated. See README.md → AWS Partner Revenue Measurement tag.
 - `node_launch_template_enabled` (default `false`) attaches an
   `aws_launch_template` to `aws_eks_node_group.n8n` so the worker EC2
-  instances, their root EBS volumes and their network interfaces carry
+  instances, their root EBS volumes and their primary network interfaces carry
   `local.common_tags`, including `aws-apn-id`, which EKS does not copy from
   the node group itself (#198). With it on, `node_disk_size` reaches the launch
   template's `block_device_mappings` instead of the node group's own
