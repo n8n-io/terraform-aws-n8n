@@ -76,9 +76,14 @@ tasks:
       - ./tests/scripts/chart-values-diff.sh "{{.CANDIDATE}}"
 
   version-drift:
-    desc: Report every version pin that has fallen behind upstream (see docs/versioning.md). Never fails; requires curl and jq.
+    desc: Report every version pin that has fallen behind upstream (see docs/versioning.md). Never fails; requires curl, jq and python3.
     cmds:
       - ./tests/scripts/check-version-drift.sh
+
+  drift-constraints:
+    desc: Offline unit test for the version-constraint evaluator check-version-drift.sh uses (requires python3).
+    cmds:
+      - ./tests/scripts/test-version-drift-constraints.sh
 
   lint:
     desc: tflint for the module root and every example.
@@ -151,9 +156,9 @@ tasks:
 
   ci:
     desc: >-
-      Run the full local loop (fmt, validate, test, chart, chart-coverage, lint,
-      terraform-floor, banners, example-parity, docs, markdown). Mirrors every
-      CI job except checkov, which is a hard-fail gate in CI but is left out
+      Run the full local loop (fmt, validate, test, chart, chart-coverage,
+      drift-constraints, lint, terraform-floor, banners, example-parity, docs,
+      markdown). Mirrors every CI job except checkov, which is a hard-fail gate in CI but is left out
       here because it needs a pinned checkov install that the other tasks do
       not: run `task checkov` separately once you have it. `test` runs on the
       local terraform only; CI's test-floor job repeats it on
@@ -165,6 +170,7 @@ tasks:
       - task: test
       - task: chart
       - task: chart-coverage
+      - task: drift-constraints
       - task: lint
       - task: terraform-floor
       - task: banners

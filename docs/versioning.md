@@ -292,9 +292,15 @@ module itself consumes a pre-existing VPC and performs no zone discovery.
 `.github/workflows/version-drift.yml`, and on demand via `task
 version-drift`) checks every pin reachable from a public API without AWS
 credentials: the five Terraform providers (registry.terraform.io, compared
-against each constraint rather than a single pinned version: a
-`~> N[.N[.N]]` constraint that already admits the latest release reports
-`OK`, not drift), the CI toolchain (GitHub releases, including
+against each constraint rather than a single pinned version: any
+comma-separated combination of `~>`, `>=`, `>`, `<=`, `<`, `!=`, `=` or a
+bare version over numeric `N[.N[.N]]` versions, evaluated by
+`tests/scripts/lib/constraints.sh`, so a constraint that already admits the
+latest release reports `OK`, not drift; a prerelease or build-metadata
+version, in a constraint or as the latest release, is an explicit `ERROR`,
+and Terraform's rule that an exact constraint cannot be combined with
+another is not enforced, since Terraform validates `versions.tf` itself),
+the CI toolchain (GitHub releases, including
 `markdownlint-cli`), the four controller charts this module installs (their
 own chart repositories' `index.yaml`), the n8n chart (its own
 `oci://ghcr.io/n8n-io/n8n-helm-chart` registry's anonymous tag list, via a
@@ -314,7 +320,8 @@ Each pin is classified `DRIFT` (behind upstream, or a provider constraint
 that no longer admits the latest release), `OK` (current, or a constraint
 that already admits the latest release), or `ERROR` (the upstream lookup
 failed, or this script cannot evaluate the pin's form, e.g. a provider
-constraint other than a single `~> N[.N[.N]]` range, or a latest provider
+constraint with an operator or a prerelease version that
+`tests/scripts/lib/constraints.sh` does not understand, or a latest provider
 release that is not a plain `X.Y.Z` version; these are reported explicitly
 rather than silently treated as current), closing with a one-line summary
 count of pins behind upstream and errors (an error is a failed lookup or a pin
@@ -322,7 +329,7 @@ the script cannot evaluate, so it is not strictly a lookup-failure count). The
 `kubernetes_version` hold tracked in #158 is the one pin without a
 classification: it is not actionable, so it is listed separately under "Known
 and expected". The script exits 0 even when a lookup fails (it still exits 1 if
-`curl` or `jq` is missing):
+`curl`, `jq` or `python3` is missing):
 `.github/workflows/version-drift.yml`'s only consumer of this output is an
 unguarded step with no `if: always()` that syncs it to a single tracking
 issue, and a non-zero exit here would make GitHub Actions skip that step

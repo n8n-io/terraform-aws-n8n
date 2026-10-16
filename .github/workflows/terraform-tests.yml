@@ -291,6 +291,19 @@ jobs:
       - name: check docs/helm-chart-coverage.md against the pinned chart
         run: tests/scripts/check-helm-chart-coverage.sh
 
+  # Offline and fast: no network and no cloud credentials, only python3, which
+  # the runner image carries. It exists so a change to the drift script's
+  # constraint evaluator is exercised on every pull request instead of only when
+  # someone remembers to run it locally.
+  drift-constraints:
+    name: drift-check constraint evaluator tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: unit-test the drift script's version-constraint evaluator
+        run: tests/scripts/test-version-drift-constraints.sh
+
   tflint:
     name: tflint (${{ matrix.target }})
     runs-on: ubuntu-latest

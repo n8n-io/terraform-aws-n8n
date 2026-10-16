@@ -358,12 +358,30 @@ this project adheres to the stability contract in
   docs/versioning.md previously claimed the OCI registry had "no equivalent
   public index", which was wrong, and a Git tag can exist before the chart
   is actually published to GHCR. The script still exits 0 when a lookup
-  fails (it exits 1 only when `curl` or `jq` is missing), by deliberate
+  fails (it exits 1 only when `curl`, `jq` or `python3` is missing), by deliberate
   choice: `.github/workflows/version-drift.yml`'s only consumer
   of this output is an unguarded step with no `if: always()` that syncs it
   to a tracking issue, and a non-zero exit would make a lookup failure skip
   that sync instead of surfacing in it. The existing `eks/kubernetes_version`
   "Known and expected" section for #158 is unchanged in content; see #150.
+
+- `tests/scripts/check-version-drift.sh`'s provider-constraint evaluator now
+  understands any comma-separated combination of `~>`, `>=`, `>`, `<=`, `<`,
+  `!=`, `=`, or a bare version over numeric `N[.N[.N]]` versions, not only a
+  single `~> N[.N[.N]]` range: a constraint like `>= 1.2, < 3.0` is now
+  evaluated against the latest release instead of reported as an explicit
+  `ERROR`. The evaluator the drift-classification rework above wrote inline
+  in `check-version-drift.sh` is replaced by the new
+  `tests/scripts/lib/constraints.sh`, shared with the new offline unit test
+  `tests/scripts/test-version-drift-constraints.sh`, which runs on every pull
+  request as the `drift-constraints` CI job (ported from the sibling
+  terraform-google-n8n module, n8n-io/terraform-google-n8n#40). A constraint
+  or a latest release it cannot parse, such as a prerelease version, reports
+  `ERROR`, never `OK` or `DRIFT`. Terraform's rule that an exact constraint cannot be combined with another
+  is not enforced, since Terraform validates `versions.tf` itself. The script
+  now also requires `python3` up front, like `curl` and `jq`. This module's own
+  five provider constraints are all a single `~>` range today, so the drift
+  report's output is unchanged for them.
 
 - **`cluster_name` is now checked at plan time against S3's bucket-name
   rules while the module creates the bucket**
