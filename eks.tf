@@ -325,11 +325,13 @@ resource "aws_launch_template" "node" {
 # gives each group a unique, cluster-specific name, so Terraform creates the
 # new group and waits for EKS to report it ACTIVE before it deletes the old
 # one. The account needs EC2 quota and subnet IPs for both groups during the
-# switch. Deleting the old group is not a rolling update: EKS scales it to zero
-# and tries to drain its nodes, but it can terminate them after a timeout
-# without waiting for PodDisruptionBudgets. Pods on the old nodes move to the
-# new ones, and single-replica workloads and running executions can still be
-# interrupted.
+# switch. Measured live on examples/small, the create-before-destroy
+# replacement caused no full outage: about 2.5 minutes with fewer n8n pods and
+# one 502. Deleting the old group is not a rolling update: EKS scales it to
+# zero and cordons and drains all of its nodes at once (update_config does not
+# apply), and it can terminate them after a timeout without waiting for
+# PodDisruptionBudgets. Pods on the old nodes move to the new ones, and
+# single-replica workloads and running executions can still be interrupted.
 #
 # create_before_destroy also applies to this resource's dependencies when they
 # are replaced (Terraform propagates it). aws_eks_cluster.n8n and

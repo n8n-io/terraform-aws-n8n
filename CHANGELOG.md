@@ -59,14 +59,19 @@ this project adheres to the stability contract in
   replacement. It needs EC2 quota and subnet IPs for both groups at once.
   Pods on the old nodes are evicted, and EKS does not guarantee it waits for
   PodDisruptionBudgets, so single-replica pods and running executions can be
-  interrupted. Anything that selects nodes by the old name, such as
+  interrupted. Measured live on `examples/small`: no full outage, about 2.5
+  minutes with fewer n8n pods running and one failed request, against about
+  10 minutes of disruption (4 to 5 fully down) for the same replacement
+  without create-before-destroy. Webhook processors and workers have no
+  PodDisruptionBudget, so they can stop together for about a minute.
+  Anything that selects nodes by the old name, such as
   a `nodeSelector` on `eks.amazonaws.com/nodegroup: n8n-nodes`, stops matching,
   and the new name changes on every replacement, so do not pin to it.
   Setting `node_launch_template_enabled = false` does not avoid it, because
   the rename forces replacement on its own. Downgrading to an
   earlier module version replaces the node group again with the old
-  delete-first behavior. Expect an outage like the upgrade measured live
-  before this change, about 10 minutes.
+  delete-first behavior: measured live, about 9.5 minutes of disruption,
+  about 4.5 of them fully down.
   Turning `eks_secrets_encryption_enabled` from `true` to `false` now fails at
   apply with a cluster name conflict instead of replacing the cluster. See
   README.md → AWS Partner Revenue Measurement tag.

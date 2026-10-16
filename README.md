@@ -261,9 +261,17 @@ it deletes the old one. Plan for the following:
   tries to drain its nodes, but it can terminate them after a timeout without
   waiting for PodDisruptionBudgets. Pods on the old nodes move to the new
   ones, and single-replica workloads and running executions can still be
-  interrupted. Before this change, the replacement deleted the old group
-  first; measured live, that meant about 10 minutes of disruption, 4 to 5 of
-  them with no response at all.
+  interrupted. EKS cordons and drains all of the old group's nodes at once,
+  so `update_config` does not limit this; only PodDisruptionBudgets do, and
+  the module configures one only for the main pods.
+
+  Measured live on `examples/small` (3 nodes): this upgrade caused no full
+  outage, about 2.5 minutes with fewer n8n pods running, and one failed
+  request (a 502). Webhook processors and workers have no
+  PodDisruptionBudget, so they can all stop together for about a minute,
+  which interrupts webhook and queue processing in that time. Before this
+  change, the same replacement deleted the old group first: about 10 minutes
+  of disruption, 4 to 5 of them with no response at all.
 - Anything that selects nodes by the old name stops matching, for example a
   `nodeSelector` on `eks.amazonaws.com/nodegroup: n8n-nodes` or a script that
   filters EC2 instances on the `eks:nodegroup-name` tag. Do not pin to the new
@@ -275,8 +283,9 @@ Setting `node_launch_template_enabled = false` does not avoid this
 replacement, because the new name forces it on its own. It only leaves the
 launch template off, and turning it on later is a second replacement.
 Downgrading to a module version without this change replaces the node group
-again, and older versions delete the old group first, so expect an outage like
-the one measured above (the downgrade itself was not measured).
+again, and older versions delete the old group first. Measured live, a
+downgrade to the previous release meant about 9.5 minutes of disruption, about
+4.5 of them with no response at all.
 
 Once the launch template is in place, further
 changes (a new `aws_partner_attribution_tag`, a different `node_disk_size`)
