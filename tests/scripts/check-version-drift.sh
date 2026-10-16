@@ -218,7 +218,7 @@ for provider in aws kubernetes helm random time; do
   # Checked here, not only inside provider_admits_latest, so a prerelease or
   # otherwise unexpected "latest" is reported as such rather than blamed on
   # the constraint.
-  if [[ ! "$latest" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+  if [[ ! "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     report_error "provider/$provider: registry.terraform.io returned latest \"$latest\", which is not a plain X.Y.Z release; compare constraint \"$constraint\" by hand"
     continue
   fi

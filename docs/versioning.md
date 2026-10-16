@@ -258,7 +258,8 @@ elsewhere that were measured on `3.5.0` were not re-measured.
     bump `CHECKOV_VERSION`, so the fix is visible before anyone makes it.
   - An unreadable or unparseable EKS release list, `isEol` flag, or pinned
     allow-list is an `ERROR` instead, so a network or format failure never
-    hides real drift. The allow-list must be one complete single-line
+    hides real drift. The one exception is a readable `isEol: true`, which
+    is `DRIFT` even when the rest is unreadable (first bullet). The allow-list must be one complete single-line
     list literal; any other shape counts as unparseable. Only the optional
     latest-checkov lookup may fail quietly, since the pinned answer alone
     decides the hold.
