@@ -15551,3 +15551,16 @@ run "webhook_and_worker_pdbs_can_be_disabled_independently" {
     error_message = "n8n_webhook_pdb_enabled = false must drop only the webhook budget"
   }
 }
+
+run "worker_pdb_can_be_disabled_independently" {
+  command = plan
+
+  variables {
+    n8n_worker_pdb_enabled = false
+  }
+
+  assert {
+    condition     = length(kubernetes_pod_disruption_budget_v1.n8n_worker) == 0 && length(kubernetes_pod_disruption_budget_v1.n8n_webhook) == 1
+    error_message = "n8n_worker_pdb_enabled = false must drop only the worker budget"
+  }
+}

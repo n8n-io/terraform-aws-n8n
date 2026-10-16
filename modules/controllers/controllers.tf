@@ -61,8 +61,9 @@ resource "helm_release" "lbc" {
   # reach it. defaultTags is how the controller tags what it creates.
   #
   # podDisruptionBudget: the chart runs two replicas and renders no budget by
-  # default, so a drain could stop both at once. maxUnavailable = 1 (not
-  # minAvailable) keeps a drain possible if one replica is already down.
+  # default, so a drain could stop both at once. maxUnavailable = 1 lets a drain
+  # evict one replica at a time and refuses a second eviction while the first
+  # replica is still down.
   values = [yamlencode(merge(
     length(var.lbc_default_tags) > 0 ? { defaultTags = var.lbc_default_tags } : {},
     var.lbc_pdb_enabled ? { podDisruptionBudget = { maxUnavailable = 1 } } : {},

@@ -1352,9 +1352,10 @@ resource "helm_release" "n8n" {
 }
 
 # ── Pod disruption budgets ────────────────────────────────────────────────────
-# The chart (checked on 1.15.0) renders a budget for the main pods only, so the
-# webhook processors and default workers get theirs here, selecting the labels
-# the chart puts on those Deployments' pods. maxUnavailable = 1, not
+# The chart (1.16.0, the default) renders a budget for the main pods only, and
+# only in multi-main, so the webhook processors and default workers get theirs
+# here, selecting the labels the chart puts on those Deployments' pods.
+# maxUnavailable = 1, not
 # minAvailable: minAvailable = 1 on a one-replica Deployment (the default
 # worker floor) would block every voluntary eviction and stall drains.
 # depends_on the release: the pods' namespace may be caller-owned, and a budget
