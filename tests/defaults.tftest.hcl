@@ -6785,6 +6785,16 @@ run "s3_bucket_is_private" {
     condition     = local.s3_bucket_name == "n8n-n8n-cluster-789012"
     error_message = "local.s3_bucket_name should track the module-managed bucket by default"
   }
+
+  # Not covered here: aws_s3_bucket.n8n and aws_kms_alias.s3 ignore changes to
+  # their names, so a deferred data.aws_caller_identity read (a caller's
+  # depends_on with a pending change) does not replace them, while
+  # replace_triggered_by on aws_iam_role.s3.name still replaces them on a
+  # cluster_name change. This suite reads data.aws_caller_identity at plan
+  # time with a fixed mocked account ID, and its plan-only runs carry no prior
+  # state to compare a name against, so neither half is expressed here. Verify
+  # against a live deployment of examples/small: change only a VPC tag and
+  # expect no bucket replacement; change cluster_name and expect one.
 }
 
 run "s3_force_destroy_reaches_the_bucket" {
