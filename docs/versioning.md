@@ -248,16 +248,18 @@ elsewhere that were measured on `3.5.0` were not re-measured.
   that minor is missing, the report lists `eks/kubernetes_version` under
   "Known and expected (not actionable)" with its `isEol` flag and a link to
   #158 instead of as drift. It applies the hold only when every input is
-  definite, and otherwise keeps the line in the drift list:
+  definite, and otherwise reports the line as `DRIFT` or `ERROR`:
   - `isEol: true` (endoflife.date's flag for the end of EKS standard
-    support) adds an `ACTIONABLE` note on its own, because a pin outside
-    standard support outweighs the checkov gate.
-  - The pinned checkov allowing the next minor adds an `ACTIONABLE` note.
-  - A newer checkov release allowing it adds an `ACTIONABLE` note to bump
-    `CHECKOV_VERSION`, so the fix is visible before anyone makes it.
+    support) is `DRIFT` marked `ACTIONABLE` on its own, because a pin
+    outside standard support outweighs the checkov gate.
+  - The pinned checkov allowing the next minor is `DRIFT` marked
+    `ACTIONABLE`.
+  - A newer checkov release allowing it is `DRIFT` marked `ACTIONABLE`, to
+    bump `CHECKOV_VERSION`, so the fix is visible before anyone makes it.
   - An unreadable or unparseable EKS release list, `isEol` flag, or pinned
-    allow-list adds a `note:` line instead, so a network or format failure
-    never hides real drift. The allow-list must be one complete single-line
+    allow-list is an `ERROR` instead, so a network or format failure never
+    hides real drift. The one exception is a readable `isEol: true`, which
+    is `DRIFT` even when the rest is unreadable (first bullet). The allow-list must be one complete single-line
     list literal; any other shape counts as unparseable. Only the optional
     latest-checkov lookup may fail quietly, since the pinned answer alone
     decides the hold.
@@ -289,20 +291,50 @@ module itself consumes a pre-existing VPC and performs no zone discovery.
 `tests/scripts/check-version-drift.sh` (run weekly by
 `.github/workflows/version-drift.yml`, and on demand via `task
 version-drift`) checks every pin reachable from a public API without AWS
-credentials: the five Terraform providers (registry.terraform.io), the CI
-toolchain (GitHub releases, including `markdownlint-cli`), the four controller charts this module installs
-(their own chart repositories' `index.yaml`), the n8n chart (`n8n-io/n8n-hosting`'s
-latest Git tag, not its `oci://ghcr.io` registry, which has no equivalent
-public index; the chart's own `Chart.yaml` is release-please-automated to
-match that tag exactly, confirmed at `1.11.0` as of this PR, so the tag is a
-reliable proxy for the published chart version rather than a literal registry
-query), and `kubernetes_version` against EKS's supported-version list via
+credentials: the five Terraform providers (registry.terraform.io, compared
+against each constraint rather than a single pinned version: a
+`~> N[.N[.N]]` constraint that already admits the latest release reports
+`OK`, not drift), the CI toolchain (GitHub releases, including
+`markdownlint-cli`), the four controller charts this module installs (their
+own chart repositories' `index.yaml`), the n8n chart (its own
+`oci://ghcr.io/n8n-io/n8n-helm-chart` registry's anonymous tag list, via a
+short-lived unauthenticated token and the Docker Distribution `tags/list`
+API, filtered to plain `X.Y.Z` release tags; a paginated response is an
+`ERROR`, since a truncated list could hide the newest release. ghcr.io does
+expose a public, unauthenticated tag index, and an earlier version of this doc and the script
+itself claimed otherwise and read `n8n-io/n8n-hosting`'s latest Git tag
+instead, which can also exist before the chart is actually published to
+GHCR), and `kubernetes_version` against EKS's supported-version list via
 `endoflife.date`'s public JSON API (an aggregator over AWS's own
 release-calendar docs; AWS itself does not publish this behind an API),
 cross-checked against checkov's `CKV_AWS_339` allow-list (see the
-`kubernetes_version` entry above). It
-always exits 0: it is a report, not a gate, and everything it would flag is
-release-sized work per the tiers above, not an auto-bump.
+`kubernetes_version` entry above).
+
+Each pin is classified `DRIFT` (behind upstream, or a provider constraint
+that no longer admits the latest release), `OK` (current, or a constraint
+that already admits the latest release), or `ERROR` (the upstream lookup
+failed, or this script cannot evaluate the pin's form, e.g. a provider
+constraint other than a single `~> N[.N[.N]]` range, or a latest provider
+release that is not a plain `X.Y.Z` version; these are reported explicitly
+rather than silently treated as current), closing with a one-line summary
+count of pins behind upstream and errors (an error is a failed lookup or a pin
+the script cannot evaluate, so it is not strictly a lookup-failure count). The
+`kubernetes_version` hold tracked in #158 is the one pin without a
+classification: it is not actionable, so it is listed separately under "Known
+and expected". The script exits 0 even when a lookup fails (it still exits 1 if
+`curl` or `jq` is missing):
+`.github/workflows/version-drift.yml`'s only consumer of this output is an
+unguarded step with no `if: always()` that syncs it to a single tracking
+issue, and a non-zero exit here would make GitHub Actions skip that step
+entirely, silently stopping the tracking issue from ever reflecting a run
+that hit a lookup failure. Every `ERROR` is already visible in the synced
+report text, so a report, not a gate, is still the right contract here;
+revisit if that workflow step ever gains `if: always()`. One lookup does not
+report an `ERROR` when it fails: the optional lookup of the latest checkov
+release behind the #158 hold. The pinned checkov's `CKV_AWS_339` is what holds
+`kubernetes_version`, so the line stays under "Known and expected" and only
+that run's early warning, that a newer checkov release allows the next minor,
+is skipped.
 
 Even the EKS check only proves a version exists and its support window,
 not that it is creatable in one specific account and region right now;
