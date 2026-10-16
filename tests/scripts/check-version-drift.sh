@@ -34,7 +34,7 @@
 # failure): .github/workflows/version-drift.yml pipes this script straight
 # into `tee -a report.md "$GITHUB_STEP_SUMMARY"`, and `shell: bash` on that
 # step adds `-o pipefail`. A later, unguarded step (no `if: always()`) syncs
-# report.md to a single tracking issue -- the only place this report is
+# report.md to a single tracking issue, the only place this report is
 # actually read day to day. A non-zero exit here would fail the first step,
 # and GitHub Actions would then skip the sync step entirely: the one
 # successful run that found a lookup failure would silently stop updating
@@ -57,8 +57,8 @@
 #     repositories' index.yaml; the n8n chart against its own
 #     oci://ghcr.io/n8n-io/n8n-helm-chart registry's anonymous tag list (a
 #     short-lived unauthenticated token plus the Docker Distribution
-#     `tags/list` API -- ghcr.io does expose a public, unauthenticated tag
-#     index; an earlier version of this script read n8n-io/n8n-hosting's
+#     `tags/list` API; ghcr.io does expose a public, unauthenticated tag
+#     index, and an earlier version of this script read n8n-io/n8n-hosting's
 #     latest Git tag instead and claimed the OCI registry had "no equivalent
 #     public index", which was wrong). Only plain X.Y.Z tags count: the
 #     registry also carries prereleases (e.g.
@@ -187,7 +187,7 @@ provider_admits_latest() {
   else
     local fixed=$(( n - 1 ))
     for ((i = 0; i < fixed - 1; i++)); do upper[i]=${segs[i]}; done
-    upper[$(( fixed - 1 ))]=$(( 10#${segs[$(( fixed - 1 ))]} + 1 ))
+    upper[fixed - 1]=$(( 10#${segs[fixed - 1]} + 1 ))
   fi
   local lower_n upper_n latest_n
   lower_n="$(numify "${lower[0]}.${lower[1]}.${lower[2]}")"
@@ -212,7 +212,14 @@ for provider in aws kubernetes helm random time; do
   fi
   latest="$(curl -sf --max-time 15 "https://registry.terraform.io/v1/providers/hashicorp/$provider" | jq -r '.version // empty')" || latest=""
   if [[ -z "$latest" ]]; then
-    report_error "provider/$provider: constraint \"$constraint\" -- registry.terraform.io lookup failed"
+    report_error "provider/$provider: constraint \"$constraint\", registry.terraform.io lookup failed"
+    continue
+  fi
+  # Checked here, not only inside provider_admits_latest, so a prerelease or
+  # otherwise unexpected "latest" is reported as such rather than blamed on
+  # the constraint.
+  if [[ ! "$latest" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+    report_error "provider/$provider: registry.terraform.io returned latest \"$latest\", which is not a plain X.Y.Z release; compare constraint \"$constraint\" by hand"
     continue
   fi
   case "$(provider_admits_latest "$constraint" "$latest")" in
@@ -274,10 +281,18 @@ n8n_token="$(curl -sf --max-time 15 "https://ghcr.io/token?scope=repository:n8n-
 if [[ -z "$n8n_token" ]]; then
   report_error "chart/n8n: ghcr.io anonymous token request failed"
 else
-  n8n_tags="$(curl -sf --max-time 15 -H "Authorization: Bearer $n8n_token" "https://ghcr.io/v2/n8n-io/n8n-helm-chart/n8n/tags/list" | jq -r '.tags[]?' 2>/dev/null)" || n8n_tags=""
+  # tags/list paginates (a `Link: <...>; rel="next"` header). Ask for a page
+  # far larger than the tag count, and treat a Link header as an ERROR: a
+  # truncated list would silently drop the newest tags and could read as OK.
+  # `-i` keeps the headers; the body is the part after the first blank line.
+  n8n_resp="$(curl -sf -i --max-time 15 -H "Authorization: Bearer $n8n_token" "https://ghcr.io/v2/n8n-io/n8n-helm-chart/n8n/tags/list?n=1000" | tr -d '\r')" || n8n_resp=""
+  n8n_link="$(printf '%s\n' "$n8n_resp" | awk 'NF == 0 { exit } tolower($1) == "link:" { print }')"
+  n8n_tags="$(printf '%s\n' "$n8n_resp" | awk 'body { print } NF == 0 { body = 1 }' | jq -r '.tags[]?' 2>/dev/null)" || n8n_tags=""
   # Keep only plain X.Y.Z release tags; see the header comment for why.
   n8n_latest="$(printf '%s\n' "$n8n_tags" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
-  if [[ -z "$n8n_latest" ]]; then
+  if [[ -n "$n8n_link" ]]; then
+    report_error "chart/n8n: ghcr.io tag list is paginated and this script reads only the first page, so the latest release may be missing"
+  elif [[ -z "$n8n_latest" ]]; then
     report_error "chart/n8n: ghcr.io tag list lookup failed or returned no numbered release tags"
   else
     compare_pin "chart/n8n" "$n8n_chart_version" "$n8n_latest"
@@ -346,7 +361,7 @@ k8s_detail="eks/kubernetes_version: pinned $pinned_k8s (isEol: ${pinned_eol:-unk
 # becomes allowed.
 #
 # The line moves to the known-holds section (and out of the DRIFT/OK/ERROR
-# counts below -- "not actionable" means exactly that) only when every input
+# counts below, because "not actionable" means exactly that) only when every input
 # is definite: a valid latest minor, a boolean isEol of false, and a parsed
 # pinned allow-list without the next minor, with no newer checkov release
 # that allows it. Otherwise it is DRIFT or ERROR:
@@ -386,11 +401,11 @@ ckv_allows() {
 
 known_holds=""
 if [[ "$pinned_eol" == "true" ]]; then
-  report_drift "$k8s_detail -- ACTIONABLE: pinned $pinned_k8s is past the end of EKS standard support, so the checkov hold tracked in #158 no longer justifies staying on it"
+  report_drift "$k8s_detail; ACTIONABLE: pinned $pinned_k8s is past the end of EKS standard support, so the checkov hold tracked in #158 no longer justifies staying on it"
 elif [[ "$latest_k8s" == "unknown" ]]; then
-  report_error "$k8s_detail -- could not read the EKS release list from endoflife.date"
+  report_error "$k8s_detail; could not read the EKS release list from endoflife.date"
 elif [[ -z "$pinned_eol" ]]; then
-  report_error "$k8s_detail -- could not read isEol for $pinned_k8s from endoflife.date, so the #158 hold is not applied"
+  report_error "$k8s_detail; could not read isEol for $pinned_k8s from endoflife.date, so the #158 hold is not applied"
 elif [[ "$latest_k8s" == "$pinned_k8s" ]]; then
   report_ok "$k8s_detail"
 else
@@ -398,13 +413,13 @@ else
   pinned_checkov="$(sed -n 's/^[[:space:]]*CHECKOV_VERSION:[[:space:]]*"\([^"]*\)".*/\1/p' "$WORKFLOW" | head -1)"
   pinned_allows="$(ckv_allows "$pinned_checkov" "$next_k8s")"
   if [[ "$pinned_allows" == "unknown" ]]; then
-    report_error "$k8s_detail -- could not read or parse CKV_AWS_339 at checkov $pinned_checkov to confirm the #158 hold"
+    report_error "$k8s_detail; could not read or parse CKV_AWS_339 at checkov $pinned_checkov to confirm the #158 hold"
   elif [[ "$pinned_allows" == "yes" ]]; then
-    report_drift "$k8s_detail -- ACTIONABLE: checkov $pinned_checkov's CKV_AWS_339 now allows $next_k8s, so the hold tracked in #158 is lifted"
+    report_drift "$k8s_detail; ACTIONABLE: checkov $pinned_checkov's CKV_AWS_339 now allows $next_k8s, so the hold tracked in #158 is lifted"
   else
     latest_checkov="$(curl -sf --max-time 15 "https://api.github.com/repos/bridgecrewio/checkov/releases/latest" | jq -r '.tag_name // empty' 2>/dev/null)" || latest_checkov=""
     if [[ -n "$latest_checkov" && "$latest_checkov" != "$pinned_checkov" && "$(ckv_allows "$latest_checkov" "$next_k8s")" == "yes" ]]; then
-      report_drift "$k8s_detail -- ACTIONABLE: checkov $latest_checkov's CKV_AWS_339 allows $next_k8s. Bump CHECKOV_VERSION from $pinned_checkov to lift the hold tracked in #158"
+      report_drift "$k8s_detail; ACTIONABLE: checkov $latest_checkov's CKV_AWS_339 allows $next_k8s. Bump CHECKOV_VERSION from $pinned_checkov to lift the hold tracked in #158"
     else
       # Held: not actionable, reported separately below, not counted as
       # DRIFT or ERROR.
@@ -413,8 +428,9 @@ else
   fi
 fi
 
+# Every section above already ends on a blank line, so the heading needs no
+# blank line of its own before it.
 if [[ -n "$known_holds" ]]; then
-  echo
   echo "## Known and expected (not actionable)"
   echo
   printf '%s' "$known_holds"

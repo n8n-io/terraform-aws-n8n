@@ -342,15 +342,18 @@ this project adheres to the stability contract in
   "constraint vs latest" pair: a `~> N[.N[.N]]` constraint that already
   admits the latest release (e.g. this module's own `~> 6.0` on the `aws`
   provider) now reports `OK` instead of looking like drift; a constraint
-  form the script cannot evaluate reports an explicit `ERROR` asking for a
-  manual compare instead of silently passing as current. Upstream lookup
+  form the script cannot evaluate, or a latest provider release that is not
+  a plain `X.Y.Z` version, reports an explicit `ERROR` asking for a manual
+  compare instead of silently passing as current. Upstream lookup
   failures are now explicit `ERROR` lines, never silently read as "up to
   date", with one exception that predates this change: if the optional
   lookup of the latest checkov release behind the #158 hold fails, the line
   stays under "Known and expected" and that run skips the early warning that
   a newer checkov release allows the next minor. The n8n chart check now reads its own
   `oci://ghcr.io/n8n-io/n8n-helm-chart` registry's anonymous tag list
-  (filtered to plain `X.Y.Z` release tags) instead of
+  (filtered to plain `X.Y.Z` release tags, and an `ERROR` if the list comes
+  back paginated, since a truncated list could hide the newest release)
+  instead of
   `n8n-io/n8n-hosting`'s latest Git tag: the script's own header and
   docs/versioning.md previously claimed the OCI registry had "no equivalent
   public index", which was wrong, and a Git tag can exist before the chart
