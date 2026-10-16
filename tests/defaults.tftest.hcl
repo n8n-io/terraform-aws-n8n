@@ -14966,7 +14966,7 @@ run "aws_partner_attribution_tag_empty_removes_the_tag" {
   }
 
   assert {
-    condition     = length(module.controllers.lbc_helm_release[0].values) == 0
+    condition     = !can(yamldecode(module.controllers.lbc_helm_release[0].values[0]).defaultTags)
     error_message = "An empty aws_partner_attribution_tag must not pass defaultTags to the AWS Load Balancer Controller"
   }
 
@@ -15481,5 +15481,35 @@ run "extra_ca_leaves_env_and_volume_name_free_when_unset" {
   assert {
     condition     = local.n8n_extra_ca_enabled == false
     error_message = "NODE_EXTRA_CA_CERTS and the ca-bundle volume name must stay usable while n8n_extra_ca_pem is null."
+  }
+}
+
+# The controllers submodule's helm values are built from variables only, so
+# unlike helm_release.n8n they are known at plan time and can be asserted.
+run "lbc_pdb_enabled_by_default" {
+  command = plan
+
+  assert {
+    condition     = yamldecode(module.controllers.lbc_helm_release[0].values[0]).podDisruptionBudget.maxUnavailable == 1
+    error_message = "LBC chart values must carry podDisruptionBudget.maxUnavailable = 1 by default"
+  }
+
+  # defaultTags and the budget share one values document: one must not drop the other.
+  assert {
+    condition     = length(yamldecode(module.controllers.lbc_helm_release[0].values[0]).defaultTags) > 0
+    error_message = "podDisruptionBudget must not displace defaultTags in the LBC values"
+  }
+}
+
+run "lbc_pdb_disabled_omits_budget" {
+  command = plan
+
+  variables {
+    lbc_pdb_enabled = false
+  }
+
+  assert {
+    condition     = !can(yamldecode(module.controllers.lbc_helm_release[0].values[0]).podDisruptionBudget)
+    error_message = "lbc_pdb_enabled = false must leave podDisruptionBudget out of the LBC values"
   }
 }

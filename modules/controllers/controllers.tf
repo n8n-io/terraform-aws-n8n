@@ -59,7 +59,14 @@ resource "helm_release" "lbc" {
 
   # The ALB is created by the controller, not by Terraform, so common_tags never
   # reach it. defaultTags is how the controller tags what it creates.
-  values = length(var.lbc_default_tags) > 0 ? [yamlencode({ defaultTags = var.lbc_default_tags })] : []
+  #
+  # podDisruptionBudget: the chart runs two replicas and renders no budget by
+  # default, so a drain could stop both at once. maxUnavailable = 1 (not
+  # minAvailable) keeps a drain possible if one replica is already down.
+  values = [yamlencode(merge(
+    length(var.lbc_default_tags) > 0 ? { defaultTags = var.lbc_default_tags } : {},
+    var.lbc_pdb_enabled ? { podDisruptionBudget = { maxUnavailable = 1 } } : {},
+  ))]
 
   set = [
     {

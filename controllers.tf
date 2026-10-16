@@ -32,6 +32,7 @@ module "controllers" {
   ebs_volume_tags              = local.aws_partner_attribution_tags
 
   install_lbc                = var.install_lbc
+  lbc_pdb_enabled            = var.lbc_pdb_enabled
   install_cluster_autoscaler = var.install_cluster_autoscaler
   install_metrics_server     = var.install_metrics_server
   install_keda               = var.install_keda
