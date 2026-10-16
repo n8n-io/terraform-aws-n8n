@@ -558,6 +558,15 @@ this project adheres to the stability contract in
 
 ### Fixed
 
+- `check.autoscaling_maxima_fit_node_group_capacity` (`scaling.tf`) models the
+  same worker ceiling as the connection-budget check: while
+  `n8n_worker_keda_pause = true`, the worker term uses
+  `n8n_worker_keda_paused_replica_count` when that is larger than
+  `n8n_worker_keda_max_replicas`, so paused workers that do not fit the node
+  group are no longer missed
+  ([#186](https://github.com/n8n-io/terraform-aws-n8n/issues/186)). The shared
+  `local.n8n_worker_modeled_max_replicas` moved from `database.tf` to
+  `scaling.tf`. Advisory only: plan and apply are unaffected.
 - **Controller Helm releases install one at a time** (#174). In
   `modules/controllers`, the Cluster Autoscaler, metrics-server, the AWS
   Load Balancer Controller, and KEDA used to install in parallel (only KEDA
