@@ -15038,6 +15038,24 @@ run "node_launch_template_enabled_defaults_to_true" {
   }
 }
 
+run "node_group_name_is_cluster_specific_for_create_before_destroy" {
+  command = plan
+
+  # The prefix is what lets lifecycle.create_before_destroy work: EKS rejects a
+  # second node group with the same name in one cluster, so a fixed name forced
+  # a delete-first replacement. create_before_destroy itself is a lifecycle
+  # setting and cannot be asserted in a run block; a live replacement is what
+  # proves the ordering.
+  variables {
+    cluster_name = "prod-a"
+  }
+
+  assert {
+    condition     = aws_eks_node_group.n8n[0].node_group_name_prefix == "prod-a-nodes-"
+    error_message = "The node group must be named from a cluster-specific node_group_name_prefix so a replacement can create the new group before deleting the old one."
+  }
+}
+
 run "node_launch_template_disabled_restores_pre_198_node_group_shape" {
   command = plan
 

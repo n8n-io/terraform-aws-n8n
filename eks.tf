@@ -314,15 +314,42 @@ resource "aws_launch_template" "node" {
 # ones, so a rolling update needs spare EC2 quota and subnet IPs. Neither
 # guarantees workload availability: that still depends on replica counts and
 # PodDisruptionBudgets.
+#
+# Replacement is create-before-destroy. Some changes cannot be made to a
+# running managed node group (instance_types, attaching the launch template,
+# the node group's own disk_size), so Terraform replaces the group. With a
+# fixed node_group_name it had to delete the old group first, because EKS
+# rejects a second group with the same name in the cluster: every node went
+# away before the new ones joined, a full outage (about 10 minutes measured
+# live, about 4 to 5 of them with no response at all). node_group_name_prefix
+# gives each group a unique, cluster-specific name, so Terraform creates the
+# new group and waits for EKS to report it ACTIVE before it deletes the old
+# one. The account needs EC2 quota and subnet IPs for both groups during the
+# switch. Deleting the old group is not a rolling update: EKS scales it to zero
+# and tries to drain its nodes, but it can terminate them after a timeout
+# without waiting for PodDisruptionBudgets. Pods on the old nodes move to the
+# new ones, and single-replica workloads and running executions can still be
+# interrupted.
+#
+# create_before_destroy also applies to this resource's dependencies when they
+# are replaced (Terraform propagates it). aws_eks_cluster.n8n and
+# aws_iam_role.nodes have fixed names, so a change that replaces either one
+# without renaming it now fails at create with a name conflict instead of
+# destroying the old one first. A cluster_name change renames both, which
+# avoids that collision. The one module input that replaces the cluster without renaming
+# it is eks_secrets_encryption_enabled = true -> false (the AWS provider forces
+# replacement when encryption_config is removed, because EKS cannot turn
+# envelope encryption off): that plan now fails at apply instead of destroying
+# the cluster and everything on it.
 
 resource "aws_eks_node_group" "n8n" {
   count = var.create_eks ? 1 : 0
 
-  cluster_name    = aws_eks_cluster.n8n[0].name
-  node_group_name = "n8n-nodes"
-  node_role_arn   = aws_iam_role.nodes[0].arn
-  subnet_ids      = local.private_subnets
-  instance_types  = [var.node_instance_type]
+  cluster_name           = aws_eks_cluster.n8n[0].name
+  node_group_name_prefix = "${local.cluster_name}-nodes-"
+  node_role_arn          = aws_iam_role.nodes[0].arn
+  subnet_ids             = local.private_subnets
+  instance_types         = [var.node_instance_type]
   # The EKS API rejects disk_size outright once launch_template is set below,
   # so this only takes effect with the launch template disabled.
   disk_size = var.node_launch_template_enabled ? null : var.node_disk_size
@@ -340,8 +367,7 @@ resource "aws_eks_node_group" "n8n" {
   # Attaching the launch template sets launch_template.id, which the AWS
   # provider marks ForceNew: the first apply with
   # var.node_launch_template_enabled = true on an existing node group replaces
-  # the whole group (every node destroyed, then re-created), so every pod is
-  # down until the new nodes join. After that, a change to the launch
+  # the whole group, create-before-destroy (see above). After that, a change to the launch
   # template's contents only bumps launch_template.version, which is NOT
   # ForceNew: EKS rolls it out via UpdateNodegroupVersion, honoring
   # update_config above, instead of a Terraform replacement.
@@ -350,7 +376,8 @@ resource "aws_eks_node_group" "n8n" {
   # ForceNew and id is Optional+Computed, so removing the block can plan as an
   # in-place update that does not actually detach the template from the node
   # group. Disabling the toggle on an attached node group therefore needs an
-  # explicit `terraform apply -replace` of this resource. See
+  # explicit `terraform apply -replace` of this resource, which is again
+  # create-before-destroy. See
   # var.node_launch_template_enabled and README.md → "AWS Partner Revenue
   # Measurement tag".
   dynamic "launch_template" {
@@ -378,8 +405,11 @@ resource "aws_eks_node_group" "n8n" {
   # The Cluster Autoscaler owns desired_size after creation (see tags above).
   # Without this, every plan after an autoscaler scaling event tries to reset
   # desired_size back to var.node_desired, and applying that drains live nodes.
+  #
+  # create_before_destroy: see the banner comment above this resource.
   lifecycle {
-    ignore_changes = [scaling_config[0].desired_size]
+    create_before_destroy = true
+    ignore_changes        = [scaling_config[0].desired_size]
   }
 }
 

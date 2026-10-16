@@ -46,12 +46,28 @@ this project adheres to the stability contract in
   `update_config { max_unavailable = 1 }` is
   now explicit on the node group so a launch template version bump (from a new
   `aws_partner_attribution_tag` or `node_disk_size`) drains at most one old
-  node at a time instead of implicitly. **Upgrade note (breaking):** the first apply after
-  upgrading replaces the entire node group, because attaching a launch
-  template for the first time changes `launch_template.id`, which forces
-  replacement; every pod is down until the new nodes join. Set
-  `node_launch_template_enabled = false` before that apply to defer the
-  replacement, then flip it to `true` in a deliberate maintenance window. See
+  node at a time instead of implicitly. The node group is now
+  create-before-destroy and named from `node_group_name_prefix`
+  (`<cluster_name>-nodes-<suffix>`) instead of the fixed `n8n-nodes`, which
+  EKS shares across every cluster this module creates. A node group replacement
+  (this upgrade, a `node_instance_type` change, or toggling the launch
+  template) creates the new group and waits for EKS to report it active
+  before it deletes the old one, instead of deleting it first. **Upgrade note
+  (breaking):** the first apply after upgrading replaces the node group,
+  because attaching a launch template and the new name both force
+  replacement. It needs EC2 quota and subnet IPs for both groups at once.
+  Pods on the old nodes are evicted, and EKS does not guarantee it waits for
+  PodDisruptionBudgets, so single-replica pods and running executions can be
+  interrupted. Anything that selects nodes by the old name, such as
+  a `nodeSelector` on `eks.amazonaws.com/nodegroup: n8n-nodes`, stops matching,
+  and the new name changes on every replacement, so do not pin to it.
+  Setting `node_launch_template_enabled = false` does not avoid it, because
+  the rename forces replacement on its own. Downgrading to an
+  earlier module version replaces the node group again with the old
+  delete-first behavior. Expect an outage like the upgrade measured live
+  before this change, about 10 minutes.
+  Turning `eks_secrets_encryption_enabled` from `true` to `false` now fails at
+  apply with a cluster name conflict instead of replacing the cluster. See
   README.md → AWS Partner Revenue Measurement tag.
 - A plan-time advisory `check.db_postgresdb_pool_size_fits_known_max_connections`
   (`database.tf`) warns when `db_postgresdb_pool_size` times the modeled main,
