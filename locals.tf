@@ -689,16 +689,20 @@ locals {
 
   # True only when the pinned chart is known to render
   # DB_POSTGRESDB_SSL_ENABLED from database.ssl.enabled: the upstream
-  # repository at chart 1.15.0 or newer (n8n-io/n8n-hosting#175; earlier charts
-  # rendered DB_POSTGRESDB_SSL, which n8n does not read). For any other
-  # repository the chart contents cannot be verified, and the safe error is a
-  # duplicate env entry (same value "true"), not a silently disabled TLS
-  # connection, so the module keeps emitting its own entry there. Nested
-  # ternaries, the repo's guard shape (AGENTS.md); same shape as
-  # local.n8n_worker_keda_pause_supported in scaling.tf.
+  # repository at a numbered chart release 1.15.0 or newer
+  # (n8n-io/n8n-hosting#175; earlier charts rendered DB_POSTGRESDB_SSL, which
+  # n8n does not read). For any other repository, and for any prerelease
+  # (a SemVer "-" segment, e.g. a preview built from a branch that may predate
+  # #175), the chart contents cannot be verified, and the safe error is a
+  # duplicate env entry (same value "true"), not a missing one, so the module
+  # keeps emitting its own entry there. Nested ternaries, the repo's guard
+  # shape (AGENTS.md); same gate as terraform-google-n8n#39 and
+  # terraform-azurerm-n8n#77.
   n8n_chart_renders_postgres_ssl_enabled = var.n8n_chart_repository != "oci://ghcr.io/n8n-io/n8n-helm-chart" ? false : (
-    tonumber(local.n8n_chart_version_parts[0]) > 1 ? true : (
-      tonumber(local.n8n_chart_version_parts[0]) < 1 ? false : tonumber(local.n8n_chart_version_parts[1]) >= 15
+    strcontains(split("+", var.n8n_chart_version)[0], "-") ? false : (
+      tonumber(local.n8n_chart_version_parts[0]) > 1 ? true : (
+        tonumber(local.n8n_chart_version_parts[0]) < 1 ? false : tonumber(local.n8n_chart_version_parts[1]) >= 15
+      )
     )
   )
 

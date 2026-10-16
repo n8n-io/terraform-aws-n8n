@@ -170,7 +170,8 @@ The one change that reaches this module is n8n-io/n8n-hosting#175: the chart
 renders `database.ssl.enabled` as `DB_POSTGRESDB_SSL_ENABLED` instead of
 `DB_POSTGRESDB_SSL`. The module sets that name through `config.extraEnv`, and
 sends `database.ssl.*` only while a CA is delivered, so on the upstream chart
-at `1.15.0` or newer it omits its own entry in exactly that case
+at a numbered `1.15.0` or newer (prereleases excluded) it omits its own entry
+in exactly that case
 (`local.n8n_chart_renders_postgres_ssl_enabled`); otherwise every container would
 carry the name twice. A bump that moves this gate, or a chart that renames the
 key again, is caught by `tests/scripts/check-main-chart.sh`, which counts the

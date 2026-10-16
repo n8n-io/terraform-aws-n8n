@@ -247,8 +247,9 @@ upgrade: Helm cannot roll back database migrations.
   `DB_POSTGRESDB_SSL_ENABLED`, the name n8n reads (n8n-io/n8n-hosting#175).
   The module delivers `database.ssl.*` only with `db_postgresdb_ssl_ca_pem`,
   and sets `DB_POSTGRESDB_SSL_ENABLED` itself through `config.extraEnv`. On
-  the upstream chart at `1.15.0` or newer, with a CA delivered, it now leaves
-  that name to the chart; in every other case it keeps setting it. You do not
+  the upstream chart at a numbered `1.15.0` or newer (not a prerelease), with
+  a CA delivered, it now leaves that name to the chart; in every other case it
+  keeps setting it. You do not
   need to change any input. After the upgrade a container with a CA delivered
   carries the name once, from the chart's ConfigMap, and one without a CA
   carries it once, from the module. If you set `n8n_chart_repository` to a

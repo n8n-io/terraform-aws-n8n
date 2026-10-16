@@ -12719,6 +12719,50 @@ run "db_postgresdb_ssl_enabled_stays_in_extra_env_on_a_custom_chart_repository" 
   }
 }
 
+# A prerelease can be built from a branch that predates n8n-io/n8n-hosting#175
+# whatever its version number says, so it keeps the module's entry even at
+# 1.15.0 or above. Build metadata alone ("+...") does not count as a prerelease.
+run "db_postgresdb_ssl_enabled_stays_in_extra_env_on_a_prerelease_chart" {
+  command = plan
+
+  variables {
+    n8n_chart_version                     = "1.16.0-preview.workerpools.1+build.7"
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition = (
+      local.n8n_chart_renders_postgres_ssl_enabled == false &&
+      length(local.n8n_postgres_ssl_env) == 2 &&
+      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_ENABLED" &&
+      local.n8n_postgres_ssl_env[0].value == "true"
+    )
+    error_message = "A prerelease n8n_chart_version must keep DB_POSTGRESDB_SSL_ENABLED=true in config.extraEnv, even at 1.15.0 or above."
+  }
+}
+
+# A numbered release past 1.x, with build metadata, still counts as rendering
+# the name: the major-version branch of the gate and the "+" strip.
+run "db_postgresdb_ssl_enabled_left_to_the_chart_on_a_numbered_major_2_release" {
+  command = plan
+
+  variables {
+    n8n_chart_version                     = "2.0.0+build.7"
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition = (
+      local.n8n_chart_renders_postgres_ssl_enabled == true &&
+      length(local.n8n_postgres_ssl_env) == 1 &&
+      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"
+    )
+    error_message = "A numbered chart release 2.0.0 (build metadata ignored) must leave DB_POSTGRESDB_SSL_ENABLED to the chart when a CA is delivered."
+  }
+}
+
 run "db_postgresdb_ssl_ca_pem_delivered_without_verification" {
   command = plan
 

@@ -439,12 +439,14 @@ this project adheres to the stability contract in
     `DB_POSTGRESDB_SSL`, which n8n ignores. The module sends
     `database.ssl.*` only while `db_postgresdb_ssl_ca_pem` is delivered, and
     always sets `DB_POSTGRESDB_SSL_ENABLED` itself through `config.extraEnv`.
-    With a CA delivered on the upstream chart at `1.15.0` or newer the module
-    now omits its own entry (`local.n8n_chart_renders_postgres_ssl_enabled`),
-    because the chart supplies it and every container would otherwise carry
-    the name twice. With no CA, with `db_postgresdb_ssl_enabled = false`, on
-    an older chart, or on a custom `n8n_chart_repository` (whose version
-    numbers the module cannot verify) the module's entry stays. The
+    With a CA delivered on the upstream chart at a numbered `1.15.0` or newer
+    the module now omits its own entry
+    (`local.n8n_chart_renders_postgres_ssl_enabled`), because the chart
+    supplies it and every container would otherwise carry the name twice.
+    With no CA, with `db_postgresdb_ssl_enabled = false`, on an older chart,
+    on a prerelease chart (including the worker-pools preview), or on a
+    custom `n8n_chart_repository` (whose contents the module cannot verify)
+    the module's entry stays. The
     CA-delivered, no-CA and older-chart cases were checked on a live cluster;
     the SSL-off and custom-repository cases are covered by `terraform test`
     only. `tests/scripts/check-main-chart.sh` now fails if a container
