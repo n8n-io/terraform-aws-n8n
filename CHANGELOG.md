@@ -621,7 +621,7 @@ this project adheres to the stability contract in
   `CKV_AWS_339`'s allow-list still ends at `1.35`, which keeps
   `kubernetes_version` at `1.35` per `docs/versioning.md`. See #139 and
   #150.
-- CI Terraform pin `1.16.4` to `1.16.5`. Checkov stays at `3.3.20` rather
+- CI Terraform pin `1.16.4` to `1.16.6`. Checkov stays at `3.3.20` rather
   than moving to `3.3.28`: with `3.3.28`, the opt-in pass of
   `tests/scripts/check-checkov.sh` fails `CKV_K8S_14`, `CKV_K8S_15` and
   `CKV_K8S_43` on `kubernetes_deployment_v1.redis_exporter` although its

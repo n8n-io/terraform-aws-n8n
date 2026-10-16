@@ -14,7 +14,7 @@ env:
   # Every job except test-floor runs this version: the current latest stable,
   # so there is one deliberately tracked latest version to bump rather than a
   # moving target. TF_FLOOR_VERSION below tracks the module's floor instead.
-  TF_VERSION: "1.16.5"
+  TF_VERSION: "1.16.6"
   # The `test-floor` job also runs the `terraform test` suites on the lowest
   # release the module's required_version admits. A floor CI never runs is a
   # claim nobody is checking: on the previous `>= 1.11` floor, two validations
@@ -38,6 +38,8 @@ env:
   # refuses to run against a different local version, which makes this line the
   # single source of truth for both. Bumping it is a deliberate change: expect a
   # new release to report findings that need triaging in the same commit.
+  # Held at 3.3.20: 3.3.28 and later fail the opt-in pass on a correct
+  # resource. See #193 before bumping.
   CHECKOV_VERSION: "3.3.20"
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
