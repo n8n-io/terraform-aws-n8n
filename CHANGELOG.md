@@ -438,8 +438,8 @@ this project adheres to the stability contract in
     `DB_POSTGRESDB_SSL_ENABLED`, the name n8n reads. Earlier charts rendered
     `DB_POSTGRESDB_SSL`, which n8n ignores. The module sends
     `database.ssl.*` only while `db_postgresdb_ssl_ca_pem` is delivered, and
-    always sets `DB_POSTGRESDB_SSL_ENABLED` itself through `config.extraEnv`.
-    With a CA delivered on the upstream chart at a numbered `1.15.0` or newer
+    until now always set `DB_POSTGRESDB_SSL_ENABLED` itself through
+    `config.extraEnv`. With a CA delivered on the upstream chart at a numbered `1.15.0` or newer
     the module now omits its own entry
     (`local.n8n_chart_renders_postgres_ssl_enabled`), because the chart
     supplies it and every container would otherwise carry the name twice.

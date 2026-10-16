@@ -172,8 +172,10 @@ renders `database.ssl.enabled` as `DB_POSTGRESDB_SSL_ENABLED` instead of
 sends `database.ssl.*` only while a CA is delivered, so on the upstream chart
 at a numbered `1.15.0` or newer (prereleases excluded) it omits its own entry
 in exactly that case
-(`local.n8n_chart_renders_postgres_ssl_enabled`); otherwise every container would
-carry the name twice. A bump that moves this gate, or a chart that renames the
+(`local.n8n_chart_renders_postgres_ssl_enabled`). Keeping its entry there would
+give every container the name twice; in every other case the chart does not
+render the name, or the module cannot verify that it does, so the module's
+entry stays. A bump that moves this gate, or a chart that renames the
 key again, is caught by `tests/scripts/check-main-chart.sh`, which counts the
 name per container with and without a CA. The mocked suites cannot catch it:
 `helm_release.values` is unknown under plan mocks.
