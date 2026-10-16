@@ -98,6 +98,7 @@ OPT_IN_TFVARS="tests/checkov/opt-in.tfvars"
 OPT_IN_RESOURCES=(
   "kubernetes_deployment_v1.redis_exporter[0]"
   "kubernetes_service_v1.redis_exporter[0]"
+  "aws_launch_template.node[0]"
 )
 
 echo "checkov pass 2/2: opt-in resources (--var-file $OPT_IN_TFVARS)"

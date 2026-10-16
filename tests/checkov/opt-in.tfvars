@@ -12,3 +12,4 @@
 # Not a terraform.tfvars: Terraform never reads this file, only checkov does,
 # and only when the script passes it with --var-file.
 redis_exporter_enabled = true
+node_launch_template_enabled = true
