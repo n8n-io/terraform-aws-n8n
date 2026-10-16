@@ -179,3 +179,12 @@ run "customer_managed_node_desired_rejects_above_max" {
 # pass-through on this example: a run that plans the module cannot complete. The
 # variable's default and validation are identical to the other examples', which
 # do assert them, and `terraform validate` covers the wiring.
+
+# The TLS proxy pass-throughs (n8n_extra_ca_pem, n8n_proxy_hops, n8n_extra_env)
+# are intentionally untested here. The module exposes no output that reflects
+# them, and helm_release.n8n.values is unknown at plan time under mocks, so a
+# run block could only read back the example's own variable. Their contracts
+# (defaults, validations, reserved names) are covered by the repo root's
+# tests/defaults.tftest.hcl. `terraform validate` checks only that the
+# arguments, references and types line up; confirming the rendered result
+# needs a real `terraform plan`.

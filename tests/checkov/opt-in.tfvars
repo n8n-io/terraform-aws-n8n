@@ -12,3 +12,9 @@
 # Not a terraform.tfvars: Terraform never reads this file, only checkov does,
 # and only when the script passes it with --var-file.
 redis_exporter_enabled = true
+
+# Any value that passes the variable's validation. checkov 3.3.20 already
+# evaluates kubernetes_secret_v1.n8n_ca_bundle without it (it cannot resolve
+# that count, see OPT_IN_RESOURCES), but the toggle keeps the resource covered
+# if a later checkov starts resolving the count from the null default.
+n8n_extra_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIBcheckov\n-----END CERTIFICATE-----\n"

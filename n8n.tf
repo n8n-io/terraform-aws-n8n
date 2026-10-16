@@ -308,7 +308,7 @@ resource "kubernetes_secret" "n8n_redis" {
 # ── Extra CA bundle ───────────────────────────────────────────────────────────
 # Caller-supplied CA certificate(s) (n8n_extra_ca_pem), mounted on every n8n
 # role and pointed at by NODE_EXTRA_CA_CERTS. Public certificates only.
-resource "kubernetes_secret" "n8n_ca_bundle" {
+resource "kubernetes_secret_v1" "n8n_ca_bundle" {
   count = local.n8n_extra_ca_enabled ? 1 : 0
 
   metadata {
@@ -1021,7 +1021,7 @@ resource "helm_release" "n8n" {
         local.n8n_credentials_overwrite_env,
 
         # Outbound CA trust (n8n_extra_ca_pem): points Node at the bundle
-        # mounted from kubernetes_secret.n8n_ca_bundle. Reaches the n8n
+        # mounted from kubernetes_secret_v1.n8n_ca_bundle. Reaches the n8n
         # containers only; the task runner sidecar is a separate container
         # this value does not touch (see docs/tls-proxy.md).
         local.n8n_ca_bundle_env,
@@ -1273,8 +1273,8 @@ resource "helm_release" "n8n" {
     aws_elasticache_replication_group.n8n,
     aws_iam_role_policy_attachment.s3,
     aws_eks_pod_identity_association.s3,
-    kubernetes_service_account_v1.n8n, # empty list unless the module owns it
-    kubernetes_secret.n8n_ca_bundle,   # empty list unless n8n_extra_ca_pem is set
+    kubernetes_service_account_v1.n8n,  # empty list unless the module owns it
+    kubernetes_secret_v1.n8n_ca_bundle, # empty list unless n8n_extra_ca_pem is set
   ]
 }
 

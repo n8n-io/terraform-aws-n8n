@@ -15087,7 +15087,7 @@ run "extra_ca_disabled_by_default" {
   command = plan
 
   assert {
-    condition     = local.n8n_extra_ca_enabled == false && length(local.n8n_ca_bundle_env) == 0 && length(kubernetes_secret.n8n_ca_bundle) == 0
+    condition     = local.n8n_extra_ca_enabled == false && length(local.n8n_ca_bundle_env) == 0 && length(kubernetes_secret_v1.n8n_ca_bundle) == 0
     error_message = "No CA Secret, mount or NODE_EXTRA_CA_CERTS may exist while n8n_extra_ca_pem is null."
   }
 
@@ -15105,7 +15105,7 @@ run "extra_ca_renders_secret_mount_env_and_checksum" {
   }
 
   assert {
-    condition     = length(kubernetes_secret.n8n_ca_bundle) == 1 && local.n8n_ca_bundle_pem == "-----BEGIN CERTIFICATE-----\nMIIBproxyca\n-----END CERTIFICATE-----\n"
+    condition     = length(kubernetes_secret_v1.n8n_ca_bundle) == 1 && local.n8n_ca_bundle_pem == "-----BEGIN CERTIFICATE-----\nMIIBproxyca\n-----END CERTIFICATE-----\n"
     error_message = "One module-managed Secret must hold the PEM with exactly one trailing newline."
   }
 
@@ -15194,6 +15194,21 @@ run "extra_ca_rejects_volume_name_collision" {
       config_map = { name = "x" }
     }]
     n8n_extra_volume_mounts = [{ name = "ca-bundle", mount_path = "/opt/custom-ca" }]
+  }
+
+  expect_failures = [var.n8n_extra_ca_pem]
+}
+
+run "extra_ca_rejects_mount_path_collision" {
+  command = plan
+
+  variables {
+    n8n_extra_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    n8n_extra_volumes = [{
+      name       = "custom-ca"
+      config_map = { name = "x" }
+    }]
+    n8n_extra_volume_mounts = [{ name = "custom-ca", mount_path = "/etc/n8n-certs/ca-bundle.crt" }]
   }
 
   expect_failures = [var.n8n_extra_ca_pem]
