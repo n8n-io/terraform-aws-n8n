@@ -443,6 +443,68 @@ this project adheres to the stability contract in
   - n8n-io/n8n-hosting#209: chart validation reports every failure in one
     render.
   - See `docs/upgrading-n8n.md#moving-from-chart-1130-to-1140`.
+- Default n8n chart `1.14.0` to `1.15.0`.
+  - `n8n_image_tag = null` moves from `appVersion: 2.41.4` to `2.42.4`; pin
+    the running application version first if it is not already pinned. The
+    n8n 2.42.0 through 2.42.4 release notes contain no breaking-change
+    entries (a text search of the release notes, not a behavior audit).
+    **Unpinned callers move too:** with a null tag, the next apply upgrades
+    the application. Every n8n pod rolls once on this bump even with the image
+    pinned, because the chart's `helm.sh/chart` and `app.kubernetes.io/version`
+    labels and its `checksum/config` annotation change (with the tag pinned,
+    the rendered pod templates differ only in those three fields). Observed on a
+    live `examples/small` upgrade from `1.14.0` with a null tag: the plan was
+    0 to add, 2 to change, 0 to destroy (the n8n and LBC Helm releases), all
+    five pods were replaced within about two minutes, and the smoke test
+    passed afterwards.
+  - n8n-io/n8n-hosting#175: the chart now renders `database.ssl.enabled` as
+    `DB_POSTGRESDB_SSL_ENABLED`, the name n8n reads. Earlier charts rendered
+    `DB_POSTGRESDB_SSL`, which n8n ignores. The module sends
+    `database.ssl.*` only while `db_postgresdb_ssl_ca_pem` is delivered, and
+    until now always set `DB_POSTGRESDB_SSL_ENABLED` itself through
+    `config.extraEnv`. With a CA delivered on the upstream chart at a numbered `1.15.0` or newer
+    the module now omits its own entry
+    (`local.n8n_chart_renders_postgres_ssl_enabled`), because the chart
+    supplies it and every container would otherwise carry the name twice.
+    With no CA, with `db_postgresdb_ssl_enabled = false`, on an older chart,
+    on a prerelease chart (including the worker-pools preview), or on a
+    custom `n8n_chart_repository` (whose contents the module cannot verify)
+    the module's entry stays. The
+    CA-delivered, no-CA and older-chart cases were checked on a live cluster;
+    the SSL-off and custom-repository cases are covered by `terraform test`
+    only. `tests/scripts/check-main-chart.sh` now fails if a container
+    carries `DB_POSTGRESDB_SSL_ENABLED` other than exactly once, with and
+    without a
+    CA. The chart's upgrade note that `database.ssl.enabled: true` now
+    actually negotiates TLS does not change anything here: the module never
+    sets `database.ssl.enabled` without also setting `database.ssl.ca`,
+    which the note says is unaffected.
+  - New chart keys `extraObjects` and `database.ssl.existingSecret` are not
+    exposed by this module (`docs/helm-chart-coverage.md`).
+  - No changes to the chart's `deployment-*.yaml` templates, so main pods
+    still have no task-runner sidecar in queue mode. Worker-only task-runner
+    capacity accounting now covers `1.15.0`.
+  - See `docs/upgrading-n8n.md#moving-from-chart-1140-to-1150`.
+- Default `lbc_chart_version` `3.5.0` to `3.6.0` (root module and
+  `modules/controllers`; the AWS Load Balancer Controller moves from `v3.5.0`
+  to `v3.6.0`). The chart's `templates/` are identical between the two
+  versions, including the `webhookConfig.ingressValdationFailurePolicy`
+  spelling the module's override depends on. **Unpinned callers move too:**
+  the next apply upgrades the controller in place.
+  - Helm does not upgrade the CRDs in a chart's `crds/` directory, so an
+    existing cluster keeps the CRDs it already has. `3.6.0` adds one optional
+    field to `TargetGroupBinding` (`registerTargetsWithPodAvailabilityZone`,
+    cross-account IP targets) and changes a description in the Gateway API
+    CRDs. This module uses neither, and an upgraded cluster ran correctly on
+    the older CRDs. Upstream's release notes recommend applying the new CRDs
+    (`kubectl apply -k "github.com/aws/eks-charts/stable/aws-load-balancer-controller/crds?ref=master"`)
+    if you use the new field; a fresh install gets them from the chart.
+  - Re-verified live on `3.6.0` after an in-place upgrade: the ALB and both
+    target groups stay healthy, the `alb_inbound_cidrs` rule on the ALB
+    security group is unchanged, and the module's `failurePolicy` overrides
+    are intact. The other ALB behaviors documented here (IngressClassParams
+    precedence, prefix-list quota, `security-groups` annotation) were
+    measured on `3.5.0` and were not re-measured on `3.6.0`.
 - **`n8n_webhook_hpa_max_replicas` default drops from `8` to `4`, and
   `db_postgresdb_pool_size` default drops from `10` to `9`.** The previous
   defaults asked for more connections than the default database can offer.

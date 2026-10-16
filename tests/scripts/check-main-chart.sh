@@ -37,7 +37,7 @@ chart_version=$(console <<< 'var.n8n_chart_version')
 chart_repository=$(console <<< 'var.n8n_chart_repository')
 helm pull "$chart_repository/n8n" --version "$chart_version" --untar --untardir "$tmp"
 app_version=$(console <<< "yamldecode(file(\"$tmp/n8n/Chart.yaml\")).appVersion")
-[[ "$app_version" == "2.41.4" ]] || { echo "Review image fallback tests for appVersion=$app_version" >&2; exit 1; }
+[[ "$app_version" == "2.42.4" ]] || { echo "Review image fallback tests for appVersion=$app_version" >&2; exit 1; }
 
 # Include a larger multi-main floor, plus an explicitly high ceiling for the
 # single-main case. Expected results below are independent of the locals.
@@ -92,7 +92,7 @@ done
 # Explicit app tags must override appVersion; runner tags follow the app unless
 # explicitly set. Custom repositories must not reset either explicit tag.
 # The explicit scenario deliberately picks a tag other than the pinned
-# chart's appVersion (2.41.4): using the same value would make "explicit tag
+# chart's appVersion (2.42.4): using the same value would make "explicit tag
 # wins" indistinguishable from "fallback to appVersion" wins by coincidence.
 for scenario in explicit custom; do
   args=(--set-string image.tag=2.39.6)
@@ -243,6 +243,7 @@ jq -e '.data | keys | map(select(startswith("DB_POSTGRESDB_SSL"))) | length == 0
 jq -e --arg ca "$ca_trimmed" \
   '.data.DB_POSTGRESDB_SSL_CA == $ca and (.data | has("DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED") | not)' \
   "$tmp/postgres-ssl-ca-configmap.json" >/dev/null
+jq -e '.data.DB_POSTGRESDB_SSL_ENABLED == "true"' "$tmp/postgres-ssl-ca-configmap.json" >/dev/null
 # The env reference must point at the ConfigMap checked above, by name and key,
 # so a chart-side rename or retarget fails here instead of at pod start.
 ca_configmap_name=$(jq -er '.metadata.name' "$tmp/postgres-ssl-ca-configmap.json")
@@ -256,6 +257,19 @@ for template in deployment-main deployment-worker deployment-webhook-processor; 
     "$tmp/postgres-ssl-ca-$template.json" >/dev/null
   jq -e '[.spec.template.spec.containers[] | select(.name != "task-runner") | [.env[] | select(.name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED") | .value] == ["true"]] | (length > 0 and all)' \
     "$tmp/postgres-ssl-ca-$template.json" >/dev/null
+  # DB_POSTGRESDB_SSL_ENABLED must appear exactly once per container, and its
+  # source matters. With a CA, chart >= 1.15.0 renders it from
+  # database.ssl.enabled and the module omits its own
+  # (local.n8n_chart_renders_postgres_ssl_enabled): the one entry must be a
+  # reference to the chart ConfigMap's key. Without a CA the chart renders
+  # nothing and the module supplies it: the one entry must be the module's
+  # literal "true". A second entry, or the wrong source, means that gate and
+  # the chart have drifted apart.
+  jq -e --arg name "$ca_configmap_name" \
+    '[.spec.template.spec.containers[] | select(.name != "task-runner") | [.env[] | select(.name == "DB_POSTGRESDB_SSL_ENABLED") | .valueFrom.configMapKeyRef | {name, key}] == [{"name": $name, "key": "DB_POSTGRESDB_SSL_ENABLED"}]] | (length > 0 and all)' \
+    "$tmp/postgres-ssl-ca-$template.json" >/dev/null
+  jq -e '[.spec.template.spec.containers[] | select(.name != "task-runner") | [.env[] | select(.name == "DB_POSTGRESDB_SSL_ENABLED") | .value] == ["true"]] | (length > 0 and all)' \
+    "$tmp/postgres-ssl-default-$template.json" >/dev/null
 done
 echo "PASS: chart $chart_version, db_postgresdb_ssl_ca_pem reaches the chart ConfigMap as DB_POSTGRESDB_SSL_CA with no duplicate SSL env names"
 

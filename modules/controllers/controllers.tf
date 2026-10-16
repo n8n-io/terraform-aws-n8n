@@ -76,7 +76,8 @@ resource "helm_release" "lbc" {
     #
     # The key really is spelled "ingressValdationFailurePolicy", missing an
     # "i". That typo is upstream's, in the chart's own values.yaml (verified
-    # against aws-load-balancer-controller chart 3.5.0, this module's
+    # against aws-load-balancer-controller charts 3.5.0 and 3.6.0, whose
+    # templates are identical; this module's
     # lbc_chart_version default), and the template reads only that spelling.
     # Helm silently accepts unknown --set paths, so the corrected spelling
     # applies cleanly and does nothing, leaving the webhook on its chart

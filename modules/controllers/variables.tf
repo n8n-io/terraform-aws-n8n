@@ -176,12 +176,12 @@ variable "lbc_chart_repository" {
 variable "lbc_chart_version" {
   description = "AWS Load Balancer Controller Helm chart version. Ignored when install_lbc = false."
   type        = string
-  default     = "3.5.0"
+  default     = "3.6.0"
   nullable    = false
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.lbc_chart_version))
-    error_message = "lbc_chart_version must be an exact SemVer 2 version such as \"3.5.0\". Helm resolves chart versions literally here, so a range (\">= 3.5\", \"~3.5.0\"), a leading \"v\", or a floating tag is not accepted."
+    error_message = "lbc_chart_version must be an exact SemVer 2 version such as \"3.6.0\". Helm resolves chart versions literally here, so a range (\">= 3.6\", \"~3.6.0\"), a leading \"v\", or a floating tag is not accepted."
   }
 }
 

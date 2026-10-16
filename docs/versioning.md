@@ -96,7 +96,7 @@ its running version before changing the chart; see
 
 Rendering tests cover fallback and explicit image tags, custom repositories,
 and worker-only task runners in queue mode. The capacity model removes main
-runner requests for upstream `1.12.0`, `1.13.0` and `1.14.0`, ignoring build metadata
+runner requests for upstream `1.12.0`, `1.13.0`, `1.14.0` and `1.15.0`, ignoring build metadata
 but not prerelease suffixes. Verify topology before extending that
 exception to any other release or repository. Worker pools still require
 their separate preview or verified custom chart.
@@ -156,6 +156,48 @@ The module sends neither deprecated name (except `WEBHOOK_URL` when the
 image tags do not prove n8n `2.30.0` or newer) and rejects both in its env
 inputs. The upgrade rolls every n8n pod once because the env list changes; see
 [Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1130-to-1140).
+
+## Chart 1.15.0 upgrade requirements
+
+The default moves from `1.14.0` to `1.15.0`. `n8n_image_tag = null` moves from
+`appVersion: 2.41.4` to `appVersion: 2.42.4`; pin first if unpinned. No
+Terraform input changes. Only the chart's helpers, ConfigMap and NOTES
+templates changed, plus a new `extraObjects.yaml`; no `deployment-*.yaml`
+changed, so queue-mode main pods still carry no task-runner sidecar and the
+capacity model's worker-only accounting extends to `1.15.0`.
+
+The one change that reaches this module is n8n-io/n8n-hosting#175: the chart
+renders `database.ssl.enabled` as `DB_POSTGRESDB_SSL_ENABLED` instead of
+`DB_POSTGRESDB_SSL`. The module sets that name through `config.extraEnv`, and
+sends `database.ssl.*` only while a CA is delivered, so on the upstream chart
+at a numbered `1.15.0` or newer (prereleases excluded) it omits its own entry
+in exactly that case
+(`local.n8n_chart_renders_postgres_ssl_enabled`). Keeping its entry there would
+give every container the name twice; in every other case the chart does not
+render the name, or the module cannot verify that it does, so the module's
+entry stays. A bump that moves this gate, or a chart that renames the
+key again, is caught by `tests/scripts/check-main-chart.sh`, which counts the
+name per container with and without a CA. The mocked suites cannot catch it:
+`helm_release.values` is unknown under plan mocks.
+
+The same release's upgrade note, that `database.ssl.enabled: true` now actually
+negotiates TLS and verifies the certificate, does not affect this module,
+which never sets `database.ssl.enabled` without `database.ssl.ca`. See
+[Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1140-to-1150).
+
+## Controller chart: AWS Load Balancer Controller 3.6.0
+
+`lbc_chart_version` moves from `3.5.0` to `3.6.0` (controller `v3.5.0` to
+`v3.6.0`). The chart's `templates/` are identical between the two, so the
+module's chart-level wiring (including the misspelled
+`webhookConfig.ingressValdationFailurePolicy` it overrides) is unchanged; only
+the controller image and the CRDs differ. Helm does not upgrade a chart's
+`crds/` directory, so existing clusters keep their current CRDs; the changes
+are one optional `TargetGroupBinding` field this module does not use and a
+Gateway API description. The chart declares no `kubeVersion`; the module's
+default Kubernetes `1.35` was the version exercised. Live behavior re-verified
+on `3.6.0` is listed in the `CHANGELOG`; the ALB behaviors documented
+elsewhere that were measured on `3.5.0` were not re-measured.
 
 ## What this policy deliberately does not force
 
