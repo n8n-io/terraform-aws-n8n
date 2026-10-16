@@ -3493,7 +3493,7 @@ variable "n8n_worker_keda_pause" {
 }
 
 variable "n8n_worker_keda_paused_replica_count" {
-  description = "Replica count the worker Deployment holds while n8n_worker_keda_pause is true (sets autoscaling.keda.sh/paused-replicas, the chart's keda.worker.pausedReplicaCount). Null (the default) freezes workers at whatever count they had when paused. 0 scales workers to zero, e.g. to stop consuming jobs while they queue in Redis ahead of a migration. Ignored, with a plan-time warning, when n8n_worker_keda_pause is false. While paused, a count above n8n_worker_keda_max_replicas replaces that maximum in the plan-time node-capacity and database connection-budget warnings."
+  description = "Replica count the worker Deployment holds while n8n_worker_keda_pause is true (sets autoscaling.keda.sh/paused-replicas, the chart's keda.worker.pausedReplicaCount). Null (the default) freezes workers at whatever count they had when paused. 0 scales workers to zero, e.g. to stop consuming jobs while they queue in Redis ahead of a migration. Ignored, with a plan-time warning, when n8n_worker_keda_pause is false. While paused, an explicit count above n8n_worker_keda_max_replicas replaces that maximum in the plan-time node-capacity and database connection-budget warnings. A null count is assumed to be within the maximum, so workers already held above it when paused are not warned about."
   type        = number
   default     = null
 
