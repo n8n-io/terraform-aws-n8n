@@ -5,7 +5,7 @@ variable "aws_region" {
 }
 
 variable "cluster_name" {
-  description = "Name for the EKS cluster. Keep to 14 characters or fewer, because the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars."
+  description = "Name for the EKS cluster. Keep to 14 characters or fewer, because the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. The module also embeds the name in the S3 bucket name `n8n-<cluster_name>-<id>`, so use only lowercase letters, digits, hyphens and periods, with no period at either end or next to another period or a hyphen. The module rejects any other name at plan time."
   type        = string
   default     = "n8n-cluster"
 

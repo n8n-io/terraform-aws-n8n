@@ -386,6 +386,7 @@ this project adheres to the stability contract in
   fails used to pass `plan` and then fail during `apply`, because S3 rejected
   the bucket name. It now fails during `plan`, so no deployment that applied
   successfully is affected.
+
 - **Breaking: the minimum Terraform version is now `>= 1.13`** (was
   `>= 1.11`) in all thirteen `required_version` declarations: the module
   root, `modules/controllers`, and all eleven examples. Two Terraform
