@@ -253,7 +253,7 @@ exported `TF_VAR_*` (even one the module has no input for, such as
 counts as pass 1 and `check-checkov.sh` exits 1 with "pass 2 did not reach
 `kubernetes_deployment_v1.redis_exporter[0]`". That message looks like a
 missing toggle or a renamed resource, but it is the environment. The script
-now unsets every `TF_VAR_*` itself, so it is safe to run from a shell that
+unsets every `TF_VAR_*` itself, so it is safe to run from a shell that
 exports them (CI does not). If you invoke checkov directly, unset them first
 or pass 2 proves nothing. A real pass 2 reports more passed checks than pass 1.
 

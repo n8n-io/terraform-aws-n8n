@@ -774,6 +774,15 @@ this project adheres to the stability contract in
   FAIL or the missing catch-all `/` WARN could print, skipping the summary and
   every later check. Both lookups now tolerate no match with `|| true`.
 
+- **`tests/scripts/check-checkov.sh` applies the opt-in tfvars from any
+  shell.** On checkov 3.3.20, a single exported `TF_VAR_*`, even one the
+  module has no input for, makes checkov ignore `--var-file`. Pass 2 then
+  reported pass 1's counts and failed with "pass 2 did not reach
+  `kubernetes_deployment_v1.redis_exporter[0]`", which pointed at a missing
+  toggle or a renamed resource rather than the environment. The script now
+  unsets every `TF_VAR_*` before scanning. CI exports none, so its results
+  do not change.
+
 - **`tests/scripts/smoke-test.sh` no longer passes on a broken deployment**
   (#154). A not-Ready worker `ScaledObject` fails at any floor; an execution
   still `new` or `waiting` when polls run out, or whose status the API never
