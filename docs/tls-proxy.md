@@ -35,6 +35,15 @@ the certificates to its built-in roots; it does not replace them.
   update that drops the mount has succeeded. Old pods that are still shutting
   down when the Secret goes can log a brief `FailedMount` event; that is
   expected and clears once they are gone.
+- The Secret uses create-before-destroy with a fixed name, so forcing its
+  replacement (`terraform apply -replace`, or an instance Terraform marked
+  tainted after a failed create) fails with `AlreadyExists` and changes
+  nothing. Recover by re-adopting the existing Secret instead of replacing it:
+  `terraform state rm '<module address>.kubernetes_secret_v1.n8n_ca_bundle[0]'`,
+  then `terraform import` the same address with the ID
+  `<namespace>/n8n-ca-bundle-secret`, then apply. Do not delete the Secret and
+  retry the replacement: removing the old instance deletes by the same name,
+  so it would delete the new Secret too.
 - The proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`) stay in
   `n8n_extra_env`, which reaches the n8n containers on every role and not the
   task runner sidecars. They route HTTP(S) requests only. n8n's PostgreSQL and

@@ -328,8 +328,14 @@ resource "kubernetes_secret_v1" "n8n_ca_bundle" {
   # rescheduled in that window would stay in ContainerCreating). With it, the
   # Secret is destroyed only after the Helm update succeeds, and survives a
   # failed one. Terraform reads this flag from state, so it protects removals
-  # of Secrets created with it set. The fixed name cannot collide on
-  # replacement: only a name or namespace change replaces this resource.
+  # of Secrets created with it set. Trade-off: the name is fixed, so a forced
+  # replacement (terraform apply -replace, or a tainted instance) tries to
+  # create a second n8n-ca-bundle-secret before deleting the first and fails
+  # with AlreadyExists. Nothing is deleted; docs/tls-proxy.md has the recovery
+  # (state rm + import, never delete-and-retry: the deposed instance's destroy
+  # deletes by the same name).
+  # A fixed name keeps the Helm values diff visible in plans; generate_name
+  # would avoid the collision at the cost of that visibility.
   lifecycle {
     create_before_destroy = true
   }

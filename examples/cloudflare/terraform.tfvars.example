@@ -52,7 +52,8 @@ n8n_license_key = "your-license-key-here"
 
 # Egress through a TLS-inspecting proxy. See docs/tls-proxy.md. Reaches the
 # n8n containers only, not the task runner sidecars. Never embed credentials
-# in a proxy URL: the values are stored in plaintext in Terraform state.
+# in a proxy URL: the values are stored in plaintext in Terraform state and
+# the Helm release.
 # n8n_extra_ca_pem = <<-EOT
 #   -----BEGIN CERTIFICATE-----
 #   ...
@@ -66,6 +67,8 @@ n8n_license_key = "your-license-key-here"
 
 # Inbound only: a proxy or WAF in front of the ALB that adds its own
 # X-Forwarded-For entry. Leave unset (the default 1) for egress-only setups.
+# Turning on Cloudflare proxying (proxied = true in dns.tf) adds such a hop:
+# set 2 and restrict the ALB to Cloudflare's published IP ranges.
 # A caller that bypasses the declared proxy can forge X-Forwarded-For at any
 # hop count of 1 or more, including an in-cluster caller reaching the n8n
 # Services directly.

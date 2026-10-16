@@ -33,7 +33,8 @@ n8n_license_key = "your-license-key-here"
 
 # Egress through a TLS-inspecting proxy. See docs/tls-proxy.md. Reaches the
 # n8n containers only, not the task runner sidecars. Never embed credentials
-# in a proxy URL: the values are stored in plaintext in Terraform state.
+# in a proxy URL: the values are stored in plaintext in Terraform state and
+# the Helm release.
 # n8n_extra_ca_pem = <<-EOT
 #   -----BEGIN CERTIFICATE-----
 #   ...
