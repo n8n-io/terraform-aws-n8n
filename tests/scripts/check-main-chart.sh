@@ -39,8 +39,8 @@ helm pull "$chart_repository/n8n" --version "$chart_version" --untar --untardir 
 app_version=$(console <<< "yamldecode(file(\"$tmp/n8n/Chart.yaml\")).appVersion")
 [[ "$app_version" == "2.43.5" ]] || { echo "Review image fallback tests for appVersion=$app_version" >&2; exit 1; }
 
-# Chart 1.16.0 skips the single-main PDB (n8n-hosting #228) and adds the
-# task-runner liveness probe (#223); the assertions for both branch on this.
+# Chart 1.16.0 skips the single-main PDB (n8n-io/n8n-hosting#228) and adds the
+# task-runner liveness probe (n8n-io/n8n-hosting#223); the assertions for both branch on this.
 IFS=. read -r chart_major chart_minor _ <<< "${chart_version%%-*}"
 if (( chart_major > 1 || (chart_major == 1 && chart_minor >= 16) )); then
   chart_at_least_1_16=true
@@ -66,7 +66,7 @@ HCL
     console <<< "jsonencode(yamldecode(file(\"$tmp/$template.yaml\")))" > "$tmp/$template.json"
   done
 
-  # Charts from 1.16.0 (n8n-hosting #228) render the main PDB only while main
+  # Charts from 1.16.0 (n8n-io/n8n-hosting#228) render the main PDB only while main
   # can run more than one replica, so single-main gets none there; every
   # multi-main replica count above, and every replica count on older charts,
   # still renders the module's budget. `--show-only` errors on a template
@@ -100,7 +100,7 @@ HCL
       jq -e '.spec.minAvailable == 0' "$tmp/pdb.json" >/dev/null
     else
       [[ "$pdb_rendered" == false ]] \
-        || { echo "FAIL: chart ${chart_version} must render no main PDB for single-main (n8n-hosting #228 skips it while main runs one replica)" >&2; exit 1; }
+        || { echo "FAIL: chart ${chart_version} must render no main PDB for single-main (n8n-io/n8n-hosting#228 skips it while main runs one replica)" >&2; exit 1; }
     fi
   else
     jq -e --argjson replicas "$replicas" \
@@ -134,7 +134,7 @@ HCL
   echo "PASS: chart $chart_version, main replicas=$replicas, image fallback and worker-only runners"
 done
 
-# Chart 1.16.0 (n8n-hosting #223) probes the launcher's /healthz on port 5680
+# Chart 1.16.0 (n8n-io/n8n-hosting#223) probes the launcher's /healthz on port 5680
 # on the worker task-runner sidecar; main and webhook-processor pods carry no
 # sidecar in queue mode, so only the worker gets it. The module never sets
 # N8N_RUNNERS_LAUNCHER_HEALTH_CHECK_PORT, and a caller-managed launcher file

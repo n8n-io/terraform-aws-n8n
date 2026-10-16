@@ -421,8 +421,8 @@ main_pod=$(kubectl get pods -n "$NAMESPACE" \
 
 if [[ "$MAIN_TOPOLOGY" == "single-main" ]]; then
   # One main without leader election: the HPA must never allow a second main,
-  # upgrades must use Recreate so two mains never overlap, and the PDB must
-  # let the only main be evicted during node maintenance.
+  # upgrades must use Recreate so two mains never overlap, and node maintenance
+  # must be able to evict the only main (no main PDB, or minAvailable=0).
   # Runtime check in the pod, not the spec: this catches the flag from any
   # source (chart switch, extra env, valueFrom), not only a literal value.
   # The command always exits 0 and prints a sentinel when the variable is
@@ -464,7 +464,7 @@ if [[ "$MAIN_TOPOLOGY" == "single-main" ]]; then
     fail "Main Deployment strategy is '${main_strategy:-<unset>}' — expected Recreate for single-main"
   fi
 
-  # Chart 1.16.0 (n8n-hosting #228) renders no main PDB at all while main runs
+  # Chart 1.16.0 (n8n-io/n8n-hosting#228) renders no main PDB at all while main runs
   # one replica; older charts still render the module's minAvailable=0
   # budget. Both permit every voluntary eviction, so accept either shape.
   # --ignore-not-found keeps a missing PDB (empty output, exit 0) apart from

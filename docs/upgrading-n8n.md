@@ -305,13 +305,14 @@ shared template helper with the same placement and resources, so `1.16.0`
 joins the worker-only task-runner capacity accounting alongside `1.12.0`
 through `1.15.0`.
 
-Not exposed by this module: `editor.url` (#243; the module keeps rendering
-its own `N8N_EDITOR_BASE_URL` and manages its own Ingress outside the chart,
-so neither `ingress` nor `webhook.url` reaches the chart either), `hostAliases`
-(#167), image digests and `persistence.annotations` (#240), per-role
-`podSecurityContext` and `containerSecurityContext` (#236; their defaults
-render the same security contexts as `1.15.0`), and
-`secretRefs.env.N8N_ENCRYPTION_KEY_FILE` (#183; the module passes its key
+Not exposed by this module: `editor.url` (n8n-io/n8n-hosting#243; the module
+keeps rendering its own `N8N_EDITOR_BASE_URL` and manages its own Ingress
+outside the chart, so neither `ingress` nor `webhook.url` reaches the chart
+either), `hostAliases` (n8n-io/n8n-hosting#167), image digests and
+`persistence.annotations` (n8n-io/n8n-hosting#240), per-role
+`podSecurityContext` and `containerSecurityContext` (n8n-io/n8n-hosting#236;
+their defaults render the same security contexts as `1.15.0`), and
+`secretRefs.env.N8N_ENCRYPTION_KEY_FILE` (n8n-io/n8n-hosting#183; the module passes its key
 through `secretRefs.existingSecret`). See
 [docs/helm-chart-coverage.md](./helm-chart-coverage.md) for the full table.
 

@@ -10608,7 +10608,7 @@ run "autoscaler_floors_default_to_warm_multi_replica_values" {
 
   assert {
     condition     = var.n8n_main_hpa_min_replicas == 2 && var.n8n_webhook_hpa_min_replicas == 2
-    error_message = "Main and webhook floors must default to 2; a floor of 1 leaves no replica available during a node drain under the module's PodDisruptionBudget"
+    error_message = "Main and webhook floors must default to 2; a floor of 1 leaves no replica available during a node drain"
   }
 
   assert {

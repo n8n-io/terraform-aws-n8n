@@ -1116,7 +1116,7 @@ resource "helm_release" "n8n" {
     # Protect one main during voluntary eviction in multi-main mode. A single
     # main permits eviction with downtime. PDBs do not constrain rollouts.
     # Charts from 1.16.0 render no main PDB at all while main runs one
-    # replica (chart #228), which permits eviction the same way; older
+    # replica (n8n-io/n8n-hosting#228), which permits eviction the same way; older
     # charts, including the 1.11.0-based worker-pools preview, still render
     # the minAvailable 0 budget this sends.
     pdb = {

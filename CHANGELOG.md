@@ -655,7 +655,7 @@ this project adheres to the stability contract in
     upgraded release ran n8n `2.43.5` with the worker task-runner's new
     `/healthz:5680` liveness probe, and `tests/scripts/smoke-test.sh` passed
     (26/0/2/3). Re-ran with `n8n_main_hpa_min_replicas = 1`: no `n8n-main`
-    `PodDisruptionBudget` was created, confirming n8n-hosting#228 above, and
+    `PodDisruptionBudget` was created, confirming n8n-io/n8n-hosting#228 above, and
     smoke-test passed again (28/0/2/3) with its new no-PDB assertion for
     this topology.
 - Default `lbc_chart_version` `3.5.0` to `3.6.0` (root module and
