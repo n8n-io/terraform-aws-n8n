@@ -60,8 +60,24 @@ EOF
 fi
 
 cd "$REPO_ROOT"
+# Any exported TF_VAR_* makes checkov ignore --var-file (measured on 3.3.20:
+# a single unrelated TF_VAR_location left pass 2 at pass 1's counts, with the
+# opt-in resources never reached), so the scan must not inherit them.
+# Removed with `env -u` rather than `unset`: names that are not shell
+# identifiers, such as TF_VAR_bad-name, still reach child processes, and
+# bash either omits them from `compgen -e` or fails to `unset` them. `env -0`
+# keeps a value containing a newline from posing as another entry.
+ENV_UNSET=()
+while IFS= read -r -d '' entry; do
+  name="${entry%%=*}"
+  if [[ "$name" == TF_VAR_* ]]; then
+    ENV_UNSET+=(-u "$name")
+  fi
+done < <(env -0)
 
-SCAN=(checkov -d . --framework terraform --config-file .checkov.yaml --compact)
+# The ${arr[@]+...} form keeps an empty array from tripping `set -u` on
+# bash 3.2, the macOS /bin/bash.
+SCAN=(env ${ENV_UNSET[@]+"${ENV_UNSET[@]}"} checkov -d . --framework terraform --config-file .checkov.yaml --compact)
 
 # Pass 1: the module and every example exactly as written. --quiet prints
 # failures only, so a clean pass is silent apart from the summary line.
