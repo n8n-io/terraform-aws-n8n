@@ -251,7 +251,8 @@ replacement is create-before-destroy: the node group now has a
 cluster-specific name built from `node_group_name_prefix`
 (`<cluster_name>-nodes-<suffix>` instead of the fixed `n8n-nodes`), so
 Terraform creates the new group and waits for EKS to report it active before
-it deletes the old one. Plan for the following:
+it deletes the old one. Run the upgrade in a low-traffic maintenance window,
+and plan for the following:
 
 - The account needs EC2 quota and the private subnets need free IPs for both
   node groups at once: at least as many new nodes as the old group is running,

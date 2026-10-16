@@ -41,8 +41,9 @@ this project adheres to the stability contract in
   the resulting volume size is unchanged. The launch template also sets
   `encrypted = "true"` on the root volume, so node root volumes are encrypted
   at rest with the region's default EBS key even where EBS encryption by
-  default is off; a customer managed default EBS key must
-  allow the Auto Scaling service-linked role, or new nodes fail to launch.
+  default is off; a customer managed default EBS key must let the Auto
+  Scaling service-linked role use the key and create grants, or new nodes
+  fail to launch.
   `update_config { max_unavailable = 1 }` is
   now explicit on the node group so a launch template version bump (from a new
   `aws_partner_attribution_tag` or `node_disk_size`) drains at most one old
@@ -63,8 +64,8 @@ this project adheres to the stability contract in
   minutes with fewer n8n pods running and one failed request, against about
   10 minutes of disruption (4 to 5 fully down) for the same replacement
   without create-before-destroy. Webhook processors and workers have no
-  PodDisruptionBudget, so they can stop together for about a minute.
-  Anything that selects nodes by the old name, such as
+  PodDisruptionBudget, so they can stop together for about a minute. Run the
+  upgrade in a low-traffic maintenance window. Anything that selects nodes by the old name, such as
   a `nodeSelector` on `eks.amazonaws.com/nodegroup: n8n-nodes`, stops matching,
   and the new name changes on every replacement, so do not pin to it.
   Setting `node_launch_template_enabled = false` does not avoid it, because
@@ -72,9 +73,12 @@ this project adheres to the stability contract in
   earlier module version replaces the node group again with the old
   delete-first behavior: measured live, about 9.5 minutes of disruption,
   about 4.5 of them fully down.
-  Turning `eks_secrets_encryption_enabled` from `true` to `false` now fails at
-  apply with a cluster name conflict instead of replacing the cluster. See
-  README.md → AWS Partner Revenue Measurement tag.
+  See README.md → AWS Partner Revenue Measurement tag. Turning
+  `eks_secrets_encryption_enabled` from `true` to `false` now fails at apply
+  with a cluster name conflict instead of replacing the cluster. EKS cannot
+  turn envelope encryption off, so an unencrypted cluster means a new cluster
+  under a different `cluster_name` and migrating workloads to it; see
+  docs/build-time-decisions.md.
 - A plan-time advisory `check.db_postgresdb_pool_size_fits_known_max_connections`
   (`database.tf`) warns when `db_postgresdb_pool_size` times the modeled main,
   worker, webhook-processor, and `n8n_worker_pools` replica ceilings would
