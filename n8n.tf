@@ -1252,6 +1252,56 @@ resource "helm_release" "n8n" {
   ]
 }
 
+# ── Pod disruption budgets ────────────────────────────────────────────────────
+# The chart (checked on 1.15.0) renders a budget for the main pods only, so the
+# webhook processors and default workers get theirs here, selecting the labels
+# the chart puts on those Deployments' pods. maxUnavailable = 1, not
+# minAvailable: minAvailable = 1 on a one-replica Deployment (the default
+# worker floor) would block every voluntary eviction and stall drains.
+# depends_on the release: the pods' namespace may be caller-owned, and a budget
+# should be destroyed before the Deployment it guards.
+resource "kubernetes_pod_disruption_budget_v1" "n8n_webhook" {
+  count = var.n8n_webhook_pdb_enabled ? 1 : 0
+
+  metadata {
+    name      = "n8n-webhook-processor"
+    namespace = local.namespace_name
+  }
+
+  spec {
+    max_unavailable = "1"
+
+    selector {
+      match_labels = {
+        "app.kubernetes.io/name"      = "n8n"
+        "app.kubernetes.io/component" = "webhook-processor"
+        "app.kubernetes.io/instance"  = helm_release.n8n.name
+      }
+    }
+  }
+}
+
+resource "kubernetes_pod_disruption_budget_v1" "n8n_worker" {
+  count = var.n8n_worker_pdb_enabled ? 1 : 0
+
+  metadata {
+    name      = "n8n-worker"
+    namespace = local.namespace_name
+  }
+
+  spec {
+    max_unavailable = "1"
+
+    selector {
+      match_labels = {
+        "app.kubernetes.io/name"      = "n8n"
+        "app.kubernetes.io/component" = "worker"
+        "app.kubernetes.io/instance"  = helm_release.n8n.name
+      }
+    }
+  }
+}
+
 # ── Ingress ───────────────────────────────────────────────────────────────────
 # A single ALB fronting both Services: the webhook path prefixes go to the
 # webhook processors, everything else to the mains. Annotations come from
