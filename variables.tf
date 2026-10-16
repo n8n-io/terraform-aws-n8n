@@ -398,7 +398,7 @@ variable "n8n_license_detach_floating_on_shutdown" {
 # ── EKS cluster ───────────────────────────────────────────────────────────────
 
 variable "eks_secrets_encryption_enabled" {
-  description = "When true (the default), envelope-encrypt Kubernetes Secrets and the EKS control-plane CloudWatch log group with a module-created Customer Managed KMS Key (aws_kms_key.eks). Clears Checkov findings CKV_AWS_58 and CKV_AWS_158. The supported AWS provider associates encryption with an existing unencrypted cluster in place; disabling it again is irreversible in EKS and therefore forces cluster replacement. Set to false before the first apply to preserve current behavior on a pre-existing cluster without secrets encryption. The CMK rotates annually and uses a 7-day deletion window (AWS minimum)."
+  description = "When true (the default), envelope-encrypt Kubernetes Secrets and the EKS control-plane CloudWatch log group with a module-created Customer Managed KMS Key (aws_kms_key.eks). Clears Checkov findings CKV_AWS_58 and CKV_AWS_158. The supported AWS provider associates encryption with an existing unencrypted cluster in place; disabling it again is irreversible in EKS and therefore forces cluster replacement; because the node group is create-before-destroy and Terraform applies that to the cluster too, the cluster's fixed name makes that apply fail with a name conflict instead of deleting the cluster. Turning encryption off on an existing cluster is therefore not supported through this module; an unencrypted cluster means a new cluster under a different cluster_name and migrating workloads to it. Set to false before the first apply to preserve current behavior on a pre-existing cluster without secrets encryption. The CMK rotates annually and uses a 7-day deletion window (AWS minimum)."
   type        = bool
   default     = true
   nullable    = false
@@ -588,7 +588,16 @@ variable "node_disk_size" {
     pods in one episode.
 
     NOTE: changing this on an existing cluster replaces every node in the group.
-    Plan for the rollout, and do not change it during a measurement run.
+    With node_launch_template_enabled = true (the default), the new size bumps
+    the launch template's version and EKS rolls it out as a managed update:
+    it surges replacement nodes, then drains at most one old node at a time
+    (update_config), which needs spare EC2 quota and subnet IPs. With it set
+    to false, the change forces replacement of aws_eks_node_group.n8n, which
+    is create-before-destroy: the new group becomes active before the old
+    group is deleted, so the account needs capacity for both groups for a
+    while, and pods on the old nodes are evicted and rescheduled (see the
+    comment above aws_eks_node_group.n8n in eks.tf). Either way, plan for the rollout, and
+    do not change it during a measurement run.
   EOT
   type        = number
   default     = null
@@ -605,7 +614,7 @@ variable "node_disk_size" {
 }
 
 variable "node_instance_type" {
-  description = "EC2 instance type for EKS worker nodes. t3.xlarge (4 vCPU, 16GB) is the recommended minimum for multi-main: the 6 n8n pods (main × 2, worker × 2, webhook × 2) request ~3,600m CPU at minimum replicas, leaving t3.medium nodes with insufficient headroom for HPA to scale. Changing this on an existing deployment replaces the node group: Terraform deletes the old group before it creates the new one, so every pod is down until the new nodes join. See docs/build-time-decisions.md."
+  description = "EC2 instance type for EKS worker nodes. t3.xlarge (4 vCPU, 16GB) is the recommended minimum for multi-main: the 6 n8n pods (main × 2, worker × 2, webhook × 2) request ~3,600m CPU at minimum replicas, leaving t3.medium nodes with insufficient headroom for HPA to scale. Changing this on an existing deployment replaces the node group, create-before-destroy: the new group becomes active before the old group is deleted, so the account needs EC2 quota and subnet IPs for both groups for a while. Pods on the old nodes are evicted and rescheduled, and EKS does not guarantee it waits for PodDisruptionBudgets, so single-replica pods and running executions can be interrupted. See docs/build-time-decisions.md."
   type        = string
   default     = "t3.xlarge"
   nullable    = false
@@ -663,6 +672,58 @@ variable "node_max" {
     condition     = var.node_max == floor(var.node_max) && var.node_max >= var.node_min
     error_message = "node_max must be a whole number of nodes and must not be below node_min. AWS rejects a managed node group whose scaling config has maxSize below minSize, and nothing before this said so."
   }
+}
+
+variable "node_launch_template_enabled" {
+  description = <<-EOT
+    When true (the default), aws_eks_node_group.n8n attaches an
+    aws_launch_template so the worker EC2 instances, their root EBS volumes,
+    and their primary network interfaces carry local.common_tags, including
+    aws-apn-id for AWS Partner Revenue Measurement. EKS does not copy the node
+    group's own tags to the resources it launches, so an explicit launch
+    template is the only way to get them tagged (#198).
+
+    Attaching the launch template sets the node group's launch_template.id,
+    which the AWS provider's aws_eks_node_group schema marks ForceNew: the
+    first apply with this set to true on an existing node group replaces the
+    entire node group. The replacement is create-before-destroy: the new
+    group becomes active before the old group is deleted, so the account
+    needs EC2 quota and subnet IPs for both groups for a while. Pods on the
+    old nodes are evicted and rescheduled, and EKS does not guarantee it waits
+    for PodDisruptionBudgets, so single-replica pods and running executions
+    can be interrupted. After that, a change to the launch
+    template's contents only bumps its version, which is NOT ForceNew: EKS
+    rolls that out via UpdateNodegroupVersion, honoring update_config, instead
+    of a Terraform replacement. That rollout surges replacement nodes before
+    it drains at most one old node at a time, so each one needs spare EC2
+    quota and free subnet IPs. Upgrading to the module version that added this
+    input replaces the node group anyway, because the node group's name also
+    changed (node_group_name_prefix), so leaving this true attaches the
+    template in that same replacement. Setting it to false only defers the
+    template, and turning it on later is a second replacement.
+
+    Setting this back to false once the template is attached does not reliably
+    detach it: the provider can plan that as an in-place update. Plan that
+    change together with
+    -replace='<module address>.aws_eks_node_group.n8n[0]', review the saved
+    plan, and apply it. That is again a
+    create-before-destroy node group replacement. See README.md → "AWS Partner Revenue
+    Measurement tag".
+
+    node_disk_size reaches the launch template's block_device_mappings instead
+    of the node group's own disk_size when this is true, because the EKS API
+    rejects disk_size outright once a launch template is attached; the
+    resulting volume size is unaffected by this toggle either way. The launch
+    template also sets the root volume's encrypted = true, using the region's
+    default EBS key. If that default is a customer managed KMS key, its key
+    policy must allow the Auto Scaling service-linked role to use the key and
+    create grants, or the new nodes fail to launch. With this set to false,
+    root volumes are encrypted only if EBS encryption by default is on in the
+    region.
+  EOT
+  type        = bool
+  default     = true
+  nullable    = false
 }
 
 # ── Cluster controllers ────────────────────────────────────────────────────────

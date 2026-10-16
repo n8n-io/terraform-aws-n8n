@@ -22,16 +22,30 @@ this project adheres to the stability contract in
   balancers it creates. Every example takes the same input and merges it into
   its own tags, so its VPC and Redis, RDS and S3 stand-ins carry it too; the
   stand-in EKS clusters in `customer-managed-cluster` and
-  `customer-managed-everything` tag their node groups only.
-  The EKS node group's EC2 instances, their root volumes, the node
-  launch template and the EKS-created cluster security group stay untagged,
-  because EKS does not copy tags to them. Upgrade note: the first plan after
+  `customer-managed-everything` tag their node groups only. The EKS-created
+  cluster security group stays untagged, because EKS does not copy tags to it
+  and the module leaves that EKS-owned group unmanaged. Upgrade note: the first plan after
   upgrading updates the tags of every tagged resource in place, upgrades the AWS
   Load Balancer Controller release and reconfigures the EBS CSI addon, which
   tags volumes it provisions from then on; volumes that already exist are not
   retagged, and opting out does not untag them. The one Pod Identity
   association owned by the EBS CSI addon keeps its old tags until the addon is
   recreated. See README.md → AWS Partner Revenue Measurement tag.
+- `node_launch_template_enabled` (default `true`) attaches an
+  `aws_launch_template` to `aws_eks_node_group.n8n` so the worker EC2
+  instances, their root EBS volumes and their primary network interfaces carry
+  `local.common_tags`, including `aws-apn-id`, which EKS does not copy from
+  the node group itself (#198). `node_disk_size` now reaches the launch
+  template's `block_device_mappings` instead of the node group's own
+  `disk_size`, which the EKS API rejects once a launch template is attached;
+  the resulting volume size is unchanged. The launch template also sets
+  `encrypted = "true"` on the root volume, so node root volumes are encrypted
+  at rest with the region's default EBS key even where EBS encryption by
+  default is off; a customer managed default EBS key must let the Auto
+  Scaling service-linked role use the key and create grants, or new nodes
+  fail to launch. Attaching the launch template replaces the node group; see
+  the breaking node group entry under Changed. See README.md → AWS Partner
+  Revenue Measurement tag.
 - A plan-time advisory `check.db_postgresdb_pool_size_fits_known_max_connections`
   (`database.tf`) warns when `db_postgresdb_pool_size` times the modeled main,
   worker, webhook-processor, and `n8n_worker_pools` replica ceilings would
@@ -333,6 +347,45 @@ this project adheres to the stability contract in
 
 ### Changed
 
+- **Breaking: `aws_eks_node_group.n8n` is replaced on upgrade, and is now
+  create-before-destroy with a per-cluster name** (#198). The node group is
+  named from `node_group_name_prefix` (`<cluster_name>-nodes-<suffix>`)
+  instead of the fixed `n8n-nodes`, which every cluster this module creates
+  reused and which blocked creating a second group with that name in the same
+  cluster. A node group replacement (this upgrade, a `node_instance_type`
+  change, or toggling `node_launch_template_enabled`) now creates the new
+  group and waits for EKS to report it active before it deletes the old one,
+  instead of deleting it first. `update_config { max_unavailable = 1 }` is
+  now explicit, so a launch template version bump (from a new
+  `aws_partner_attribution_tag` or `node_disk_size`) drains at most one old
+  node at a time. **Upgrade note (breaking):** the first apply after
+  upgrading replaces the node group, because attaching the launch template
+  and the new name both force replacement; setting
+  `node_launch_template_enabled = false` does not avoid it. It needs EC2
+  quota and subnet IPs for both groups at once. Pods on the old nodes are
+  evicted, and EKS does not guarantee it waits for PodDisruptionBudgets, so
+  single-replica pods and running executions can be interrupted. Measured
+  live on `examples/small`: no full outage, about 2.5 minutes with fewer n8n
+  pods running and one failed request, against about 10 minutes of
+  disruption (4 to 5 fully down) for the same replacement without
+  create-before-destroy. Webhook processors and workers have no
+  PodDisruptionBudget, so they can stop together for about a minute. Run the
+  upgrade in a low-traffic maintenance window. Anything that selects nodes by
+  the old name, such as a `nodeSelector` on
+  `eks.amazonaws.com/nodegroup: n8n-nodes`, stops matching, and the new name
+  changes on every replacement, so do not pin to it. Downgrading to an earlier
+  module version replaces the node group again with the old delete-first
+  behavior: measured live, about 9.5 minutes of disruption, about 4.5 of them
+  fully down. See README.md → AWS Partner Revenue Measurement tag.
+- **Breaking: turning `eks_secrets_encryption_enabled` from `true` to `false`
+  on an existing cluster now fails at apply** with a cluster name conflict,
+  instead of replacing the cluster and everything on it. The AWS provider
+  treats removing `encryption_config` as a cluster replacement, because EKS
+  cannot turn envelope encryption off. The node group's create-before-destroy
+  carries over to the cluster, so Terraform would create the replacement
+  first, under the same fixed name. An unencrypted cluster means a new cluster
+  under a different `cluster_name` and migrating workloads to it; see
+  docs/build-time-decisions.md.
 - `tests/scripts/check-version-drift.sh` now classifies each pin `DRIFT`,
   `OK`, or `ERROR` and closes with a one-line summary count of pins behind
   upstream and errors (ported from the
