@@ -402,7 +402,15 @@ locals {
   # bucket otherwise. n8n.tf and the s3_bucket_name output read this rather
   # than aws_s3_bucket.n8n directly, so both resolve correctly whichever
   # bucket is in play.
-  s3_bucket_name = var.create_s3_bucket ? local.s3_bucket_name_generated : var.existing_s3_bucket_name
+  #
+  # On the module-managed path this reads the bucket's own name, not
+  # s3_bucket_name_generated. aws_s3_bucket.n8n ignores changes to `bucket`
+  # (see s3.tf), so the name in state is the one that exists in AWS and can
+  # differ from the generated one; pods must be pointed at that bucket. For an
+  # existing bucket that is not being replaced, it also stays known at plan
+  # time when the account ID read is deferred. aws_kms_key.s3 and its alias do
+  # not read this local, so they keep no dependency on the bucket (see s3.tf).
+  s3_bucket_name = var.create_s3_bucket ? aws_s3_bucket.n8n[0].bucket : var.existing_s3_bucket_name
 
   # ARN of the bucket actually in use. aws_iam_policy.s3 (s3.tf) grants access
   # to this ARN regardless of who created the bucket.

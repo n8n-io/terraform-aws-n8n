@@ -714,9 +714,11 @@ this project adheres to the stability contract in
   `bucket` and `aws_kms_alias.s3` to `name_prefix`. A change to `cluster_name`
   still replaces the bucket, as before: `replace_triggered_by` on
   `aws_iam_role.s3.name`, which is derived from `cluster_name` alone, keeps
-  that rename working. Reproduced and fixed against real AWS: a change to the
-  module's `depends_on` target and an in-place tag update on the role replace
-  nothing, and a `cluster_name` change replaces the bucket.
+  that rename working. The n8n Helm values and the `s3_bucket_name` output
+  now read the name from `aws_s3_bucket.n8n` rather than recomputing it, so
+  they follow the name of the bucket Terraform manages. Reproduced and fixed against real
+  AWS: a change to the module's `depends_on` target and an in-place tag update
+  on the role replace nothing, and a `cluster_name` change replaces the bucket.
 
 - `check.autoscaling_maxima_fit_node_group_capacity` (`scaling.tf`) models the
   same worker ceiling as the connection-budget check: while

@@ -52,8 +52,8 @@ resource "aws_s3_bucket" "n8n" {
   # so the name becomes "known after apply" and, with it, a forced replacement
   # of a bucket that holds binary execution data (force_destroy = true by
   # default deletes it). ignore_changes = [bucket] stops that. It would also
-  # stop a deliberate rename, because the name is derived from cluster_name and
-  # n8n.tf hands the pods the new name. aws_iam_role.s3 is named from
+  # stop a deliberate rename: a cluster_name change would leave the old bucket
+  # in place under the old name. aws_iam_role.s3 is named from
   # cluster_name alone, never from the deferred account id, so a change to its
   # name is a reliable signal that cluster_name changed. replace_triggered_by
   # turns that back into the replacement the bucket needs. It names the
@@ -101,7 +101,7 @@ resource "aws_s3_bucket_public_access_block" "n8n" {
 resource "aws_kms_key" "s3" {
   count = var.create_s3_bucket && var.s3_kms_encryption_enabled && var.create_s3_kms_key ? 1 : 0
 
-  description             = "CMK for module-managed S3 bucket ${local.s3_bucket_name} (n8n binary and execution data)"
+  description             = "CMK for module-managed S3 bucket ${local.s3_bucket_name_generated} (n8n binary and execution data)"
   enable_key_rotation     = true
   deletion_window_in_days = 7
 
@@ -121,20 +121,28 @@ resource "aws_kms_key" "s3" {
     ]
   })
 
-  tags = merge(local.common_tags, { Name = local.s3_bucket_name })
+  tags = merge(local.common_tags, { Name = local.s3_bucket_name_generated })
 }
 
 resource "aws_kms_alias" "s3" {
   count = var.create_s3_bucket && var.s3_kms_encryption_enabled && var.create_s3_kms_key ? 1 : 0
 
-  name_prefix   = "alias/${local.s3_bucket_name}-"
+  name_prefix   = "alias/${local.s3_bucket_name_generated}-"
   target_key_id = aws_kms_key.s3[0].key_id
 
-  # Same reason as aws_s3_bucket.n8n: the prefix embeds the bucket name, which
-  # turns unknown when the module's data sources are deferred, and a changed
-  # prefix forces replacement of an alias the key policy and S3 encryption
-  # already depend on. The same replace_triggered_by keeps a cluster_name
-  # change producing an alias named for the new cluster.
+  # Same reason as aws_s3_bucket.n8n: the prefix embeds the generated bucket
+  # name, which turns unknown when the module's data sources are deferred, and
+  # a changed prefix forces replacement of the alias, renaming the handle
+  # operators use to find this key for no reason. The same
+  # replace_triggered_by keeps a cluster_name change producing an alias named
+  # for the new cluster.
+  #
+  # This key, its alias and its metadata read local.s3_bucket_name_generated,
+  # not local.s3_bucket_name, on purpose: the latter reads aws_s3_bucket.n8n,
+  # and that reference would make the key depend on the bucket. A targeted
+  # destroy of the bucket would then also destroy the key, which can be
+  # scheduled for deletion before the bucket delete fails with BucketNotEmpty
+  # (s3_force_destroy = false), leaving the remaining objects unreadable.
   lifecycle {
     ignore_changes       = [name_prefix]
     replace_triggered_by = [aws_iam_role.s3.name]
@@ -237,6 +245,10 @@ resource "aws_iam_policy" "s3" {
 # "S3 only", once n8n_external_secrets_aws_enabled = true.
 
 resource "aws_iam_role" "s3" {
+  # Do not change this name format. aws_s3_bucket.n8n and aws_kms_alias.s3
+  # use replace_triggered_by on this attribute as their "cluster_name
+  # changed" signal, so any change to the name replaces the bucket, and with
+  # s3_force_destroy = true (the default) deletes the data in it.
   name = "n8n-s3-role-${local.cluster_name}"
 
   assume_role_policy = jsonencode({

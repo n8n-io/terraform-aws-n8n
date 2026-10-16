@@ -578,12 +578,14 @@ terraform apply -target=module.vpc   # or whatever carries the pending change
 terraform plan                       # now refreshes against the real cluster
 ```
 
-Do NOT reach for `-refresh=false` to get past the refresh error. Skipping
-refresh defers every data source in the configuration, including
-`aws_caller_identity`; the module's generated S3 bucket name then becomes
-unknown, and because `bucket` forces replacement, the resulting plan destroys
-and recreates the bucket holding n8n's binary execution data. Verified live;
-the plan was discarded unapplied.
+Do NOT reach for `-refresh=false` to get past the refresh error. A plan that
+skips refresh does not reflect the real state of the cluster or the account,
+so it is not one to apply. In a live test it also left `aws_caller_identity`
+unread at plan time. On module versions before the fix for the S3 bucket
+replacement, that made the generated S3 bucket name unknown and the plan
+destroyed and recreated the bucket holding n8n's binary execution data (the
+plan was discarded unapplied). The module now ignores that unknown name, so
+the bucket is no longer replaced.
 
 ## LBC fails with `couldn't auto-discover subnets: ... are tagged for other clusters`, deploying a second stack into a VPC another n8n deployment already uses
 
