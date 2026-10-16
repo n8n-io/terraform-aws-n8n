@@ -588,7 +588,14 @@ variable "node_disk_size" {
     pods in one episode.
 
     NOTE: changing this on an existing cluster replaces every node in the group.
-    Plan for the rollout, and do not change it during a measurement run.
+    With node_launch_template_enabled = true (the default), the new size bumps
+    the launch template's version and EKS rolls it out as a managed update:
+    it surges replacement nodes, then drains at most one old node at a time
+    (update_config), which needs spare EC2 quota and subnet IPs. With it set
+    to false, the
+    change forces replacement of aws_eks_node_group.n8n: every node is
+    destroyed before the new ones join, a full outage. Either way, plan for the
+    rollout, and do not change it during a measurement run.
   EOT
   type        = number
   default     = null
@@ -674,22 +681,31 @@ variable "node_launch_template_enabled" {
     group's own tags to the resources it launches, so an explicit launch
     template is the only way to get them tagged (#198).
 
-    Attaching or detaching the launch template changes the node group's
-    launch_template.id, which the AWS provider's aws_eks_node_group schema
-    marks ForceNew: the first apply after flipping this replaces the entire
-    node group — every node destroyed, then re-created — so every pod is down
-    until the new nodes join. Every apply after that only bumps the launch
-    template's version, which is NOT ForceNew: EKS rolls that out node-by-node
-    via UpdateNodegroupVersion, honoring update_config, instead of a Terraform
-    replacement. Set this to false before the first apply on an existing
-    deployment to defer that one-time replacement to a deliberate maintenance
-    window, then flip it to true later. See README.md → "AWS Partner Revenue
+    Attaching the launch template sets the node group's launch_template.id,
+    which the AWS provider's aws_eks_node_group schema marks ForceNew: the
+    first apply with this set to true on an existing node group replaces the
+    entire node group (every node destroyed, then re-created), so every pod is
+    down until the new nodes join. After that, a change to the launch
+    template's contents only bumps its version, which is NOT ForceNew: EKS
+    rolls that out via UpdateNodegroupVersion, honoring update_config, instead
+    of a Terraform replacement. Set this to false before the first apply on an
+    existing deployment to defer that one-time replacement to a deliberate
+    maintenance window, then flip it to true later.
+
+    Setting this back to false once the template is attached does not reliably
+    detach it: the provider can plan that as an in-place update. Apply that
+    change together with
+    -replace='<module address>.aws_eks_node_group.n8n[0]', which is again a
+    full node group replacement. See README.md → "AWS Partner Revenue
     Measurement tag".
 
     node_disk_size reaches the launch template's block_device_mappings instead
     of the node group's own disk_size when this is true, because the EKS API
     rejects disk_size outright once a launch template is attached; the
-    resulting volume size is unaffected by this toggle either way.
+    resulting volume size is unaffected by this toggle either way. The launch
+    template also sets the root volume's encrypted = true, using the account's
+    default EBS key. With this set to false, root volumes are encrypted only if
+    the account enables EBS encryption by default.
   EOT
   type        = bool
   default     = true

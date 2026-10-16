@@ -38,10 +38,15 @@ this project adheres to the stability contract in
   the node group itself (#198). `node_disk_size` now reaches the launch
   template's `block_device_mappings` instead of the node group's own
   `disk_size`, which the EKS API rejects once a launch template is attached;
-  the resulting volume size is unchanged. `update_config { max_unavailable =
-  1 }` is now explicit on the node group so a launch template version bump —
-  from a new `aws_partner_attribution_tag` or `node_disk_size` — rolls nodes
-  one at a time instead of implicitly. Upgrade note: the first apply after
+  the resulting volume size is unchanged. The launch template also sets
+  `encrypted = "true"` on the root volume, so node root volumes are encrypted
+  at rest with the account's default EBS key even where the account does not
+  enable EBS encryption by default; a customer managed default EBS key must
+  allow the Auto Scaling service-linked role, or new nodes fail to launch.
+  `update_config { max_unavailable = 1 }` is
+  now explicit on the node group so a launch template version bump (from a new
+  `aws_partner_attribution_tag` or `node_disk_size`) drains at most one old
+  node at a time instead of implicitly. **Upgrade note (breaking):** the first apply after
   upgrading replaces the entire node group, because attaching a launch
   template for the first time changes `launch_template.id`, which forces
   replacement; every pod is down until the new nodes join. Set

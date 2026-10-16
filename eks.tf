@@ -250,10 +250,13 @@ resource "aws_eks_cluster" "n8n" {
 # volume_type and delete_on_termination are measured off the implicit launch
 # template EKS generates when no launch_template is set at all (live
 # DescribeLaunchTemplateVersions on a deployment from #187): gp3, /dev/xvda,
-# delete-on-termination enabled, no EBS encryption (matching this AWS
-# account's EbsEncryptionByDefault = false). volume_size is left unset when
-# var.node_disk_size is null so the volume still inherits the AMI snapshot's
-# 20 GiB default instead of a hard-coded one.
+# delete-on-termination enabled. encrypted is set explicitly rather than left
+# to the account's EBS encryption-by-default setting, so node root volumes are
+# encrypted at rest like every other storage layer the module creates. With no
+# kms_key_id, EC2 uses the account's default EBS key (aws/ebs unless the
+# account has changed it). volume_size is left unset when var.node_disk_size
+# is null so the volume still inherits the AMI snapshot's 20 GiB default
+# instead of a hard-coded one.
 #
 # metadata_options matches that same implicit launch template's IMDS posture
 # (IMDSv2 required, hop limit 1, instance metadata tags disabled) rather than
@@ -261,8 +264,6 @@ resource "aws_eks_cluster" "n8n" {
 # change cannot silently loosen it.
 
 resource "aws_launch_template" "node" {
-  # checkov:skip=CKV_AWS_341:IMDSv2 already required (http_tokens = "required" below); this ID also checks the hop limit, which metadata_options sets to 1 to match the EKS-managed implicit launch template's own default, measured live (see comment above).
-  # checkov:skip=CKV_AWS_8:Root volume encryption is intentionally left at this AWS account's default (unencrypted; EbsEncryptionByDefault = false), matching the node group's own behavior before this launch template existed. Encrypting it is a separate, deliberate change outside #198's tagging scope.
   count = var.create_eks && var.node_launch_template_enabled ? 1 : 0
 
   name_prefix = "${local.cluster_name}-node-"
@@ -273,6 +274,7 @@ resource "aws_launch_template" "node" {
     ebs {
       volume_size           = var.node_disk_size
       volume_type           = "gp3"
+      encrypted             = "true"
       delete_on_termination = true
     }
   }
@@ -306,10 +308,12 @@ resource "aws_launch_template" "node" {
 # HPA scales pods horizontally; Cluster Autoscaler (controllers.tf) adds/removes
 # nodes between node_min and node_max as pod demand changes.
 #
-# update_config caps one unavailable node per rolling update — a launch
-# template version bump (tag or node_disk_size change) or a kubernetes_version
-# bump — so capacity never drops to zero while nodes roll, as long as node_min
-# stays above 1.
+# update_config caps how many nodes a managed update takes down in parallel
+# (for example a launch template version bump from a tag or node_disk_size
+# change) at one. EKS also surges replacement nodes before it drains the old
+# ones, so a rolling update needs spare EC2 quota and subnet IPs. Neither
+# guarantees workload availability: that still depends on replica counts and
+# PodDisruptionBudgets.
 
 resource "aws_eks_node_group" "n8n" {
   count = var.create_eks ? 1 : 0
@@ -333,13 +337,20 @@ resource "aws_eks_node_group" "n8n" {
     max_unavailable = 1
   }
 
-  # Attaching or detaching the launch template changes launch_template.id,
-  # which the AWS provider marks ForceNew: the first apply after flipping
-  # var.node_launch_template_enabled replaces the whole node group (every node
-  # destroyed, then re-created), so every pod is down until the new nodes
-  # join. Every apply after that only bumps launch_template.version, which is
-  # NOT ForceNew: EKS rolls that out node-by-node via UpdateNodegroupVersion,
-  # honoring update_config above instead of a Terraform replacement. See
+  # Attaching the launch template sets launch_template.id, which the AWS
+  # provider marks ForceNew: the first apply with
+  # var.node_launch_template_enabled = true on an existing node group replaces
+  # the whole group (every node destroyed, then re-created), so every pod is
+  # down until the new nodes join. After that, a change to the launch
+  # template's contents only bumps launch_template.version, which is NOT
+  # ForceNew: EKS rolls it out via UpdateNodegroupVersion, honoring
+  # update_config above, instead of a Terraform replacement.
+  #
+  # Detaching is not symmetric. The outer launch_template block is not
+  # ForceNew and id is Optional+Computed, so removing the block can plan as an
+  # in-place update that does not actually detach the template from the node
+  # group. Disabling the toggle on an attached node group therefore needs an
+  # explicit `terraform apply -replace` of this resource. See
   # var.node_launch_template_enabled and README.md → "AWS Partner Revenue
   # Measurement tag".
   dynamic "launch_template" {

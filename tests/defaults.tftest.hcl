@@ -12483,8 +12483,8 @@ run "node_disk_size_accepts_a_larger_volume" {
 
   # The node group's own disk_size is Optional+Computed in the AWS provider
   # schema, so once launch_template is attached it plans as (known after
-  # apply) rather than null — verified live (examples/node-tags-test, #198):
-  # the real plan shows disk_size = 20 -> (known after apply) on this same
+  # apply) rather than null. Verified live during #198 on a throwaway
+  # deployment: the real plan shows disk_size = 20 -> (known after apply) on this same
   # transition. Not assertable at plan time under mocks either, hence no
   # assertion on it here; the block_device_mappings assert above is what
   # actually proves node_disk_size reaches the volume.
@@ -14983,11 +14983,6 @@ run "node_launch_template_enabled_defaults_to_true" {
   command = plan
 
   assert {
-    condition     = var.node_launch_template_enabled == true
-    error_message = "node_launch_template_enabled must default to true so a fresh deployment tags its worker instances and volumes without extra configuration."
-  }
-
-  assert {
     condition     = length(aws_launch_template.node) == 1
     error_message = "node_launch_template_enabled defaults to true, so the module must plan exactly one launch template."
   }
@@ -15005,6 +15000,41 @@ run "node_launch_template_enabled_defaults_to_true" {
   assert {
     condition     = aws_eks_node_group.n8n[0].update_config[0].max_unavailable == 1
     error_message = "update_config.max_unavailable must default to 1 so a launch template version bump rolls one node at a time."
+  }
+
+  assert {
+    condition     = aws_launch_template.node[0].block_device_mappings[0].device_name == "/dev/xvda"
+    error_message = "The root block device mapping must target /dev/xvda, the root device of the EKS-optimized AMIs; any other name adds a second volume and leaves the root at the AMI default."
+  }
+
+  assert {
+    condition     = aws_launch_template.node[0].block_device_mappings[0].ebs[0].volume_type == "gp3"
+    error_message = "The node root volume must stay gp3, matching the implicit launch template EKS used before #198."
+  }
+
+  assert {
+    condition     = aws_launch_template.node[0].block_device_mappings[0].ebs[0].encrypted == "true"
+    error_message = "The node root volume must be encrypted at rest regardless of the account's EBS encryption-by-default setting."
+  }
+
+  assert {
+    condition     = aws_launch_template.node[0].block_device_mappings[0].ebs[0].delete_on_termination == "true"
+    error_message = "The node root volume must be deleted with its instance, or every node replacement leaks a volume."
+  }
+
+  assert {
+    condition     = aws_launch_template.node[0].metadata_options[0].http_tokens == "required"
+    error_message = "Worker nodes must require IMDSv2 (http_tokens = required)."
+  }
+
+  assert {
+    condition     = aws_launch_template.node[0].metadata_options[0].http_put_response_hop_limit == 1
+    error_message = "The IMDS hop limit must stay 1 so pods without host networking cannot reach the node role's credentials; workloads use Pod Identity instead."
+  }
+
+  assert {
+    condition     = aws_launch_template.node[0].metadata_options[0].instance_metadata_tags == "disabled"
+    error_message = "Instance metadata tags must stay disabled, matching the implicit launch template EKS used before #198."
   }
 }
 
