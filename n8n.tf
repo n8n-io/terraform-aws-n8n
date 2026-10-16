@@ -1691,7 +1691,7 @@ check "graceful_shutdown_fits_grace_period" {
 check "custom_image_repository_needs_an_explicit_tag" {
   assert {
     condition     = var.n8n_image_repository != null ? var.n8n_image_tag != null : true
-    error_message = "n8n_image_repository is set but n8n_image_tag is null, so the chart appends its own default tag (appVersion 2.43.5 in upstream chart 1.16.0). If this tag is absent from the custom repository, the pods fail with ImagePullBackOff. Set n8n_image_tag to a tag that exists in this repository. Ignore this warning only if the repository publishes the selected chart's default tag."
+    error_message = "n8n_image_repository is set but n8n_image_tag is null, so the chart appends the selected chart version's default tag, its appVersion (2.43.5 for the default upstream chart 1.16.0; other chart versions use their own). If this tag is absent from the custom repository, the pods fail with ImagePullBackOff. Set n8n_image_tag to a tag that exists in this repository. Ignore this warning only if the repository publishes the selected chart's default tag."
   }
 }
 

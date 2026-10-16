@@ -324,8 +324,9 @@ through `secretRefs.existingSecret`). See
    previous one.
 2. `kubectl rollout status deploy/n8n-main -n <namespace> && kubectl rollout status deploy/n8n-worker -n <namespace> && kubectl rollout status deploy/n8n-webhook-processor -n <namespace>`.
 3. `kubectl get deploy n8n-main -n <namespace> -o jsonpath='{.spec.template.spec.containers[0].image}'`
-   prints `docker.n8n.io/n8nio/n8n:2.43.5` with `n8n_image_tag = null`, or
-   your pinned tag.
+   prints your image repository with tag `2.43.5` when `n8n_image_tag = null`
+   (`docker.n8n.io/n8nio/n8n:2.43.5` unless you set `n8n_image_repository`),
+   or your pinned tag.
 4. `kubectl get pdb -n <namespace>`: multi-main lists `n8n-main` with
    `MIN AVAILABLE` 1; single-main lists no `n8n-main`.
 5. When `n8n_task_runners_enabled = true`, `kubectl get deploy n8n-worker -n <namespace> -o json | jq '.spec.template.spec.containers[] | select(.name == "task-runner") | .livenessProbe.httpGet'`
