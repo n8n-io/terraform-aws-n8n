@@ -605,6 +605,7 @@ terraform test -verbose                        # plan-time, no AWS creds needed
 tests/scripts/check-main-chart.sh              # chart rendering, Helm + jq needed
 tests/scripts/check-helm-chart-coverage.sh     # helm-chart-coverage.md drift, Helm needed
 tests/scripts/check-terraform-floor.sh         # required_version == TF_FLOOR_VERSION
+tests/scripts/test-version-drift-constraints.sh # constraint evaluator, python3 needed
 tflint --init && tflint --format compact
 terraform-docs --output-check .                # README drift check
 markdownlint README.md CONTRIBUTING.md AGENTS.md docs/*.md

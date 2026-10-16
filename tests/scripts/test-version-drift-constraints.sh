@@ -7,8 +7,9 @@
 # Terraform; every case below is a fixed (constraint, version, expected
 # exit code) triple.
 #
-# Ported from the sibling terraform-google-n8n module's
-# tests/scripts/test-version-drift-constraints.sh (n8n-io/terraform-google-n8n#40).
+# Ported from the tests/scripts/test-version-drift-constraints.sh proposed
+# for the sibling terraform-google-n8n module in
+# n8n-io/terraform-google-n8n#40.
 #
 # Usage: tests/scripts/test-version-drift-constraints.sh
 # Requires: python3 (constraints.sh shells out to it).
@@ -17,7 +18,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-# shellcheck source=lib/constraints.sh
+# shellcheck source=tests/scripts/lib/constraints.sh
 source tests/scripts/lib/constraints.sh
 
 FAILURES=0
@@ -59,10 +60,7 @@ check_case "~> 0.14" "0.22.0" 0  # time: pre-1.0, so the minor is free too
 check_case "~> 0.14" "1.0.0" 1   # time: major bump is drift
 
 # ── ~> precision (one and two dotted components, exact upper bound) ────────
-check_case "~> 3.0" "3.3.0" 0
-check_case "~> 3.0" "4.0.0" 1
-check_case "~> 0.14" "0.14.2" 0
-check_case "~> 0.14" "1.0.0" 1
+# The two-component "~> 3.0" and "~> 0.14" forms are covered above.
 check_case "~> 6.23" "8.6.0" 1
 check_case "~> 8.0" "8.7.0" 0
 check_case "~> 1.14" "1.19.0" 0
@@ -115,26 +113,14 @@ check_case "  ~>   3.0  " "3.1.0" 0
 # ── Self-check: prove a wrong expected value is actually caught ────────────
 # Runs one case with a deliberately wrong expected exit code in a subshell
 # (so its FAILURES increment does not pollute the real run) and confirms it
-# is reported as a failure, not a false pass. This proves the harness has
-# teeth every time it runs, rather than only when someone remembers to
-# break it by hand.
+# is reported as a failure, not a false pass. The subshell inherits the real
+# check_case above and redefines only fail() and pass(), so it proves the
+# harness this file actually uses has teeth every time it runs, rather than
+# only when someone remembers to break it by hand.
 SELFTEST_OUTPUT="$(
   FAILURES=0
   fail() { echo "FAIL: $1"; FAILURES=$((FAILURES + 1)); }
   pass() { echo "PASS: $1"; }
-  check_case() {
-    local constraint="$1" version="$2" expected="$3" actual
-    if constraint_accepts "$constraint" "$version"; then
-      actual=0
-    else
-      actual=$?
-    fi
-    if [ "$actual" = "$expected" ]; then
-      pass "constraint_accepts '${constraint}' '${version}' -> ${actual}"
-    else
-      fail "constraint_accepts '${constraint}' '${version}' -> ${actual}, expected ${expected}"
-    fi
-  }
   check_case "~> 3.0" "3.3.0" 1
   echo "FAILURES=$FAILURES"
 )"

@@ -5,15 +5,15 @@
 # sourceable file because check-version-drift.sh runs network lookups at
 # the top level and cannot itself be `source`d by a test.
 #
-# Ported from the sibling terraform-google-n8n module's
-# tests/scripts/lib/constraints.sh (n8n-io/terraform-google-n8n#40), which
-# generalized that module's own `~>`-vs-latest substring compare into the
+# Ported from the tests/scripts/lib/constraints.sh proposed for the sibling
+# terraform-google-n8n module in n8n-io/terraform-google-n8n#40, which
+# generalizes that module's own `~>`-vs-latest substring compare into the
 # same full constraint grammar this file implements. Unlike the sibling,
 # this module's check-version-drift.sh (n8n-io/terraform-aws-n8n#191)
 # already evaluated provider constraints rather than doing a substring
 # compare, but only understood a single "~> N[.N[.N]]" range; this file
-# replaces that narrower evaluator with the same one the sibling now uses,
-# so a provider constraint like ">= 1.2, < 3.0" is evaluated instead of
+# replaces that narrower evaluator with the one proposed there, so a
+# provider constraint like ">= 1.2, < 3.0" is evaluated instead of
 # reported as an explicit ERROR.
 
 # constraint_accepts <constraint> <version>
