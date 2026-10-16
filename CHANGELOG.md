@@ -621,6 +621,14 @@ this project adheres to the stability contract in
   `CKV_AWS_339`'s allow-list still ends at `1.35`, which keeps
   `kubernetes_version` at `1.35` per `docs/versioning.md`. See #139 and
   #150.
+- CI Terraform pin `1.16.4` to `1.16.6`. Checkov stays at `3.3.20` rather
+  than moving to `3.3.28`: with `3.3.28`, the opt-in pass of
+  `tests/scripts/check-checkov.sh` fails `CKV_K8S_14`, `CKV_K8S_15` and
+  `CKV_K8S_43` on `kubernetes_deployment_v1.redis_exporter` although its
+  image is pinned by tag and digest, and the default pass is clean. The
+  checks' source is identical in both releases, so the difference is in how
+  Checkov resolves the resource, not in what the checks look for. Held
+  until that is understood. Tracked in #193; see also #150.
 - AWS provider locks `6.64.0` to `6.65.0` in the root, all eleven examples,
   and `modules/controllers`, with checksums for Linux amd64, Linux arm64,
   and macOS arm64. The `~> 6.0` constraint and all other provider selections
