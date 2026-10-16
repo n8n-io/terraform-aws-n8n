@@ -251,10 +251,10 @@ resource "aws_eks_cluster" "n8n" {
 # template EKS generates when no launch_template is set at all (live
 # DescribeLaunchTemplateVersions on a deployment from #187): gp3, /dev/xvda,
 # delete-on-termination enabled. encrypted is set explicitly rather than left
-# to the account's EBS encryption-by-default setting, so node root volumes are
+# to the region's EBS encryption-by-default setting, so node root volumes are
 # encrypted at rest like every other storage layer the module creates. With no
-# kms_key_id, EC2 uses the account's default EBS key (aws/ebs unless the
-# account has changed it). volume_size is left unset when var.node_disk_size
+# kms_key_id, EC2 uses the region's default EBS key (aws/ebs unless it has been
+# changed). volume_size is left unset when var.node_disk_size
 # is null so the volume still inherits the AMI snapshot's 20 GiB default
 # instead of a hard-coded one.
 #

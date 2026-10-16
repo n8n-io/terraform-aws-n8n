@@ -40,8 +40,8 @@ this project adheres to the stability contract in
   `disk_size`, which the EKS API rejects once a launch template is attached;
   the resulting volume size is unchanged. The launch template also sets
   `encrypted = "true"` on the root volume, so node root volumes are encrypted
-  at rest with the account's default EBS key even where the account does not
-  enable EBS encryption by default; a customer managed default EBS key must
+  at rest with the region's default EBS key even where EBS encryption by
+  default is off; a customer managed default EBS key must
   allow the Auto Scaling service-linked role, or new nodes fail to launch.
   `update_config { max_unavailable = 1 }` is
   now explicit on the node group so a launch template version bump (from a new
@@ -49,7 +49,8 @@ this project adheres to the stability contract in
   node at a time instead of implicitly. The node group is now
   create-before-destroy and named from `node_group_name_prefix`
   (`<cluster_name>-nodes-<suffix>`) instead of the fixed `n8n-nodes`, which
-  EKS shares across every cluster this module creates. A node group replacement
+  every cluster this module creates reused and which blocked creating a second
+  group with that name in the same cluster. A node group replacement
   (this upgrade, a `node_instance_type` change, or toggling the launch
   template) creates the new group and waits for EKS to report it active
   before it deletes the old one, instead of deleting it first. **Upgrade note

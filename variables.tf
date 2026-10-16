@@ -398,7 +398,7 @@ variable "n8n_license_detach_floating_on_shutdown" {
 # ── EKS cluster ───────────────────────────────────────────────────────────────
 
 variable "eks_secrets_encryption_enabled" {
-  description = "When true (the default), envelope-encrypt Kubernetes Secrets and the EKS control-plane CloudWatch log group with a module-created Customer Managed KMS Key (aws_kms_key.eks). Clears Checkov findings CKV_AWS_58 and CKV_AWS_158. The supported AWS provider associates encryption with an existing unencrypted cluster in place; disabling it again is irreversible in EKS and therefore forces cluster replacement; because the node group is create-before-destroy and Terraform applies that to the cluster too, the cluster's fixed name makes that apply fail with a name conflict instead of deleting the cluster. Set to false before the first apply to preserve current behavior on a pre-existing cluster without secrets encryption. The CMK rotates annually and uses a 7-day deletion window (AWS minimum)."
+  description = "When true (the default), envelope-encrypt Kubernetes Secrets and the EKS control-plane CloudWatch log group with a module-created Customer Managed KMS Key (aws_kms_key.eks). Clears Checkov findings CKV_AWS_58 and CKV_AWS_158. The supported AWS provider associates encryption with an existing unencrypted cluster in place; disabling it again is irreversible in EKS and therefore forces cluster replacement; because the node group is create-before-destroy and Terraform applies that to the cluster too, the cluster's fixed name makes that apply fail with a name conflict instead of deleting the cluster. Turning encryption off on an existing cluster is therefore not supported through this module; an unencrypted cluster means a new cluster under a different cluster_name and migrating workloads to it. Set to false before the first apply to preserve current behavior on a pre-existing cluster without secrets encryption. The CMK rotates annually and uses a 7-day deletion window (AWS minimum)."
   type        = bool
   default     = true
   nullable    = false
@@ -714,9 +714,12 @@ variable "node_launch_template_enabled" {
     of the node group's own disk_size when this is true, because the EKS API
     rejects disk_size outright once a launch template is attached; the
     resulting volume size is unaffected by this toggle either way. The launch
-    template also sets the root volume's encrypted = true, using the account's
-    default EBS key. With this set to false, root volumes are encrypted only if
-    the account enables EBS encryption by default.
+    template also sets the root volume's encrypted = true, using the region's
+    default EBS key. If that default is a customer managed KMS key, its key
+    policy must allow the Auto Scaling service-linked role to use the key and
+    create grants, or the new nodes fail to launch. With this set to false,
+    root volumes are encrypted only if EBS encryption by default is on in the
+    region.
   EOT
   type        = bool
   default     = true
