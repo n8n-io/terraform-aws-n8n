@@ -32,8 +32,9 @@ multi-main [n8n Enterprise](https://n8n.io) installation on AWS**. A single
 The default multi-main topology requires an **n8n Enterprise license key**
 with `feat:multipleMainInstances`. A **Business license** works with
 `n8n_main_hpa_min_replicas = 1`: multi-main is disabled, the main HPA is
-clamped to one, upgrades use `Recreate`, and the main PodDisruptionBudget
-allows eviction with downtime. The module does not provision a
+clamped to one, upgrades use `Recreate`, and the only main can be evicted
+with downtime (chart `1.16.0`+ renders no main PodDisruptionBudget; older
+charts render one with `minAvailable: 0`). The module does not provision a
 community-edition deployment. Supply the license through `n8n_license_key`
 or `n8n_license_key_secret_ref`.
 

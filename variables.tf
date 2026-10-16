@@ -871,7 +871,7 @@ variable "keda_chart_repository" {
 variable "n8n_chart_version" {
   description = "n8n Helm chart version to deploy. Must be an exact version, not a constraint: the Helm provider resolves this literally."
   type        = string
-  default     = "1.15.0"
+  default     = "1.16.0"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version))
@@ -925,7 +925,7 @@ variable "keda_chart_version" {
 }
 
 variable "n8n_image_tag" {
-  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). When it is null (the default), the selected Helm chart's own default applies: chart 1.15.0 uses its appVersion, 2.42.4, while 1.11.0 used the floating `stable` tag. A chart upgrade can therefore downgrade an unpinned application. Inspect and pin the currently running n8n version before upgrading the chart; see docs/upgrading-n8n.md. Keep a concrete tag for reproducible, incremental upgrades. See <https://docs.n8n.io/2-0-breaking-changes/> for the n8n 2.x migration guide."
+  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). When it is null (the default), the selected Helm chart's own default applies: chart 1.16.0 uses its appVersion, 2.43.5, while 1.11.0 used the floating `stable` tag. A chart upgrade can therefore downgrade an unpinned application. Inspect and pin the currently running n8n version before upgrading the chart; see docs/upgrading-n8n.md. Keep a concrete tag for reproducible, incremental upgrades. See <https://docs.n8n.io/2-0-breaking-changes/> for the n8n 2.x migration guide."
   type        = string
   default     = null
 
@@ -1595,14 +1595,14 @@ variable "n8n_graceful_shutdown_timeout" {
 # ── Task runners ──────────────────────────────────────────────────────────────
 
 variable "n8n_task_runners_enabled" {
-  description = "Enable task runner sidecars for isolated JavaScript and Python code execution. In queue mode, upstream chart 1.15.0 places them on workers only, not main or webhook pods."
+  description = "Enable task runner sidecars for isolated JavaScript and Python code execution. In queue mode, upstream chart 1.16.0 places them on workers only, not main or webhook pods."
   type        = bool
   default     = true
   nullable    = false
 }
 
 variable "n8n_task_runner_image_tag" {
-  description = "Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 1.15.0 queue mode). Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n_task_runners_enabled = false."
+  description = "Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 1.16.0 queue mode). Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n_task_runners_enabled = false."
   type        = string
   default     = null
 
@@ -1752,7 +1752,7 @@ variable "n8n_task_runner_custom_config" {
 
       kubectl rollout restart deploy/n8n-worker -n <namespace>
 
-    Upstream chart 1.15.0 mounts this config only on workers in queue mode.
+    Upstream chart 1.16.0 mounts this config only on workers in queue mode.
     For older or custom charts that also place runners on mains, restart
     deploy/n8n-main too. Each n8n_worker_pools pool on a suitable preview or
     verified custom chart also mounts it; roll those by label:
@@ -2442,7 +2442,7 @@ variable "db_postgresdb_ssl_ca_pem" {
   }
 
   # The chart passes database.ssl.ca to every n8n container as the
-  # environment variable DB_POSTGRESDB_SSL_CA (chart 1.15.0,
+  # environment variable DB_POSTGRESDB_SSL_CA (chart 1.16.0,
   # templates/_configmap-env.tpl). Linux caps a single environment string,
   # "NAME=value" plus its terminating NUL, at 32 pages (MAX_ARG_STRLEN), which
   # is 131072 bytes with 4 KiB pages. Above that the container fails to start
@@ -2805,7 +2805,7 @@ variable "s3_force_destroy" {
 # ── HPA: main pods ────────────────────────────────────────────────────────────
 
 variable "n8n_main_hpa_min_replicas" {
-  description = "Minimum replicas for n8n main pods. HPA will not scale below this. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back. At 2 or more, multi-main is enabled and requires feat:multipleMainInstances; the main PodDisruptionBudget protects one available main during voluntary eviction. Set to 1 for Business-compatible single-main queue mode: multi-main is disabled, the HPA maximum is clamped to 1 regardless of n8n_main_hpa_max_replicas, upgrades use Recreate, and the disruption budget allows eviction with downtime. The editor, REST API, and scheduled triggers are unavailable while the only main is stopped. Recreate prevents upgrade overlap, not overlap following manual pod deletion or node failure. See docs/upgrading-n8n.md."
+  description = "Minimum replicas for n8n main pods. HPA will not scale below this. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back. At 2 or more, multi-main is enabled and requires feat:multipleMainInstances; the main PodDisruptionBudget protects one available main during voluntary eviction. Set to 1 for Business-compatible single-main queue mode: multi-main is disabled, the HPA maximum is clamped to 1 regardless of n8n_main_hpa_max_replicas, upgrades use Recreate, and the only main can be evicted with downtime (chart 1.16.0 and newer render no main PodDisruptionBudget; older charts render one with minAvailable 0). The editor, REST API, and scheduled triggers are unavailable while the only main is stopped. Recreate prevents upgrade overlap, not overlap following manual pod deletion or node failure. See docs/upgrading-n8n.md."
   type        = number
   default     = 2
   nullable    = false

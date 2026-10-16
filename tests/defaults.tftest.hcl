@@ -10253,8 +10253,8 @@ run "autoscaling_defaults_fit_the_default_node_group" {
   command = plan
 
   assert {
-    condition     = var.n8n_chart_version == "1.15.0" && local.n8n_peak_cpu_request_millis == 14200
-    error_message = "Upstream chart 1.15.0 must count runners only on workers: 14200m at default ceilings."
+    condition     = var.n8n_chart_version == "1.16.0" && local.n8n_peak_cpu_request_millis == 14200
+    error_message = "Upstream chart 1.16.0 must count runners only on workers: 14200m at default ceilings."
   }
 
   # No expect_failures: a warning from the capacity check would fail this run,
@@ -10459,7 +10459,7 @@ run "future_chart_keeps_conservative_runner_accounting" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.16.0"
+    n8n_chart_version = "1.17.0"
   }
 
   assert {
@@ -10608,7 +10608,7 @@ run "autoscaler_floors_default_to_warm_multi_replica_values" {
 
   assert {
     condition     = var.n8n_main_hpa_min_replicas == 2 && var.n8n_webhook_hpa_min_replicas == 2
-    error_message = "Main and webhook floors must default to 2; a floor of 1 leaves no replica available during a node drain under the module's PodDisruptionBudget"
+    error_message = "Main and webhook floors must default to 2; a floor of 1 leaves no replica available during a node drain"
   }
 
   assert {
@@ -12783,7 +12783,7 @@ run "db_postgresdb_ssl_ca_pem_renders_chart_ssl_values" {
     error_message = "db_postgresdb_ssl_ca_pem must render database.ssl = { enabled = true, rejectUnauthorized = true, ca = <trimmed PEM> } for the chart."
   }
 
-  # The default chart (1.15.0) renders database.ssl.enabled as
+  # The default chart (1.16.0) renders database.ssl.enabled as
   # DB_POSTGRESDB_SSL_ENABLED itself, so with a CA delivered the module must
   # leave that name to the chart and set only REJECT_UNAUTHORIZED.
   assert {
@@ -12793,7 +12793,7 @@ run "db_postgresdb_ssl_ca_pem_renders_chart_ssl_values" {
       local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED" &&
       length([for e in local.n8n_postgres_ssl_env : e if e.name == "DB_POSTGRESDB_SSL_CA_FILE" || e.name == "DB_POSTGRESDB_SSL_CA" || e.name == "DB_POSTGRESDB_SSL_ENABLED"]) == 0
     )
-    error_message = "With a CA delivered on chart 1.15.0 or later, local.n8n_postgres_ssl_env must carry only DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: the chart renders DB_POSTGRESDB_SSL_ENABLED and the CA, and a second SSL_ENABLED would give every n8n container the name twice."
+    error_message = "With a CA delivered on chart 1.15.0 or later, local.n8n_postgres_ssl_env must carry only DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: the chart renders DB_POSTGRESDB_SSL_ENABLED and the CA, and a second SSL_ENABLED would give every n8n container the name twice. The default chart is 1.16.0."
   }
 
   assert {

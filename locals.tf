@@ -667,7 +667,7 @@ locals {
 
   # ── PostgreSQL SSL CA bundle (chart database.ssl.ca) ───────────────────────
   # The CA bundle reaches n8n through the chart's own database.ssl.ca value,
-  # merged into the database values in n8n.tf. Charts 1.14.0 and 1.15.0 render it into
+  # merged into the database values in n8n.tf. Charts 1.14.0 through 1.16.0 render it into
   # its ConfigMap as DB_POSTGRESDB_SSL_CA, only inside `if database.ssl.enabled`,
   # and n8n passes that string to the TLS socket as PEM content. Keeping the
   # CA inside the Helm release means a failed upgrade's atomic rollback
@@ -935,7 +935,7 @@ locals {
   )
 
   # The chart's values.yaml default for redis.worker.timeout, in seconds, as of
-  # the pinned n8n_chart_version (1.15.0). Used only by n8n.tf's
+  # the pinned n8n_chart_version (1.16.0). Used only by n8n.tf's
   # graceful_shutdown_fits_grace_period check, for callers who leave
   # n8n_graceful_shutdown_timeout null. tests/scripts/check-main-chart.sh
   # renders the real chart and fails if its default drifts from 30, so update

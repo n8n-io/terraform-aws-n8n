@@ -610,6 +610,54 @@ this project adheres to the stability contract in
     still have no task-runner sidecar in queue mode. Worker-only task-runner
     capacity accounting now covers `1.15.0`.
   - See `docs/upgrading-n8n.md#moving-from-chart-1140-to-1150`.
+- Default n8n chart `1.15.0` to `1.16.0`.
+  - `n8n_image_tag = null` moves from `appVersion: 2.42.4` to `2.43.5`; pin
+    the running application version first if it is not already pinned.
+    **Unpinned callers move too:** with a null tag, the next apply upgrades
+    n8n across its database migrations. The module sends the same Helm
+    values on both charts; only what the chart itself renders differs.
+  - n8n-io/n8n-hosting#228: the chart renders the main `PodDisruptionBudget`
+    only while main can run more than one replica, so single-main
+    (`n8n_main_hpa_min_replicas = 1`) loses the `minAvailable: 0` budget
+    this module still sends; multi-main keeps `minAvailable: 1`. Eviction
+    permissions are unchanged (that budget already permitted every
+    voluntary eviction), but Helm deletes the `n8n-main` PDB object on
+    the upgrade, and `smoke-test.sh` was adjusted for that.
+    `tests/scripts/check-main-chart.sh` renders both
+    topologies and expects no single-main PDB from `1.16.0`;
+    `tests/scripts/smoke-test.sh` now accepts no PDB or `minAvailable: 0`
+    for single-main (it failed on a missing PDB before), tells a missing
+    PDB apart from a failed lookup, and still requires `minAvailable: 1`
+    for multi-main.
+  - n8n-io/n8n-hosting#223: the worker task-runner sidecar gains a liveness
+    probe on the launcher's `/healthz`, port 5680. The module sets nothing
+    that moves that port; `tests/scripts/check-main-chart.sh` asserts the
+    probe.
+  - n8n-io/n8n-hosting#229: more than one main now requires
+    `multiMain.enabled` and `license.enabled` at render time. Every
+    configuration this module accepts already satisfies both.
+  - The task-runner sidecar moved into a shared `n8n.taskRunnerContainer`
+    template helper with the same placement and resources, so `1.16.0`
+    joins the worker-only task-runner capacity accounting alongside
+    `1.12.0`, `1.13.0`, `1.14.0`, and `1.15.0`.
+  - New chart keys `editor.url`, `hostAliases`, image digests,
+    `persistence.annotations`, per-role `podSecurityContext` and
+    `containerSecurityContext`, and `secretRefs.env.N8N_ENCRYPTION_KEY_FILE`
+    are not exposed. The module keeps rendering its own
+    `N8N_EDITOR_BASE_URL`.
+  - See `docs/upgrading-n8n.md#moving-from-chart-1150-to-1160`.
+  - Re-verified live on `1.16.0` after an in-place upgrade (`examples/small`,
+    multi-main): `terraform plan` showed exactly one change,
+    `helm_release.n8n`'s `version`, with byte-identical Helm values; the
+    apply completed in just over two minutes with main, worker, and
+    webhook-processor pod counts never dropping below their floors, zero
+    restarts, and a clean `-detailed-exitcode` re-plan afterward. The
+    upgraded release ran n8n `2.43.5` with the worker task-runner's new
+    `/healthz:5680` liveness probe, and `tests/scripts/smoke-test.sh` passed
+    (26/0/2/3). Re-ran with `n8n_main_hpa_min_replicas = 1`: no `n8n-main`
+    `PodDisruptionBudget` was created, confirming n8n-io/n8n-hosting#228 above, and
+    smoke-test passed again (28/0/2/3) with its new no-PDB assertion for
+    this topology.
 - Default `lbc_chart_version` `3.5.0` to `3.6.0` (root module and
   `modules/controllers`; the AWS Load Balancer Controller moves from `v3.5.0`
   to `v3.6.0`). The chart's `templates/` are identical between the two
