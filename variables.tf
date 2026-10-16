@@ -588,12 +588,13 @@ variable "node_disk_size" {
     pods in one episode.
 
     NOTE: changing this on an existing cluster replaces every node in the group.
-    With node_launch_template_enabled = false (the default), the change
-    forces replacement of aws_eks_node_group.n8n: every node is destroyed
-    before the new ones join, a full outage. With it set to true, the new size
-    bumps the launch template's version and EKS rolls it out as a managed
-    update: it surges replacement nodes, then drains at most one old node at a
-    time (update_config), which needs spare EC2 quota and subnet IPs. Either way, plan for the
+    With node_launch_template_enabled = true (the default), the new size bumps
+    the launch template's version and EKS rolls it out as a managed update:
+    it surges replacement nodes, then drains at most one old node at a time
+    (update_config), which needs spare EC2 quota and subnet IPs. With it set
+    to false, the
+    change forces replacement of aws_eks_node_group.n8n: every node is
+    destroyed before the new ones join, a full outage. Either way, plan for the
     rollout, and do not change it during a measurement run.
   EOT
   type        = number
@@ -673,15 +674,12 @@ variable "node_max" {
 
 variable "node_launch_template_enabled" {
   description = <<-EOT
-    When true, aws_eks_node_group.n8n attaches an aws_launch_template so the worker EC2 instances, their root EBS volumes,
+    When true (the default), aws_eks_node_group.n8n attaches an
+    aws_launch_template so the worker EC2 instances, their root EBS volumes,
     and their primary network interfaces carry local.common_tags, including
     aws-apn-id for AWS Partner Revenue Measurement. EKS does not copy the node
     group's own tags to the resources it launches, so an explicit launch
-    template is the only way to get them tagged (#198). Defaults to false
-    because turning it on for an existing node group replaces that group (see
-    below), which would take every existing deployment down on upgrade. New
-    deployments should set it to true before their first apply, when there
-    are no nodes to replace.
+    template is the only way to get them tagged (#198).
 
     Attaching the launch template sets the node group's launch_template.id,
     which the AWS provider's aws_eks_node_group schema marks ForceNew: the
@@ -692,8 +690,9 @@ variable "node_launch_template_enabled" {
     rolls that out via UpdateNodegroupVersion, honoring update_config, instead
     of a Terraform replacement. That rollout surges replacement nodes before
     it drains at most one old node at a time, so each one needs spare EC2
-    quota and free subnet IPs. On an existing deployment, turn it on in a
-    deliberate maintenance window.
+    quota and free subnet IPs. Set this to false before the first apply on an
+    existing deployment to defer that one-time replacement to a deliberate
+    maintenance window, then flip it to true later.
 
     Setting this back to false once the template is attached does not reliably
     detach it: the provider can plan that as an in-place update. Apply that
@@ -711,7 +710,7 @@ variable "node_launch_template_enabled" {
     the account enables EBS encryption by default.
   EOT
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 }
 
