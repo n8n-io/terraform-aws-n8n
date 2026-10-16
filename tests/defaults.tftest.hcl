@@ -15513,3 +15513,41 @@ run "lbc_pdb_disabled_omits_budget" {
     error_message = "lbc_pdb_enabled = false must leave podDisruptionBudget out of the LBC values"
   }
 }
+
+# The chart renders a budget for main only; these two are module-owned. The
+# selectors must match the labels the chart puts on the pods or the budget
+# guards nothing, and mocks cannot catch a typo there, so pin them.
+run "webhook_and_worker_pdbs_default_to_max_unavailable_one" {
+  command = plan
+
+  assert {
+    condition = (
+      kubernetes_pod_disruption_budget_v1.n8n_webhook[0].spec[0].max_unavailable == "1" &&
+      kubernetes_pod_disruption_budget_v1.n8n_webhook[0].spec[0].selector[0].match_labels["app.kubernetes.io/component"] == "webhook-processor" &&
+      kubernetes_pod_disruption_budget_v1.n8n_webhook[0].spec[0].selector[0].match_labels["app.kubernetes.io/name"] == "n8n"
+    )
+    error_message = "The webhook processor budget must allow one unavailable pod and select component=webhook-processor"
+  }
+
+  assert {
+    condition = (
+      kubernetes_pod_disruption_budget_v1.n8n_worker[0].spec[0].max_unavailable == "1" &&
+      kubernetes_pod_disruption_budget_v1.n8n_worker[0].spec[0].selector[0].match_labels["app.kubernetes.io/component"] == "worker" &&
+      kubernetes_pod_disruption_budget_v1.n8n_worker[0].spec[0].selector[0].match_labels["app.kubernetes.io/name"] == "n8n"
+    )
+    error_message = "The worker budget must allow one unavailable pod and select component=worker"
+  }
+}
+
+run "webhook_and_worker_pdbs_can_be_disabled_independently" {
+  command = plan
+
+  variables {
+    n8n_webhook_pdb_enabled = false
+  }
+
+  assert {
+    condition     = length(kubernetes_pod_disruption_budget_v1.n8n_webhook) == 0 && length(kubernetes_pod_disruption_budget_v1.n8n_worker) == 1
+    error_message = "n8n_webhook_pdb_enabled = false must drop only the webhook budget"
+  }
+}
