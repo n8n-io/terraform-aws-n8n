@@ -12959,9 +12959,10 @@ run "n8n_dns_config_accepts_an_ndots_override" {
 }
 
 # A valueless option is valid in the pod spec (edns0, single-request-reopen).
-# The ndots validation once rejected it on Terraform 1.11, whose eager `||`
-# still evaluated `tonumber(null) <= 15` and errored. This run passes on any
-# newer CLI either way; it pins the contract for the floor.
+# The ndots validation once rejected it: before Terraform 1.12 the eager `||`
+# still evaluated `tonumber(null) <= 15` and errored (#175). The floor is now
+# 1.13, so this passes either way; it pins the contract so a rewrite of the
+# validation cannot reintroduce it.
 run "n8n_dns_config_accepts_a_valueless_option_beside_ndots" {
   command = plan
 
