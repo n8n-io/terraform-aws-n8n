@@ -9,6 +9,18 @@ this project adheres to the stability contract in
 
 ### Added
 
+- `n8n_extra_ca_pem` makes the n8n containers trust extra CA certificates for
+  outbound TLS, for a TLS-inspecting egress proxy or a private CA. The module
+  stores the PEM in a module-managed Secret (certificates only; a private key
+  is rejected at plan time), mounts it read-only at
+  `/etc/n8n-certs/ca-bundle.crt` on main, worker and webhook-processor pods,
+  and sets `NODE_EXTRA_CA_CERTS`. Changing the PEM rolls the pods through a
+  `checksum/extra-ca` annotation. `NODE_EXTRA_CA_CERTS`, the `ca-bundle`
+  volume name and that mount path are reserved only while the input is set. The
+  task runner sidecar does not inherit it. Every example now also exposes
+  `n8n_extra_ca_pem`, `n8n_proxy_hops` and `n8n_extra_env`. See
+  [docs/tls-proxy.md](./docs/tls-proxy.md), which also covers the inbound case
+  (`n8n_proxy_hops`).
 - `aws_partner_attribution_tag` adds the tag `aws-apn-id` to every taggable
   resource the module creates, through `local.common_tags`; to the ALB and the
   listeners, target groups and security groups the AWS Load Balancer Controller

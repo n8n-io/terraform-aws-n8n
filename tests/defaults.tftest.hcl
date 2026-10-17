@@ -15078,3 +15078,182 @@ run "node_launch_template_disabled_restores_pre_198_node_group_shape" {
     error_message = "instance_types must still reach the node group directly with the launch template disabled."
   }
 }
+
+# ── n8n_extra_ca_pem ─────────────────────────────────────────────────────────
+# helm_release.n8n.values is unknown at plan time under the mock provider, so
+# the mount shape is asserted on the locals and the Secret by resource count.
+
+run "extra_ca_disabled_by_default" {
+  command = plan
+
+  assert {
+    condition     = local.n8n_extra_ca_enabled == false && length(local.n8n_ca_bundle_env) == 0 && length(kubernetes_secret_v1.n8n_ca_bundle) == 0
+    error_message = "No CA Secret, mount or NODE_EXTRA_CA_CERTS may exist while n8n_extra_ca_pem is null."
+  }
+
+  assert {
+    condition     = !contains([for v in local.n8n_extra_volumes : v.name], "ca-bundle") && !contains([for m in local.n8n_extra_volume_mounts : m.name], "ca-bundle")
+    error_message = "No ca-bundle volume or mount may be rendered by default."
+  }
+}
+
+run "extra_ca_renders_secret_mount_env_and_checksum" {
+  command = plan
+
+  variables {
+    n8n_extra_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIBproxyca\n-----END CERTIFICATE-----\n\n"
+  }
+
+  assert {
+    condition     = length(kubernetes_secret_v1.n8n_ca_bundle) == 1 && local.n8n_ca_bundle_pem == "-----BEGIN CERTIFICATE-----\nMIIBproxyca\n-----END CERTIFICATE-----\n"
+    error_message = "One module-managed Secret must hold the PEM with exactly one trailing newline."
+  }
+
+  assert {
+    condition     = length(local.n8n_ca_bundle_env) == 1 && local.n8n_ca_bundle_env[0].name == "NODE_EXTRA_CA_CERTS" && local.n8n_ca_bundle_env[0].value == "/etc/n8n-certs/ca-bundle.crt"
+    error_message = "NODE_EXTRA_CA_CERTS must point at the mounted bundle file."
+  }
+
+  assert {
+    condition     = length([for m in local.n8n_extra_volume_mounts : m if m.name == "ca-bundle" && m.mountPath == "/etc/n8n-certs/ca-bundle.crt" && m.readOnly == true]) == 1
+    error_message = "The bundle must be mounted read-only at /etc/n8n-certs/ca-bundle.crt on every role."
+  }
+
+  assert {
+    condition     = length([for v in local.n8n_extra_volumes : v if v.name == "ca-bundle" && v.secret.secretName == "n8n-ca-bundle-secret"]) == 1
+    error_message = "The bundle volume must be rendered alongside the caller's volumes."
+  }
+
+  assert {
+    condition     = contains(keys(local.n8n_pod_annotations), "checksum/extra-ca")
+    error_message = "A changed PEM must roll the pods through a checksum annotation."
+  }
+}
+
+run "extra_ca_checksum_ignores_surrounding_whitespace" {
+  command = plan
+
+  variables {
+    n8n_extra_ca_pem = " \n-----BEGIN CERTIFICATE-----\nMIIBproxyca\n-----END CERTIFICATE-----\n "
+  }
+
+  assert {
+    condition     = local.n8n_pod_annotations["checksum/extra-ca"] == sha256("-----BEGIN CERTIFICATE-----\nMIIBproxyca\n-----END CERTIFICATE-----")
+    error_message = "The checksum must be taken over the trimmed PEM so whitespace-only edits do not roll pods."
+  }
+}
+
+run "extra_ca_rejects_non_certificate" {
+  command = plan
+
+  variables {
+    n8n_extra_ca_pem = "not a certificate"
+  }
+
+  expect_failures = [var.n8n_extra_ca_pem]
+}
+
+run "extra_ca_rejects_empty_certificate_block" {
+  command = plan
+
+  variables {
+    n8n_extra_ca_pem = "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n"
+  }
+
+  expect_failures = [var.n8n_extra_ca_pem]
+}
+
+run "extra_ca_rejects_private_key" {
+  command = plan
+
+  variables {
+    n8n_extra_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"
+  }
+
+  expect_failures = [var.n8n_extra_ca_pem]
+}
+
+run "extra_ca_rejects_env_collision_on_extra_env" {
+  command = plan
+
+  variables {
+    n8n_extra_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    n8n_extra_env    = [{ name = "NODE_EXTRA_CA_CERTS", value = "/other.crt" }]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_ca_rejects_env_collision_on_worker_extra_env" {
+  command = plan
+
+  variables {
+    n8n_extra_ca_pem     = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    n8n_worker_extra_env = [{ name = "NODE_EXTRA_CA_CERTS", value = "/other.crt" }]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
+
+run "extra_ca_rejects_env_collision_on_worker_pool_extra_env" {
+  command = plan
+
+  variables {
+    n8n_extra_ca_pem  = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools = [{
+      name      = "gpu"
+      extra_env = [{ name = "NODE_EXTRA_CA_CERTS", value = "/other.crt" }]
+    }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "extra_ca_rejects_volume_name_collision" {
+  command = plan
+
+  variables {
+    n8n_extra_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    n8n_extra_volumes = [{
+      name       = "ca-bundle"
+      config_map = { name = "x" }
+    }]
+    n8n_extra_volume_mounts = [{ name = "ca-bundle", mount_path = "/opt/custom-ca" }]
+  }
+
+  expect_failures = [var.n8n_extra_ca_pem]
+}
+
+run "extra_ca_rejects_mount_path_collision" {
+  command = plan
+
+  variables {
+    n8n_extra_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    n8n_extra_volumes = [{
+      name       = "custom-ca"
+      config_map = { name = "x" }
+    }]
+    n8n_extra_volume_mounts = [{ name = "custom-ca", mount_path = "/etc/n8n-certs/ca-bundle.crt" }]
+  }
+
+  expect_failures = [var.n8n_extra_ca_pem]
+}
+
+run "extra_ca_leaves_env_and_volume_name_free_when_unset" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [{ name = "NODE_EXTRA_CA_CERTS", value = "/custom/ca.pem" }]
+    n8n_extra_volumes = [{
+      name       = "ca-bundle"
+      config_map = { name = "x" }
+    }]
+    n8n_extra_volume_mounts = [{ name = "ca-bundle", mount_path = "/opt/custom-ca" }]
+  }
+
+  assert {
+    condition     = local.n8n_extra_ca_enabled == false
+    error_message = "NODE_EXTRA_CA_CERTS and the ca-bundle volume name must stay usable while n8n_extra_ca_pem is null."
+  }
+}

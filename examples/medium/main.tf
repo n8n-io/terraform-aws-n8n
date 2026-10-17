@@ -181,6 +181,13 @@ module "n8n" {
   n8n_pruning_max_age             = 168
   n8n_pruning_max_count           = 500000
 
+  # ── TLS proxy support ───────────────────────────────────────────────────────
+  # Outbound CA trust, inbound proxy hop count, and proxy routing env. See
+  # docs/tls-proxy.md.
+  n8n_extra_ca_pem = var.n8n_extra_ca_pem
+  n8n_proxy_hops   = var.n8n_proxy_hops
+  n8n_extra_env    = var.n8n_extra_env
+
   tags = local.common_tags
 
   depends_on = [module.vpc]

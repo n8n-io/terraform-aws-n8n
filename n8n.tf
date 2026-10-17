@@ -305,6 +305,45 @@ resource "kubernetes_secret" "n8n_redis" {
   depends_on = [aws_eks_node_group.n8n]
 }
 
+# ── Extra CA bundle ───────────────────────────────────────────────────────────
+# Caller-supplied CA certificate(s) (n8n_extra_ca_pem), mounted on every n8n
+# role and pointed at by NODE_EXTRA_CA_CERTS. Public certificates only.
+resource "kubernetes_secret_v1" "n8n_ca_bundle" {
+  count = local.n8n_extra_ca_enabled ? 1 : 0
+
+  metadata {
+    name      = "n8n-ca-bundle-secret"
+    namespace = local.namespace_name
+  }
+
+  data = {
+    "ca.crt" = local.n8n_ca_bundle_pem
+  }
+
+  # Setting n8n_extra_ca_pem back to null removes this Secret while
+  # helm_release.n8n removes the volume that references it. Without
+  # create_before_destroy, Terraform destroys a dependency before updating its
+  # dependents, so the Secret was gone for the whole Helm rollout (measured
+  # live: about a minute of FailedMount events on the old pods, and any old pod
+  # rescheduled in that window would stay in ContainerCreating). With it, the
+  # Secret is destroyed only after the Helm update succeeds, and survives a
+  # failed one. Terraform reads this flag from state, so it protects removals
+  # of Secrets created with it set. Trade-off: the name is fixed, so a forced
+  # replacement (terraform apply -replace, or a tainted instance) tries to
+  # create a second n8n-ca-bundle-secret before deleting the first and fails
+  # with AlreadyExists. Nothing is deleted; docs/tls-proxy.md has the recovery
+  # (state rm + import, never delete-and-retry: the deposed instance's destroy
+  # deletes by the same name).
+  # A fixed name keeps the Helm values diff visible in plans; generate_name
+  # would avoid the collision at the cost of that visibility.
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  # See the comment on kubernetes_secret.n8n above.
+  depends_on = [aws_eks_node_group.n8n]
+}
+
 # ── Service account ───────────────────────────────────────────────────────────
 # Only created when var.n8n_image_pull_secrets is non-empty. Otherwise the chart
 # creates the account and this resource does not exist; see the note on
@@ -1001,6 +1040,12 @@ resource "helm_release" "n8n" {
         # exactly that reason.
         local.n8n_credentials_overwrite_env,
 
+        # Outbound CA trust (n8n_extra_ca_pem): points Node at the bundle
+        # mounted from kubernetes_secret_v1.n8n_ca_bundle. Reaches the n8n
+        # containers only; the task runner sidecar is a separate container
+        # this value does not touch (see docs/tls-proxy.md).
+        local.n8n_ca_bundle_env,
+
         # Worker pools (n8n alpha). The feature is inert unless this is set on
         # the mains, which resolve a project's pool and enqueue to it, as well
         # as the workers, which read N8N_WORKER_POOL_NAME. Webhook pods ignore
@@ -1248,7 +1293,8 @@ resource "helm_release" "n8n" {
     aws_elasticache_replication_group.n8n,
     aws_iam_role_policy_attachment.s3,
     aws_eks_pod_identity_association.s3,
-    kubernetes_service_account_v1.n8n, # empty list unless the module owns it
+    kubernetes_service_account_v1.n8n,  # empty list unless the module owns it
+    kubernetes_secret_v1.n8n_ca_bundle, # empty list unless n8n_extra_ca_pem is set
   ]
 }
 

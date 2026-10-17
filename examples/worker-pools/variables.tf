@@ -331,3 +331,24 @@ variable "n8n_worker_pools_chart_verified" {
   default     = false
   nullable    = false
 }
+
+variable "n8n_extra_ca_pem" {
+  description = "Passed to the module's n8n_extra_ca_pem: PEM CA certificate(s) trusted by the main, worker and webhook-processor pods for outbound TLS, for a TLS-inspecting egress proxy or a private CA; task-runner sidecars are not covered. Certificates only, never a private key. Leave null (the default) to add none. See [TLS proxy guide](../../docs/tls-proxy.md)."
+  type        = string
+  default     = null
+}
+
+variable "n8n_proxy_hops" {
+  description = "Passed to the module's n8n_proxy_hops: number of proxies in front of n8n that add an X-Forwarded-For entry (the module's own ALB counts as 1, an additional proxy or WAF that adds its own entry makes 2). At any hop count of 1 or more, a caller that bypasses the declared proxy chain can forge X-Forwarded-For and spoof its client IP, including an in-cluster caller that reaches the n8n Services directly. When a proxy sits in front of the ALB, restrict the ALB to that proxy's egress addresses with the module's alb_inbound_cidrs or alb_inbound_prefix_list_ids input, which this example does not pass through (add it in main.tf), and keep in-cluster callers off the n8n Services. Leave null (the default) to use the module's default of 1. See [TLS proxy guide](../../docs/tls-proxy.md)."
+  type        = number
+  default     = null
+}
+
+variable "n8n_extra_env" {
+  description = "Passed to the module's n8n_extra_env: extra environment variables for the n8n containers on every role (main, worker, webhook processor), not the task runner sidecars, e.g. HTTP_PROXY, HTTPS_PROXY and NO_PROXY for an egress proxy. The module rejects names it manages. Values are stored in plaintext in Terraform state and the Helm release, so never embed credentials in a proxy URL (http://user:pass@proxy). See [TLS proxy guide](../../docs/tls-proxy.md)."
+  type = list(object({
+    name  = string
+    value = string
+  }))
+  default = []
+}

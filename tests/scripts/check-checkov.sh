@@ -98,6 +98,11 @@ OPT_IN_TFVARS="tests/checkov/opt-in.tfvars"
 OPT_IN_RESOURCES=(
   "kubernetes_deployment_v1.redis_exporter[0]"
   "kubernetes_service_v1.redis_exporter[0]"
+  # No [0]: checkov 3.3.20 cannot resolve this count (it goes through
+  # local.n8n_extra_ca_enabled, a null comparison), so it reports the resource
+  # unindexed in both passes. The unindexed string also matches "[0]" should a
+  # later checkov resolve it.
+  "kubernetes_secret_v1.n8n_ca_bundle"
 )
 
 echo "checkov pass 2/2: opt-in resources (--var-file $OPT_IN_TFVARS)"

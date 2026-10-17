@@ -50,3 +50,28 @@ n8n_license_key = "your-license-key-here"
 # license carrying feat:multipleMainInstances). Set to 1 to run single-main
 # in plain queue mode instead, which only needs a Business-tier license.
 # n8n_main_hpa_min_replicas = 1
+
+# Egress through a TLS-inspecting proxy. See docs/tls-proxy.md. Reaches the
+# n8n containers only, not the task runner sidecars. Never embed credentials
+# in a proxy URL: the values are stored in plaintext in Terraform state and
+# the Helm release.
+# n8n_extra_ca_pem = <<-EOT
+#   -----BEGIN CERTIFICATE-----
+#   ...
+#   -----END CERTIFICATE-----
+# EOT
+# n8n_extra_env = [
+#   { name = "HTTP_PROXY", value = "http://proxy.example.com:3128" },
+#   { name = "HTTPS_PROXY", value = "http://proxy.example.com:3128" },
+#   { name = "NO_PROXY", value = ".svc,.cluster.local,169.254.170.23" },
+# ]
+
+# Inbound only: a proxy or WAF in front of the ALB that adds its own
+# X-Forwarded-For entry. Leave unset (the default 1) for egress-only setups.
+# A caller that bypasses the declared proxy can forge X-Forwarded-For at any
+# hop count of 1 or more, including an in-cluster caller reaching the n8n
+# Services directly.
+# Restrict the ALB to that proxy with the module's alb_inbound_cidrs or
+# alb_inbound_prefix_list_ids input; this example does not pass either
+# through, so add it in main.tf.
+# n8n_proxy_hops = 2
