@@ -760,6 +760,13 @@ variable "install_lbc" {
   }
 }
 
+variable "lbc_pdb_enabled" {
+  description = "When true (the default), the AWS Load Balancer Controller chart renders a PodDisruptionBudget with maxUnavailable = 1, so a node drain (node group replacement, Cluster Autoscaler scale-down, kubectl drain) evicts at most one of its two replicas at a time. Without it both replicas can be stopped in the same second, which drops ALB target registration and can cause a brief 502 during the switch. Set to false if your own policy (e.g. a PodDisruptionBudget managed outside Terraform) already covers the controller, or if you need drains to ignore it. The budget is a voluntary-disruption guard only: EKS can still terminate nodes after a node group deletion timeout without honoring it. Ignored when install_lbc = false."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "install_cluster_autoscaler" {
   description = "When true (the default), the module installs the Kubernetes Cluster Autoscaler via Helm. Set to false only when an identical install already exists in the cluster, e.g. one a platform team manages through GitOps, or when node_desired = node_max and the node group is meant to stay a fixed size. The IAM role, policy and Pod Identity association for the cluster-autoscaler ServiceAccount all follow the same create_eks-aware rule as install_lbc's (see that variable's description): created when this is true or create_eks is true, skipped only when both are false, since an existing cluster may already carry this ServiceAccount's association from elsewhere and a second one would collide with it. With no autoscaler running at all, node_max is not enforced automatically: nodes stay at whatever desired_size last converged to, and the autoscaling capacity check in scaling.tf still assumes an autoscaler will eventually add nodes up to node_max, so a caller relying on this toggle to go without one entirely should also lower the HPA/KEDA maxima to what the fixed node count can actually schedule."
   type        = bool
@@ -2904,6 +2911,13 @@ variable "n8n_webhook_hpa_scale_up_stabilization_window_seconds" {
   }
 }
 
+variable "n8n_webhook_pdb_enabled" {
+  description = "When true (the default), the module creates a PodDisruptionBudget with maxUnavailable = 1 for the webhook processor Deployment, so a node drain (node group replacement, Cluster Autoscaler scale-down, kubectl drain) evicts at most one webhook processor at a time. The n8n chart (1.16.0, the default) renders a budget for the main pods only, and only in multi-main (n8n_main_hpa_min_replicas of 2 or more), so without this every webhook processor can be stopped in the same second. maxUnavailable rather than minAvailable, so a one-replica Deployment never blocks a drain: with n8n_webhook_hpa_min_replicas = 1 the budget permits evicting the only replica and protects nothing. Set to false to manage your own budget. Voluntary-disruption guard only: EKS can still terminate the nodes of a deleted node group after its timeout without honoring it."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 # ── Observability ─────────────────────────────────────────────────────────────
 
 variable "n8n_metrics_enabled" {
@@ -3581,6 +3595,13 @@ variable "n8n_worker_keda_paused_replica_count" {
     condition     = var.n8n_worker_keda_paused_replica_count == null ? true : (var.n8n_worker_keda_paused_replica_count == floor(var.n8n_worker_keda_paused_replica_count) && var.n8n_worker_keda_paused_replica_count >= 0)
     error_message = "n8n_worker_keda_paused_replica_count must be a whole number of 0 or more, or null to freeze workers at their current count."
   }
+}
+
+variable "n8n_worker_pdb_enabled" {
+  description = "When true (the default), the module creates a PodDisruptionBudget with maxUnavailable = 1 for the default worker Deployment, so a node drain evicts at most one worker at a time. The n8n chart (1.16.0, the default) renders a budget for the main pods only, and only in multi-main (n8n_main_hpa_min_replicas of 2 or more). maxUnavailable rather than minAvailable, because minAvailable = 1 on a one-replica Deployment blocks every voluntary eviction and stalls drains: at the default n8n_worker_keda_min_replicas = 1 the budget therefore protects nothing until KEDA scales to two or more workers, and raising the floor to 2 is what makes it effective, at the cost of one more pod. Evicted workers still receive SIGTERM and get n8n_termination_grace_period to finish in-flight executions. Does not cover n8n_worker_pools Deployments. Set to false to manage your own budget. Voluntary-disruption guard only: EKS can still terminate the nodes of a deleted node group after its timeout without honoring it."
+  type        = bool
+  default     = true
+  nullable    = false
 }
 
 # ── Pod DNS ───────────────────────────────────────────────────────────────────

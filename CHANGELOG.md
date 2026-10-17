@@ -9,6 +9,26 @@ this project adheres to the stability contract in
 
 ### Added
 
+- `lbc_pdb_enabled` (default `true`) renders a PodDisruptionBudget with
+  `maxUnavailable = 1` for the AWS Load Balancer Controller, so a node drain no
+  longer stops both replicas at once. During the live test of #200 both were
+  stopped together, which probably caused one 502. Set it to `false` to opt out.
+  Existing deployments gain the budget on the next apply (a Helm values change
+  to the `aws-load-balancer-controller` release). Ignored when
+  `install_lbc = false`.
+
+- `n8n_webhook_pdb_enabled` and `n8n_worker_pdb_enabled` (both default `true`)
+  create PodDisruptionBudgets with `maxUnavailable = 1` for the webhook
+  processor and default worker Deployments. The n8n chart renders a budget for
+  the main pods only, so a node group replacement previously stopped every
+  webhook processor and the only worker in the same second (observed in the
+  live test of #200). `maxUnavailable` rather than `minAvailable`, so a
+  one-replica worker never blocks a drain; that also means the worker budget
+  protects nothing until KEDA runs two or more workers. Worker pool
+  Deployments are not covered. EKS can still terminate nodes after a node group
+  deletion timeout without honoring budgets. Set either to `false` to manage
+  your own.
+
 - `aws_partner_attribution_tag` adds the tag `aws-apn-id` to every taggable
   resource the module creates, through `local.common_tags`; to the ALB and the
   listeners, target groups and security groups the AWS Load Balancer Controller
