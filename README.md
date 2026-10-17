@@ -264,12 +264,12 @@ and plan for the following:
   ones, and single-replica workloads and running executions can still be
   interrupted. EKS cordons and drains all of the old group's nodes at once,
   so `update_config` does not limit this; only PodDisruptionBudgets do. The
-  module configures them for the main pods (multi-main only, from the chart),
-  the webhook processors and the default workers
-  (`n8n_webhook_pdb_enabled`, `n8n_worker_pdb_enabled`), and the Load Balancer
-  Controller (`lbc_pdb_enabled`), each with `maxUnavailable = 1`. A
-  single-replica Deployment is still evicted whole: the budget never blocks a
-  drain, so it protects nothing there.
+  chart renders one for the main pods in multi-main (`minAvailable = 1`). The
+  module adds three more, each with `maxUnavailable = 1`: the webhook
+  processors (`n8n_webhook_pdb_enabled`), the default workers
+  (`n8n_worker_pdb_enabled`) and the Load Balancer Controller
+  (`lbc_pdb_enabled`). A single-replica Deployment is still evicted whole
+  under a `maxUnavailable = 1` budget, so it protects nothing there.
 
   Measured live on `examples/small` (3 nodes) before those budgets existed:
   this upgrade caused no full outage, about 2.5 minutes with fewer n8n pods
