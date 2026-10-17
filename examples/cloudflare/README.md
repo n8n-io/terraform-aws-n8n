@@ -29,6 +29,8 @@ Terraform provisions the VPC, issues the ACM certificate (validating it automati
 
 The CNAME record is created with `proxied = false` by default so that ACM certificate renewal and ALB health checks work without Cloudflare-specific configuration. To route traffic through Cloudflare's proxy (for DDoS protection and CDN), set `proxied = true` on `cloudflare_record.n8n_cname` in `dns.tf` **and** set your Cloudflare SSL/TLS mode to **Full (strict)**.
 
+Cloudflare's proxy adds its own `X-Forwarded-For` entry, so with `proxied = true` also set `n8n_proxy_hops = 2`. With the default of 1, n8n records Cloudflare's edge IPs as the client IPs. Restrict the ALB to [Cloudflare's published IP ranges](https://www.cloudflare.com/ips/) as well, with the module's `alb_inbound_cidrs` input, which this example does not pass through (add it in `main.tf`). Otherwise a caller that reaches the ALB directly can forge `X-Forwarded-For` and spoof its client IP. See the [TLS proxy guide](../../docs/tls-proxy.md).
+
 ## Multiple hostnames
 
 This example issues its own single-Common-Name ACM certificate in `dns.tf`
