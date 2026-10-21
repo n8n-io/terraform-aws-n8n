@@ -100,7 +100,7 @@ variable "n8n_domain" {
 
   # DNS limits, not Kubernetes ones: ACM's RequestCertificate pattern enforces
   # both on DomainName and every SAN, and the ALB Ingress host and n8n's own
-  # N8N_HOST / WEBHOOK_URL carry the same limits, so this holds on the
+  # editor.url / webhook.url carry the same limits, so this holds on the
   # BYO-certificate path too. Characters equal octets here because the regex
   # above restricts the value to ASCII.
   validation {
@@ -113,7 +113,7 @@ variable "n8n_domain" {
 }
 
 variable "n8n_additional_domains" {
-  description = "Extra fully-qualified hostnames n8n should answer on, beyond n8n_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53_zone_id set); with a caller-supplied certificate_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n_domain stays canonical: it is what n8n advertises as WEBHOOK_URL and N8N_HOST. Every name must live in the hosted zone given by route53_zone_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns. Names are normalized to lowercase before use: ACM and Kubernetes both store them that way, and DNS is case-insensitive. Standard DNS limits apply to every entry: 253 characters in total, 63 per dot-separated label."
+  description = "Extra fully-qualified hostnames n8n should answer on, beyond n8n_domain. Added to the module-issued ACM certificate as subject alternative names and given a Route 53 validation record each. Requires the Route 53 path (route53_zone_id set); with a caller-supplied certificate_arn the module cannot add names to a certificate it did not issue, and a plan-time warning says so. With create_ingress = true each name also gets an alias A-record and an Ingress rule, so the module routes it end to end. With create_ingress = false the certificate still covers every name and every name is still validated: consume it through the certificate_arn output and attach it to your own Ingress resources, as examples/split-ingress does. n8n_domain stays canonical: it is the host the module sets editor.url to, and what n8n_additional_domains is defined against. Every name must live in the hosted zone given by route53_zone_id, since that is the zone all validation and alias records are written to. A name outside it fails the apply when Route 53 rejects the record as not permitted in the zone. Names in a second hosted zone need their own certificate and records, which the caller owns. Names are normalized to lowercase before use: ACM and Kubernetes both store them that way, and DNS is case-insensitive. Standard DNS limits apply to every entry: 253 characters in total, 63 per dot-separated label."
   type        = list(string)
   default     = []
 
@@ -331,7 +331,7 @@ variable "n8n_license_key" {
 }
 
 variable "n8n_license_key_secret_ref" {
-  description = "Existing Kubernetes Secret carrying the n8n license key, instead of supplying the value through n8n_license_key. The same topology requirements apply: Enterprise with feat:multipleMainInstances for multi-main, or Business with n8n_main_hpa_min_replicas = 1. name is the Secret's name in var.namespace; key defaults to \"license-key\", matching the chart's own license.existingSecret.key default, and can be overridden if the Secret you already sync uses a different key name. Null (the default) changes nothing: the module keeps writing the value from n8n_license_key into kubernetes_secret.n8n as it always has. The module does not verify that the named Secret exists or carries this key: a typo surfaces only as a pod stuck in CreateContainerConfigError naming the missing key, not as a Terraform error, because reading the Secret's data to check would put the credential back in Terraform state, which defeats the reason this input exists. Mutually exclusive with n8n_license_key and n8n_license_cert_secret_ref. Exactly one of the three must be set, so one can never silently win over the others, and setting none is also rejected since a license credential is otherwise required. All three checks live here rather than split across the variables, which would form a validation dependency cycle. Also see n8n_encryption_key_secret_ref: setting that input replaces kubernetes_secret.n8n entirely, and either this input or n8n_license_cert_secret_ref becomes required (not merely allowed) whenever it is set, since there is then no module-managed Secret left for the license key to live in."
+  description = "Existing Kubernetes Secret carrying the n8n license key, instead of supplying the value through n8n_license_key. The same topology requirements apply: Enterprise with feat:multipleMainInstances for multi-main, or Business with n8n_main_hpa_min_replicas = 1. name is the Secret's name in var.namespace; key defaults to \"license-key\", matching the chart's own license.existingSecret.key default, and can be overridden if the Secret you already sync uses a different key name. Null (the default) changes nothing: the module keeps writing the value from n8n_license_key into kubernetes_secret.n8n as it always has. The module does not verify that the named Secret exists or carries this key: a typo surfaces only as a pod stuck in CreateContainerConfigError naming the missing key, not as a Terraform error, because reading the Secret's data to check would put the credential back in Terraform state, which defeats the reason this input exists. Mutually exclusive with n8n_license_key and n8n_license_cert_secret_ref. Exactly one of the three must be set, so one can never silently win over the others, and setting none is also rejected since a license credential is otherwise required. All three checks live here rather than split across the variables, which would form a validation dependency cycle. kubernetes_secret.n8n exists whenever it still holds at least one of the encryption key or the license key, so setting n8n_encryption_key_secret_ref at the same time as leaving this null does not take that Secret away from the license key: chart 2.0's secretRefs.existingSecret (n8n.tf) reads only N8N_ENCRYPTION_KEY from it, independently of license.existingSecret, which this input and kubernetes_secret.n8n feed instead."
   type = object({
     name = string
     key  = optional(string)
@@ -347,7 +347,7 @@ variable "n8n_license_key_secret_ref" {
 }
 
 variable "n8n_license_cert_secret_ref" {
-  description = "Existing Kubernetes Secret name and key holding a base64-encoded n8n Enterprise offline license certificate (N8N_LICENSE_CERT), for air-gapped or egress-restricted clusters that cannot reach n8n's license server to activate a key. Mutually exclusive with n8n_license_key and n8n_license_key_secret_ref. Exactly one of the three must be set (see n8n_license_key_secret_ref, which owns that validation). The module does not read the Secret's value; Terraform renders only the name and key into the shared config.extraEnv list as a secretKeyRef (n8n.tf), not into the chart's license.existingSecret block, which only ever maps to N8N_LICENSE_ACTIVATION_KEY. license.enabled still renders true on this path because the chart also gates N8N_MULTI_MAIN_SETUP_ENABLED on license.enabled, independent of which credential backs it. key defaults to \"cert\" when omitted."
+  description = "Existing Kubernetes Secret name and key holding a base64-encoded n8n Enterprise offline license certificate (N8N_LICENSE_CERT), for air-gapped or egress-restricted clusters that cannot reach n8n's license server to activate a key. Mutually exclusive with n8n_license_key and n8n_license_key_secret_ref. Exactly one of the three must be set (see n8n_license_key_secret_ref, which owns that validation). The module does not read the Secret's value; Terraform renders only the name and key into the chart's env.shared map as a secretKeyRef reference (n8n.tf), not into the chart's license.existingSecret block, which only ever maps to N8N_LICENSE_ACTIVATION_KEY. license.enabled still renders true on this path because the chart also gates N8N_MULTI_MAIN_SETUP_ENABLED on license.enabled, independent of which credential backs it. key defaults to \"cert\" when omitted."
   type = object({
     name = string
     key  = optional(string)
@@ -386,7 +386,7 @@ variable "n8n_encryption_key" {
 }
 
 variable "n8n_encryption_key_secret_ref" {
-  description = "Existing Kubernetes Secret carrying N8N_ENCRYPTION_KEY, instead of supplying the value through n8n_encryption_key. Different in shape from the other three secret-reference inputs below: the chart's secretRefs.existingSecret (n8n.tf) names a single Secret that n8n.coreSecretsEnv reads FOUR keys from, N8N_ENCRYPTION_KEY, N8N_HOST, N8N_PORT and N8N_PROTOCOL, so setting this input points the chart at your Secret for all four, not just the encryption key, and your Secret must carry every one of them: N8N_HOST is var.n8n_domain, N8N_PORT is \"5678\", N8N_PROTOCOL is \"http\". See README.md -> \"Where credentials live\" for a worked ExternalSecret example with a template block supplying those three literals alongside the fetched key. key defaults to \"N8N_ENCRYPTION_KEY\" and exists only for shape parity with the other three secret-reference inputs: the chart hardcodes the key name it reads on this path, so this module rejects any other value at plan time rather than silently ignoring it. Setting this input also gates kubernetes_secret.n8n to zero, since secretRefs.existingSecret replaces that whole Secret rather than one key inside it, which leaves the license key with nowhere to live: it otherwise rides in kubernetes_secret.n8n too. The task runner auth token is unaffected, since it is never in a Secret at all: it reaches the chart as a literal Helm value regardless of this input. Whenever this is set, the licence must therefore also come from a caller-managed Secret, through either n8n_license_key_secret_ref or n8n_license_cert_secret_ref (the offline certificate path never wrote to kubernetes_secret.n8n in the first place); otherwise the module rejects the plan rather than pointing a chart value at a Secret that no longer exists. Setting this alongside n8n_encryption_key is rejected at plan time. The module does not verify that the referenced Secret exists or carries the required keys: a missing key surfaces only as a pod stuck in CreateContainerConfigError, not as a Terraform error."
+  description = "Existing Kubernetes Secret carrying N8N_ENCRYPTION_KEY, instead of supplying the value through n8n_encryption_key. Different in shape from the other three secret-reference inputs below: the chart's secretRefs.existingSecret (n8n.tf) names a Secret that the chart reads N8N_ENCRYPTION_KEY from by one hardcoded key name, so your Secret only needs to carry that one key -- chart 2.0 no longer reads N8N_HOST, N8N_PORT or N8N_PROTOCOL from it at all (n8n-io/n8n-hosting decisions/0012-env-as-per-component-maps.md); those three are set elsewhere now (N8N_PORT from the chart's own service.port, and the module's editor.url/webhook.url values cover what N8N_HOST and N8N_PROTOCOL used to), and your existing Secret needs no change if it still carries them, since the chart simply stops reading those keys. key defaults to \"N8N_ENCRYPTION_KEY\" and exists only for shape parity with the other three secret-reference inputs: the chart hardcodes the key name it reads on this path, so this module rejects any other value at plan time rather than silently ignoring it. Setting this input gates kubernetes_secret.n8n's encryption-key data to nothing, but that Secret still exists and still carries the license key whenever n8n_license_key_secret_ref and n8n_license_cert_secret_ref are both left null: chart 2.0's secretRefs.existingSecret and license.existingSecret are two independent values, so the two no longer have to share one Secret the way a four-key Secret once forced them to. The task runner auth token is unaffected, since it is never in a Secret at all: it reaches the chart as a literal Helm value regardless of this input. Setting this alongside n8n_encryption_key is rejected at plan time. The module does not verify that the referenced Secret exists or carries the required key: a missing key surfaces only as a pod stuck in CreateContainerConfigError, not as a Terraform error."
   type = object({
     name = string
     key  = optional(string)
@@ -404,12 +404,7 @@ variable "n8n_encryption_key_secret_ref" {
   # evaluation.
   validation {
     condition     = var.n8n_encryption_key_secret_ref == null ? true : coalesce(var.n8n_encryption_key_secret_ref.key, "N8N_ENCRYPTION_KEY") == "N8N_ENCRYPTION_KEY"
-    error_message = "n8n_encryption_key_secret_ref.key must be \"N8N_ENCRYPTION_KEY\" or unset. The chart's coreSecretsEnv helper reads this exact key name from secretRefs.existingSecret and takes no override, unlike the other three secret-reference inputs, whose key the chart does honor."
-  }
-
-  validation {
-    condition     = var.n8n_encryption_key_secret_ref == null ? true : (var.n8n_license_key_secret_ref != null || var.n8n_license_cert_secret_ref != null)
-    error_message = "n8n_encryption_key_secret_ref replaces kubernetes_secret.n8n entirely, so n8n_license_key_secret_ref or n8n_license_cert_secret_ref must also be set: the license key has no module-managed Secret left to live in otherwise, unless the offline certificate path supplies the license instead."
+    error_message = "n8n_encryption_key_secret_ref.key must be \"N8N_ENCRYPTION_KEY\" or unset. The chart's n8n.secretEnv helper reads this exact key name from secretRefs.existingSecret and takes no override, unlike the other three secret-reference inputs, whose key the chart does honor."
   }
 }
 
@@ -574,7 +569,7 @@ variable "alb_ssl_policy" {
 }
 
 variable "n8n_proxy_hops" {
-  description = "Number of trusted reverse-proxy hops in front of n8n, rendered as N8N_PROXY_HOPS on every n8n pod (main, worker, webhook processor) via config.extraEnv. n8n passes it to Express's trust proxy setting, which uses it to pick the client IP out of X-Forwarded-For; any value of 1 or more also makes n8n honor X-Forwarded-Proto. Count every proxy on the client's path that adds an X-Forwarded-For entry (HTTP proxies such as CloudFront, an ALB or an Istio gateway do; a TCP passthrough NLB does not), whatever create_ingress is set to: an ALB alone (the module's own Ingress, or a caller-owned one) is 1, so the default fits it; CloudFront in front of the ALB, or an ALB in front of an Istio ingress gateway, is 2. Too low a value attributes every request to the nearest extra proxy's IP. A value above 1 is only safe when the inner proxy accepts traffic from the outer one alone (e.g. an ALB restricted to CloudFront, see alb_inbound_prefix_list_ids): otherwise a client that reaches the inner proxy directly can forge its IP through X-Forwarded-For. At any value of 1 or more, the same holds for anything that bypasses the declared proxy chain, such as an in-cluster caller reaching the n8n Services directly. Set 0 only when nothing proxies traffic to n8n. Reserved in n8n_managed_env_names, so n8n_extra_env, n8n_worker_extra_env and n8n_worker_pools[*].extra_env cannot set it."
+  description = "Number of trusted reverse-proxy hops in front of n8n, rendered as N8N_PROXY_HOPS on every n8n pod (main, worker, webhook processor) via env.shared. n8n passes it to Express's trust proxy setting, which uses it to pick the client IP out of X-Forwarded-For; any value of 1 or more also makes n8n honor X-Forwarded-Proto. Count every proxy on the client's path that adds an X-Forwarded-For entry (HTTP proxies such as CloudFront, an ALB or an Istio gateway do; a TCP passthrough NLB does not), whatever create_ingress is set to: an ALB alone (the module's own Ingress, or a caller-owned one) is 1, so the default fits it; CloudFront in front of the ALB, or an ALB in front of an Istio ingress gateway, is 2. Too low a value attributes every request to the nearest extra proxy's IP. A value above 1 is only safe when the inner proxy accepts traffic from the outer one alone (e.g. an ALB restricted to CloudFront, see alb_inbound_prefix_list_ids): otherwise a client that reaches the inner proxy directly can forge its IP through X-Forwarded-For. At any value of 1 or more, the same holds for anything that bypasses the declared proxy chain, such as an in-cluster caller reaching the n8n Services directly. Set 0 only when nothing proxies traffic to n8n. Reserved in n8n_managed_env_names, so n8n_extra_env, n8n_worker_extra_env and n8n_worker_pools[*].extra_env cannot set it."
   type        = number
   default     = 1
   nullable    = false
@@ -900,9 +895,9 @@ variable "keda_chart_repository" {
 # not pinned. See AGENTS.md → "When adding a new input".
 
 variable "n8n_chart_version" {
-  description = "n8n Helm chart version to deploy. Must be an exact version, not a constraint: the Helm provider resolves this literally."
+  description = "n8n Helm chart version to deploy. Must be an exact version, not a constraint: the Helm provider resolves this literally. The module requires chart 2.x: it passes n8n's environment through the chart 2.0 env.shared / env.worker maps, which a 1.x chart silently ignores."
   type        = string
-  default     = "1.16.0"
+  default     = "2.0.0-rc.1"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version))
@@ -956,7 +951,7 @@ variable "keda_chart_version" {
 }
 
 variable "n8n_image_tag" {
-  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). When it is null (the default), the selected Helm chart's own default applies: chart 1.16.0 uses its appVersion, 2.43.5, while 1.11.0 used the floating `stable` tag. A chart upgrade can therefore downgrade an unpinned application. Inspect and pin the currently running n8n version before upgrading the chart; see docs/upgrading-n8n.md. Keep a concrete tag for reproducible, incremental upgrades. See <https://docs.n8n.io/2-0-breaking-changes/> for the n8n 2.x migration guide."
+  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). When it is null (the default), the selected Helm chart's own default applies: chart 2.0.0-rc.1 uses its appVersion, 2.44.5, while 1.11.0 used the floating `stable` tag. A chart upgrade can therefore downgrade an unpinned application. Inspect and pin the currently running n8n version before upgrading the chart; see docs/upgrading-n8n.md. Keep a concrete tag for reproducible, incremental upgrades. See <https://docs.n8n.io/2-0-breaking-changes/> for the n8n 2.x migration guide."
   type        = string
   default     = null
 
@@ -1308,18 +1303,18 @@ variable "n8n_node_max_old_space_size_mb" {
 # ── Execution settings ────────────────────────────────────────────────────────
 
 variable "n8n_worker_concurrency" {
-  description = "Number of jobs each worker pod can process simultaneously"
+  description = "Number of jobs each worker pod can process simultaneously, passed to n8n as the --concurrency flag via queueMode.workerConcurrency. Null (the default) omits the flag entirely, matching the chart's own default for queueMode.workerConcurrency (empty), so n8n falls back to its own default of 10. n8n takes a worker's concurrency from n8n_execution_concurrency_limit (executions.concurrency.productionLimit) instead of this flag, and ignores this flag entirely, whenever that limit is set to anything other than -1; chart 2.0 fails the Helm render outright if both are set at once in queue mode, which this module always runs in. See n8n_execution_concurrency_limit's validation, which enforces that the two cannot both be set."
   type        = number
-  default     = 10
+  default     = null
 
   validation {
-    condition     = var.n8n_worker_concurrency >= 1
-    error_message = "Worker concurrency must be at least 1."
+    condition     = var.n8n_worker_concurrency == null ? true : var.n8n_worker_concurrency >= 1
+    error_message = "Worker concurrency must be at least 1, or null to use n8n's own default (10)."
   }
 }
 
 variable "n8n_queue_worker_lock_duration" {
-  description = "Milliseconds a worker holds a Bull job lock before it must renew it. Maps to the chart's redis.worker.lockDuration value (QUEUE_WORKER_LOCK_DURATION on the pods); must go through this chart value rather than config.extraEnv: once set, the chart renders its own env entry for this key, config.extraEnv is appended after it, and Kubernetes silently keeps the last of two same-named entries, so a duplicate would override this value with no warning. n8n_extra_env rejects every QUEUE_ name at plan time for that reason. Leave null for n8n's own default (60000ms). Lowering it to 10000ms or less additionally requires setting n8n_queue_worker_lock_renew_time explicitly below it: the chart's renewal default is 10000ms, so an unset renewal interval would otherwise outlast the lock. That pairing is validated on n8n_queue_worker_lock_renew_time, because Terraform forbids two variables' validations from referencing each other, so a violation is reported against that variable."
+  description = "Milliseconds a worker holds a Bull job lock before it must renew it. Maps to the chart's redis.worker.lockDuration value (QUEUE_WORKER_LOCK_DURATION on the pods); must go through this chart value rather than env.shared/env.worker: once set, the chart renders its own entry for this key, and chart 2.0 fails the Helm render outright if env.shared or env.worker also sets it (n8n.validateEnv), instead of the silent last-entry-wins a plain Kubernetes env list once risked. n8n_extra_env rejects every QUEUE_ name at plan time for that reason, which surfaces the same failure earlier. Leave null for n8n's own default (60000ms). Lowering it to 10000ms or less additionally requires setting n8n_queue_worker_lock_renew_time explicitly below it: the chart's renewal default is 10000ms, so an unset renewal interval would otherwise outlast the lock. That pairing is validated on n8n_queue_worker_lock_renew_time, because Terraform forbids two variables' validations from referencing each other, so a violation is reported against that variable."
   type        = number
   default     = null
 
@@ -1335,7 +1330,7 @@ variable "n8n_queue_worker_lock_duration" {
 }
 
 variable "n8n_queue_worker_lock_renew_time" {
-  description = "Milliseconds between a worker's renewals of its Bull job lock. Maps to the chart's redis.worker.lockRenewTime value (QUEUE_WORKER_LOCK_RENEW_TIME on the pods); like n8n_queue_worker_lock_duration it must go through the chart value rather than config.extraEnv, for the same silent last-entry-wins override reason. Leave null for n8n's own default (10000ms). This must stay comfortably below n8n_queue_worker_lock_duration: the worker renews on a timer, so a renew interval at or above the lock duration guarantees the lock expires before the next renewal ever fires, and every job then looks stalled to Bull's stalled-job check no matter how healthy the worker is. Lowering it increases Redis command volume proportionally to in-flight jobs, which is a real cost on a single-threaded Redis near saturation, so it is a diagnostic knob as much as a tuning one: if stalls get WORSE when you shorten it, the constraint is Redis throughput rather than missed timers on a busy worker event loop."
+  description = "Milliseconds between a worker's renewals of its Bull job lock. Maps to the chart's redis.worker.lockRenewTime value (QUEUE_WORKER_LOCK_RENEW_TIME on the pods); like n8n_queue_worker_lock_duration it must go through the chart value rather than env.shared/env.worker, for the same reason: chart 2.0 fails the Helm render outright if either map also sets it. Leave null for n8n's own default (10000ms). This must stay comfortably below n8n_queue_worker_lock_duration: the worker renews on a timer, so a renew interval at or above the lock duration guarantees the lock expires before the next renewal ever fires, and every job then looks stalled to Bull's stalled-job check no matter how healthy the worker is. Lowering it increases Redis command volume proportionally to in-flight jobs, which is a real cost on a single-threaded Redis near saturation, so it is a diagnostic knob as much as a tuning one: if stalls get WORSE when you shorten it, the constraint is Redis throughput rather than missed timers on a busy worker event loop."
   type        = number
   default     = null
 
@@ -1365,8 +1360,8 @@ variable "n8n_queue_worker_stalled_interval" {
   description = <<-EOT
     Milliseconds between Bull's checks for stalled jobs. Maps to the chart's
     redis.worker.stalledInterval value (QUEUE_WORKER_STALLED_INTERVAL on the
-    pods), not to config.extraEnv, for the same silent last-entry-wins
-    override reason as the two lock variables. Leave null for n8n's own default (30000ms).
+    pods), not to env.shared or env.worker, for the same chart-render-failure
+    reason as the two lock variables. Leave null for n8n's own default (30000ms).
 
     n8n itself documents 0 as "disable stall checking", but THAT IS NOT REACHABLE
     THROUGH THIS CHART and this variable cannot offer it. The chart's
@@ -1522,9 +1517,18 @@ variable "n8n_execution_timeout_max" {
 }
 
 variable "n8n_execution_concurrency_limit" {
-  description = "Maximum concurrent production executions (-1 to disable)"
+  description = "Maximum concurrent production executions, maps to executions.concurrency.productionLimit (N8N_CONCURRENCY_PRODUCTION_LIMIT). Defaults to -1, the chart's own default, which disables the limit and leaves worker concurrency to n8n_worker_concurrency (or n8n's own default of 10 if that is also unset). Set this to a positive number to cap concurrent production executions; n8n then takes every worker's concurrency from this value instead of n8n_worker_concurrency's flag, and n8n_worker_concurrency must be left null while this is set to anything other than -1, since chart 2.0 fails the Helm render outright when both are set in queue mode (which this module always runs in). See the validation below, which enforces that."
   type        = number
-  default     = 100
+  default     = -1
+
+  validation {
+    # Hosted here rather than on n8n_worker_concurrency because Terraform
+    # forbids two variables' validations from referencing each other (a
+    # cycle); n8n_queue_worker_lock_renew_time's cross-check against
+    # n8n_queue_worker_lock_duration above is the same pattern.
+    condition     = var.n8n_worker_concurrency == null || var.n8n_execution_concurrency_limit == -1
+    error_message = "n8n_worker_concurrency and n8n_execution_concurrency_limit both set each worker's concurrency when n8n_worker_concurrency is non-null: n8n uses n8n_execution_concurrency_limit (executions.concurrency.productionLimit) and ignores n8n_worker_concurrency (queueMode.workerConcurrency) whenever this is not -1, and chart 2.0 fails the Helm render outright when both are set in queue mode. Leave n8n_execution_concurrency_limit at -1 while n8n_worker_concurrency is set, or clear n8n_worker_concurrency (leave it null) to control concurrency through n8n_execution_concurrency_limit instead."
+  }
 }
 
 variable "n8n_pruning_max_age" {
@@ -1585,8 +1589,9 @@ variable "n8n_graceful_shutdown_timeout" {
 
     Set it here, not through n8n_extra_env, n8n_worker_extra_env or a worker
     pool's extra_env, which all reject this name at plan time. The chart
-    always renders its own entry for this key, and a caller duplicate would
-    silently replace it.
+    always renders its own entry for this key, and chart 2.0 fails the Helm
+    render outright if env.shared or env.worker also sets it, rather than
+    silently replacing it.
 
     n8n_termination_grace_period is a hard ceiling. Kubernetes starts that
     countdown when termination begins: the preStop hook
@@ -1640,14 +1645,14 @@ variable "n8n_worker_pdb_enabled" {
 # ── Task runners ──────────────────────────────────────────────────────────────
 
 variable "n8n_task_runners_enabled" {
-  description = "Enable task runner sidecars for isolated JavaScript and Python code execution. In queue mode, upstream chart 1.16.0 places them on workers only, not main or webhook pods."
+  description = "Enable task runner sidecars for isolated JavaScript and Python code execution. In queue mode, upstream chart 2.0.0-rc.1 places them on workers only, not main or webhook pods."
   type        = bool
   default     = true
   nullable    = false
 }
 
 variable "n8n_task_runner_image_tag" {
-  description = "Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 1.16.0 queue mode). Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n_task_runners_enabled = false."
+  description = "Image tag for the task runner sidecar (`n8nio/runners`). When it is null (the default), the chart falls back to the n8n application image's tag, which is the right behavior as long as that tag is a published n8n version. Set this to the underlying n8n version when running a custom application image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar tries to pull `n8nio/runners:2.27.4-mypackages` and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 2.0.0-rc.1 queue mode). Reproduced on a live cluster, where kubelet reported `docker.io/n8nio/runners:<tag>: not found`; because the release waits for readiness, the apply blocks and then fails rather than completing with broken pods, and webhook processors are unaffected since they run no runner sidecar. The tag should match the n8n version in the application image, since the runner protocol is versioned with n8n. Ignored when n8n_task_runners_enabled = false."
   type        = string
   default     = null
 
@@ -1797,7 +1802,7 @@ variable "n8n_task_runner_custom_config" {
 
       kubectl rollout restart deploy/n8n-worker -n <namespace>
 
-    Upstream chart 1.16.0 mounts this config only on workers in queue mode.
+    Upstream chart 2.0.0-rc.1 mounts this config only on workers in queue mode.
     For older or custom charts that also place runners on mains, restart
     deploy/n8n-main too. Each n8n_worker_pools pool on a suitable preview or
     verified custom chart also mounts it; roll those by label:
@@ -2850,7 +2855,7 @@ variable "s3_force_destroy" {
 # ── HPA: main pods ────────────────────────────────────────────────────────────
 
 variable "n8n_main_hpa_min_replicas" {
-  description = "Minimum replicas for n8n main pods. HPA will not scale below this. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back. At 2 or more, multi-main is enabled and requires feat:multipleMainInstances; the main PodDisruptionBudget protects one available main during voluntary eviction. Set to 1 for Business-compatible single-main queue mode: multi-main is disabled, the HPA maximum is clamped to 1 regardless of n8n_main_hpa_max_replicas, upgrades use Recreate, and the only main can be evicted with downtime (chart 1.16.0 and newer render no main PodDisruptionBudget; older charts render one with minAvailable 0). The editor, REST API, and scheduled triggers are unavailable while the only main is stopped. Recreate prevents upgrade overlap, not overlap following manual pod deletion or node failure. See docs/upgrading-n8n.md."
+  description = "Minimum replicas for n8n main pods. HPA will not scale below this. Also becomes the deployment's own replica count: the Helm chart renders spec.replicas unconditionally, so leaving it below the autoscaler floor would make every helm upgrade scale down and then wait for the autoscaler to climb back. At 2 or more, multi-main is enabled and requires feat:multipleMainInstances; the chart then also renders the main PodDisruptionBudget, which protects one available main during voluntary eviction. Set to 1 for Business-compatible single-main queue mode: multi-main is disabled, the HPA maximum is clamped to 1 regardless of n8n_main_hpa_max_replicas, upgrades use Recreate, and the chart renders no PodDisruptionBudget at all for the single main (chart 2.0's pdb.yaml only renders one when a second main pod can exist), so a voluntary eviction (node maintenance, for example) is unobstructed and causes downtime. The editor, REST API, and scheduled triggers are unavailable while the only main is stopped. Recreate prevents upgrade overlap, not overlap following manual pod deletion or node failure. See docs/upgrading-n8n.md."
   type        = number
   default     = 2
   nullable    = false
@@ -2952,7 +2957,7 @@ variable "n8n_webhook_hpa_scale_up_stabilization_window_seconds" {
 # ── Observability ─────────────────────────────────────────────────────────────
 
 variable "n8n_metrics_enabled" {
-  description = "Enable n8n's built-in Prometheus metrics endpoint. When true, the module appends N8N_METRICS=true to the n8n Helm release's config.extraEnv, which the chart applies to every n8n container (main, worker, webhook processor). n8n exposes /metrics on its existing HTTP port (5678) — the same port and service the chart already publishes for the UI/API. The n8n Helm chart at the currently pinned version (see n8n_chart_version) exposes no top-level metrics / serviceMonitor block of its own, so this toggle is intentionally env-var-only. Scrape configuration (Prometheus scrape annotations or a ServiceMonitor CR) is left to the caller's monitoring stack — in practice the main pod's Service is the meaningful scrape target. Defaults to false; when false the env var is omitted entirely so n8n's own defaults apply. Note that this endpoint does NOT give you a usable Bull queue depth in the multi-main topology this module deploys; see redis_exporter_enabled for that signal."
+  description = "Enable n8n's built-in Prometheus metrics endpoint. When true, the module sets N8N_METRICS=true in the n8n Helm release's env.shared, which reaches every n8n container (main, worker, webhook processor). n8n exposes /metrics on its existing HTTP port (5678) — the same port and service the chart already publishes for the UI/API. The n8n Helm chart at the currently pinned version (see n8n_chart_version) exposes no top-level metrics / serviceMonitor block of its own, so this toggle is intentionally env-var-only. Scrape configuration (Prometheus scrape annotations or a ServiceMonitor CR) is left to the caller's monitoring stack — in practice the main pod's Service is the meaningful scrape target. Defaults to false; when false the env var is omitted entirely so n8n's own defaults apply. Note that this endpoint does NOT give you a usable Bull queue depth in the multi-main topology this module deploys; see redis_exporter_enabled for that signal."
   type        = bool
   default     = false
 }
@@ -2987,13 +2992,13 @@ variable "redis_exporter_image" {
 }
 
 variable "n8n_templates_enabled" {
-  description = "Enable n8n's workflow templates and template suggestions. Maps to N8N_TEMPLATES_ENABLED. When false, sets N8N_TEMPLATES_ENABLED=false on all n8n pods (main, worker, webhook processor) via config.extraEnv. Defaults to true, matching n8n's own default — note that explicitly setting true emits no env var (n8n's default already applies). Set to false to hide the templates library, e.g. when enforcing curated internal workflows."
+  description = "Enable n8n's workflow templates and template suggestions. Maps to N8N_TEMPLATES_ENABLED. When false, sets N8N_TEMPLATES_ENABLED=false on all n8n pods (main, worker, webhook processor) via env.shared. Defaults to true, matching n8n's own default — note that explicitly setting true emits no env var (n8n's default already applies). Set to false to hide the templates library, e.g. when enforcing curated internal workflows."
   type        = bool
   default     = true
 }
 
 variable "n8n_personalization_enabled" {
-  description = "Whether n8n asks users personalization survey questions and tailors content/recommendations based on the answers. Maps to N8N_PERSONALIZATION_ENABLED. When false, sets N8N_PERSONALIZATION_ENABLED=false on all n8n pods (main, worker, webhook processor) via config.extraEnv. Defaults to true, matching n8n's own default — note that explicitly setting true emits no env var (n8n's default already applies). Set to false to skip the personalization survey, e.g. on shared or ephemeral instances."
+  description = "Whether n8n asks users personalization survey questions and tailors content/recommendations based on the answers. Maps to N8N_PERSONALIZATION_ENABLED. When false, sets N8N_PERSONALIZATION_ENABLED=false on all n8n pods (main, worker, webhook processor) via env.shared. Defaults to true, matching n8n's own default — note that explicitly setting true emits no env var (n8n's default already applies). Set to false to skip the personalization survey, e.g. on shared or ephemeral instances."
   type        = bool
   default     = true
 }
@@ -3246,9 +3251,9 @@ variable "n8n_compression_max_zip_entries" {
 }
 
 # OpenTelemetry tracing
-# Wired to N8N_OTEL_* env vars on the n8n Helm release's config.extraEnv block,
-# which the chart applies to every n8n container (main, worker, webhook
-# processor). This matches the n8n OpenTelemetry docs' queue-mode requirement:
+# Wired to N8N_OTEL_* env vars on the n8n Helm release's env.shared map,
+# which reaches every n8n container (main, worker, webhook processor). This
+# matches the n8n OpenTelemetry docs' queue-mode requirement:
 # https://docs.n8n.io/hosting/logging-monitoring/opentelemetry/
 #
 # The collector / Jaeger receiver itself is intentionally out of scope for this
@@ -3263,7 +3268,7 @@ variable "n8n_compression_max_zip_entries" {
 # n8n's own default applies. Only set the values you actually need to override.
 
 variable "n8n_otel_enabled" {
-  description = "Master switch for n8n's OpenTelemetry workflow + node tracing. When true, the module sets N8N_OTEL_ENABLED=true on all n8n containers (main, worker, webhook processor) via the Helm release's config.extraEnv block. When false (the default), no OpenTelemetry env vars are emitted and the SDK is not loaded. The OpenTelemetry collector / Jaeger receiver is out of scope for this module — deploy it separately and point n8n_otel_exporter_otlp_endpoint at it. See <https://docs.n8n.io/hosting/logging-monitoring/opentelemetry/> for the underlying n8n contract."
+  description = "Master switch for n8n's OpenTelemetry workflow + node tracing. When true, the module sets N8N_OTEL_ENABLED=true on all n8n containers (main, worker, webhook processor) via the Helm release's env.shared map. When false (the default), no OpenTelemetry env vars are emitted and the SDK is not loaded. The OpenTelemetry collector / Jaeger receiver is out of scope for this module — deploy it separately and point n8n_otel_exporter_otlp_endpoint at it. See <https://docs.n8n.io/hosting/logging-monitoring/opentelemetry/> for the underlying n8n contract."
   type        = bool
   default     = false
 }
@@ -3285,7 +3290,7 @@ variable "n8n_otel_exporter_otlp_endpoint" {
 }
 
 variable "n8n_otel_exporter_otlp_headers" {
-  description = "Comma-separated list of key=value pairs sent as HTTP headers with each OTLP request (e.g. `authorization=Bearer <token>,x-tenant=acme`). Use this for collector authentication or multi-tenant routing. Maps to N8N_OTEL_EXPORTER_OTLP_HEADERS. Leave null to send no extra headers. Marked sensitive so the value is redacted from CLI and plan output, but note it is still injected as a literal env var: it is persisted in plaintext in Terraform state and visible in the pod environment (kubectl describe / printenv). The chart's config.extraEnv does not support secretKeyRef, so restrict access to state and the n8n namespace accordingly. Ignored when n8n_otel_enabled = false."
+  description = "Comma-separated list of key=value pairs sent as HTTP headers with each OTLP request (e.g. `authorization=Bearer <token>,x-tenant=acme`). Use this for collector authentication or multi-tenant routing. Maps to N8N_OTEL_EXPORTER_OTLP_HEADERS. Leave null to send no extra headers. Marked sensitive so the value is redacted from CLI and plan output, but note it is still injected as a literal env var: it is persisted in plaintext in Terraform state and visible in the pod environment (kubectl describe / printenv). env.shared is a flat NAME: value map, which has no secretKeyRef-reference form for a comma-joined header list like this one, so restrict access to state and the n8n namespace accordingly. Ignored when n8n_otel_enabled = false."
   type        = string
   default     = null
   sensitive   = true
@@ -3377,7 +3382,7 @@ variable "n8n_log_streaming_destinations" {
 }
 
 variable "n8n_extra_env" {
-  description = "Additional environment variables to inject into all n8n pods (main, worker, and webhook-processor) via the Helm chart's config.extraEnv list. Each entry is an object with name and value string attributes. config.extraEnv is appended last in every container's env list, so by Kubernetes' last-wins rule any name here overrides the chart's value for that name. To prevent silently breaking the deployment, an entry is rejected at plan time when its name collides with a connection, identity, storage, license, or topology variable the module manages: any name starting with DB_, QUEUE_, N8N_RUNNERS_, N8N_EXTERNAL_STORAGE_S3_, N8N_MULTI_MAIN_, or AWS_, plus names like N8N_ENCRYPTION_KEY, N8N_LICENSE_ACTIVATION_KEY, N8N_HOST, and EXECUTIONS_MODE. Env vars n8n has deprecated and warns about on every start (N8N_AVAILABLE_BINARY_DATA_MODES, and WEBHOOK_URL from n8n 2.30.0) are rejected too, with their own error; the module sets WEBHOOK_URL itself for an image that may predate n8n 2.30.0. NODE_OPTIONS is additionally reserved only while n8n_node_max_old_space_size_mb is set: it is a whole flag string rather than a single setting, so a caller entry would replace the module's --max-old-space-size wholesale instead of merging with it. With that input null the module emits no NODE_OPTIONS and callers may set it freely. Use the dedicated module inputs for those. Do not put secret values here, because they render into the Helm release and are stored in plaintext in Terraform state; instead pass a *_FILE companion (e.g. a name ending in _FILE) pointing at a mounted Kubernetes secret, or use n8n credentials. Example: [{name = \"N8N_DEFAULT_LOCALE\", value = \"de\"}]."
+  description = "Additional environment variables to inject into all n8n pods (main, worker, and webhook-processor), converted into the Helm chart's env.shared map (chart 2.0's flat NAME: value model; n8n.tf's local.n8n_env_shared merges it in last). Each entry is an object with name and value string attributes. Duplicate names are rejected at plan time -- not last-wins -- so each variable may be set only once; the conversion to a map can never silently drop or collapse an entry. To prevent silently breaking the deployment, an entry is also rejected when its name collides with a connection, identity, storage, license, or topology variable the module manages: any name starting with DB_, QUEUE_, N8N_RUNNERS_, N8N_EXTERNAL_STORAGE_S3_, N8N_MULTI_MAIN_, or AWS_, plus names like N8N_ENCRYPTION_KEY, N8N_LICENSE_ACTIVATION_KEY, N8N_PORT, and EXECUTIONS_MODE. A name the chart itself computes from its own values (N8N_PORT, N8N_EDITOR_BASE_URL, N8N_WEBHOOK_URL, and everything covered by those prefixes) fails the Helm render outright even if this guard somehow missed it (chart 2.0's n8n.validateEnv); this validation just surfaces that at plan time instead, with a message naming the dedicated input to use. Env vars n8n has deprecated and warns about on every start (N8N_AVAILABLE_BINARY_DATA_MODES, and WEBHOOK_URL from n8n 2.30.0) are rejected too, with their own error; the module sets WEBHOOK_URL itself for an image that may predate n8n 2.30.0. NODE_OPTIONS is additionally reserved only while n8n_node_max_old_space_size_mb is set: it is a whole flag string rather than a single setting, and the chart never computes it itself, so a caller entry would silently replace the module's --max-old-space-size wholesale in this module's own env.shared merge() rather than adding to it -- this guard is the only protection, since there is no chart-side render failure to fall back on for this one. With that input null the module emits no NODE_OPTIONS and callers may set it freely. Use the dedicated module inputs for those. Do not put secret values here, because they render into the Helm release and are stored in plaintext in Terraform state; instead pass a *_FILE companion (e.g. a name ending in _FILE) pointing at a mounted Kubernetes secret, or use n8n credentials. (Chart 2.0's env maps also accept a value that is a reference object with exactly one of secretKeyRef, configMapKeyRef, fieldRef or resourceFieldRef, but this variable's value attribute is a plain string, so that capability is not reachable through this input.) Example: [{name = \"N8N_DEFAULT_LOCALE\", value = \"de\"}]."
   type = list(object({
     name  = string
     value = string
@@ -3402,7 +3407,7 @@ variable "n8n_extra_env" {
         anytrue([for p in local.n8n_managed_env_prefixes : startswith(e.name, p)])
       )
     ])
-    error_message = "n8n_extra_env must not set module-managed variables. Reserved: any name starting with one of ${join(", ", local.n8n_managed_env_prefixes)} (connection/queue/runner/storage/topology/AWS families), plus the exact names ${join(", ", local.n8n_managed_env_names)}. config.extraEnv is appended last and would otherwise silently override these (Kubernetes last-wins). Use the dedicated module inputs (e.g. n8n_log_level, n8n_metrics_enabled) instead."
+    error_message = "n8n_extra_env must not set module-managed variables. Reserved: any name starting with one of ${join(", ", local.n8n_managed_env_prefixes)} (connection/queue/runner/storage/topology/AWS families), plus the exact names ${join(", ", local.n8n_managed_env_names)}. These either feed this module's own env.shared merge(), which resolves a duplicate key last-wins, or are computed by the chart itself, whose render fails outright on a collision (chart 2.0's n8n.validateEnv). Use the dedicated module inputs (e.g. n8n_log_level, n8n_metrics_enabled) instead."
   }
 
   validation {
@@ -3512,12 +3517,14 @@ variable "n8n_credentials_overwrite_secret_ref" {
 
   validation {
     # All three env escape hatches, not just n8n_extra_env: the module's own
-    # CREDENTIALS_OVERWRITE_DATA_FILE entry rides on config.extraEnv, which
-    # reaches every pod, while n8n_worker_extra_env and a pool's extra_env are
-    # appended after it in worker containers. readEnv prefers
-    # CREDENTIALS_OVERWRITE_DATA over the _FILE variant wherever it appears, so
-    # a worker-only entry would leave the workers running a different set of
-    # credential overwrites from the mains, with nothing to announce it.
+    # CREDENTIALS_OVERWRITE_DATA_FILE entry rides on env.shared, which reaches
+    # every pod, while n8n_worker_extra_env's env.worker and a pool's
+    # extra_env (still the chart's pre-2.0 queueMode.workerGroups[].extraEnv
+    # list shape, see worker-pools.tf) are appended after it in worker
+    # containers. readEnv prefers CREDENTIALS_OVERWRITE_DATA over the _FILE
+    # variant wherever it appears, so a worker-only entry would leave the
+    # workers running a different set of credential overwrites from the
+    # mains, with nothing to announce it.
     condition = var.n8n_credentials_overwrite_secret_ref == null ? true : alltrue([
       for env in concat(
         var.n8n_extra_env,
@@ -3802,13 +3809,14 @@ variable "n8n_dns_config" {
 # pods ignore the pool name, so only workers need it.
 #
 # The upstream Helm chart renders exactly one worker Deployment and exposes
-# worker-only env solely through queueMode.workerExtraEnv, so it can express at
-# most a single pool. Anything beyond that has to be built outside the chart,
-# which is what n8n_worker_pools does: one Deployment and one KEDA ScaledObject
+# worker-only env solely through queueMode.workerExtraEnv in chart 1.x
+# (env.worker in chart 2.0), so it can express at most a single pool.
+# Anything beyond that has to be built outside the chart, which is what
+# n8n_worker_pools does: one Deployment and one KEDA ScaledObject
 # per entry, alongside the chart's own unlabelled worker deployment.
 
 variable "n8n_worker_extra_env" {
-  description = "Additional environment variables injected into worker pods only, via queueMode.workerExtraEnv. Use this for worker-only tuning that must not reach main or webhook-processor pods; n8n_extra_env is the equivalent for all three. This reaches every worker, the chart's own unlabelled deployment and each n8n_worker_pools pool alike, because they render from one shared pod template; a pool's own extra_env is applied after this and wins on a repeated name. Set it here for tuning that should apply pool-wide, and on the pool for tuning that should not. N8N_WORKER_POOL_NAME is rejected here along with the other module-managed names: pool membership is owned by n8n_worker_pools, which also builds the queue and the KEDA scaler that go with it, and pinning the chart's own worker deployment to a pool through this input would leave those workers consuming a pool queue that nothing scales. Rejected at plan time for the same module-managed names as n8n_extra_env, and for the same deprecated names (N8N_AVAILABLE_BINARY_DATA_MODES and WEBHOOK_URL) with their own error."
+  description = "Additional environment variables injected into worker pods only, converted into the Helm chart's env.worker map (chart 2.0's flat NAME: value model for worker pods; queueMode.workerExtraEnv before it). Use this for worker-only tuning that must not reach main or webhook-processor pods; n8n_extra_env is the equivalent for all three. This reaches every worker, the chart's own unlabelled deployment and each n8n_worker_pools pool alike, because they render from one shared pod template; a pool's own extra_env is applied after this and wins on a repeated name. Set it here for tuning that should apply pool-wide, and on the pool for tuning that should not. N8N_WORKER_POOL_NAME is rejected here along with the other module-managed names: pool membership is owned by n8n_worker_pools, which also builds the queue and the KEDA scaler that go with it, and pinning the chart's own worker deployment to a pool through this input would leave those workers consuming a pool queue that nothing scales. Rejected at plan time for the same module-managed names as n8n_extra_env, and for the same deprecated names (N8N_AVAILABLE_BINARY_DATA_MODES and WEBHOOK_URL) with their own error."
   type = list(object({
     name  = string
     value = string
@@ -3914,6 +3922,18 @@ variable "n8n_worker_pools" {
   validation {
     condition     = alltrue([for p in var.n8n_worker_pools : p.concurrency == null ? true : (p.concurrency == floor(p.concurrency) && p.concurrency >= 1)])
     error_message = "n8n_worker_pools concurrency must be a whole number of concurrent jobs, 1 or greater, or null to inherit n8n_worker_concurrency."
+  }
+
+  validation {
+    # Mirrors n8n_execution_concurrency_limit's own cross-check against
+    # n8n_worker_concurrency above: hosted here, not there, for the same
+    # reason (a validation cycle). A pool's concurrency maps to the same
+    # --concurrency flag as n8n_worker_concurrency (queueMode.workerGroups[].
+    # concurrency vs. queueMode.workerConcurrency), so n8n ignores it exactly
+    # as it ignores the module-wide flag whenever n8n_execution_concurrency_limit
+    # is not -1; a pool's own concurrency would be silently dropped otherwise.
+    condition     = alltrue([for p in var.n8n_worker_pools : p.concurrency == null || var.n8n_execution_concurrency_limit == -1])
+    error_message = "An n8n_worker_pools entry sets concurrency while n8n_execution_concurrency_limit is not -1: n8n takes every worker's concurrency, pool or not, from n8n_execution_concurrency_limit (executions.concurrency.productionLimit) whenever it is set to anything other than -1, and ignores a pool's own concurrency (queueMode.workerGroups[].concurrency) exactly as it ignores n8n_worker_concurrency (queueMode.workerConcurrency) in that case. Leave n8n_execution_concurrency_limit at -1 while any pool sets concurrency, or clear the pool's concurrency (leave it null) to control it through n8n_execution_concurrency_limit instead."
   }
 
   validation {

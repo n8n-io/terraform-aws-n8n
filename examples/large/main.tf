@@ -128,7 +128,8 @@ module "n8n" {
   # ── Compute ───────────────────────────────────────────────────────────────────
   # m7i.4xlarge: 16 vCPU, 64 GB. Intel x86_64 — required with AL2023_x86_64_STANDARD
   # AMI type. Graviton (m7g.*) requires AL2023_ARM_64_STANDARD.
-  # Floor of 10 keeps scheduling warm; 50 max covers 2,400 req/s peak.
+  # Floor of 10 keeps scheduling warm; 50 max is headroom (the measured
+  # ~1,000 req/s ceiling used 20-23 nodes).
   node_instance_type = "m7i.4xlarge"
   node_desired       = 10
   node_min           = 10
@@ -184,35 +185,58 @@ module "n8n" {
   # what the node group has to survive, it is 320,000m of the ~785,000m this
   # node group can schedule (60 x 1,200m main, 320 x 700m worker, 80 x 300m
   # webhook) and ~9,200 client connections (460 pods x pool_size 20) against
-  # PgBouncer's 12,000 budget (MAX_CLIENT_CONN 3,000 x 4 replicas, sized in
+  # PgBouncer's 24,000 budget (MAX_CLIENT_CONN 3,000 x 8 replicas, sized in
   # pgbouncer.tf to stay above this ceiling).
   n8n_main_hpa_min_replicas = var.n8n_main_hpa_min_replicas
   n8n_main_hpa_max_replicas = 60
 
   # ── Webhook processors ────────────────────────────────────────────────────────
-  # Floor of 30: 10 pods saturated at ~960 req/s in benchmarks; 30 handles
-  # 500 concurrent VUs cleanly. 4 Gi memory limit halved failure rate vs 2 Gi
-  # under sustained 500 VU load.
+  # Floor of 30 is warm and handles 500 concurrent VUs cleanly. At the
+  # measured ~900-1,000 req/s ceiling (see pgbouncer.tf) webhook pods
+  # averaged ~11 exec/s each at about 40% CPU; 80 pods x ~11 exec/s is
+  # ~880 exec/s, near or at that measured ceiling rather than clearly below
+  # it. One run that raised the max to 160 cut the error rate at a fixed
+  # 1,250 req/s offered rate, but webhook CPU stayed around 40% throughout —
+  # the Postgres lock contention in pgbouncer.tf, not webhook pod capacity,
+  # is what caps throughput beyond this ceiling. The earlier "10 pods
+  # saturated at ~960 req/s" figure came from a no-op webhook benchmark and
+  # was not reproduced with a workflow that crosses the queue. 4 Gi memory
+  # limit halved failure rate vs 2 Gi under sustained 500 VU load.
   n8n_webhook_hpa_min_replicas = 30
   n8n_webhook_hpa_max_replicas = 80
   n8n_webhook_memory_request   = "1Gi"
   n8n_webhook_memory_limit     = "4Gi"
 
   # ── Workers ───────────────────────────────────────────────────────────────────
-  # concurrency=40: doubles the queue slots per pod vs 20, halving the pod
-  # count needed for a given throughput. Floor of 20 keeps the queue draining
-  # during idle periods. Ceiling of 320: the round-2 endurance headline (587
-  # req/s sustained on the representative real workflow) ran at 320 workers.
-  # Past that concurrency setting, throughput at this tier scales in worker
-  # pod count, not in per-pod CPU, so raise the ceiling before the requests. The previous ceiling of 160 was never
-  # observed reaching this tier's target on a real workload.
+  # Floor of 20 keeps the queue draining during idle periods. Ceiling of 320:
+  # the round-2 endurance headline (587 req/s sustained on the representative
+  # real workflow) ran at 320 workers. Throughput at this tier scales in worker
+  # pod count, not in per-pod CPU, so raise the ceiling before the requests. The
+  # previous ceiling of 160 was never observed reaching this tier's target on a
+  # real workload.
   n8n_worker_keda_min_replicas = 20
   n8n_worker_keda_max_replicas = 320
-  n8n_worker_concurrency       = 40
 
   # ── Execution settings ────────────────────────────────────────────────────────
-  # Raise the hard concurrency cap from 100 to 2,000 — the default throttles
-  # workers before any infrastructure bottleneck at this scale.
+  # Measured (2026-10-17, chart 2.0, 20 pinned workers, synthetic 500ms-HTTP
+  # I/O workflow and a trivial CPU workflow): throughput at a fixed worker
+  # count is flat (~340-410 exec/s) across n8n_worker_concurrency 10/20/40/100
+  # because each worker pod is CPU-bound at its 1-vCPU container limit
+  # regardless of the flag, not slot-bound. Raising concurrency past 10 only
+  # costs visibility and tail latency: bull:jobs:wait (KEDA's queue-depth
+  # trigger) drops from ~390 deep (fully visible) at concurrency=10 to ~190
+  # at 20 to 0 (fully blind to KEDA) at >=40, and p99 latency grows from
+  # ~1.9s at 10 to 7+s at 100 from per-worker job-fairness loss under many
+  # concurrent promises. An unpinned A/B at this tier's real KEDA bounds
+  # (20-320) confirmed it: an instantaneous ramp to 1,200 req/s completed
+  # cleanly at n8n_worker_concurrency=10, but the old effective config (this
+  # value unset, limit=2000) crashed 2 of 3 k6 load-generator jobs, drove
+  # bull:jobs:active to ~2,900 (jobs claimed but not completing), and
+  # dropped a PgBouncer replica to not-ready, none of which happened at
+  # concurrency=10. n8n_execution_concurrency_limit stays at -1 (the
+  # module's default): setting it instead of this flag is what let the 1.x
+  # chart silently run this tier at the old 2,000 effective value, because
+  # the limit wins over the flag whenever both would otherwise apply.
   # WARNING: pruning settings cannot bound table growth at this tier. n8n's
   # hard deletion runs at a hardcoded, non-configurable ceiling of 100
   # executions/s (batchSize=100, rescheduled every 1 second, leader-only),
@@ -220,9 +244,9 @@ module "n8n" {
   # execution rows accumulate unboundedly whatever these two values say. They
   # still matter (they set what the pruner is ALLOWED to reclaim), but plan
   # for net table growth at any sustained completion rate above ~100/s.
-  n8n_execution_concurrency_limit = 2000
-  n8n_pruning_max_age             = 24
-  n8n_pruning_max_count           = 5000000
+  n8n_worker_concurrency = 10
+  n8n_pruning_max_age    = 24
+  n8n_pruning_max_count  = 5000000
 
   # ── Data-resource deletion controls ─────────────────────────────────────────
   # Defaults to null, which lets the module's own default apply. Exposed so the

@@ -6,8 +6,8 @@ This covers bumping the deployed n8n version on an existing deployment. It does 
 
 | Variable | Controls | Default |
 | --- | --- | --- |
-| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.16.0"`, pinned |
-| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.43.5` in chart `1.16.0`) |
+| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"2.0.0-rc.1"`, pinned |
+| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.44.5` in chart `2.0.0-rc.1`) |
 | `n8n_task_runner_image_tag` | Task runner image tag; keep aligned with the underlying n8n version when using a custom application tag. | `null`, meaning the application image tag |
 
 Bumping the image tag alone gets you a new n8n version without changing the chart's templates or value schema. Bumping the chart version can also change what values the chart accepts, so treat it as the larger-blast-radius change of the two.
@@ -246,16 +246,19 @@ upgrade: Helm cannot roll back database migrations.
 - **PostgreSQL TLS.** The chart now renders `database.ssl.enabled` as
   `DB_POSTGRESDB_SSL_ENABLED`, the name n8n reads (n8n-io/n8n-hosting#175).
   The module delivers `database.ssl.*` only with `db_postgresdb_ssl_ca_pem`,
-  and sets `DB_POSTGRESDB_SSL_ENABLED` itself through `config.extraEnv`. On
+  and sets `DB_POSTGRESDB_SSL_ENABLED` itself through `env.shared`. On
   the upstream chart at a numbered `1.15.0` or newer (not a prerelease), with
   a CA delivered, it now leaves that name to the chart; in every other case it
   keeps setting it. You do not
   need to change any input. After the upgrade a container with a CA delivered
   carries the name once, from the chart's ConfigMap, and one without a CA
   carries it once, from the module. If you set `n8n_chart_repository` to a
-  private mirror, the module cannot verify that mirror's version numbers and
-  keeps its own entry, so the name may appear twice with the same value, which
-  Kubernetes resolves last-wins.
+  private mirror, the module cannot verify that mirror's version and keeps
+  its own entry regardless; if that mirror's chart also renders the name
+  (chart 2.0's `n8n.validateEnv` rejects any `env.shared`/`env.worker` key
+  the chart itself computes), the Helm render fails outright rather than
+  silently keeping either value, so a private mirror at 1.15.0 or newer with
+  a CA delivered needs its own case-by-case check.
 - **"Postgres TLS now applies" in the chart's release notes** concerns
   `database.ssl.enabled: true` without a CA, which this module never sends.
   Callers who manage that value in their own chart values are the audience.
@@ -350,6 +353,137 @@ the launcher's health server), or the apply rolling back to `1.15.0`.
 
 The worker-only task-runner capacity accounting covers `1.16.0`.
 
+## Moving from chart 1.16.0 to 2.0.0-rc.1
+
+`n8n_chart_version` now defaults to `"2.0.0-rc.1"` (was `"1.16.0"`), a chart
+2.0 release candidate published at the existing default
+`n8n_chart_repository` (`oci://ghcr.io/n8n-io/n8n-helm-chart`; appVersion
+`2.44.5`, n8n 2.x). This module's Helm values target chart 2.0's schema
+([n8n-io/n8n-hosting#250](https://github.com/n8n-io/n8n-hosting/pull/250),
+[#203](https://github.com/n8n-io/terraform-aws-n8n/issues/203)): env vars are
+per-component maps (`env.shared`, `env.worker`, …) rather than the `1.x`
+`config.extraEnv`-style lists, with no `1.x` compatibility path. As a release
+candidate rather than a numbered release, `2.0.0-rc.1` sits outside the
+usual chart-pin verification tiers in `docs/versioning.md` until chart 2.0
+ships a stable release.
+
+**Every n8n pod rolls once**, the same as any chart version bump: the
+chart's `helm.sh/chart` label and the rendered env shape both change, so
+main, worker, and webhook-processor pods all get new pod templates in one
+apply.
+
+**Secret contract change.** The core Kubernetes Secret this module creates
+(and the Secret `n8n_encryption_key_secret_ref` points at, if you use that
+input instead) only needs to carry `N8N_ENCRYPTION_KEY` now. Chart `1.x`
+also read `N8N_HOST`, `N8N_PORT`, and `N8N_PROTOCOL` from the same Secret;
+chart `2.0` gets the equivalents from `editor.url` / `webhook.url` /
+`service.port` instead and no longer reads them from a Secret at all. If
+your `n8n_encryption_key_secret_ref` Secret still carries those three keys
+from before this upgrade, leave them — the chart simply stops reading
+them — but you may remove them once you've confirmed the upgrade.
+
+**URL change.** Before this upgrade, the module set n8n's public editor and
+webhook URLs as literal `N8N_EDITOR_BASE_URL` / `WEBHOOK_URL` env entries.
+Chart `2.0` instead takes them as first-class `editor.url` / `webhook.url`
+values, which the module now sets from the same `n8n_domain` and webhook
+base URL it always computed. The effective URLs n8n hands out do not
+change; only the chart value they travel through does.
+
+**Concurrency change.** `n8n_worker_concurrency` is now nullable and
+defaults to `null`: the module then omits `queueMode.workerConcurrency`
+entirely and n8n's own built-in default (`10`) applies, instead of the
+module always sending `10` as before. Chart `2.0` fails to render if
+`queueMode.workerConcurrency` is set together with
+`executions.concurrency.productionLimit` at anything other than `-1`,
+because n8n honors `productionLimit` for worker job concurrency regardless
+of `workerConcurrency`, so the chart rejects the pair as a conflict rather
+than silently preferring one. `n8n_execution_concurrency_limit`'s default
+changes from `100` to `-1` (n8n's own "unlimited" sentinel) so the pair no
+longer conflicts by default; it remains an ordinary, overridable input
+beyond that. Set `n8n_worker_concurrency` together with a non-`-1`
+`n8n_execution_concurrency_limit` and `terraform plan` now fails.
+
+**This changes the effective default.** Under chart `1.x` the module always
+sent both values, and n8n actually ran workers at
+`n8n_execution_concurrency_limit`'s old default of `100`:
+`n8n_worker_concurrency`'s old default of `10` never took effect. With
+`n8n_worker_concurrency` now `null` by default and
+`n8n_execution_concurrency_limit`'s default now `-1`, the effective default
+becomes n8n's own worker concurrency of `10` instead. If you relied on the
+old effective value, set `n8n_execution_concurrency_limit = 100` (or
+whatever your old deployment actually ran at) explicitly rather than
+leaving both at their new defaults.
+`examples/medium` and `examples/large` were both re-benchmarked on chart 2.0
+and set `n8n_worker_concurrency = 10`; the measured basis, and when a higher
+value is right, is in each example's `main.tf`.
+
+**`n8n_extra_env` / `n8n_worker_extra_env` users: nothing to change.**
+These inputs keep the same `list(object({ name, value }))` shape and still
+reach the same pods (main + worker + webhook processor for the first,
+workers only for the other); only where the module places their values
+inside the chart's rendered values changed, which is this module's problem
+to get right, not yours. The plan-time reserved-name guards
+(`N8N_GRACEFUL_SHUTDOWN_TIMEOUT` and the other chart-managed names) are
+unchanged.
+
+**License cert and extra CA users: nothing to change.** `N8N_LICENSE_CERT`
+(`n8n_license_cert_secret_ref`) and `NODE_EXTRA_CA_CERTS`
+(`n8n_extra_ca_pem`) now render through `env.shared` as chart 2.0
+`{ secretKeyRef }` / literal map values instead of the chart 1.x
+`config.extraEnv` list; the pods, mounts, and annotations they produce are
+unchanged.
+
+**Worker pool `extra_env` users: this does not reach pool pods yet.** Chart
+`2.0.0-rc.1` has no `queueMode.workerGroups`, and `worker-pools.tf` still
+emits a pool's `extra_env` in the pre-2.0 list shape it expects. Until
+worker pools land on a chart `2.0` release (see `docs/versioning.md`'s Chart
+2.0 upgrade requirements), a worker pool's `extra_env` is not wired to any
+rendered value and will not reach that pool's pods. `n8n_worker_pools` also
+now requires either a `preview.workerpools.*` build or
+`n8n_worker_pools_chart_verified = true` against a verified private mirror:
+the prerelease exemption no longer covers an upstream `-rc.<N>` release
+candidate such as `2.0.0-rc.1`, which is cut from the chart's `main` branch
+and does not carry `queueMode.workerGroups` either. See
+`examples/worker-pools/README.md`.
+
+**Other chart changes you will see.** Verified against the published
+`2.0.0-rc.1` release (`oci://ghcr.io/n8n-io/n8n-helm-chart`), not against a
+live upgrade. Each item below is a chart default this module does not set
+(confirmed against `n8n.tf`/`locals.tf`), so it applies exactly as the
+chart ships it:
+
+- **Worker readiness/liveness probes default to `httpGet`** against
+  `/healthz` and `/healthz/readiness` on port `5678`, because
+  `redis.healthCheck.enabled` now defaults to `true` (was `false`). Chart
+  `1.x` defaulted to an exec probe (`pgrep -f 'n8n worker'`) instead. A new
+  `startupProbe` (also httpGet, enabled by default) gates liveness/readiness
+  on the worker finishing its database/migration/Redis startup.
+- **A default per-container `securityContext`** (`containerSecurityContext`
+  in `values.yaml`) now applies to the main, worker, webhook-processor, and
+  task-runner containers: `allowPrivilegeEscalation: false` and
+  `capabilities.drop: [ALL]`. Chart `1.x` had no equivalent per-container
+  key.
+- **`imagePullSecrets`** is now a top-level chart value rendered directly
+  onto every pod spec. This module still uses its own pre-2.0 workaround
+  (`n8n_image_pull_secrets` creates and attaches secrets to a ServiceAccount
+  it manages itself) rather than this new value; see
+  `local.n8n_manages_service_account` in `locals.tf`.
+- **`hostAliases`** is a new top-level chart value (default `[]`) for
+  rendering `/etc/hosts` entries on every pod. Not set by this module.
+- **`image.digest`** (and `taskRunners.image.digest`) let you pin by digest
+  alongside the tag (default `""`). Not set by this module; `n8n_image_tag`
+  still only sets the tag.
+- **`persistence.annotations`** is a new value for the optional PVC
+  (default `{}`). Not set by this module, which leaves `persistence.enabled`
+  at the chart's own default and uses no PVC.
+- **`webhook.timeout`** (request timeout in milliseconds, `120000` in chart
+  `1.x`) is removed from chart `2.0` entirely. This module never set it, so
+  there is nothing to change here, but it is gone if you referenced it in
+  your own chart-values research.
+- **`enableServiceLinks`** and **`httpRoute`** are new top-level chart
+  values (defaults `false` and `{enabled: false, ...}`). Not set by this
+  module; see [docs/helm-chart-coverage.md](./helm-chart-coverage.md).
+
 ## Before bumping
 
 1. Read the breaking-changes doc for every major version you're crossing, not just the target: [n8n v2.0 breaking changes](https://docs.n8n.io/2-0-breaking-changes/), [n8n v3.0 breaking changes](https://docs.n8n.io/changelog/v30-breaking-changes) (scheduled October 2026). Jumping from, say, 1.x straight to a 3.x tag means both apply.
@@ -367,11 +501,11 @@ but makes the editor, REST API, and scheduled triggers unavailable until the
 replacement starts. Plan a maintenance window; missed schedule times are not
 promised to replay.
 
-With chart `1.16.0` and newer, no main PodDisruptionBudget is rendered in
-this topology, so node drains and managed node updates can always evict the
-only main. Older charts render a main PDB with `minAvailable = 0`, which
-permits the same eviction. Either way, such maintenance causes downtime.
-Worker and webhook rollout strategies are unchanged.
+Chart `2.0` renders no main `PodDisruptionBudget` at all in this topology
+(`templates/pdb.yaml` renders one only when a second main pod can exist),
+so node drains and managed node updates can evict the only main with
+nothing to block them. Such maintenance also causes downtime. Worker and
+webhook rollout strategies are unchanged.
 
 Moving from single-main back to two or more mains is not overlap-free: the
 Deployment scales the existing single-main ReplicaSet up before the
@@ -400,8 +534,8 @@ before the replacement starts, and verify a node drain can evict the main.
 Rendering tests cannot establish controller behavior.
 `tests/scripts/smoke-test.sh` detects the single-main topology from the
 multi-main flag on the main Deployment and fails if the HPA is not pinned to
-`1/1`, the strategy is not `Recreate`, or the disruption budget (where the
-chart renders one, before `1.16.0`) is not `minAvailable = 0`.
+`1/1`, the strategy is not `Recreate`, or a main `PodDisruptionBudget` exists
+at all (chart `2.0` renders none in this topology; see above).
 
 For scale, on `examples/small` (n8n 2.37.10, `t3.xlarge` nodes) a
 `kubectl rollout restart` of the main produced about 30 seconds of ALB 503

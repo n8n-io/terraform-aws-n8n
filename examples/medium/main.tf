@@ -161,25 +161,111 @@ module "n8n" {
   n8n_webhook_memory_limit     = "2Gi"
 
   # ── Workers ───────────────────────────────────────────────────────────────────
-  # concurrency=20: doubles throughput per pod vs the default 10.
   # pool_size=10 is a per-process lazy maximum, not a value derived from worker
   # or workflow concurrency. Keep aggregate database capacity within the budget
   # described above.
   n8n_worker_keda_min_replicas = 5
   n8n_worker_keda_max_replicas = 40
-  n8n_worker_concurrency       = 20
   db_postgresdb_pool_size      = 10
 
   # ── Execution settings ────────────────────────────────────────────────────────
-  # Concurrency limit of 200 gives 2× headroom over the worker floor × concurrency.
+  # Chart 2.0 rejects setting both n8n_worker_concurrency and
+  # n8n_execution_concurrency_limit, so only one can govern per-worker
+  # concurrency now. Re-benched after the chart 2.0 move (the 1.x value here
+  # was n8n_execution_concurrency_limit = 200, which is what workers actually
+  # ran at under 1.x — n8n_worker_concurrency = 20 never took effect because
+  # n8n always prefers N8N_CONCURRENCY_PRODUCTION_LIMIT when it is set).
+  # Re-benched twice: a CPU-bound workload (light Code node, no $env) and an
+  # I/O-bound one (webhook -> HTTP Request node calling an in-cluster
+  # endpoint -> Set node), both against this tier's worker CPU budget
+  # (n8n_worker_cpu_limit's default of 1000m), KEDA pinned at the floor of 5
+  # workers, sweeping n8n_worker_concurrency over 10/20/50/100/200 with
+  # 5-minute saturating closed-loop runs:
+  #   - CPU-bound: 10 gives ~62 completed executions/s, p95 ~5.1s, worker CPU
+  #     pegged at its 1000m limit throughout. 20-50 are flat (~60/s, same CPU
+  #     ceiling); 100-200 are slightly down (~58-59/s) with p95 growing to
+  #     8.4s and 12.8s — more concurrent work competing for one CPU core adds
+  #     scheduling overhead with no throughput to show for it.
+  #   - I/O-bound at a fast (500ms) in-cluster call: same story. 10 gives
+  #     ~81/s, already CPU-pegged at 1000m; 20-200 are flat-to-worse (~58-60/s,
+  #     p95 up to 16s at 200). n8n's own per-execution overhead (data
+  #     cloning, execution bookkeeping, queue housekeeping), not the network
+  #     wait, is what consumes the CPU, so a sub-second call behaves like a
+  #     CPU-bound node: 10 is already enough concurrency to keep the CPU busy,
+  #     and more just adds contention.
+  #   - I/O-bound at a slow (2s) call — representing a slow upstream API —
+  #     inverts this: at 10, worker CPU sits at only ~27% (280m), because each
+  #     slot now spends most of its time waiting, not computing, and
+  #     throughput is capped at ~24/s by the slot count itself. Raising to 50
+  #     restores full CPU utilization and more than doubles throughput to
+  #     ~57/s — landing on the same ~60/s ceiling as every other setting,
+  #     just reached with more concurrency because each execution occupies
+  #     its slot ~4x longer.
+  # In every case the ceiling is this tier's worker CPU budget (~60-80/s
+  # completed executions across 5 workers at 1000m each, confirmed by RDS
+  # staying under 10% CPU and Redis under 4% the entire time — never the
+  # constraint). What differs by workload is how much concurrency it takes to
+  # reach that ceiling: workflows that are CPU-bound or make fast (sub-second)
+  # calls are already there at 10; workflows dominated by slow upstream calls
+  # need more concurrency to keep the CPU fed, and should be benched the same
+  # way before raising this. n8n_execution_concurrency_limit = 10 with
+  # n8n_worker_concurrency = null reproduced the CPU-bound ~60/s, confirming
+  # the two knobs are equivalent at this value; n8n_worker_concurrency is kept
+  # because it is the knob the module now treats as primary.
+  #
+  # 10 — n8n's own default — is the right default for this example: it is the
+  # measured optimum for CPU-bound and typical fast-call workflows, which is
+  # what this tier's sizing otherwise assumes, and the previous effective 200
+  # bought no throughput on either shape while costing tail latency. If most
+  # of your workflows wait on slow external calls instead, re-bench and raise
+  # this (watching worker CPU with `kubectl top`; we saw worker memory grow
+  # with concurrency too — up to ~1.3 Gi of the 2Gi n8n_worker_memory_limit at
+  # concurrency 200 — so watch that alongside CPU). If CPU is already pegged
+  # at low concurrency, as it is for this tier's assumed workload, raise
+  # n8n_worker_cpu_limit instead of this; raising concurrency further will not
+  # help.
+  #
+  # Live-scaling validation (KEDA unpinned at this example's real 5-40 bounds,
+  # node group left at 5-15, both HPAs at their real bounds): A/B on a
+  # stepped load ramp (idle -> 60 -> 120 -> 175 -> 400 req/s, each held
+  # several minutes) comparing n8n_worker_concurrency = 10 against the old
+  # chart-1.x-equivalent (n8n_worker_concurrency = null,
+  # n8n_execution_concurrency_limit = 200). Both reached ~40 workers and
+  # ~300-320 completed executions/s at the 400 req/s step, and neither came
+  # close to the 15-node ceiling (one extra node beyond the 5-node floor
+  # covered 40 workers + 30+ webhook-processor pods); RDS peaked around 50%
+  # CPU and ~600-700 connections and Redis around 20-27% CPU — this tier's
+  # database and cache sizing holds at the 400 req/s step on both settings.
+  # KEDA scaled the worker Deployment itself (confirmed via `kubectl get
+  # deployment n8n-worker -o jsonpath='{.spec.replicas}'`, not pinned by the
+  # chart), reaching 40 replicas within about 40 seconds of load crossing
+  # capacity, and a Helm upgrade applied mid-scale-out (40 replicas) did not
+  # reset the Deployment back to any chart default — confirmed replicas
+  # stayed at 40 through the upgrade.
+  #
+  # Where the two settings differ sharply is scaling *visibility* and tail
+  # latency, not peak throughput: at concurrency 200, BullMQ lets each worker
+  # claim up to 200 jobs into "active" immediately, so bull:jobs:wait (KEDA's
+  # primary trigger) stayed at 0 for the entire test even while active queued
+  # above 2,900 and p95 latency reached 24-26s at the saturating step — the
+  # backlog becomes invisible to the autoscaler and sits queued inside the
+  # worker process instead of Redis. At concurrency 10, the same backlog
+  # shows up in bull:jobs:wait where KEDA can see and react to it, and p95 at
+  # the same step was 10-13s. Concurrency 200 also produced the only
+  # `Database ping failed` messages seen in either run (two occurrences,
+  # both self-recovered, no pod restarts) during its saturating step, against
+  # none at concurrency 10 — DB_PING timeouts show up under this live-scaling
+  # test at concurrency 200 but not at concurrency 10, and not at all in the
+  # earlier fixed-worker-count sweep above, further evidence for the value
+  # below, not a reason to change it.
   # 7-day pruning keeps the execution_entity table at a manageable size without
   # losing useful debugging history. Caveat for sustained high rates: n8n's
   # hard deletion is hardcoded at a 100 executions/s ceiling (~8.6M/day,
   # leader-only), so retention math stops holding as sustained completion
   # rates approach 100/s; see the large example's warning for the mechanism.
-  n8n_execution_concurrency_limit = 200
-  n8n_pruning_max_age             = 168
-  n8n_pruning_max_count           = 500000
+  n8n_worker_concurrency = 10
+  n8n_pruning_max_age    = 168
+  n8n_pruning_max_count  = 500000
 
   # ── TLS proxy support ───────────────────────────────────────────────────────
   # Outbound CA trust, inbound proxy hop count, and proxy routing env. See

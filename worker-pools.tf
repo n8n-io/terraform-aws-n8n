@@ -34,6 +34,13 @@
 # and the two checks at the bottom of this file, and
 # examples/worker-pools/README.md for the exact command and a
 # private-mirror fallback.
+#
+# This feature's chart support also predates chart 2.0's env.shared/env.worker
+# model (decisions/0012-env-as-per-component-maps.md): queueMode.workerGroups
+# does not exist on the chart's main branch at all (2.0 and later), only on
+# preview/worker-pools, which has not been rebased onto 2.0. A pool's own
+# extra_env (below) is therefore left in its pre-2.0 {name, value} list shape,
+# unconverted -- see the comment on that field.
 
 locals {
   # First n8n release that reads N8N_WORKER_POOLS_ENABLED and
@@ -57,66 +64,93 @@ locals {
   # no-render case this guard exists to stop. Checking for the hyphen
   # directly, rather than "fails a strict X.Y.Z match", is what keeps a
   # build-metadata-only version from falling through as if it were a
-  # prerelease. Replace this whole local with a real floor and a numeric
-  # compare once n8n-io/n8n-hosting#189 merges to main and a numbered
-  # release carries the feature; n8n_worker_pools_chart_verified can retire
-  # at the same time.
+  # prerelease. An upstream release candidate ("-rc.N", e.g. 2.0.0-rc.1) is
+  # NOT exempt: it is cut from main, which does not carry the feature, and
+  # 2.0.0-rc.1's values.yaml has no queueMode.workerGroups at all. Replace
+  # this whole local with a real floor and a numeric compare once
+  # n8n-io/n8n-hosting#189 merges to main and a numbered release carries the
+  # feature; n8n_worker_pools_chart_verified can retire at the same time.
   n8n_chart_renders_worker_pools = (
-    can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+-", var.n8n_chart_version)) ||
+    (
+      can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+-", var.n8n_chart_version)) &&
+      !can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.", var.n8n_chart_version))
+    ) ||
     var.n8n_worker_pools_chart_verified
   )
 
   n8n_worker_groups = [
-    for p in var.n8n_worker_pools : {
-      # One group per pool, and the group is the pool: the chart allows a group
-      # with no poolName (extra workers on the default queue), but this module
-      # has n8n_worker_keda_{min,max}_replicas for sizing the default workers
-      # and does not need a second way to do it.
-      name     = p.name
-      poolName = p.name
+    for p in var.n8n_worker_pools : merge(
+      {
+        # One group per pool, and the group is the pool: the chart allows a group
+        # with no poolName (extra workers on the default queue), but this module
+        # has n8n_worker_keda_{min,max}_replicas for sizing the default workers
+        # and does not need a second way to do it.
+        name     = p.name
+        poolName = p.name
 
-      concurrency = coalesce(p.concurrency, var.n8n_worker_concurrency)
-      extraEnv    = p.extra_env
+        # Still the chart's pre-2.0 {name, value} list shape for
+        # queueMode.workerGroups[].extraEnv, unconverted: workerGroups exists
+        # only on the chart's preview/worker-pools branch (see the file header),
+        # which predates the chart 2.0 env.shared/env.worker/envFrom model
+        # (decisions/0012-env-as-per-component-maps.md) and has not been
+        # rebased onto it as of this module's chart 2.0 migration. There is no
+        # workerGroups on chart 2.0's main branch to verify this field's shape
+        # against at all. Leave this as the list shape until n8n-io/n8n-hosting
+        # #189 merges onto the 2.0 line and a render can confirm what
+        # workerGroups[].extraEnv looks like there -- do not guess at a map
+        # conversion here the way n8n_worker_extra_env's env.worker got.
+        extraEnv = p.extra_env
 
-      resources = {
-        requests = {
-          cpu    = coalesce(p.cpu_request, var.n8n_worker_cpu_request)
-          memory = coalesce(p.memory_request, var.n8n_worker_memory_request)
+        resources = {
+          requests = {
+            cpu    = coalesce(p.cpu_request, var.n8n_worker_cpu_request)
+            memory = coalesce(p.memory_request, var.n8n_worker_memory_request)
+          }
+          limits = {
+            cpu    = coalesce(p.cpu_limit, var.n8n_worker_cpu_limit)
+            memory = coalesce(p.memory_limit, var.n8n_worker_memory_limit)
+          }
         }
-        limits = {
-          cpu    = coalesce(p.cpu_limit, var.n8n_worker_cpu_limit)
-          memory = coalesce(p.memory_limit, var.n8n_worker_memory_limit)
+
+        keda = {
+          minReplicaCount = p.min_replicas
+          maxReplicaCount = p.max_replicas
+          # Same threshold the module gives the default worker's scaler, so a
+          # pool's queue depth is read on the same scale as the default queue's.
+          jobsPerReplica = var.n8n_worker_keda_jobs_per_replica
+
+          # The same TLS and AUTH metadata the default worker's two triggers
+          # carry (see the merge sites in n8n.tf). The chart builds a pool's
+          # triggers itself from the queue name, so this is the only route the
+          # metadata has into them, and without it a pool's scaler talks
+          # plaintext to a TLS-only endpoint and the pool sits at min_replicas
+          # with nothing crashing to announce it. Empty on a deployment without
+          # transit encryption or AUTH, and the chart guards the block with
+          # `with`, so it renders nothing on that path.
+          #
+          # Verified on a live TLS cluster, including the counterfactual: removing
+          # enableTLS from one pool's triggers put its ScaledObject into
+          # READY=False and logged `connection to redis failed: i/o timeout` in
+          # the KEDA operator, and restoring it recovered. Those two are the
+          # signals to trust. `kubectl get hpa` is not: its TARGETS column read
+          # <unknown> for every worker HPA in both the healthy and the broken
+          # state, so it gives a false alarm on a working release and false
+          # reassurance on a broken one. The metric itself resolves through
+          # /apis/external.metrics.k8s.io.
+          triggerMetadata = local.keda_redis_auth_metadata
         }
-      }
-
-      keda = {
-        minReplicaCount = p.min_replicas
-        maxReplicaCount = p.max_replicas
-        # Same threshold the module gives the default worker's scaler, so a
-        # pool's queue depth is read on the same scale as the default queue's.
-        jobsPerReplica = var.n8n_worker_keda_jobs_per_replica
-
-        # The same TLS and AUTH metadata the default worker's two triggers
-        # carry (see the merge sites in n8n.tf). The chart builds a pool's
-        # triggers itself from the queue name, so this is the only route the
-        # metadata has into them, and without it a pool's scaler talks
-        # plaintext to a TLS-only endpoint and the pool sits at min_replicas
-        # with nothing crashing to announce it. Empty on a deployment without
-        # transit encryption or AUTH, and the chart guards the block with
-        # `with`, so it renders nothing on that path.
-        #
-        # Verified on a live TLS cluster, including the counterfactual: removing
-        # enableTLS from one pool's triggers put its ScaledObject into
-        # READY=False and logged `connection to redis failed: i/o timeout` in
-        # the KEDA operator, and restoring it recovered. Those two are the
-        # signals to trust. `kubectl get hpa` is not: its TARGETS column read
-        # <unknown> for every worker HPA in both the healthy and the broken
-        # state, so it gives a false alarm on a working release and false
-        # reassurance on a broken one. The metric itself resolves through
-        # /apis/external.metrics.k8s.io.
-        triggerMetadata = local.keda_redis_auth_metadata
-      }
-    }
+      },
+      # Pool concurrency if set, else the module-wide default, which is
+      # itself nullable (n8n_worker_concurrency's own chart-2.0 default is
+      # empty). coalesce() errors when every argument is null, so this uses a
+      # plain ternary instead and omits the key entirely in that case,
+      # matching the chart's own default (no --concurrency flag, n8n's
+      # default of 10 applies) exactly as queueMode.workerConcurrency does
+      # for the default worker deployment above.
+      (p.concurrency != null ? p.concurrency : var.n8n_worker_concurrency) == null ? {} : {
+        concurrency = p.concurrency != null ? p.concurrency : var.n8n_worker_concurrency
+      },
+    )
   ]
 }
 

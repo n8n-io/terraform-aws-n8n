@@ -133,12 +133,14 @@ locals {
   # 1.16.0 moves the sidecar into a shared n8n.taskRunnerContainer helper,
   # still gated on main by the same n8n.mainTaskRunnersEnabled, and keeps its
   # resources; none changes deployment-main.yaml's runner placement).
+  # 2.0.0-rc.1 keeps the same gate (n8n.mainTaskRunnersEnabled is
+  # taskRunners.enabled and not queueMode.enabled) around the same helper.
   # Strip build metadata only: previews, older/future
   # releases and custom repositories keep the conservative main-sidecar
   # allowance until their topology is verified.
   n8n_chart_has_worker_only_runners = (
     var.n8n_chart_repository == "oci://ghcr.io/n8n-io/n8n-helm-chart" &&
-    contains(["1.12.0", "1.13.0", "1.14.0", "1.15.0", "1.16.0"], split("+", var.n8n_chart_version)[0])
+    contains(["1.12.0", "1.13.0", "1.14.0", "1.15.0", "1.16.0", "2.0.0-rc.1"], split("+", var.n8n_chart_version)[0])
   )
   n8n_main_task_runner_cpu_millis = local.n8n_chart_has_worker_only_runners ? 0 : local.n8n_cpu_request_millis["task_runner"]
 
