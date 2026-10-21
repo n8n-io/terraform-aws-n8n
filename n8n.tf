@@ -118,11 +118,15 @@ locals {
 locals {
   # Whether the running n8n may predate N8N_WEBHOOK_URL (added in 2.30.0) and
   # so still needs the legacy WEBHOOK_URL. Below 2.30.0, n8n builds webhook
-  # URLs from WEBHOOK_URL or else from N8N_PROTOCOL://N8N_HOST:N8N_PORT, which
-  # here is http://<n8n_domain>:5678/. Leaving WEBHOOK_URL out of an old image
-  # therefore breaks webhook URLs silently, while sending it to a current one
-  # only costs a deprecation warning. So the module drops it only when the
-  # tags prove the image is current, and sends it whenever they cannot.
+  # URLs from WEBHOOK_URL or else from N8N_PROTOCOL://N8N_HOST:N8N_PORT. This
+  # module no longer sets any of those three (chart 2.0 dropped them from the
+  # core Secret; see kubernetes_secret.n8n below), so the fallback now
+  # resolves to n8n's own defaults, http://localhost:5678/, not the previous
+  # http://<n8n_domain>:5678/. Leaving WEBHOOK_URL out of an old image
+  # therefore breaks webhook URLs even more silently than before, while
+  # sending it to a current one only costs a deprecation warning. So the
+  # module drops it only when the tags prove the image is current, and sends
+  # it whenever they cannot.
   #
   # The version, when one can be read:
   #   - n8n_image_tag starts with a full MAJOR.MINOR.PATCH version ("2.27.4",
@@ -173,17 +177,15 @@ locals {
     )
   ) : !local.n8n_image_known_current
 
-  # The webhook env entries config.extraEnv carries. A local rather than inline
-  # in helm_release.n8n so tests can assert the rendered list: the release's
-  # values are unknown at plan under mocks (see AGENTS.md).
+  # The legacy WEBHOOK_URL entry for env.shared, when the image may predate
+  # 2.30.0 (see n8n_needs_legacy_webhook_url_env above). N8N_WEBHOOK_URL
+  # itself is chart-owned now: helm_release.n8n's webhook.url value renders
+  # it, and env.shared cannot set it without failing the render (chart 2.0's
+  # n8n.validateEnv). A local rather than inline in helm_release.n8n so tests
+  # can assert the rendered map directly: the release's values are unknown at
+  # plan under mocks (see AGENTS.md).
   n8n_webhook_base_url = coalesce(var.n8n_webhook_url, "https://${local.n8n_domain}")
-  n8n_webhook_url_env = concat(
-    [{ name = "N8N_WEBHOOK_URL", value = local.n8n_webhook_base_url }],
-    # WEBHOOK_URL is the pre-2.30.0 name. n8n reads N8N_WEBHOOK_URL from
-    # 2.30.0 on and logs a deprecation warning at startup whenever WEBHOOK_URL
-    # is set, so it is only emitted when the image is not known to be current.
-    local.n8n_needs_legacy_webhook_url_env ? [{ name = "WEBHOOK_URL", value = local.n8n_webhook_base_url }] : [],
-  )
+  n8n_webhook_url_env  = local.n8n_needs_legacy_webhook_url_env ? { WEBHOOK_URL = local.n8n_webhook_base_url } : {}
 }
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
@@ -205,18 +207,18 @@ locals {
 # stops being copied into the Helm release as well.
 
 resource "kubernetes_secret" "n8n" {
-  # Gated to zero only when n8n_encryption_key_secret_ref replaces this Secret
-  # entirely: the chart's secretRefs.existingSecret names one Secret for all
-  # four of N8N_ENCRYPTION_KEY, N8N_HOST, N8N_PORT and N8N_PROTOCOL, so there
-  # is no way to keep this Secret around for the other three and still point
-  # the encryption key at a caller-supplied one. See that variable's
-  # description for the coupling this implies for the license key.
-  #
-  # The license key is handled differently: it is dropped from `data` (not
-  # gated onto this resource's count) when n8n_license_key_secret_ref is set,
-  # since kubernetes_secret.n8n keeps existing for the other configuration
-  # keys either way on that path. See the `merge()` below.
-  count = var.n8n_encryption_key_secret_ref == null ? 1 : 0
+  # Exists whenever at least one of the two keys it can hold still needs a
+  # module-managed home: the encryption key (n8n_encryption_key_secret_ref ==
+  # null) or the license key (n8n_license_key_secret_ref == null). Chart 2.0's
+  # secretRefs.existingSecret names a Secret holding only N8N_ENCRYPTION_KEY
+  # (n8n-io/n8n-hosting decision 0012): N8N_HOST, N8N_PORT and N8N_PROTOCOL are
+  # no longer read from it at all, and the license key reaches the chart
+  # through the unrelated license.existingSecret value below. The two no
+  # longer have to share one Secret's existence the way the old four-key
+  # Secret forced them to: a caller supplying their own Secret for the
+  # encryption key no longer requires n8n_license_key_secret_ref to also be
+  # set. See both variables' descriptions.
+  count = (var.n8n_encryption_key_secret_ref == null || var.n8n_license_key_secret_ref == null) ? 1 : 0
 
   metadata {
     name      = "n8n-enterprise-secrets"
@@ -224,15 +226,7 @@ resource "kubernetes_secret" "n8n" {
   }
 
   data = merge(
-    {
-      N8N_ENCRYPTION_KEY = local.n8n_encryption_key
-      N8N_HOST           = local.n8n_domain
-      N8N_PORT           = "5678"
-      N8N_PROTOCOL       = "http"
-      # No WEBHOOK_URL here: coreSecretsEnv reads only the four keys above
-      # (plus the license key), so a copy in this Secret was never read.
-      # The pods get it from config.extraEnv instead.
-    },
+    var.n8n_encryption_key_secret_ref == null ? { N8N_ENCRYPTION_KEY = local.n8n_encryption_key } : {},
     # Dropped rather than merged in as null when the caller's own Secret
     # carries the license key instead: license.existingSecret then points
     # straight at var.n8n_license_key_secret_ref.name below, and this key
@@ -346,6 +340,256 @@ resource "kubernetes_service_account_v1" "n8n" {
   depends_on = [aws_eks_node_group.n8n]
 }
 
+# ── n8n process environment (chart 2.0 env.shared / env.worker maps) ──────────
+# Chart 2.0 replaced config.extraEnv (and eight sibling *extraEnv lists) with
+# one flat map per component -- env.shared reaches every n8n process (main,
+# worker, webhook processor) but not the task-runner sidecar; env.worker adds
+# to it for workers only -- rendered into ConfigMaps the containers load with
+# envFrom (n8n-io/n8n-hosting decision 0012). Built here with merge() rather
+# than inline in helm_release.n8n's values below so tests can assert the
+# result directly: the release's values are unknown at plan under mocks (see
+# AGENTS.md's known mock-provider limitations), the same reason
+# n8n_webhook_url_env, n8n_postgres_ssl_env and n8n_proxy_hops_env already
+# exist as their own locals (locals.tf).
+#
+# merge() resolves a duplicate key last-wins, same as the old config.extraEnv
+# list's Kubernetes last-wins semantics did for a name THIS module sets here,
+# but a name the CHART computes from its own values (N8N_PORT,
+# N8N_EDITOR_BASE_URL, N8N_WEBHOOK_URL, DB_*, QUEUE_*, N8N_RUNNERS_*,
+# N8N_MULTI_MAIN_*, N8N_EXTERNAL_STORAGE_S3_*, AWS_*, TZ, ...) now fails the
+# Helm render outright if it reaches env.shared or env.worker (chart 2.0's
+# n8n.validateEnv), rather than silently losing to whichever entry happened
+# to render last in the pod's env list. var.n8n_extra_env, merged in last
+# below, can still silently override a name THIS module sets in this same
+# merge() -- local.n8n_managed_env_names and local.n8n_managed_env_prefixes
+# further down are what stop that, by rejecting those names from the
+# variable at plan time.
+locals {
+  n8n_env_shared = merge(
+    # Direct connections to RDS/Aurora use SSL. Certificate verification is off by default
+    # because the RDS CA is not in Node.js's trust store; db_postgresdb_ssl_reject_unauthorized
+    # and db_postgresdb_ssl_ca_pem turn it on (see docs/postgresql-tls.md). Set
+    # db_postgresdb_ssl_enabled = false when n8n's DB host is an in-cluster pooler (e.g.
+    # PgBouncer) that handles SSL on its upstream leg.
+    local.n8n_postgres_ssl_env,
+    {
+      N8N_LOG_LEVEL = var.n8n_log_level
+      # N8N_LOG_OUTPUT controls *where* logs go (console / file), not their
+      # format. Setting it to anything other than "console" / "file" / a
+      # comma-separated combination leaves Winston without a transport, at
+      # which point every log line is replaced with a Winston warning and
+      # the actual logs are silently dropped. See variable description.
+      N8N_LOG_OUTPUT                        = var.n8n_log_output
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS = "true"
+    },
+    # The legacy WEBHOOK_URL, when the image may predate 2.30.0 (see
+    # local.n8n_needs_legacy_webhook_url_env). N8N_WEBHOOK_URL itself is
+    # chart-owned now: helm_release.n8n's webhook.url value above renders it,
+    # and env.shared cannot set it without failing the render.
+    local.n8n_webhook_url_env,
+    # Hop count for Express's trust-proxy setting, so n8n takes the client IP
+    # from the right X-Forwarded-For entry and honors X-Forwarded-Proto. An
+    # ALB alone is one hop; any proxy in front of it (e.g. CloudFront) adds
+    # one, whether or not the module owns the Ingress. See var.n8n_proxy_hops's
+    # description.
+    local.n8n_proxy_hops_env,
+    {
+      N8N_RUNNERS_TASK_REQUEST_TIMEOUT = tostring(var.n8n_task_runner_request_timeout)
+      # Keeps ElastiCache from dropping idle Redis subscriber connections under sustained load.
+      # Without this, Bull detects dropped connections, emits queue errors, and pods crash.
+      QUEUE_BULL_REDIS_KEEP_ALIVE = "true"
+    },
+    # Scopes n8n's scaling-mode pub/sub command channel ("<prefix>:n8n.commands")
+    # to this deployment. The chart has no dedicated field for this env var
+    # (unlike QUEUE_BULL_PREFIX, wired via redis.prefix above), so it's a
+    # literal env.shared entry here. Omitted entirely on the null path, leaving
+    # n8n's own "n8n" default exactly as before. See redis_key_prefix.
+    var.redis_key_prefix != null ? { N8N_REDIS_KEY_PREFIX = var.redis_key_prefix } : {},
+    # Database connection acquisition and health-check ping settings. The
+    # chart has no values path for these and `DB_` is a module-managed
+    # prefix, so n8n_extra_env cannot reach them. Each is omitted on the
+    # null path, leaving n8n's own defaults.
+    #
+    # DB_POSTGRESDB_CONNECTION_TIMEOUT becomes pg-pool's
+    # connectionTimeoutMillis, which bounds both connection establishment
+    # and waiting for the shared pool to free a slot. The database monitor
+    # also calls pool.connect(), so its acquisition is subject to this
+    # timeout and to the separate DB_PING_TIMEOUT_MS race. The effective
+    # health-check acquisition deadline is whichever timeout fires first.
+    #
+    # This interaction matters under load. A pool saturated by ordinary
+    # database operations can make the ping time out while the database is
+    # healthy. One timed-out ping marks the pod disconnected, so its global
+    # middleware returns 503. Repeated failures make n8n destroy and
+    # recreate the pool, suspending in-flight acquisition on that pod.
+    var.db_postgresdb_connection_timeout_ms != null ? { DB_POSTGRESDB_CONNECTION_TIMEOUT = tostring(var.db_postgresdb_connection_timeout_ms) } : {},
+    var.db_ping_timeout_ms != null ? { DB_PING_TIMEOUT_MS = tostring(var.db_ping_timeout_ms) } : {},
+    var.db_ping_interval_seconds != null ? { DB_PING_INTERVAL_SECONDS = tostring(var.db_ping_interval_seconds) } : {},
+    var.db_ping_max_failures_before_recovery != null ? { DB_PING_MAX_FAILURES_BEFORE_RECOVERY = tostring(var.db_ping_max_failures_before_recovery) } : {},
+    # V8 heap ceiling. Without it V8 sizes the heap at roughly half the
+    # container memory limit, capped at about 2 GiB on this image, so any
+    # memory limit above roughly 4Gi buys memory the heap can never
+    # allocate: measured during load validation, webhook pods died at that
+    # ~2,033 MB ceiling with half of their 4 GiB limit unused. Applies to every
+    # n8n container, because env.shared reaches all of them and the chart has
+    # no per-tier env path; that is why the variable says to size against the
+    # SMALLEST of the three memory limits. Omitted entirely on the null path,
+    # leaving V8's own default exactly as before. See the variable description
+    # for sizing and for the heap-leak caveat.
+    var.n8n_node_max_old_space_size_mb != null ? { NODE_OPTIONS = "--max-old-space-size=${var.n8n_node_max_old_space_size_mb}" } : {},
+    {
+      DB_POSTGRESDB_POOL_SIZE = tostring(var.db_postgresdb_pool_size)
+      # n8n's upstream default (true) makes the leader main detach its floating
+      # license entitlement on shutdown, zeroing the shared cert in the database.
+      # In multi-main (the module default) a fresh main pod then starts as a
+      # follower, never renews on init, reads the zeroed cert, and crash-loops on
+      # the license gate (n8n-io/terraform-aws-n8n#49). All mains share the same
+      # device fingerprint, so keeping this false reuses a single floating seat
+      # across restarts instead of releasing and re-acquiring it. Always emitted
+      # (unlike opt-in toggles) because the module default deliberately overrides
+      # n8n's own default.
+      N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN = tostring(var.n8n_license_detach_floating_on_shutdown)
+    },
+    # n8n exposes Prometheus metrics on /metrics over its HTTP port (5678) when
+    # N8N_METRICS is set. The pinned chart version exposes no metrics /
+    # serviceMonitor block (verified via `helm show values` against
+    # var.n8n_chart_version), so the toggle is env-var-only — omit the var
+    # entirely when disabled so n8n's own defaults apply (prefix, default
+    # process metrics, etc). Scrape config is the caller's job.
+    var.n8n_metrics_enabled ? { N8N_METRICS = "true" } : {},
+    # Community-package handling. Both map straight to the n8n env vars and
+    # default to n8n's own behavior (env var omitted), so only an explicit
+    # opt-in changes anything. N8N_REINSTALL_MISSING_PACKAGES is what makes
+    # workers reinstall UI-installed community nodes after they are
+    # rescheduled onto a fresh, empty filesystem — without it those nodes
+    # load on main but fail on workers in queue mode.
+    var.n8n_reinstall_missing_packages ? { N8N_REINSTALL_MISSING_PACKAGES = "true" } : {},
+    var.n8n_community_packages_prevent_loading ? { N8N_COMMUNITY_PACKAGES_PREVENT_LOADING = "true" } : {},
+    # Private npm mirror for community package installs. Omitted unless set,
+    # so n8n's own default (https://registry.npmjs.org) applies. The
+    # companion N8N_COMMUNITY_PACKAGES_AUTH_TOKEN is deliberately not
+    # managed here: it is a credential, and env.shared renders into the Helm
+    # release and Terraform state in plaintext.
+    var.n8n_community_packages_registry == null ? {} : { N8N_COMMUNITY_PACKAGES_REGISTRY = var.n8n_community_packages_registry },
+    # Directory n8n scans for custom nodes at startup, which is how nodes
+    # baked into a custom image are picked up: since n8n 1.0 the loader
+    # ignores the image's global node_modules entirely. Applied to every pod
+    # type, because a node type that resolves on main and not on workers
+    # fails at execution time instead of at edit time.
+    var.n8n_custom_extensions_path == null ? {} : { N8N_CUSTOM_EXTENSIONS = var.n8n_custom_extensions_path },
+    # n8n defaults scheduled to change. n8n warns on every pod start that
+    # these four will move in a future version and asks operators to set
+    # them explicitly to keep today's behavior.
+    #
+    # Only the task timeout is emitted unconditionally, because only its
+    # change is a pure functional regression: n8n has announced the default
+    # drops from 300 to 60, which would abort every Code node task running
+    # longer than a minute after an upgrade that changed nothing else.
+    # Pinning it means an upgrade cannot move it silently. See
+    # var.n8n_task_runner_timeout for why the other three are not pinned.
+    { N8N_RUNNERS_TASK_TIMEOUT = tostring(var.n8n_task_runner_timeout) },
+    var.n8n_unverified_packages_enabled == null ? {} : { N8N_UNVERIFIED_PACKAGES_ENABLED = tostring(var.n8n_unverified_packages_enabled) },
+    var.n8n_compression_max_decompressed_size_bytes == null ? {} : { N8N_COMPRESSION_NODE_MAX_DECOMPRESSED_SIZE_BYTES = tostring(var.n8n_compression_max_decompressed_size_bytes) },
+    var.n8n_compression_max_zip_entries == null ? {} : { N8N_COMPRESSION_NODE_MAX_ZIP_ENTRIES = tostring(var.n8n_compression_max_zip_entries) },
+
+    # Execution-data offload to S3 (n8n >= 2.27, Enterprise). The chart has
+    # no value for this at var.n8n_chart_version (its s3.storage block only
+    # covers *binary* data), so it goes through env.shared, which reaches
+    # every n8n container. That matters: the n8n docs require
+    # N8N_EXECUTION_DATA_STORAGE_MODE on all instances in queue mode,
+    # including workers and webhook processors, not just the mains.
+    #
+    # The connection itself is already in place: this reuses the
+    # N8N_EXTERNAL_STORAGE_S3_* values the chart renders from the s3 block
+    # above and the Pod Identity role from s3.tf, so nothing else is needed.
+    # Emitted only for "s3"; "database" is n8n's own default, so the env var
+    # is omitted entirely there.
+    var.n8n_execution_data_storage_mode == "s3" ? { N8N_EXECUTION_DATA_STORAGE_MODE = "s3" } : {},
+
+    # n8n's own module system. local.n8n_disabled_modules collapses to []
+    # unless n8n_external_secrets_enabled = false, so the default apply
+    # emits no N8N_DISABLED_MODULES at all.
+    length(local.n8n_disabled_modules) > 0 ? { N8N_DISABLED_MODULES = join(",", local.n8n_disabled_modules) } : {},
+    var.n8n_external_secrets_update_interval == null ? {} : { N8N_EXTERNAL_SECRETS_UPDATE_INTERVAL = tostring(var.n8n_external_secrets_update_interval) },
+
+    # n8n feature toggles: templates and personalization. Only set the env
+    # var when disabled (false) to override n8n's defaults. When enabled
+    # (true), the env var is omitted so n8n's defaults apply.
+    !var.n8n_templates_enabled ? { N8N_TEMPLATES_ENABLED = "false" } : {},
+    !var.n8n_personalization_enabled ? { N8N_PERSONALIZATION_ENABLED = "false" } : {},
+
+    # n8n OpenTelemetry tracing. env.shared applies to every n8n container in
+    # the multi-main topology (main, worker, webhook processor), which
+    # matches the OTEL docs' queue-mode requirement
+    # (https://docs.n8n.io/hosting/logging-monitoring/opentelemetry/).
+    #
+    # Master switch first; each individual tuning var is null-default and
+    # only emitted when explicitly set, so n8n's own defaults apply
+    # otherwise. When n8n_otel_enabled = false the whole block collapses
+    # to {} and no N8N_OTEL_* env vars are set on the pods.
+    var.n8n_otel_enabled ? merge(
+      { N8N_OTEL_ENABLED = "true" },
+      var.n8n_otel_exporter_otlp_endpoint == null ? {} : { N8N_OTEL_EXPORTER_OTLP_ENDPOINT = var.n8n_otel_exporter_otlp_endpoint },
+      var.n8n_otel_exporter_otlp_headers == null ? {} : { N8N_OTEL_EXPORTER_OTLP_HEADERS = var.n8n_otel_exporter_otlp_headers },
+      var.n8n_otel_exporter_service_name == null ? {} : { N8N_OTEL_EXPORTER_SERVICE_NAME = var.n8n_otel_exporter_service_name },
+      var.n8n_otel_traces_sample_rate == null ? {} : { N8N_OTEL_TRACES_SAMPLE_RATE = tostring(var.n8n_otel_traces_sample_rate) },
+      var.n8n_otel_traces_include_node_spans == null ? {} : { N8N_OTEL_TRACES_INCLUDE_NODE_SPANS = tostring(var.n8n_otel_traces_include_node_spans) },
+      var.n8n_otel_traces_inject_outbound == null ? {} : { N8N_OTEL_TRACES_INJECT_OUTBOUND = tostring(var.n8n_otel_traces_inject_outbound) },
+      var.n8n_otel_traces_production_only == null ? {} : { N8N_OTEL_TRACES_PRODUCTION_ONLY = tostring(var.n8n_otel_traces_production_only) },
+    ) : {},
+
+    # n8n Enterprise log streaming, managed declaratively via env vars
+    # (settings-env-vars activation pattern, n8n >= 2.19.0). When the
+    # master switch is on, n8n reapplies the destinations on every startup
+    # and locks the Log Streaming UI read-only. The destinations list is
+    # JSON-encoded — n8n expects a JSON array in
+    # N8N_LOG_STREAMING_DESTINATIONS. When the master switch is off the
+    # block collapses to {} and destinations stay UI-managed.
+    var.n8n_log_streaming_managed_by_env ? merge(
+      { N8N_LOG_STREAMING_MANAGED_BY_ENV = "true" },
+      length(var.n8n_log_streaming_destinations) > 0 ? { N8N_LOG_STREAMING_DESTINATIONS = jsonencode(var.n8n_log_streaming_destinations) } : {},
+    ) : {},
+
+    # File-based credential overwrites from a caller-managed Secret. The
+    # matching volume and read-only mount are assembled in locals.tf and
+    # rendered onto all three n8n pod types below. This is n8n's generic
+    # "<VAR>_FILE" convention (readEnv in @n8n/config), not a dedicated
+    # setting, and readEnv prefers CREDENTIALS_OVERWRITE_DATA over the
+    # _FILE variant wherever it appears in the env list, so this merge()'s
+    # last-wins ordering is not the whole story here. The input validation
+    # rejects both names in n8n_extra_env while this entry is active for
+    # exactly that reason.
+    local.n8n_credentials_overwrite_env,
+
+    # Worker pools (n8n alpha). The feature is inert unless this is set on
+    # the mains, which resolve a project's pool and enqueue to it, as well
+    # as the workers, which read N8N_WORKER_POOL_NAME. Webhook pods ignore
+    # it but are harmless to set, and env.shared reaches all three.
+    # Emitted only when pools are declared, so an untouched deployment sees
+    # no diff. The name is reserved in n8n_managed_env_names, so declaring a
+    # pool is the only way to switch the feature on. See worker-pools.tf.
+    length(var.n8n_worker_pools) > 0 ? { N8N_WORKER_POOLS_ENABLED = "true" } : {},
+
+    # Caller-supplied escape hatch, converted from its list-of-{name,value}
+    # input shape and merged in last. var.n8n_extra_env already rejects
+    # duplicate names at plan time (its own validation), so this conversion
+    # never silently collapses two entries into one; the module-managed-name
+    # validation below (n8n_managed_env_names / n8n_managed_env_prefixes)
+    # is what stops it from silently overriding a key this merge() set above.
+    { for e in var.n8n_extra_env : e.name => e.value },
+  )
+
+  # env.worker: reaches worker pods only, on top of env.shared -- every
+  # worker, the chart's own unlabelled deployment and each n8n_worker_pools
+  # pool alike, since they render from one shared pod template (see
+  # n8n_worker_extra_env's description). Was queueMode.workerExtraEnv in
+  # chart 1.x; chart 2.0 merges env.shared under env.worker before loading
+  # them with envFrom (decision 0012), so a worker-only key here still wins
+  # over a same-named env.shared key, exactly as queueMode.workerExtraEnv,
+  # appended after config.extraEnv in worker containers, used to.
+  n8n_env_worker = { for e in var.n8n_worker_extra_env : e.name => e.value }
+}
+
 # ── Helm release ──────────────────────────────────────────────────────────────
 
 resource "helm_release" "n8n" {
@@ -372,9 +616,10 @@ resource "helm_release" "n8n" {
     # through the same helper.
     # name/key fall back to kubernetes_secret.n8n when n8n_license_key_secret_ref
     # is null (the default, no change from before this input existed), and
-    # point at the caller's own Secret otherwise. See that variable and
-    # n8n_encryption_key_secret_ref for when kubernetes_secret.n8n itself does
-    # not exist, in which case n8n_license_key_secret_ref is required.
+    # point at the caller's own Secret otherwise. kubernetes_secret.n8n exists
+    # whenever it holds at least one of the encryption key or the license key,
+    # so it is still there for the license key on this path even when
+    # n8n_encryption_key_secret_ref also points the encryption key elsewhere.
     license = {
       enabled = true
       existingSecret = {
@@ -464,15 +709,16 @@ resource "helm_release" "n8n" {
       {
         enabled            = true
         workerReplicaCount = local.n8n_worker_replica_count
-        workerConcurrency  = var.n8n_worker_concurrency
       },
 
-      # Worker-only env, appended after config.extraEnv in worker containers and
-      # nowhere else. Distinct from n8n_extra_env, which reaches main and webhook
-      # pods too. "Worker" here covers every worker: the chart renders the
-      # unlabelled deployment and each pool from one shared pod template, so this
-      # lands in all of them, with a pool's own extraEnv applied afterwards.
-      length(var.n8n_worker_extra_env) > 0 ? { workerExtraEnv = var.n8n_worker_extra_env } : {},
+      # Omitted entirely while null, matching the chart's own default for
+      # queueMode.workerConcurrency (empty, so n8n falls back to its own
+      # default of 10). n8n_execution_concurrency_limit's own validation
+      # keeps this from ever coexisting with a non--1 productionLimit: chart
+      # 2.0 fails the render when both are set in queue mode (which this
+      # module always runs in), because n8n takes a worker's concurrency
+      # from the production limit and ignores this flag whenever it is set.
+      var.n8n_worker_concurrency != null ? { workerConcurrency = var.n8n_worker_concurrency } : {},
 
       # One additional worker Deployment and ScaledObject per pool. Omitted
       # entirely on the default path. See worker-pools.tf.
@@ -483,6 +729,38 @@ resource "helm_release" "n8n" {
       enabled                                = true
       replicaCount                           = var.n8n_webhook_hpa_min_replicas
       disableProductionWebhooksOnMainProcess = true
+    }
+
+    # ── Public URLs ────────────────────────────────────────────────────────
+    # Chart 2.0 reads these directly (decision 0012) instead of building a
+    # fallback from the core Secret's N8N_HOST/N8N_PROTOCOL, which it no
+    # longer carries (see kubernetes_secret.n8n above). Leaving them unset
+    # would make n8n build its webhook and editor URLs from localhost, since
+    # this module sets no chart-managed ingress for the chart to fall back
+    # on either (routing is its own kubernetes_ingress_v1.n8n below, outside
+    # the chart). webhook.url also renders N8N_WEBHOOK_URL; see
+    # local.n8n_webhook_base_url and local.n8n_webhook_url_env (locals.tf)
+    # for the legacy WEBHOOK_URL this module still sends pre-2.30.0 images.
+    webhook = {
+      enabled = true
+      url     = local.n8n_webhook_base_url
+    }
+
+    # The editor's own base URL, and what n8n builds absolute non-webhook URLs
+    # from: UrlService.getInstanceBaseUrl() prefers N8N_EDITOR_BASE_URL and
+    # falls back to WEBHOOK_URL when it is unset. Above all it forms the
+    # OAuth2 credential redirect URI, <editor base>/rest/oauth2-credential/callback.
+    #
+    # n8n_domain rather than the webhook URL, because n8n_domain is canonical:
+    # it is the name the editor is served on and what n8n_additional_domains is
+    # defined against. On a split hostname (n8n_webhook_url naming a second
+    # host, as examples/split-ingress does) pointing this at the webhook URL
+    # instead would label the editor with the webhook hostname, and the OAuth
+    # callback would 404: a split ingress routes only the webhook prefixes
+    # there, and the webhook processors serve no /rest routes even when
+    # reached.
+    editor = {
+      url = "https://${local.n8n_domain}"
     }
 
     # The ssl key comes from local.postgres_ssl_ca_values and is present only
@@ -553,25 +831,23 @@ resource "helm_release" "n8n" {
       # Sets QUEUE_BULL_PREFIX (configmap.yaml's `if .Values.redis.prefix`
       # guard omits it entirely when unset, so n8n's own "bull" default
       # applies exactly as before on the null path). The matching
-      # N8N_REDIS_KEY_PREFIX env var lives in config.extraEnv below, and the
-      # KEDA listName values a few blocks down are kept in sync with this same
-      # variable: all three have to move together, see redis_key_prefix.
+      # N8N_REDIS_KEY_PREFIX env var lives in local.n8n_env_shared below, and
+      # the KEDA listName values a few blocks down are kept in sync with this
+      # same variable: all three have to move together, see redis_key_prefix.
       var.redis_key_prefix != null ? { prefix = var.redis_key_prefix } : {},
       # QUEUE_WORKER_LOCK_DURATION, QUEUE_WORKER_LOCK_RENEW_TIME,
       # QUEUE_WORKER_STALLED_INTERVAL and N8N_GRACEFUL_SHUTDOWN_TIMEOUT are all
       # chart-templated from redis.worker.* (values.yaml), and are NOT names
-      # config.extraEnv can safely set. The three QUEUE_WORKER_* ConfigMap
-      # entries only render when their own redis.worker.* value is set (and
-      # are separately blocked by the "QUEUE_" prefix in
-      # n8n_managed_env_prefixes regardless of whether a collision could
-      # occur); N8N_GRACEFUL_SHUTDOWN_TIMEOUT's entry always renders. Either
-      # way, config.extraEnv is appended after these entries in every
-      # deployment template, and Kubernetes does not reject a duplicate env
-      # name: it silently keeps the last entry in the list, so an extraEnv
-      # duplicate here would override the chart's real value with no warning
-      # rather than fail. The whole `worker` key is omitted when none of the
-      # four is set, leaving the chart's own defaults (60000 / 10000 / 30000
-      # ms / 30s).
+      # env.shared or env.worker can safely set: chart 2.0's validateEnv fails
+      # the render outright on any of the four (n8n.validateEnv, the chart's
+      # _env.tpl), naming this values path as the replacement, instead of the
+      # old chart's silent last-entry-wins Kubernetes env merge. The three
+      # QUEUE_WORKER_* ConfigMap entries only render when their own
+      # redis.worker.* value is set (and are separately blocked by the
+      # "QUEUE_" prefix in n8n_managed_env_prefixes regardless);
+      # N8N_GRACEFUL_SHUTDOWN_TIMEOUT's entry always renders. The whole
+      # `worker` key is omitted when none of the four is set, leaving the
+      # chart's own defaults (60000 / 10000 / 30000 ms / 30s).
       #
       # local.n8n_queue_worker_settings, not the variables directly: this
       # merge is shallow, so four separate `worker` entries would overwrite
@@ -602,11 +878,11 @@ resource "helm_release" "n8n" {
       awsRoleArn = aws_iam_role.s3.arn
     }
 
-    # Bare Secret name, unlike the other four *_secret_ref inputs' nested or
-    # flat {name, key} shapes: coreSecretsEnv hardcodes the key it reads for
-    # each of the four values this Secret carries. See
-    # n8n_encryption_key_secret_ref's description for the four-key contract a
-    # caller-supplied Secret has to satisfy.
+    # Bare Secret name, unlike the other three *_secret_ref inputs' nested or
+    # flat {name, key} shapes. Chart 2.0 reads only N8N_ENCRYPTION_KEY from
+    # it (n8n-io/n8n-hosting decision 0012; N8N_HOST, N8N_PORT and
+    # N8N_PROTOCOL are no longer read from this value at all). See
+    # n8n_encryption_key_secret_ref's description.
     secretRefs = {
       existingSecret = var.n8n_encryption_key_secret_ref != null ? var.n8n_encryption_key_secret_ref.name : kubernetes_secret.n8n[0].metadata[0].name
     }
@@ -727,297 +1003,13 @@ resource "helm_release" "n8n" {
 
     config = {
       timezone = var.n8n_timezone
-      extraEnv = concat(
-        # Direct connections to RDS/Aurora use SSL. Certificate verification is off by default
-        # because the RDS CA is not in Node.js's trust store; db_postgresdb_ssl_reject_unauthorized
-        # and db_postgresdb_ssl_ca_pem turn it on (see docs/postgresql-tls.md). Set
-        # db_postgresdb_ssl_enabled = false when n8n's DB host is an in-cluster pooler (e.g.
-        # PgBouncer) that handles SSL on its upstream leg.
-        local.n8n_postgres_ssl_env,
-        [
-          { name = "N8N_LOG_LEVEL", value = var.n8n_log_level },
-          # N8N_LOG_OUTPUT controls *where* logs go (console / file), not their
-          # format. Setting it to anything other than "console" / "file" / a
-          # comma-separated combination leaves Winston without a transport, at
-          # which point every log line is replaced with a Winston warning and
-          # the actual logs are silently dropped. See variable description.
-          { name = "N8N_LOG_OUTPUT", value = var.n8n_log_output },
-          { name = "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS", value = "true" },
-        ],
-        # N8N_WEBHOOK_URL, plus the legacy WEBHOOK_URL when the image may
-        # predate 2.30.0 (see local.n8n_needs_legacy_webhook_url_env).
-        local.n8n_webhook_url_env,
-        [
-          # The editor's own base URL, and what n8n builds absolute non-webhook
-          # URLs from: UrlService.getInstanceBaseUrl() prefers
-          # N8N_EDITOR_BASE_URL and falls back to WEBHOOK_URL when it is unset.
-          # Above all it forms the OAuth2 credential redirect URI,
-          # <editor base>/rest/oauth2-credential/callback.
-          #
-          # Unset until now, which is harmless only while the two URLs agree.
-          # On a split hostname (n8n_webhook_url naming a second host, as
-          # examples/split-ingress does) the fallback labels the editor with
-          # the webhook hostname, and that callback 404s twice over: a split
-          # ingress routes only the webhook prefixes there, and the webhook
-          # processors serve no /rest routes even when reached. Webhook
-          # delivery keeps working throughout, which points the search at the
-          # wrong half. The chart cannot supply it either: it derives this from
-          # its own ingress host or from webhook.url, and this module sets
-          # neither (docs/helm-chart-coverage.md), so nothing emits it at all.
-          #
-          # n8n_domain rather than the webhook URL because n8n_domain is
-          # canonical: it is the name the editor is served on, what N8N_HOST
-          # already carries, and what n8n_additional_domains is defined
-          # against. Deployments where the two agree render the value n8n
-          # already resolves to today, so only a split hostname sees a change.
-          { name = "N8N_EDITOR_BASE_URL", value = "https://${local.n8n_domain}" },
-          # Hop count for Express's trust-proxy setting, so n8n takes the
-          # client IP from the right X-Forwarded-For entry and honors
-          # X-Forwarded-Proto. An ALB alone is one hop; any proxy in front of
-          # it (e.g. CloudFront) adds one, whether or not the module owns the
-          # Ingress. See var.n8n_proxy_hops's description.
-          local.n8n_proxy_hops_env,
-          { name = "N8N_RUNNERS_TASK_REQUEST_TIMEOUT", value = tostring(var.n8n_task_runner_request_timeout) },
-          # Keeps ElastiCache from dropping idle Redis subscriber connections under sustained load.
-          # Without this, Bull detects dropped connections, emits queue errors, and pods crash.
-          { name = "QUEUE_BULL_REDIS_KEEP_ALIVE", value = "true" },
-        ],
-        # Scopes n8n's scaling-mode pub/sub command channel ("<prefix>:n8n.commands")
-        # to this deployment. The chart has no dedicated field for this env var
-        # (unlike QUEUE_BULL_PREFIX, wired via redis.prefix above), so it's a
-        # literal extraEnv entry here. Omitted entirely on the null path,
-        # leaving n8n's own "n8n" default exactly as before. See redis_key_prefix.
-        var.redis_key_prefix != null ? [
-          { name = "N8N_REDIS_KEY_PREFIX", value = var.redis_key_prefix },
-        ] : [],
-        # Database connection acquisition and health-check ping settings. The
-        # chart has no values path for these and `DB_` is a module-managed
-        # prefix, so n8n_extra_env cannot reach them. Each is omitted on the
-        # null path, leaving n8n's own defaults.
-        #
-        # DB_POSTGRESDB_CONNECTION_TIMEOUT becomes pg-pool's
-        # connectionTimeoutMillis, which bounds both connection establishment
-        # and waiting for the shared pool to free a slot. The database monitor
-        # also calls pool.connect(), so its acquisition is subject to this
-        # timeout and to the separate DB_PING_TIMEOUT_MS race. The effective
-        # health-check acquisition deadline is whichever timeout fires first.
-        #
-        # This interaction matters under load. A pool saturated by ordinary
-        # database operations can make the ping time out while the database is
-        # healthy. One timed-out ping marks the pod disconnected, so its global
-        # middleware returns 503. Repeated failures make n8n destroy and
-        # recreate the pool, suspending in-flight acquisition on that pod.
-        var.db_postgresdb_connection_timeout_ms != null ? [
-          { name = "DB_POSTGRESDB_CONNECTION_TIMEOUT", value = tostring(var.db_postgresdb_connection_timeout_ms) },
-        ] : [],
-        var.db_ping_timeout_ms != null ? [
-          { name = "DB_PING_TIMEOUT_MS", value = tostring(var.db_ping_timeout_ms) },
-        ] : [],
-        var.db_ping_interval_seconds != null ? [
-          { name = "DB_PING_INTERVAL_SECONDS", value = tostring(var.db_ping_interval_seconds) },
-        ] : [],
-        var.db_ping_max_failures_before_recovery != null ? [
-          { name = "DB_PING_MAX_FAILURES_BEFORE_RECOVERY", value = tostring(var.db_ping_max_failures_before_recovery) },
-        ] : [],
-        # V8 heap ceiling. Without it V8 sizes the heap at roughly half the
-        # container memory limit, capped at about 2 GiB on this image, so any
-        # memory limit above roughly 4Gi buys memory the heap can never
-        # allocate: measured during load validation, webhook pods died at that
-        # ~2,033 MB ceiling with half of their 4 GiB limit unused. Applies to every n8n container, because
-        # config.extraEnv is chart-global and the chart has no per-tier env
-        # path; that is why the variable says to size against the SMALLEST of
-        # the three memory limits. Omitted entirely on the null path, leaving
-        # V8's own default exactly as before. See the variable description for
-        # sizing and for the heap-leak caveat.
-        var.n8n_node_max_old_space_size_mb != null ? [
-          { name = "NODE_OPTIONS", value = "--max-old-space-size=${var.n8n_node_max_old_space_size_mb}" },
-        ] : [],
-        [
-          { name = "DB_POSTGRESDB_POOL_SIZE", value = tostring(var.db_postgresdb_pool_size) },
-          # n8n's upstream default (true) makes the leader main detach its floating
-          # license entitlement on shutdown, zeroing the shared cert in the database.
-          # In multi-main (the module default) a fresh main pod then starts as a
-          # follower, never renews on init, reads the zeroed cert, and crash-loops on
-          # the license gate (n8n-io/terraform-aws-n8n#49). All mains share the same
-          # device fingerprint, so keeping this false reuses a single floating seat
-          # across restarts instead of releasing and re-acquiring it. Always emitted
-          # (unlike opt-in toggles) because the module default deliberately overrides
-          # n8n's own default.
-          { name = "N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN", value = tostring(var.n8n_license_detach_floating_on_shutdown) },
-        ],
-        # n8n exposes Prometheus metrics on /metrics over its HTTP port (5678) when
-        # N8N_METRICS is set. The pinned chart version exposes no metrics /
-        # serviceMonitor block (verified via `helm show values` against
-        # var.n8n_chart_version), so the toggle is env-var-only — omit the var
-        # entirely when disabled so n8n's own defaults apply (prefix, default
-        # process metrics, etc). Scrape config is the caller's job.
-        var.n8n_metrics_enabled ? [
-          { name = "N8N_METRICS", value = "true" },
-        ] : [],
-        # Community-package handling. Both map straight to the n8n env vars and
-        # default to n8n's own behavior (env var omitted), so only an explicit
-        # opt-in changes anything. N8N_REINSTALL_MISSING_PACKAGES is what makes
-        # workers reinstall UI-installed community nodes after they are
-        # rescheduled onto a fresh, empty filesystem — without it those nodes
-        # load on main but fail on workers in queue mode.
-        var.n8n_reinstall_missing_packages ? [
-          { name = "N8N_REINSTALL_MISSING_PACKAGES", value = "true" },
-        ] : [],
-        var.n8n_community_packages_prevent_loading ? [
-          { name = "N8N_COMMUNITY_PACKAGES_PREVENT_LOADING", value = "true" },
-        ] : [],
-        # Private npm mirror for community package installs. Omitted unless set,
-        # so n8n's own default (https://registry.npmjs.org) applies. The
-        # companion N8N_COMMUNITY_PACKAGES_AUTH_TOKEN is deliberately not
-        # managed here: it is a credential, and config.extraEnv renders into
-        # the Helm release and Terraform state in plaintext.
-        var.n8n_community_packages_registry == null ? [] : [
-          { name = "N8N_COMMUNITY_PACKAGES_REGISTRY", value = var.n8n_community_packages_registry },
-        ],
-        # Directory n8n scans for custom nodes at startup, which is how nodes
-        # baked into a custom image are picked up: since n8n 1.0 the loader
-        # ignores the image's global node_modules entirely. Applied to every pod
-        # type, because a node type that resolves on main and not on workers
-        # fails at execution time instead of at edit time.
-        var.n8n_custom_extensions_path == null ? [] : [
-          { name = "N8N_CUSTOM_EXTENSIONS", value = var.n8n_custom_extensions_path },
-        ],
-        # n8n defaults scheduled to change. n8n warns on every pod start that
-        # these four will move in a future version and asks operators to set
-        # them explicitly to keep today's behavior.
-        #
-        # Only the task timeout is emitted unconditionally, because only its
-        # change is a pure functional regression: n8n has announced the default
-        # drops from 300 to 60, which would abort every Code node task running
-        # longer than a minute after an upgrade that changed nothing else.
-        # Pinning it means an upgrade cannot move it silently. See
-        # var.n8n_task_runner_timeout for why the other three are not pinned.
-        [
-          { name = "N8N_RUNNERS_TASK_TIMEOUT", value = tostring(var.n8n_task_runner_timeout) },
-        ],
-        var.n8n_unverified_packages_enabled == null ? [] : [
-          { name = "N8N_UNVERIFIED_PACKAGES_ENABLED", value = tostring(var.n8n_unverified_packages_enabled) },
-        ],
-        var.n8n_compression_max_decompressed_size_bytes == null ? [] : [
-          { name = "N8N_COMPRESSION_NODE_MAX_DECOMPRESSED_SIZE_BYTES", value = tostring(var.n8n_compression_max_decompressed_size_bytes) },
-        ],
-        var.n8n_compression_max_zip_entries == null ? [] : [
-          { name = "N8N_COMPRESSION_NODE_MAX_ZIP_ENTRIES", value = tostring(var.n8n_compression_max_zip_entries) },
-        ],
+    }
 
-        # Execution-data offload to S3 (n8n >= 2.27, Enterprise). The chart has
-        # no value for this at var.n8n_chart_version (its s3.storage block only
-        # covers *binary* data), so it goes through config.extraEnv, which the
-        # chart applies to every n8n container. That matters: the n8n docs require
-        # N8N_EXECUTION_DATA_STORAGE_MODE on all instances in queue mode,
-        # including workers and webhook processors, not just the mains.
-        #
-        # The connection itself is already in place: this reuses the
-        # N8N_EXTERNAL_STORAGE_S3_* values the chart renders from the s3 block
-        # above and the Pod Identity role from s3.tf, so nothing else is needed.
-        # Emitted only for "s3"; "database" is n8n's own default, so the env var
-        # is omitted entirely there.
-        var.n8n_execution_data_storage_mode == "s3" ? [
-          { name = "N8N_EXECUTION_DATA_STORAGE_MODE", value = "s3" },
-        ] : [],
-
-        # n8n's own module system. local.n8n_disabled_modules collapses to []
-        # unless n8n_external_secrets_enabled = false, so the default apply
-        # emits no N8N_DISABLED_MODULES at all.
-        length(local.n8n_disabled_modules) > 0 ? [
-          { name = "N8N_DISABLED_MODULES", value = join(",", local.n8n_disabled_modules) },
-        ] : [],
-        var.n8n_external_secrets_update_interval == null ? [] : [
-          { name = "N8N_EXTERNAL_SECRETS_UPDATE_INTERVAL", value = tostring(var.n8n_external_secrets_update_interval) },
-        ],
-
-        # n8n feature toggles: templates and personalization. Only set the env
-        # var when disabled (false) to override n8n's defaults. When enabled
-        # (true), the env var is omitted so n8n's defaults apply.
-        !var.n8n_templates_enabled ? [
-          { name = "N8N_TEMPLATES_ENABLED", value = "false" },
-        ] : [],
-        !var.n8n_personalization_enabled ? [
-          { name = "N8N_PERSONALIZATION_ENABLED", value = "false" },
-        ] : [],
-
-        # n8n OpenTelemetry tracing. config.extraEnv applies to every n8n
-        # container in the multi-main topology (main, worker, webhook
-        # processor), which matches the OTEL docs' queue-mode requirement
-        # (https://docs.n8n.io/hosting/logging-monitoring/opentelemetry/).
-        #
-        # Master switch first; each individual tuning var is null-default and
-        # only emitted when explicitly set, so n8n's own defaults apply
-        # otherwise. When n8n_otel_enabled = false the whole block collapses
-        # to [] and no N8N_OTEL_* env vars are set on the pods.
-        var.n8n_otel_enabled ? concat(
-          [{ name = "N8N_OTEL_ENABLED", value = "true" }],
-          var.n8n_otel_exporter_otlp_endpoint == null ? [] : [
-            { name = "N8N_OTEL_EXPORTER_OTLP_ENDPOINT", value = var.n8n_otel_exporter_otlp_endpoint },
-          ],
-          var.n8n_otel_exporter_otlp_headers == null ? [] : [
-            { name = "N8N_OTEL_EXPORTER_OTLP_HEADERS", value = var.n8n_otel_exporter_otlp_headers },
-          ],
-          var.n8n_otel_exporter_service_name == null ? [] : [
-            { name = "N8N_OTEL_EXPORTER_SERVICE_NAME", value = var.n8n_otel_exporter_service_name },
-          ],
-          var.n8n_otel_traces_sample_rate == null ? [] : [
-            { name = "N8N_OTEL_TRACES_SAMPLE_RATE", value = tostring(var.n8n_otel_traces_sample_rate) },
-          ],
-          var.n8n_otel_traces_include_node_spans == null ? [] : [
-            { name = "N8N_OTEL_TRACES_INCLUDE_NODE_SPANS", value = tostring(var.n8n_otel_traces_include_node_spans) },
-          ],
-          var.n8n_otel_traces_inject_outbound == null ? [] : [
-            { name = "N8N_OTEL_TRACES_INJECT_OUTBOUND", value = tostring(var.n8n_otel_traces_inject_outbound) },
-          ],
-          var.n8n_otel_traces_production_only == null ? [] : [
-            { name = "N8N_OTEL_TRACES_PRODUCTION_ONLY", value = tostring(var.n8n_otel_traces_production_only) },
-          ],
-        ) : [],
-
-        # n8n Enterprise log streaming, managed declaratively via env vars
-        # (settings-env-vars activation pattern, n8n >= 2.19.0). When the
-        # master switch is on, n8n reapplies the destinations on every startup
-        # and locks the Log Streaming UI read-only. The destinations list is
-        # JSON-encoded — n8n expects a JSON array in
-        # N8N_LOG_STREAMING_DESTINATIONS. When the master switch is off the
-        # block collapses to [] and destinations stay UI-managed.
-        var.n8n_log_streaming_managed_by_env ? concat(
-          [{ name = "N8N_LOG_STREAMING_MANAGED_BY_ENV", value = "true" }],
-          length(var.n8n_log_streaming_destinations) > 0 ? [
-            { name = "N8N_LOG_STREAMING_DESTINATIONS", value = jsonencode(var.n8n_log_streaming_destinations) },
-          ] : [],
-        ) : [],
-
-        # File-based credential overwrites from a caller-managed Secret. The
-        # matching volume and read-only mount are assembled in locals.tf and
-        # rendered onto all three n8n pod types below. This is n8n's generic
-        # "<VAR>_FILE" convention (readEnv in @n8n/config), not a dedicated
-        # setting, and readEnv prefers CREDENTIALS_OVERWRITE_DATA over the
-        # _FILE variant wherever it appears in the env list, so Kubernetes'
-        # last-wins ordering is not the whole story here. The input validation
-        # rejects both names in n8n_extra_env while this entry is active for
-        # exactly that reason.
-        local.n8n_credentials_overwrite_env,
-
-        # Worker pools (n8n alpha). The feature is inert unless this is set on
-        # the mains, which resolve a project's pool and enqueue to it, as well
-        # as the workers, which read N8N_WORKER_POOL_NAME. Webhook pods ignore
-        # it but are harmless to set, and config.extraEnv reaches all three.
-        # Emitted only when pools are declared, so an untouched deployment sees
-        # no diff. The name is reserved in n8n_managed_env_names, so declaring a
-        # pool is the only way to switch the feature on. See worker-pools.tf.
-        length(var.n8n_worker_pools) > 0 ? [
-          { name = "N8N_WORKER_POOLS_ENABLED", value = "true" },
-        ] : [],
-
-        # Caller-supplied escape hatch, appended last. Kubernetes resolves
-        # duplicate env names last-wins, so this would override anything above
-        # it; var.n8n_extra_env is validated against local.n8n_managed_env_names
-        # and local.n8n_managed_env_prefixes (variables.tf) so it cannot shadow a
-        # module- or chart-managed connection/identity/storage/license var.
-        var.n8n_extra_env
-      )
+    # env.shared / env.worker: see local.n8n_env_shared and local.n8n_env_worker
+    # above for everything that lands in each map and why.
+    env = {
+      shared = local.n8n_env_shared
+      worker = local.n8n_env_worker
     }
 
     # ── Graceful shutdown ─────────────────────────────────────────────────────
@@ -1112,11 +1104,18 @@ resource "helm_release" "n8n" {
     )
 
     # ── Pod Disruption Budget ─────────────────────────────────────────────────
-    # Protect one main during voluntary eviction in multi-main mode. A single
-    # main permits eviction with downtime. PDBs do not constrain rollouts.
+    # Protects one main during voluntary eviction in multi-main mode. Chart
+    # 2.0 (templates/pdb.yaml) renders this object only when a second main
+    # pod can exist, which in this module's wiring is exactly the multi-main
+    # condition (local.n8n_multi_main_enabled); with a single main the chart
+    # renders no PodDisruptionBudget at all, rather than one with
+    # minAvailable = 0 as earlier charts did, so there is no single-main case
+    # left for this value to vary over. minAvailable is therefore the
+    # constant 1 unconditionally: on the single-main path the chart ignores
+    # these values and renders nothing. PDBs do not constrain rollouts.
     pdb = {
       enabled      = true
-      minAvailable = local.n8n_main_pdb_min_available
+      minAvailable = 1
     }
 
     # ── Extra volumes ─────────────────────────────────────────────────────────

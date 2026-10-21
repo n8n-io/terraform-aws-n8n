@@ -4,7 +4,18 @@
 # No plan/apply, cluster access, or real credentials. The isolated state path
 # prevents console from reading a deployment's state. This checks chart behavior,
 # not the full helm_release.values wiring (unknown under plan-time mocks).
+#
+# N8N_CHART_DIR: point at a local chart checkout instead of `helm pull`-ing
+# the pinned n8n_chart_version. Useful against a chart still in review (no
+# released version to pull). When set, the pinned-appVersion assertion below
+# is skipped: there is no release to compare it against. Resolved to an
+# absolute path before this script cd's to the repo root, so a relative
+# value is interpreted relative to the directory the script was invoked
+# from, not the repo.
 set -euo pipefail
+if [[ -n "${N8N_CHART_DIR:-}" ]]; then
+  N8N_CHART_DIR="$(cd "$N8N_CHART_DIR" && pwd)" || { echo "N8N_CHART_DIR not found: $N8N_CHART_DIR" >&2; exit 1; }
+fi
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 for tool in terraform helm jq; do
   command -v "$tool" >/dev/null || { echo "Required tool missing: $tool" >&2; exit 1; }
@@ -33,21 +44,52 @@ console() {
     "$@" | grep -v '^[[:space:]]*$' | tail -1 | jq -er .
 }
 
+split_yaml_docs() {
+  # $1: helm template output with one or more "---"-separated documents, each
+  # preceded by its own separator (Helm's own --show-only behavior, including
+  # before the first document). $2: output file prefix. Writes "$2"NN for each
+  # document, 00-indexed in source order. Chart 2.0's templates/configmap.yaml
+  # renders one ConfigMap per component (shared first, then each rendered
+  # component) as separate documents from one --show-only call; this is how
+  # scenarios below pick out the shared one (always doc 00) without a YAML
+  # multi-document parser (terraform console's yamldecode() rejects one).
+  awk -v prefix="$2" 'BEGIN { n = -1 } /^---$/ { n++; next } { print > sprintf("%s%02d", prefix, n) }' "$1"
+}
+
 chart_version=$(console <<< 'var.n8n_chart_version')
 chart_repository=$(console <<< 'var.n8n_chart_repository')
-helm pull "$chart_repository/n8n" --version "$chart_version" --untar --untardir "$tmp"
-app_version=$(console <<< "yamldecode(file(\"$tmp/n8n/Chart.yaml\")).appVersion")
-[[ "$app_version" == "2.42.4" ]] || { echo "Review image fallback tests for appVersion=$app_version" >&2; exit 1; }
+if [[ -n "${N8N_CHART_DIR:-}" ]]; then
+  mkdir -p "$tmp/n8n"
+  cp -R "$N8N_CHART_DIR"/. "$tmp/n8n"
+  app_version=$(console <<< "yamldecode(file(\"$tmp/n8n/Chart.yaml\")).appVersion")
+  chart_version="local $(console <<< "yamldecode(file(\"$tmp/n8n/Chart.yaml\")).version" | tr -d '"')"
+  echo "Using local chart checkout $N8N_CHART_DIR (appVersion=$app_version); skipping pinned-appVersion assertion" >&2
+else
+  helm pull "$chart_repository/n8n" --version "$chart_version" --untar --untardir "$tmp"
+  app_version=$(console <<< "yamldecode(file(\"$tmp/n8n/Chart.yaml\")).appVersion")
+  [[ "$app_version" == "2.42.4" ]] || { echo "Review image fallback tests for appVersion=$app_version" >&2; exit 1; }
+fi
+
+# Chart 2.0 (templates/pdb.yaml) renders the main PodDisruptionBudget only
+# when a second main pod can exist. Every released 1.x chart, including the
+# pinned default this script fetches with no N8N_CHART_DIR override, renders
+# it unconditionally whenever pdb.enabled is true, with no replica gating at
+# all -- so a single main there gets minAvailable = 1 (n8n.tf's own
+# unconditional constant) over its one pod. Detect which shape this
+# checkout actually has instead of assuming chart 2.0, so this script keeps
+# testing real pinned-chart behavior correctly until the pin itself moves.
+chart_has_single_main_pdb_gate=false
+grep -q 'mainReplicas' "$tmp/n8n/templates/pdb.yaml" 2>/dev/null && chart_has_single_main_pdb_gate=true
 
 # Include a larger multi-main floor, plus an explicitly high ceiling for the
 # single-main case. Expected results below are independent of the locals.
 for replicas in 1 2 3; do
   console -var="n8n_main_hpa_min_replicas=$replicas" \
     -var='n8n_main_hpa_max_replicas=6' <<'HCL' > "$tmp/values.json"
-jsonencode({strategy=local.n8n_main_strategy,pdb={enabled=true,minAvailable=local.n8n_main_pdb_min_available},multiMain={enabled=local.n8n_multi_main_enabled,replicas=var.n8n_main_hpa_min_replicas},replicaCount=var.n8n_main_hpa_min_replicas,hpa={main={enabled=true,minReplicas=var.n8n_main_hpa_min_replicas,maxReplicas=local.n8n_main_hpa_effective_max_replicas}}})
+jsonencode({strategy=local.n8n_main_strategy,pdb={enabled=true,minAvailable=1},multiMain={enabled=local.n8n_multi_main_enabled,replicas=var.n8n_main_hpa_min_replicas},replicaCount=var.n8n_main_hpa_min_replicas,hpa={main={enabled=true,minReplicas=var.n8n_main_hpa_min_replicas,maxReplicas=local.n8n_main_hpa_effective_max_replicas}}})
 HCL
 
-  for template in deployment-main deployment-worker deployment-webhook-processor hpa-main pdb; do
+  for template in deployment-main deployment-worker deployment-webhook-processor hpa-main; do
     helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
       --set secretRefs.existingSecret=test-core \
       --set license.enabled=true --set license.existingSecret.name=test-license \
@@ -57,23 +99,44 @@ HCL
     console <<< "jsonencode(yamldecode(file(\"$tmp/$template.yaml\")))" > "$tmp/$template.json"
   done
 
+  # Chart 2.0 renders the main PodDisruptionBudget only when a second main pod
+  # can exist (a budget over one pod forbids every eviction and hangs node
+  # drains). helm --show-only fails on a template that renders nothing.
+  pdb_args=(--set secretRefs.existingSecret=test-core
+    --set license.enabled=true --set license.existingSecret.name=test-license
+    --set queueMode.enabled=true --set webhookProcessor.enabled=true
+    --set keda.enabled=true --set taskRunners.enabled=true
+    --show-only templates/pdb.yaml)
   if [[ "$replicas" == 1 ]]; then
     jq -e '.spec.strategy == {"type":"Recreate","rollingUpdate":null} and .spec.replicas == 1' "$tmp/deployment-main.json" >/dev/null
     jq -e '.spec.minReplicas == 1 and .spec.maxReplicas == 1' "$tmp/hpa-main.json" >/dev/null
-    jq -e '.spec.minAvailable == 0' "$tmp/pdb.json" >/dev/null
+    if [[ "$chart_has_single_main_pdb_gate" == true ]]; then
+      if helm template n8n "$tmp/n8n" -f "$tmp/values.json" "${pdb_args[@]}" > "$tmp/pdb.yaml" 2>/dev/null; then
+        echo "single main must render no PodDisruptionBudget" >&2; exit 1
+      fi
+    else
+      # No single-main gating on this chart (pre-2.0 shape): the chart
+      # renders a PDB with minAvailable = 1 over the one main pod, which
+      # blocks node drains. Do not assert that value as a passing result;
+      # just note the chart's shape and move on.
+      echo "skipped: chart renders a PDB at one main (pre-2.0)" >&2
+    fi
   else
     jq -e --argjson replicas "$replicas" \
       '(.spec | has("strategy") | not) and .spec.replicas == $replicas' "$tmp/deployment-main.json" >/dev/null
     jq -e --argjson replicas "$replicas" \
       '.spec.minReplicas == $replicas and .spec.maxReplicas == 6' "$tmp/hpa-main.json" >/dev/null
+    helm template n8n "$tmp/n8n" -f "$tmp/values.json" "${pdb_args[@]}" > "$tmp/pdb.yaml"
+    console <<< "jsonencode(yamldecode(file(\"$tmp/pdb.yaml\")))" > "$tmp/pdb.json"
     jq -e '.spec.minAvailable == 1' "$tmp/pdb.json" >/dev/null
+    jq -e '.spec.selector.matchLabels["app.kubernetes.io/component"] == "main"' "$tmp/pdb.json" >/dev/null
   fi
 
   # The main-only strategy must not change worker or webhook rollouts.
   for template in deployment-worker deployment-webhook-processor; do
     jq -e '.spec | has("strategy") | not' "$tmp/$template.json" >/dev/null
   done
-  jq -e '.spec.selector.matchLabels["app.kubernetes.io/component"] == "main"' "$tmp/pdb.json" >/dev/null
+
   # Omitted image tags use appVersion, and queue-mode runners are worker-only.
   for template in deployment-main deployment-worker deployment-webhook-processor; do
     jq -e --arg image "docker.n8n.io/n8nio/n8n:$app_version" \
@@ -88,6 +151,29 @@ HCL
     "$tmp/deployment-worker.json" >/dev/null
   echo "PASS: chart $chart_version, main replicas=$replicas, image fallback and worker-only runners"
 done
+
+# Every n8n container (main, worker, webhook-processor) loads the shared
+# ConfigMap through envFrom (decision 0012); assert that wiring directly
+# instead of only commenting on it. Name is derived from the rendered
+# ConfigMap's own metadata.name (doc 00, see split_yaml_docs above), not
+# hardcoded, so a chart rename still passes as long as every container
+# still references whatever name the chart actually renders.
+helm template n8n "$tmp/n8n" -f "$tmp/values.json" \
+  --set secretRefs.existingSecret=test-core \
+  --set license.enabled=true --set license.existingSecret.name=test-license \
+  --set queueMode.enabled=true --set webhookProcessor.enabled=true \
+  --set keda.enabled=true --set taskRunners.enabled=true \
+  --show-only templates/configmap.yaml > "$tmp/envfrom-configmap-all.yaml"
+split_yaml_docs "$tmp/envfrom-configmap-all.yaml" "$tmp/envfrom-configmap-doc-"
+console <<< "jsonencode(yamldecode(file(\"$tmp/envfrom-configmap-doc-00\")))" > "$tmp/envfrom-configmap.json"
+shared_configmap_name=$(jq -r '.metadata.name' "$tmp/envfrom-configmap.json")
+for template in deployment-main deployment-worker deployment-webhook-processor; do
+  jq -e --arg name "$shared_configmap_name" \
+    '[.spec.template.spec.containers[].envFrom[]?.configMapRef.name] | index($name) != null' \
+    "$tmp/$template.json" >/dev/null \
+    || { echo "$template: no container's envFrom references shared ConfigMap $shared_configmap_name" >&2; exit 1; }
+done
+echo "PASS: chart $chart_version, main/worker/webhook-processor containers load the shared ConfigMap $shared_configmap_name via envFrom"
 
 # Explicit app tags must override appVersion; runner tags follow the app unless
 # explicitly set. Custom repositories must not reset either explicit tag.
@@ -199,24 +285,36 @@ for scenario in default overridden; do
     --set license.enabled=true --set license.existingSecret.name=test-license \
     --set queueMode.enabled=true --set webhookProcessor.enabled=true \
     --set keda.enabled=true --set taskRunners.enabled=true \
-    --show-only templates/configmap.yaml > "$tmp/configmap-$scenario.yaml"
-  console <<< "jsonencode(yamldecode(file(\"$tmp/configmap-$scenario.yaml\")))" > "$tmp/configmap-$scenario.json"
+    --show-only templates/configmap.yaml > "$tmp/configmap-$scenario-all.yaml"
+  # Chart 2.0 renders one ConfigMap document per component (shared first,
+  # then main/worker/webhookProcessor); N8N_GRACEFUL_SHUTDOWN_TIMEOUT is a
+  # shared variable (redis.worker.timeout, templates/_env.tpl's "shared"
+  # branch), so only the shared document (always doc 00) matters here.
+  split_yaml_docs "$tmp/configmap-$scenario-all.yaml" "$tmp/configmap-$scenario-doc-"
+  console <<< "jsonencode(yamldecode(file(\"$tmp/configmap-$scenario-doc-00\")))" > "$tmp/configmap-$scenario.json"
 done
 default_timeout=$(console <<< 'local.n8n_chart_default_graceful_shutdown_timeout')
 jq -e --arg want "$default_timeout" '.data.N8N_GRACEFUL_SHUTDOWN_TIMEOUT == $want' "$tmp/configmap-default.json" >/dev/null
 jq -e '.data.N8N_GRACEFUL_SHUTDOWN_TIMEOUT == "45"' "$tmp/configmap-overridden.json" >/dev/null
 echo "PASS: chart $chart_version, n8n_graceful_shutdown_timeout reaches N8N_GRACEFUL_SHUTDOWN_TIMEOUT in the ConfigMap"
 
-# db_postgresdb_ssl_ca_pem -> database.ssl.ca (issue #178). The module passes
-# the CA through local.postgres_ssl_ca_values and keeps
-# DB_POSTGRESDB_SSL_ENABLED / DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED in
-# config.extraEnv (local.n8n_postgres_ssl_env). The tftest.hcl runs can only
-# pin the locals' shape, because helm_release.values is unknown under plan
-# mocks. This renders the real chart from both locals and proves the chart
-# side: the CA lands in the chart ConfigMap, every n8n container gets exactly
-# one DB_POSTGRESDB_SSL_CA and one DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED (the
-# chart must not render a second one next to the module's), and without a CA
-# the chart renders no DB_POSTGRESDB_SSL* key at all.
+# db_postgresdb_ssl_ca_pem -> database.ssl.ca (issue #178). The module merges
+# database.ssl.{enabled,rejectUnauthorized,ca} from local.postgres_ssl_ca_values
+# only while a CA is delivered, and sets DB_POSTGRESDB_SSL_ENABLED /
+# DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED through env.shared
+# (local.n8n_postgres_ssl_env) the rest of the time. Chart 2.0 has no
+# per-variable ConfigMap key reference anymore (decision 0012): every plain
+# value, chart-computed or from env.shared, lands as one key in the shared
+# ConfigMap's data, loaded by every n8n container through envFrom, so this
+# checks that ConfigMap's data directly instead of each container's env list.
+# The tftest.hcl runs can only pin the locals' shape, because
+# helm_release.values is unknown under plan mocks. Without a CA the chart
+# renders no DB_POSTGRESDB_SSL* key at all, so the module's own entries are
+# the only ones; with a CA the chart owns DB_POSTGRESDB_SSL_ENABLED itself
+# (database.ssl.enabled, unconditionally in chart 2.0), and the module must
+# not also set it there, or n8n.validateEnv fails the render with a clash
+# error ("env.shared.DB_POSTGRESDB_SSL_ENABLED is set by the chart..."),
+# which `set -e` surfaces as this script failing outright.
 ca_pem=$'\n-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n'
 ca_trimmed=$'-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----'
 for scenario in default ca; do
@@ -225,53 +323,24 @@ for scenario in default ca; do
     ca_vars=(-var="db_postgresdb_ssl_ca_pem=$ca_pem" -var='db_postgresdb_ssl_reject_unauthorized=true')
   fi
   console ${ca_vars[@]+"${ca_vars[@]}"} \
-    <<< 'jsonencode({database=local.postgres_ssl_ca_values,config={extraEnv=local.n8n_postgres_ssl_env}})' \
+    <<< 'jsonencode({database=local.postgres_ssl_ca_values,env={shared=local.n8n_postgres_ssl_env}})' \
     > "$tmp/postgres-ssl-values-$scenario.json"
-  for template in configmap deployment-main deployment-worker deployment-webhook-processor; do
-    helm template n8n "$tmp/n8n" -f "$tmp/values.json" -f "$tmp/postgres-ssl-values-$scenario.json" \
-      --set secretRefs.existingSecret=test-core \
-      --set license.enabled=true --set license.existingSecret.name=test-license \
-      --set queueMode.enabled=true --set webhookProcessor.enabled=true \
-      --set keda.enabled=true --set taskRunners.enabled=true \
-      --show-only "templates/$template.yaml" > "$tmp/postgres-ssl-$scenario-$template.yaml"
-    console <<< "jsonencode(yamldecode(file(\"$tmp/postgres-ssl-$scenario-$template.yaml\")))" \
-      > "$tmp/postgres-ssl-$scenario-$template.json"
-  done
+  helm template n8n "$tmp/n8n" -f "$tmp/values.json" -f "$tmp/postgres-ssl-values-$scenario.json" \
+    --set secretRefs.existingSecret=test-core \
+    --set license.enabled=true --set license.existingSecret.name=test-license \
+    --set queueMode.enabled=true --set webhookProcessor.enabled=true \
+    --set keda.enabled=true --set taskRunners.enabled=true \
+    --show-only templates/configmap.yaml > "$tmp/postgres-ssl-$scenario-all.yaml"
+  split_yaml_docs "$tmp/postgres-ssl-$scenario-all.yaml" "$tmp/postgres-ssl-$scenario-doc-"
+  console <<< "jsonencode(yamldecode(file(\"$tmp/postgres-ssl-$scenario-doc-00\")))" \
+    > "$tmp/postgres-ssl-$scenario-configmap.json"
 done
-jq -e '.data | keys | map(select(startswith("DB_POSTGRESDB_SSL"))) | length == 0' \
+jq -e '.data.DB_POSTGRESDB_SSL_ENABLED == "true" and .data.DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED == "false" and (.data | has("DB_POSTGRESDB_SSL_CA") | not)' \
   "$tmp/postgres-ssl-default-configmap.json" >/dev/null
 jq -e --arg ca "$ca_trimmed" \
-  '.data.DB_POSTGRESDB_SSL_CA == $ca and (.data | has("DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED") | not)' \
+  '.data.DB_POSTGRESDB_SSL_CA == $ca and .data.DB_POSTGRESDB_SSL_ENABLED == "true" and .data.DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED == "true"' \
   "$tmp/postgres-ssl-ca-configmap.json" >/dev/null
-jq -e '.data.DB_POSTGRESDB_SSL_ENABLED == "true"' "$tmp/postgres-ssl-ca-configmap.json" >/dev/null
-# The env reference must point at the ConfigMap checked above, by name and key,
-# so a chart-side rename or retarget fails here instead of at pod start.
-ca_configmap_name=$(jq -er '.metadata.name' "$tmp/postgres-ssl-ca-configmap.json")
-for template in deployment-main deployment-worker deployment-webhook-processor; do
-  jq -e '[.spec.template.spec.containers[] | select(.name != "task-runner") | [.env[] | select(.name == "DB_POSTGRESDB_SSL_CA")] | length] | (length > 0 and all(. == 0))' \
-    "$tmp/postgres-ssl-default-$template.json" >/dev/null
-  jq -e '[.spec.template.spec.containers[] | select(.name != "task-runner") | [.env[] | select(.name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED") | .value] == ["false"]] | (length > 0 and all)' \
-    "$tmp/postgres-ssl-default-$template.json" >/dev/null
-  jq -e --arg name "$ca_configmap_name" \
-    '[.spec.template.spec.containers[] | select(.name != "task-runner") | [.env[] | select(.name == "DB_POSTGRESDB_SSL_CA") | .valueFrom.configMapKeyRef | {name, key}] == [{"name": $name, "key": "DB_POSTGRESDB_SSL_CA"}]] | (length > 0 and all)' \
-    "$tmp/postgres-ssl-ca-$template.json" >/dev/null
-  jq -e '[.spec.template.spec.containers[] | select(.name != "task-runner") | [.env[] | select(.name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED") | .value] == ["true"]] | (length > 0 and all)' \
-    "$tmp/postgres-ssl-ca-$template.json" >/dev/null
-  # DB_POSTGRESDB_SSL_ENABLED must appear exactly once per container, and its
-  # source matters. With a CA, chart >= 1.15.0 renders it from
-  # database.ssl.enabled and the module omits its own
-  # (local.n8n_chart_renders_postgres_ssl_enabled): the one entry must be a
-  # reference to the chart ConfigMap's key. Without a CA the chart renders
-  # nothing and the module supplies it: the one entry must be the module's
-  # literal "true". A second entry, or the wrong source, means that gate and
-  # the chart have drifted apart.
-  jq -e --arg name "$ca_configmap_name" \
-    '[.spec.template.spec.containers[] | select(.name != "task-runner") | [.env[] | select(.name == "DB_POSTGRESDB_SSL_ENABLED") | .valueFrom.configMapKeyRef | {name, key}] == [{"name": $name, "key": "DB_POSTGRESDB_SSL_ENABLED"}]] | (length > 0 and all)' \
-    "$tmp/postgres-ssl-ca-$template.json" >/dev/null
-  jq -e '[.spec.template.spec.containers[] | select(.name != "task-runner") | [.env[] | select(.name == "DB_POSTGRESDB_SSL_ENABLED") | .value] == ["true"]] | (length > 0 and all)' \
-    "$tmp/postgres-ssl-default-$template.json" >/dev/null
-done
-echo "PASS: chart $chart_version, db_postgresdb_ssl_ca_pem reaches the chart ConfigMap as DB_POSTGRESDB_SSL_CA with no duplicate SSL env names"
+echo "PASS: chart $chart_version, db_postgresdb_ssl_ca_pem reaches the shared env ConfigMap as DB_POSTGRESDB_SSL_CA with no chart/module clash"
 
 # n8n_worker_keda_min_replicas = 0 (issue #146): n8n.tf feeds
 # queueMode.workerReplicaCount from local.n8n_worker_replica_count (floored at
@@ -304,27 +373,12 @@ jq -e '.kind == "Deployment"' "$tmp/worker-floor-zero-deployment-worker.json" >/
 jq -e '.kind == "ScaledObject" and .spec.minReplicaCount == 0' "$tmp/worker-floor-zero-scaledobject-worker.json" >/dev/null
 echo "PASS: chart $chart_version, worker floor of 0 still renders Deployment+ScaledObject with KEDA minReplicaCount=0"
 
-# n8n warns on every start while a deprecated env var is set
-# (local.n8n_deprecated_env_names). Render every n8n container with the
-# module's real S3 storage values (local.n8n_s3_storage_values) and fail if
-# N8N_AVAILABLE_BINARY_DATA_MODES reaches any of them. WEBHOOK_URL is not
-# checked here: the module adds it through config.extraEnv, not the chart, and
-# tests/defaults.tftest.hcl pins that list on local.n8n_webhook_url_env.
-console <<< 'jsonencode({s3={enabled=true,bucket={name="test-bucket",region="us-east-1"},auth={autoDetect=true},storage=local.n8n_s3_storage_values},serviceAccount={awsRoleArn="arn:aws:iam::123456789012:role/test"}})' \
-  > "$tmp/s3-values.json"
-RENDERED="$tmp/s3-rendered.yaml"
-helm template n8n "$tmp/n8n" -f "$tmp/values.json" -f "$tmp/s3-values.json" \
-  --set secretRefs.existingSecret=test-core \
-  --set license.enabled=true --set license.existingSecret.name=test-license \
-  --set queueMode.enabled=true --set webhookProcessor.enabled=true \
-  --set keda.enabled=true --set taskRunners.enabled=true \
-  --set 'keda.worker.triggers[0].type=redis' \
-  --set 'keda.worker.triggers[0].metadata.listName=bull:jobs:wait' \
-  > "$RENDERED"
-grep -q -- '- name: N8N_DEFAULT_BINARY_DATA_MODE$' "$RENDERED" \
-  || { echo "S3 fixture did not render N8N_DEFAULT_BINARY_DATA_MODE; the check below would pass vacuously" >&2; exit 1; }
-if awk '/- name: N8N_AVAILABLE_BINARY_DATA_MODES$/ { found = 1 } END { exit !found }' "$RENDERED"; then
-  echo "FAIL: chart $chart_version, N8N_AVAILABLE_BINARY_DATA_MODES is rendered; n8n deprecated it and warns on every start" >&2
-  exit 1
-fi
-echo "PASS: chart $chart_version, N8N_AVAILABLE_BINARY_DATA_MODES absent from every rendered container"
+# N8N_AVAILABLE_BINARY_DATA_MODES / s3.storage.extraEnv: removed from the chart
+# entirely in 2.0 (s3.storage now has only mode and forcePathStyle; see
+# values.yaml). The chart has no path left to render the deprecated variable,
+# so there is nothing left to assert against a real chart render here; a
+# previous scenario did that against chart <= 1.13.0's s3.storage.extraEnv.
+# N8N_DEFAULT_BINARY_DATA_MODE itself is unaffected: chart 2.0 still sets it
+# from s3.storage.mode (templates/_env.tpl), just as a shared ConfigMap key
+# loaded through envFrom now, like every other plain chart value (decision
+# 0012), rather than as a container's explicit env entry.

@@ -685,6 +685,87 @@ this project adheres to the stability contract in
   "Verification-required" tier in `docs/versioning.md` for why the
   underlying rename is blocked on upstream
   `hashicorp/terraform-provider-kubernetes#2812`.
+- **Breaking: this module's Helm values now target the n8n chart's unreleased
+  2.0 input schema** (env as per-component maps,
+  [n8n-io/n8n-hosting#250](https://github.com/n8n-io/n8n-hosting/pull/250);
+  [#203](https://github.com/n8n-io/terraform-aws-n8n/issues/203)), with no 1.x
+  compatibility path. Chart 2.0 drops the `config.extraEnv` /
+  `redis.extraEnv` / `s3.storage.extraEnv` / `queueMode.workerExtraEnv` /
+  `webhookProcessor.extraEnv` / `webhook.extraEnv` / `executions.extraEnv` /
+  `taskRunners.extraEnv` lists in favor of flat `env.<component>` maps; every
+  env var this module sets now lands in `env.shared` (main, worker, and
+  webhook processor) or `env.worker` (workers and `n8n_worker_pools` pools
+  only) instead. **The module's own inputs are unchanged:** `n8n_extra_env`,
+  `n8n_worker_extra_env`, and each `n8n_worker_pools[*].extra_env` still take
+  the same `list(object({ name, value }))` shape and reach the same pods;
+  only where their values land inside the chart's rendered values changed.
+  - The core Kubernetes Secret (`kubernetes_secret.n8n`, referenced through
+    `secretRefs.existingSecret`) now carries only `N8N_ENCRYPTION_KEY`.
+    `N8N_HOST`, `N8N_PORT`, and `N8N_PROTOCOL` are no longer read from it.
+    `n8n_encryption_key_secret_ref`'s caller-supplied Secret therefore only
+    needs `N8N_ENCRYPTION_KEY` now; the other three keys it previously had
+    to carry are ignored if still present.
+  - n8n's public editor and webhook URLs are now set via the chart's
+    `editor.url` / `webhook.url` values (derived from `n8n_domain` and the
+    module's webhook base URL) instead of literal `N8N_EDITOR_BASE_URL` /
+    `WEBHOOK_URL` env entries. The effective URLs are unchanged.
+  - `n8n_worker_concurrency` is now nullable, defaulting to `null`: the
+    module then omits `queueMode.workerConcurrency` entirely and n8n's own
+    built-in default (`10`) applies, rather than the module always sending
+    `10` as before. Chart 2.0 fails to render if `queueMode.workerConcurrency`
+    is set together with `executions.concurrency.productionLimit` at
+    anything other than `-1`, because n8n honors `productionLimit` for
+    worker job concurrency regardless of `workerConcurrency`, so the chart
+    rejects the pair as a conflict. `n8n_execution_concurrency_limit`'s
+    default changes from `100` to `-1` (n8n's own "unlimited" sentinel) so
+    the pair no longer conflicts by default; it remains an ordinary,
+    overridable input beyond that;
+    a new plan-time validation rejects setting `n8n_worker_concurrency`
+    together with a non-`-1` `n8n_execution_concurrency_limit`, and
+    `n8n_extra_env`/`n8n_worker_extra_env`/a worker pool's `extra_env` reject
+    the raw `N8N_CONCURRENCY_PRODUCTION_LIMIT` name whenever
+    `n8n_worker_concurrency` is set, closing the same chart-2.0 render
+    failure reached a different way.
+    **Behavior change for callers who left both at their old defaults:**
+    under chart 1.x the module always sent both values and n8n actually ran
+    workers at `n8n_execution_concurrency_limit`'s old default of `100`
+    (`n8n_worker_concurrency`'s old default of `10` never took effect); with
+    `n8n_worker_concurrency` now `null` by default, the effective default
+    becomes n8n's own worker concurrency of `10`. Set
+    `n8n_execution_concurrency_limit` explicitly to recover the old
+    effective value. `examples/medium` and `examples/large` were both
+    re-benchmarked on chart 2.0 and now set `n8n_worker_concurrency = 10`
+    (the old effective `200` and `2000` bought no throughput and cost tail
+    latency; see each `main.tf` for the measured basis and its limits).
+  - `examples/large`: the shipped PgBouncer (4 replicas at 500m CPU) was the
+    first limiter at about 600-620 req/s. It is now 8 replicas at 1000m
+    (PgBouncer is single-threaded, so only replicas add capacity), measured
+    at about 900-1,000 req/s sustained (itself a noisy, bistable range near a
+    Postgres lock-contention ceiling — see `examples/large/pgbouncer.tf` and
+    its README), and `STATS_USERS=n8n` is set so `SHOW POOLS`/`STATS` work;
+    the PgBouncer PodDisruptionBudget moves from `min_available = 1` to
+    `max_unavailable = 1` so a drain can still take at most one of the now
+    8 replicas regardless of count. The example's README no longer claims
+    2,400 req/s peaks: its average target is restated as about 580-700
+    req/s, with the measured ceiling stated beside it.
+  - Every n8n pod rolls once on the upgrade to chart 2.0, as on any chart
+    version bump.
+  - At single-main (`n8n_main_hpa_min_replicas = 1`), chart 2.0 renders no
+    main `PodDisruptionBudget` at all, rather than one with
+    `minAvailable = 0` as chart 1.x did: `templates/pdb.yaml` only renders
+    the object when a second main pod can exist. The module still sends
+    `minAvailable = 1` unconditionally (`local.n8n_main_pdb_min_available`
+    is gone); the chart's own single-main gate makes that value moot there.
+    Node drains and managed node updates can still evict the only main
+    either way. See `docs/upgrading-n8n.md#single-main-maintenance`.
+  - **Chart 2.0 itself is not released yet.** `n8n_chart_version`'s default
+    stays at `"1.15.0"` rather than a guessed `"2.0.0"` (see
+    `docs/versioning.md`); this module's rendered values do not match that
+    pinned chart's schema, so applying at the default pin is not expected to
+    work correctly until a numbered 2.0 release exists. Point
+    `n8n_chart_version` at a verified 2.0 prerelease or private build to use
+    this module today. See `docs/upgrading-n8n.md` for the full upgrade
+    notes.
 
 ### Removed
 

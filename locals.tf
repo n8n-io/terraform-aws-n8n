@@ -463,9 +463,15 @@ locals {
   # Explicit null clears any previous RollingUpdate settings during upgrade.
   n8n_main_strategy = local.n8n_multi_main_enabled ? {} : { type = "Recreate", rollingUpdate = null }
 
-  # A single main must be evictable during node maintenance. Keeping one
-  # available with an HPA ceiling of one would block every voluntary eviction.
-  n8n_main_pdb_min_available = local.n8n_multi_main_enabled ? 1 : 0
+  # Chart 2.0 (templates/pdb.yaml) renders the main PodDisruptionBudget only
+  # when a second main pod can exist (mainReplicas > 1, or hpa.main.enabled
+  # with minReplicas > 1); both of those resolve to
+  # var.n8n_main_hpa_min_replicas in this module's own wiring, the same
+  # condition local.n8n_multi_main_enabled already tests. With a single
+  # main the chart renders no PDB object at all now, rather than one with
+  # minAvailable = 0: there was never anything to protect, so n8n.tf's pdb
+  # block sends the constant minAvailable = 1 unconditionally -- the chart
+  # simply ignores it on the single-main path, where it renders nothing.
 
   # ── Image repository grammar ───────────────────────────────────────────────
   # Shared by the validations on n8n_image_repository and
@@ -516,12 +522,22 @@ locals {
 
   # ── n8n service account ────────────────────────────────────────────────────
   # The chart creating its own ServiceAccount is the arrangement we want, with
-  # one exception: neither chart 1.10.0 nor 1.11.0 renders imagePullSecrets
-  # anywhere, not on the pod spec and not on the ServiceAccount, so a private
-  # registry has no way in through chart values. Attaching the secrets to the
+  # one exception: no chart 1.x release this module has pinned renders
+  # imagePullSecrets anywhere, not on the pod spec and not on the
+  # ServiceAccount, so a private registry has no way in through chart values
+  # at var.n8n_chart_version (still 1.15.0; chart 2.0 is not released and not
+  # pinned here, see docs/versioning.md). Attaching the secrets to the
   # account the pods already run as is the remaining lever, and the chart
   # supports it: serviceAccount.create = false with an externally managed name
   # is documented in its own values.yaml, naming Terraform as the example.
+  #
+  # Chart 2.0 adds a top-level imagePullSecrets value (values.yaml) that
+  # templates/deployment-{main,worker,webhook-processor}.yaml render directly
+  # onto every pod spec, independent of which ServiceAccount is in play, so
+  # once this module pins a chart 2.0 release var.n8n_image_pull_secrets
+  # could be passed straight through to that value instead, making this
+  # whole ServiceAccount take-over unnecessary for this purpose. Left as-is
+  # for now: the pinned chart is still 1.x, which has no such value.
   #
   # So the module takes the account over, but only when there is something to
   # attach. With the default empty list the chart keeps creating it and nothing
@@ -625,45 +641,46 @@ locals {
     ],
   )
 
-  n8n_credentials_overwrite_env = var.n8n_credentials_overwrite_secret_ref == null ? [] : [
-    {
-      name  = "CREDENTIALS_OVERWRITE_DATA_FILE"
-      value = "/etc/n8n/credentials-overwrite/${var.n8n_credentials_overwrite_secret_ref.key}"
-    },
-  ]
+  n8n_credentials_overwrite_env = var.n8n_credentials_overwrite_secret_ref == null ? {} : {
+    CREDENTIALS_OVERWRITE_DATA_FILE = "/etc/n8n/credentials-overwrite/${var.n8n_credentials_overwrite_secret_ref.key}"
+  }
 
   # ── PostgreSQL SSL (DB_POSTGRESDB_SSL_ENABLED/_REJECT_UNAUTHORIZED) ─────────
   # Extracted to its own local, like n8n_credentials_overwrite_env above, so it
   # can be asserted on directly in tests/defaults.tftest.hcl under command =
   # plan: helm_release.n8n's values are unknown at plan time (see AGENTS.md's
-  # known mock-provider limitations), so a list built inline inside that
-  # resource's config.extraEnv could not be.
+  # known mock-provider limitations), so a map built inline inside that
+  # resource's env.shared could not be.
   #
   # Set here rather than through the chart's database.ssl.* values, except for
   # the one case below. Charts before 1.15.0 render database.ssl.enabled as
   # DB_POSTGRESDB_SSL, a name n8n does not read (n8n-io/n8n-hosting#175), so
-  # DB_POSTGRESDB_SSL_ENABLED has to come from config.extraEnv.
+  # DB_POSTGRESDB_SSL_ENABLED has to come from env.shared.
   # DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED stays here too, which is why
   # local.postgres_ssl_ca_values below pins the chart's rejectUnauthorized to
-  # true: the chart then never renders a second entry under the same name.
+  # true: the chart then never computes that name itself.
   #
-  # The exception: chart >= 1.15.0 renders database.ssl.enabled as
-  # DB_POSTGRESDB_SSL_ENABLED itself, and the module sends database.ssl.* only
-  # while postgres_ssl_ca_active. In that one case the chart already supplies
-  # the entry, so the module omits its own rather than give every n8n
-  # container the same env name twice. With no CA, with SSL off, or on a chart
-  # that does not render it (older, or from a custom repository), the module's
-  # entry stays; see local.n8n_chart_renders_postgres_ssl_enabled below.
-  n8n_postgres_ssl_env = var.db_postgresdb_ssl_enabled ? concat(
-    local.postgres_ssl_ca_active && local.n8n_chart_renders_postgres_ssl_enabled ? [] : [
-      { name = "DB_POSTGRESDB_SSL_ENABLED", value = "true" },
-    ],
-    [
-      { name = "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED", value = tostring(var.db_postgresdb_ssl_reject_unauthorized) },
-    ],
-    ) : [
-    { name = "DB_POSTGRESDB_SSL_ENABLED", value = "false" },
-  ]
+  # The exception: chart >= 1.15.0 (every chart 2.0 release included) renders
+  # database.ssl.enabled as DB_POSTGRESDB_SSL_ENABLED itself, and the module
+  # sends database.ssl.* only while postgres_ssl_ca_active. On chart 2.0, in
+  # that one case, setting the module's own entry in env.shared alongside it
+  # would fail the Helm render outright (chart 2.0's n8n.validateEnv rejects a
+  # name the chart already computes), not merely render a harmless duplicate
+  # the way an older chart's Kubernetes env list did; the module omits its own
+  # entry there for exactly that reason. With no CA, with SSL off, or on a
+  # chart that does not render it (older, or from a custom repository), the
+  # module's entry stays; see local.n8n_chart_renders_postgres_ssl_enabled
+  # below.
+  n8n_postgres_ssl_env = var.db_postgresdb_ssl_enabled ? merge(
+    local.postgres_ssl_ca_active && local.n8n_chart_renders_postgres_ssl_enabled ? {} : {
+      DB_POSTGRESDB_SSL_ENABLED = "true"
+    },
+    {
+      DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED = tostring(var.db_postgresdb_ssl_reject_unauthorized)
+    },
+    ) : {
+    DB_POSTGRESDB_SSL_ENABLED = "false"
+  }
 
   # ── PostgreSQL SSL CA bundle (chart database.ssl.ca) ───────────────────────
   # The CA bundle reaches n8n through the chart's own database.ssl.ca value,
@@ -724,20 +741,27 @@ locals {
   )
 
   # ── n8n_extra_env collision guard ──────────────────────────────────────────
-  # config.extraEnv is appended LAST in every n8n container's env list (see the
-  # n8n Helm chart's deployment-*.yaml templates), and Kubernetes resolves
-  # duplicate env names last-wins. So any name a caller passes via
-  # var.n8n_extra_env overrides the value the module or chart set for it. These
-  # two lists are the reserved surface the escape hatch must not touch:
-  # connection, identity, storage, license, and topology vars whose override
-  # would silently break or hijack the deployment.
+  # env.shared (n8n.tf's local.n8n_env_shared) merges var.n8n_extra_env in
+  # LAST, and merge() resolves a duplicate key last-wins, so any name a caller
+  # passes via var.n8n_extra_env would override the value the module set for
+  # it in that same merge() -- a silent override chart 2.0 cannot see, since
+  # by the time env.shared reaches the chart it is one Terraform-resolved map
+  # with no trace of the collision. For a name the CHART itself computes from
+  # its own values instead (N8N_PORT, DB_*, QUEUE_*, ...), chart 2.0 catches
+  # the collision on its own and fails the Helm render (n8n.validateEnv); this
+  # guard exists so that failure surfaces at `terraform plan` instead, with a
+  # message naming the dedicated module input to use. These two lists are the
+  # reserved surface the escape hatch must not touch: connection, identity,
+  # storage, license, and topology vars whose override would silently break or
+  # hijack the deployment.
   #
-  # Exact names: set by the module in config.extraEnv / the n8n secret, plus the
+  # Exact names: set by the module in env.shared / the n8n secret, plus the
   # chart-rendered identity/topology/storage/license vars not covered by a
-  # prefix below. Keep in sync with the extraEnv block in n8n.tf and the chart
-  # values the module sets (database/redis/s3/multiMain/license/secretRefs).
+  # prefix below. Keep in sync with local.n8n_env_shared in n8n.tf and the
+  # chart values the module sets (database/redis/s3/multiMain/license/
+  # secretRefs/webhook/editor).
   n8n_managed_env_names = concat([
-    # Set by the module in config.extraEnv or the n8n secret.
+    # Set by the module in env.shared or the n8n secret.
     "N8N_ENCRYPTION_KEY",
     "N8N_LOG_LEVEL",
     "N8N_LOG_OUTPUT",
@@ -756,15 +780,18 @@ locals {
     # nothing writes to.
     "N8N_REDIS_KEY_PREFIX",
     # Owned by the four "n8n defaults scheduled to change" inputs. Listed even
-    # though three of them are only emitted when set: an extraEnv override would
-    # move a limit the module deliberately leaves to n8n, or unpin the task
-    # timeout the module deliberately pins, without the input saying so.
+    # though three of them are only emitted when set: an env.shared override
+    # would move a limit the module deliberately leaves to n8n, or unpin the
+    # task timeout the module deliberately pins, without the input saying so.
     # N8N_RUNNERS_TASK_TIMEOUT is already covered by the N8N_RUNNERS_ prefix
     # below and is not repeated here.
     "N8N_UNVERIFIED_PACKAGES_ENABLED",
     "N8N_COMPRESSION_NODE_MAX_DECOMPRESSED_SIZE_BYTES",
     "N8N_COMPRESSION_NODE_MAX_ZIP_ENTRIES",
     # WEBHOOK_URL is deliberately absent: it is in n8n_deprecated_env_names.
+    # N8N_WEBHOOK_URL is chart-owned (webhook.url, n8n.tf) and would fail the
+    # render if set here regardless, but is kept in this list for the same
+    # plan-time-over-apply-time reason as every other chart-owned entry below.
     "N8N_WEBHOOK_URL",
     "N8N_TEMPLATES_ENABLED",
     "N8N_PERSONALIZATION_ENABLED",
@@ -779,23 +806,23 @@ locals {
     "N8N_LOG_STREAMING_MANAGED_BY_ENV",
     "N8N_LOG_STREAMING_DESTINATIONS",
     # Owned by var.n8n_execution_data_storage_mode. Listed even though the module
-    # only emits it in "s3" mode: an extraEnv override would flip execution data
-    # onto S3 (or off it) without the input saying so, and in s3 mode without a
-    # licensed n8n every pod refuses to start.
+    # only emits it in "s3" mode: an env.shared override would flip execution
+    # data onto S3 (or off it) without the input saying so, and in s3 mode
+    # without a licensed n8n every pod refuses to start.
     "N8N_EXECUTION_DATA_STORAGE_MODE",
-    # Owned by the module's config.data block. The chart renders all four of its
-    # keys unconditionally (_environment-helpers.tpl carries no {{- if }} guard
-    # on them, unlike the EXECUTIONS_TIMEOUT and EXECUTIONS_DATA_MAX_AGE entries
-    # beside them), so an extraEnv duplicate produces a container env entry
-    # listed twice under the same name. Kubernetes' strategic-merge-patch is
-    # then ambiguous about which occurrence a later change lands on, and honours
-    # the LAST entry at container start, so a stale value can silently win.
-    # Observed live 2026-08-24: main and worker pods kept reporting "none" for
-    # EXECUTIONS_DATA_SAVE_ON_SUCCESS five minutes after the Helm release's own
-    # manifest said "all" in both positions. All four are owned by dedicated
-    # inputs (n8n_executions_data_save_on_success / _on_error / _on_progress /
+    # Owned by the module's executions.data block (n8n.tf). The chart renders
+    # all four of its keys unconditionally, so an env.shared duplicate would
+    # either fail the chart's own render (chart 2.0) or, on an older chart
+    # that still renders these as a plain Kubernetes env list, produce a
+    # container env entry listed twice under the same name whose
+    # strategic-merge-patch resolution is ambiguous about which occurrence a
+    # later change lands on. Observed live 2026-08-24 on such a chart: main
+    # and worker pods kept reporting "none" for EXECUTIONS_DATA_SAVE_ON_SUCCESS
+    # five minutes after the Helm release's own manifest said "all" in both
+    # positions. All four are owned by dedicated inputs
+    # (n8n_executions_data_save_on_success / _on_error / _on_progress /
     # _manual_executions), so every guarded name here has a supported knob and
-    # none needs the extraEnv path.
+    # none needs the env.shared path.
     "EXECUTIONS_DATA_SAVE_ON_SUCCESS",
     "EXECUTIONS_DATA_SAVE_ON_ERROR",
     "EXECUTIONS_DATA_SAVE_ON_PROGRESS",
@@ -809,7 +836,7 @@ locals {
     "N8N_LICENSE_ACTIVATION_KEY",
     # Owned by var.n8n_worker_pools. N8N_WORKER_POOLS_ENABLED is emitted only
     # when pools are declared, and N8N_WORKER_POOL_NAME is set per worker group
-    # by the chart. Reached through config.extraEnv (all pods), an override here
+    # by the chart. Reached through env.shared (all pods), an override here
     # would either turn the feature on with no pool to route to, or put every
     # worker, main and webhook pod into one pool at once, which is not a
     # topology the feature has.
@@ -823,9 +850,19 @@ locals {
     "N8N_WORKER_POOLS_ENABLED",
     "N8N_WORKER_POOL_NAME",
     "N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN",
-    "N8N_HOST",
+    # N8N_HOST and N8N_PROTOCOL are deliberately absent, unlike chart 1.x:
+    # this module no longer sets either (kubernetes_secret.n8n, n8n.tf), the
+    # chart doesn't read them from anywhere, and n8n itself only falls back to
+    # them when N8N_WEBHOOK_URL and N8N_EDITOR_BASE_URL are both unset, which
+    # they never are here (webhook.url/editor.url are always set). Both names
+    # are free for a caller to use through n8n_extra_env.
+    #
+    # N8N_PORT stays reserved: the chart now sets it on every n8n process
+    # (service.port, n8n.tf's secretRefs-adjacent `service` block), so an
+    # env.shared override of it fails the chart's own render regardless.
     "N8N_PORT",
-    "N8N_PROTOCOL",
+    # Chart-owned since chart 2.0 (editor.url / webhook.url, n8n.tf), not a
+    # literal env.shared entry the module writes itself as it was pre-2.0.
     "N8N_EDITOR_BASE_URL",
     "N8N_PROXY_HOPS",
     "N8N_DISABLE_PRODUCTION_MAIN_PROCESS",
@@ -837,28 +874,46 @@ locals {
     # three QUEUE_WORKER_* names above it, whose ConfigMap entries only
     # appear when their own redis.worker.* value is set, this key's entry
     # (templates/configmap.yaml, gated only on queueMode.enabled, which this
-    # module always sets) has no per-setting guard and always renders.
-    # config.extraEnv is appended after it in every deployment template, and
-    # Kubernetes does not reject duplicate env names outright: it silently
-    # keeps the last of the two same-named entries. That would replace the
-    # chart's real value with whatever a caller wrote here, with no plan- or
-    # apply-time warning. var.n8n_graceful_shutdown_timeout is the supported
+    # module always sets) has no per-setting guard and always renders. Chart
+    # 2.0 fails the render outright if env.shared or env.worker also sets it
+    # (n8n.validateEnv); this guard just moves that failure to plan time, with
+    # a message pointing at var.n8n_graceful_shutdown_timeout, the supported
     # way to change this value.
     "N8N_GRACEFUL_SHUTDOWN_TIMEOUT",
     ],
     # NODE_OPTIONS is reserved ONLY while n8n_node_max_old_space_size_mb is
     # set, unlike every entry above. The distinction matters because it is a
-    # whole flag STRING rather than a single setting: when the module emits it,
-    # a caller entry would replace the module's --max-old-space-size wholesale
-    # rather than adding to it (extraEnv is appended last, Kubernetes resolves
-    # duplicate names last-wins), silently unpinning the ceiling the input says
-    # is in force. When the input is null the module emits nothing, there is no
-    # value to clobber, and a caller passing NODE_OPTIONS for unrelated flags
+    # whole flag STRING rather than a single setting, and the chart never
+    # computes it itself: there is nothing for n8n.validateEnv to catch, so
+    # this guard is the only protection. When the module emits it, a caller
+    # entry would replace the module's --max-old-space-size wholesale rather
+    # than adding to it (this merge() resolves a duplicate key last-wins),
+    # silently unpinning the ceiling the input says is in force. When the
+    # input is null the module emits nothing, there is no value to clobber,
+    # and a caller passing NODE_OPTIONS for unrelated flags
     # (--enable-source-maps, --inspect, their own heap flag) is doing something
     # legitimate that this module has no business rejecting. Reserving it
     # unconditionally would break those callers at plan time on upgrade, for a
     # collision that cannot occur.
     var.n8n_node_max_old_space_size_mb != null ? ["NODE_OPTIONS"] : [],
+    # N8N_CONCURRENCY_PRODUCTION_LIMIT is reserved ONLY while
+    # n8n_worker_concurrency is set, the same conditional pattern as
+    # NODE_OPTIONS above. Unlike N8N_GRACEFUL_SHUTDOWN_TIMEOUT and the other
+    # unconditional entries, the chart only computes this name itself (and
+    # only then does n8n.validateEnv catch a literal env.shared/env.worker
+    # duplicate of it) while n8n_execution_concurrency_limit != -1 -- but
+    # the chart ALSO fails the render whenever queueMode.workerConcurrency
+    # and a caller-supplied N8N_CONCURRENCY_PRODUCTION_LIMIT in env.shared or
+    # env.worker are both present, regardless of
+    # executions.concurrency.productionLimit's own value (_helpers.tpl's
+    # worker-concurrency validation walks n8n.userEnv, not just
+    # n8n.chartEnv). n8n_execution_concurrency_limit's own validation already
+    # rejects n8n_worker_concurrency set alongside a non--1 limit, but a
+    # caller reaching the same env var directly through n8n_extra_env or
+    # n8n_worker_extra_env while leaving n8n_execution_concurrency_limit at
+    # -1 would otherwise reach that chart failure at apply time instead of
+    # here at plan time.
+    var.n8n_worker_concurrency != null ? ["N8N_CONCURRENCY_PRODUCTION_LIMIT"] : [],
   )
 
   # Env vars n8n has deprecated and logs a warning for on every start, even
@@ -983,12 +1038,12 @@ locals {
   # equivalent-to-unset shape.
   n8n_dns_config = length(local.n8n_dns_config_stripped) == 0 ? null : local.n8n_dns_config_stripped
 
-  # The config.extraEnv entry for N8N_PROXY_HOPS, extracted so
+  # The env.shared entry for N8N_PROXY_HOPS, extracted so
   # tests/defaults.tftest.hcl can assert the rendered entry directly.
   # helm_release.n8n depends on kubernetes_namespace, whose attributes are
   # unknown at plan under the mock provider, so the resource's own values
   # argument can't be asserted there; this local has no such dependency and
-  # is known at plan. See n8n.tf's config.extraEnv and the n8n_proxy_hops
-  # variable description.
-  n8n_proxy_hops_env = { name = "N8N_PROXY_HOPS", value = tostring(var.n8n_proxy_hops) }
+  # is known at plan. See n8n.tf's local.n8n_env_shared and the
+  # n8n_proxy_hops variable description.
+  n8n_proxy_hops_env = { N8N_PROXY_HOPS = tostring(var.n8n_proxy_hops) }
 }

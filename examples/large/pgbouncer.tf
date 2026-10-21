@@ -17,22 +17,61 @@
 #     tags against current PgBouncer releases.
 #   - Transaction mode confirmed compatible with n8n's TypeORM (no prepared
 #     statements or LISTEN/NOTIFY that would force session mode).
-#   - Four replicas with REQUIRED pod anti-affinity guarantee placement on
-#     four distinct nodes (a `preferred` rule was observed losing the race
+#   - Eight replicas with REQUIRED pod anti-affinity guarantee placement on
+#     eight distinct nodes (a `preferred` rule was observed losing the race
 #     against node-group startup ordering, co-locating replicas on the
 #     first Ready node — a single-node failure would then have taken out
-#     all n8n DB traffic). A PodDisruptionBudget with min_available=1
-#     keeps replicas up during voluntary node drains. Four is also the
-#     client-connection budget: MAX_CLIENT_CONN=3000 x 4 = 12,000, sized
+#     all n8n DB traffic). A PodDisruptionBudget with max_unavailable=1
+#     keeps at least seven of eight replicas up during voluntary node
+#     drains. Eight is also the client-connection budget:
+#     MAX_CLIENT_CONN=3000 x 8 = 24,000, sized
 #     for the fleet ceiling of ~9,200 (460 pods x pool_size 20; see the
-#     capacity arithmetic in main.tf's Main pods comment). Two replicas
-#     (6,000) would be oversubscribed at those maxima, and exceeding
-#     max_client_conn queues new client connections, recreating exactly
-#     the pool-acquisition backlog the pool sizing exists to prevent.
-#     Four replicas is also the topology the sustained-load validation
-#     actually ran. On the upstream leg, 4 x DEFAULT_POOL_SIZE 150 is at
-#     most 600 server connections to Aurora, well under the ~5,000
-#     max_connections of a db.r6g.8xlarge.
+#     capacity arithmetic in main.tf's Main pods comment).
+#     **Measured 2026-10-17 (chart 2.0, synthetic 500ms-I/O workflow):**
+#     the originally-shipped 4 replicas at `resources.limits.cpu = 500m`
+#     each pegged 96-100% CPU around 700-1,000 exec/s — PgBouncer is
+#     single-threaded (one process, up to ~1 vCPU per replica; the
+#     deployed edoburu image has no SO_REUSEPORT multi-process supervisor,
+#     so more cores per pod buy nothing past 1 vCPU, only more replicas
+#     do), and that CPU ceiling was the tier's actual sustained-throughput
+#     limiter, not Aurora or Redis (both stayed <=60% CPU at the same
+#     load). Doubling to 8 replicas at `limits.cpu = 1000m` (per-replica
+#     CPU never exceeds ~32% even at the new ceiling, confirmed via
+#     `kubectl top pod` container metrics, not `SHOW POOLS`/`SHOW STATS`,
+#     which report pool and transaction counters rather than CPU) raised the
+#     CPU-bound ceiling roughly 1.5-1.6x, to ~950-1,000 req/s. Raising
+#     `DEFAULT_POOL_SIZE` instead (tried 150->400) made throughput worse,
+#     not better: `pg_stat_activity` during the failure showed ~95% of all
+#     Aurora backends simultaneously blocked on `LWLock:BufferContent` — a
+#     Postgres-internal buffer-page lock convoy, confirmed independent of
+#     PgBouncer (every pool showed `cl_waiting=0`, never queuing clients)
+#     and independent of webhook pod count (doubling `n8n_webhook_hpa_max_replicas`
+#     to 160 cut the error rate at a fixed offered rate but did not fix
+#     the latency collapse). A larger pool just let more backends pile
+#     onto the same contended page. Aurora CPU (14-53%) and CommitLatency
+#     (0.1-1.8ms) stayed low throughout, so the ~950-1,000 req/s ceiling is
+#     not an Aurora capacity limit either — it is Postgres-internal lock
+#     contention this example's schema/write pattern runs into above
+#     roughly 1,000 req/s, and raising replica count, pool size or webhook
+#     pod count does not move it. The exact contended relation was not
+#     identified (the live window closed before a `pg_locks` join could
+#     catch it); treat ~950-1,000 req/s as this tier's ceiling until that
+#     investigation happens at the application/query level — outside
+#     PgBouncer's reach. On the upstream leg, 8 x DEFAULT_POOL_SIZE 150 is
+#     at most 1,200 server connections to Aurora at full pool saturation,
+#     well under the ~5,000 max_connections of a db.r6g.8xlarge (the
+#     formula-derived value, confirmed via `SHOW max_connections`).
+#   - STATS_USERS=n8n (same credential as DB_USER/DB_PASSWORD, no separate
+#     secret) makes `SHOW POOLS`/`STATS`/`CLIENTS`/`SERVERS` reachable
+#     against the `pgbouncer` admin pseudo-database from an in-cluster psql
+#     client — required for the pool diagnosis above; per-replica CPU came
+#     from `kubectl top` / container metrics instead, since PgBouncer's
+#     `SHOW` commands report pool and transaction counters, not CPU.
+#     `stats_users` (not `admin_users`) is enough here: PgBouncer's console
+#     access control lets `stats_users` run every `SHOW` command except
+#     `SHOW FDS`, so it does not need `admin_users`' broader console rights
+#     (`PAUSE`/`SUSPEND`/`RESUME`/`SHUTDOWN`/`RELOAD`/`SET`/`KILL`), which
+#     every n8n pod holding this credential would otherwise also get.
 #   - With required anti-affinity, later replicas stay Pending until
 #     enough nodes are Ready (typically <60s); the deployment as a whole
 #     is never blocked.
@@ -85,7 +124,7 @@ resource "kubernetes_deployment" "pgbouncer" {
   }
 
   spec {
-    replicas = 4
+    replicas = 8
 
     selector {
       match_labels = { app = "pgbouncer" }
@@ -118,16 +157,19 @@ resource "kubernetes_deployment" "pgbouncer" {
         container {
           name = "pgbouncer"
 
-          # CKV_K8S_10/11/12/13: pgbouncer is a lightweight connection pooler;
-          # these are generous enough to not throttle under the 2-replica
-          # pool_size=150 config above.
+          # CKV_K8S_10/11/12/13: pgbouncer is single-threaded (one process
+          # per pod, no SO_REUSEPORT multi-process supervisor in this
+          # image), so a CPU limit above ~1 vCPU buys nothing — only more
+          # replicas raise the ceiling. 500m pegged 96-100% around
+          # 700-1,000 exec/s (see the top-of-file comment); 1000m keeps
+          # per-replica usage under ~32% at this tier's measured ceiling.
           resources {
             requests = {
-              cpu    = "100m"
+              cpu    = "600m"
               memory = "128Mi"
             }
             limits = {
-              cpu    = "500m"
+              cpu    = "1000m"
               memory = "256Mi"
             }
           }
@@ -203,6 +245,10 @@ resource "kubernetes_deployment" "pgbouncer" {
             name  = "IGNORE_STARTUP_PARAMETERS"
             value = "statement_timeout,extra_float_digits"
           }
+          env {
+            name  = "STATS_USERS"
+            value = "n8n"
+          }
 
           readiness_probe {
             tcp_socket {
@@ -225,9 +271,9 @@ resource "kubernetes_deployment" "pgbouncer" {
   }
 }
 
-# PodDisruptionBudget so voluntary node drains can never take both pgbouncer
-# replicas down at the same time. min_available=1 with 2 replicas means at
-# most one can be evicted at a time; drains will wait if both are healthy.
+# PodDisruptionBudget so voluntary node drains can never take more than one
+# pgbouncer replica down at a time, regardless of replica count: drains will
+# wait once one replica is already unavailable.
 resource "kubernetes_pod_disruption_budget_v1" "pgbouncer" {
   metadata {
     name      = "pgbouncer"
@@ -235,7 +281,7 @@ resource "kubernetes_pod_disruption_budget_v1" "pgbouncer" {
   }
 
   spec {
-    min_available = 1
+    max_unavailable = 1
     selector {
       match_labels = { app = "pgbouncer" }
     }

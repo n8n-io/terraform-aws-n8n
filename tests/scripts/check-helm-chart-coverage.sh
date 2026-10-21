@@ -17,13 +17,27 @@
 # has looked at yet. Re-verifying a row's content when its key already exists
 # in an old version is still a human job: see the doc's own instructions.
 #
+# N8N_CHART_DIR: point at a local chart checkout instead of `helm show
+# values`-ing the pinned n8n_chart_version. Useful against a chart still in
+# review (no released version to pull). When set, check 1 compares the doc's
+# version line against that chart's own Chart.yaml `version` field instead of
+# n8n_chart_version's default, and check 2 reads that chart's values.yaml
+# directly instead of calling `helm show values`. Resolved to an absolute
+# path before this script cd's to the repo root, so a relative value is
+# interpreted relative to the directory the script was invoked from, not
+# the repo.
+#
 # Requires: helm. No terraform, no AWS credentials, no cluster.
 #
 # Usage: tests/scripts/check-helm-chart-coverage.sh
+#        N8N_CHART_DIR=/path/to/chart tests/scripts/check-helm-chart-coverage.sh
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+if [[ -n "${N8N_CHART_DIR:-}" ]]; then
+  N8N_CHART_DIR="$(cd "$N8N_CHART_DIR" && pwd)" || { echo "N8N_CHART_DIR not found: $N8N_CHART_DIR" >&2; exit 1; }
+fi
 cd "$REPO_ROOT"
 
 command -v helm >/dev/null 2>&1 || { echo "helm not found on PATH" >&2; exit 1; }
@@ -42,6 +56,16 @@ if [[ -z "$pinned_version" || -z "$pinned_repository" ]]; then
   exit 1
 fi
 
+if [[ -n "${N8N_CHART_DIR:-}" ]]; then
+  chart_version="$(awk -F'[: \t]+' '/^version:/{print $2; exit}' "$N8N_CHART_DIR/Chart.yaml")"
+  if [[ -z "$chart_version" ]]; then
+    echo "Could not read version from $N8N_CHART_DIR/Chart.yaml" >&2
+    exit 1
+  fi
+else
+  chart_version="$pinned_version"
+fi
+
 doc_version="$(sed -n 's/.*Verified against chart version `\([^`]*\)`.*/\1/p' "$DOC_FILE" | head -1)"
 
 if [[ -z "$doc_version" ]]; then
@@ -49,19 +73,31 @@ if [[ -z "$doc_version" ]]; then
   exit 1
 fi
 
-if [[ "$doc_version" != "$pinned_version" ]]; then
-  cat >&2 <<EOF
+if [[ "$doc_version" != "$chart_version" ]]; then
+  if [[ -n "${N8N_CHART_DIR:-}" ]]; then
+    cat >&2 <<EOF
+$DOC_FILE claims chart version $doc_version, but N8N_CHART_DIR's Chart.yaml
+reports $chart_version. Update the doc's version line to match the chart
+checkout you are verifying against.
+EOF
+  else
+    cat >&2 <<EOF
 $DOC_FILE claims chart version $doc_version, but n8n_chart_version's default in
 $VARS_FILE is $pinned_version. Diff the two versions' values.yaml, update any
 affected coverage rows, and change the doc's version line in the same PR (see
 the doc's own instructions at the top).
 EOF
+  fi
   exit 1
 fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-helm show values "${pinned_repository}/n8n" --version "$pinned_version" >"$tmp/values.yaml"
+if [[ -n "${N8N_CHART_DIR:-}" ]]; then
+  cp "$N8N_CHART_DIR/values.yaml" "$tmp/values.yaml"
+else
+  helm show values "${pinned_repository}/n8n" --version "$pinned_version" >"$tmp/values.yaml"
+fi
 
 # Top-level keys only: unindented "key:" lines. This chart's values.yaml never
 # puts a document-level list item at column 0, so this is a clean extraction
@@ -95,10 +131,10 @@ for key in "${chart_keys[@]}"; do
 done
 
 if [[ ${#missing[@]} -gt 0 ]]; then
-  echo "$DOC_FILE does not mention these top-level values.yaml keys from chart $pinned_version:" >&2
+  echo "$DOC_FILE does not mention these top-level values.yaml keys from chart $chart_version:" >&2
   printf '  %s\n' "${missing[@]}" >&2
   echo "Add a coverage row for each (or list it under 'Not currently configurable') and re-run this check." >&2
   exit 1
 fi
 
-echo "OK: $DOC_FILE is verified against chart $pinned_version (${#chart_keys[@]} top-level keys covered)."
+echo "OK: $DOC_FILE is verified against chart $chart_version (${#chart_keys[@]} top-level keys covered)."
