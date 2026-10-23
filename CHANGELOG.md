@@ -798,6 +798,9 @@ this project adheres to the stability contract in
   "Verification-required" tier in `docs/versioning.md` for why the
   underlying rename is blocked on upstream
   `hashicorp/terraform-provider-kubernetes#2812`.
+- CI `azure/setup-helm` pin `v4.3.0` to `v4.3.1` in the `chart` and
+  `chart-coverage` jobs. Patch release: a CRD-establishment wait under
+  `HookOnlyStrategy` and a linter bump. See #150.
 
 ### Removed
 
