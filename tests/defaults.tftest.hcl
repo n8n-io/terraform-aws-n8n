@@ -783,6 +783,16 @@ run "license_key_secret_ref_defaults_to_null_and_changes_nothing" {
     condition     = kubernetes_secret.n8n[0].data["N8N_LICENSE_ACTIVATION_KEY"] == "test-license-key-not-real"
     error_message = "Leaving n8n_license_key_secret_ref null must not change the default license key wiring"
   }
+
+  assert {
+    condition = (
+      local.n8n_license_values.enabled == true &&
+      !contains(keys(local.n8n_license_values), "activationKey") &&
+      local.n8n_license_values.existingSecret.name == "n8n-enterprise-secrets" &&
+      local.n8n_license_values.existingSecret.key == "N8N_LICENSE_ACTIVATION_KEY"
+    )
+    error_message = "With n8n_license_key, the license block must point existingSecret at the module-managed n8n-enterprise-secrets Secret and never set activationKey"
+  }
 }
 
 run "license_key_secret_ref_drops_the_key_from_the_shared_secret" {
@@ -821,6 +831,11 @@ run "license_key_secret_ref_key_can_be_overridden" {
     condition     = local.n8n_license_key_secret_ref_key == "n8n-license"
     error_message = "An explicit key on n8n_license_key_secret_ref must override the \"license-key\" default"
   }
+
+  assert {
+    condition     = local.n8n_license_values.existingSecret.key == "n8n-license"
+    error_message = "An explicit key on n8n_license_key_secret_ref must reach the license block's existingSecret.key"
+  }
 }
 
 run "license_key_secret_ref_rejects_being_set_alongside_the_value" {
@@ -855,9 +870,10 @@ run "license_key_is_required_when_neither_input_is_set" {
 # same way n8n_license_key_secret_ref's own section above documents for the
 # key. helm_release.n8n.values is unknown at plan time under the mock
 # provider (see AGENTS.md, "Known mock provider limitations"), so these runs
-# assert at the local/variable-contract level; the rendered config.extraEnv
-# entry and license.enabled/existingSecret omission are verified by a real
-# terraform plan.
+# assert at the local/variable-contract level: local.n8n_license_cert_env and
+# local.n8n_license_values, which helm_release.n8n renders verbatim. That the
+# cert entry actually lands in the rendered config.extraEnv list is verified
+# by a real terraform plan.
 
 run "license_cert_secret_ref_defaults_to_null_and_changes_nothing" {
   command = plan
@@ -894,6 +910,29 @@ run "license_cert_secret_ref_drops_the_key_from_the_shared_secret_and_sets_extra
       local.n8n_license_cert_env[0].valueFrom.secretKeyRef.key == "cert"
     )
     error_message = "local.n8n_license_cert_env must carry exactly one N8N_LICENSE_CERT entry sourced from n8n_license_cert_secret_ref via secretKeyRef"
+  }
+
+  assert {
+    condition     = keys(local.n8n_license_values) == ["enabled"] && local.n8n_license_values.enabled == true
+    error_message = "The license block must contain only enabled = true on the offline certificate path: no existingSecret and no activationKey"
+  }
+}
+
+run "license_values_point_existing_secret_at_caller_secret_on_key_ref_path" {
+  command = plan
+
+  variables {
+    n8n_license_key            = null
+    n8n_license_key_secret_ref = { name = "caller-license" }
+  }
+
+  assert {
+    condition = (
+      local.n8n_license_values.enabled == true &&
+      local.n8n_license_values.existingSecret.name == "caller-license" &&
+      local.n8n_license_values.existingSecret.key == "license-key"
+    )
+    error_message = "The license block must point existingSecret at n8n_license_key_secret_ref, with key defaulting to \"license-key\""
   }
 }
 
@@ -953,6 +992,28 @@ run "rejects_empty_license_cert_secret_ref_name" {
   variables {
     n8n_license_key             = null
     n8n_license_cert_secret_ref = { name = "" }
+  }
+
+  expect_failures = [var.n8n_license_cert_secret_ref]
+}
+
+run "rejects_invalid_license_cert_secret_ref_key" {
+  command = plan
+
+  variables {
+    n8n_license_key             = null
+    n8n_license_cert_secret_ref = { name = "caller-license-cert", key = "bad/key" }
+  }
+
+  expect_failures = [var.n8n_license_cert_secret_ref]
+}
+
+run "rejects_overlong_license_cert_secret_ref_key" {
+  command = plan
+
+  variables {
+    n8n_license_key             = null
+    n8n_license_cert_secret_ref = { name = "caller-license-cert", key = join("", [for i in range(254) : "a"]) }
   }
 
   expect_failures = [var.n8n_license_cert_secret_ref]

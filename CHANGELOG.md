@@ -322,10 +322,10 @@ this project adheres to the stability contract in
   has been on; README → "Kubernetes NetworkPolicy enforcement" links AWS's
   disable procedure.
 
-- `n8n_license_cert_secret_ref` supports offline license activation
+- **`n8n_license_cert_secret_ref`** supports offline license activation
   (`N8N_LICENSE_CERT`) for air-gapped or egress-restricted clusters that
   cannot reach n8n's license server. It is mutually exclusive with
-  `n8n_license_key` and `n8n_license_key_secret_ref` -- exactly one of the
+  `n8n_license_key` and `n8n_license_key_secret_ref`: exactly one of the
   three must be set. The certificate renders through the shared
   `config.extraEnv` list as a `secretKeyRef`, not through the chart's
   `license.existingSecret` block, which only ever maps to
@@ -336,6 +336,7 @@ this project adheres to the stability contract in
   activation, worker execution, and multi-main leader election before
   relying on this path. See ["Offline license
   activation"](./README.md#offline-license-activation).
+
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
   annotates the default worker `ScaledObject` with

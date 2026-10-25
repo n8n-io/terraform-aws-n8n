@@ -80,9 +80,8 @@ locals {
   # N8N_LICENSE_ACTIVATION_KEY, with no cert equivalent, so the certificate
   # Secret is wired in as an ordinary config.extraEnv entry with a
   # secretKeyRef, the same mechanism the chart itself uses for that env var.
-  # Unlike license.existingSecret (main/worker only on the pinned chart),
-  # config.extraEnv reaches every n8n pod role: main, worker, webhook, and
-  # any declared worker pool.
+  # config.extraEnv is chart-global, so this entry reaches every n8n pod
+  # role: main, worker, webhook processor, and any declared worker pool.
   n8n_license_cert_env = local.n8n_license_uses_cert ? [
     {
       name = "N8N_LICENSE_CERT"
@@ -94,6 +93,38 @@ locals {
       }
     },
   ] : []
+
+  # helm_release.n8n's license block, resolved here so plan-time tests can
+  # assert on it (helm_release.values itself is unknown under mocks).
+  #
+  # activationKey is deliberately absent: the chart's licenseEnv helper is
+  # `if .Values.license.activationKey / else if .Values.license.existingSecret.name`,
+  # so sending both would silently keep the inline path and change nothing.
+  # existingSecret takes the nested {name, key} shape here, unlike
+  # taskRunners.authToken in helm_release.n8n, which takes two flat keys.
+  # The chart renders licenseEnv on main, worker and webhook processor pods.
+  #
+  # name/key fall back to kubernetes_secret.n8n when n8n_license_key_secret_ref
+  # is null (the default, no change from before this input existed), and
+  # point at the caller's own Secret otherwise. See that variable and
+  # n8n_encryption_key_secret_ref for when kubernetes_secret.n8n itself does
+  # not exist, in which case a caller-managed license Secret is required.
+  # license.enabled stays true on the cert path too: the chart also gates
+  # N8N_MULTI_MAIN_SETUP_ENABLED on license.enabled (not on which credential
+  # backs it), so turning it off would silently break multi-main leader
+  # election. existingSecret is omitted on the cert path because the
+  # chart's license helper only ever maps it to N8N_LICENSE_ACTIVATION_KEY,
+  # never N8N_LICENSE_CERT (local.n8n_license_cert_env renders that entry
+  # instead, through config.extraEnv).
+  n8n_license_values = merge(
+    { enabled = true },
+    local.n8n_license_uses_cert ? {} : {
+      existingSecret = {
+        name = var.n8n_license_key_secret_ref != null ? var.n8n_license_key_secret_ref.name : kubernetes_secret.n8n[0].metadata[0].name
+        key  = var.n8n_license_key_secret_ref != null ? local.n8n_license_key_secret_ref_key : "N8N_LICENSE_ACTIVATION_KEY"
+      }
+    },
+  )
 }
 
 # ── Namespace ─────────────────────────────────────────────────────────────────
@@ -430,37 +461,8 @@ resource "helm_release" "n8n" {
   cleanup_on_fail = true
 
   values = [yamlencode(merge({
-    # activationKey is deliberately absent: the chart's licenseEnv helper is
-    # `if .Values.license.activationKey / else if .Values.license.existingSecret.name`,
-    # so sending both would silently keep the inline path and change nothing.
-    # existingSecret takes the nested {name, key} shape here, unlike
-    # taskRunners.authToken below, which takes two flat keys.
-    #
-    # Only main and worker pods receive the license env var: at the pinned chart
-    # version deployment-webhook-processor.yaml does not include licenseEnv at
-    # all. That is unchanged by this wiring, since the inline form was rendered
-    # through the same helper.
-    # name/key fall back to kubernetes_secret.n8n when n8n_license_key_secret_ref
-    # is null (the default, no change from before this input existed), and
-    # point at the caller's own Secret otherwise. See that variable and
-    # n8n_encryption_key_secret_ref for when kubernetes_secret.n8n itself does
-    # not exist, in which case n8n_license_key_secret_ref is required.
-    # license.enabled stays true on the cert path too: the chart also gates
-    # N8N_MULTI_MAIN_SETUP_ENABLED on license.enabled (not on which credential
-    # backs it), so turning it off would silently break multi-main leader
-    # election. existingSecret is omitted on the cert path because the
-    # chart's license helper only ever maps it to N8N_LICENSE_ACTIVATION_KEY,
-    # never N8N_LICENSE_CERT (local.n8n_license_cert_env renders that entry
-    # instead, through config.extraEnv below).
-    license = merge(
-      { enabled = true },
-      local.n8n_license_uses_cert ? {} : {
-        existingSecret = {
-          name = var.n8n_license_key_secret_ref != null ? var.n8n_license_key_secret_ref.name : kubernetes_secret.n8n[0].metadata[0].name
-          key  = var.n8n_license_key_secret_ref != null ? local.n8n_license_key_secret_ref_key : "N8N_LICENSE_ACTIVATION_KEY"
-        }
-      },
-    )
+    # See local.n8n_license_values for the license paths this block covers.
+    license = local.n8n_license_values
 
     # ── Deployment replica counts ─────────────────────────────────────────────
     # Each of these is wired to its autoscaler's floor rather than left at a
