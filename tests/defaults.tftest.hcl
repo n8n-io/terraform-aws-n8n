@@ -948,6 +948,11 @@ run "license_cert_secret_ref_key_can_be_overridden" {
     condition     = local.n8n_license_cert_secret_ref_key == "n8n-license-cert"
     error_message = "An explicit key on n8n_license_cert_secret_ref must override the \"cert\" default"
   }
+
+  assert {
+    condition     = local.n8n_license_cert_env[0].valueFrom.secretKeyRef.key == "n8n-license-cert"
+    error_message = "An explicit key on n8n_license_cert_secret_ref must reach the N8N_LICENSE_CERT secretKeyRef"
+  }
 }
 
 run "rejects_license_key_and_cert_secret_ref_together" {

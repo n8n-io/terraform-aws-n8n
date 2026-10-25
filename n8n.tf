@@ -102,7 +102,12 @@ locals {
   # so sending both would silently keep the inline path and change nothing.
   # existingSecret takes the nested {name, key} shape here, unlike
   # taskRunners.authToken in helm_release.n8n, which takes two flat keys.
-  # The chart renders licenseEnv on main, worker and webhook processor pods.
+  # The chart turns this block into N8N_LICENSE_ACTIVATION_KEY on main and
+  # worker pods through its n8n.licenseEnv helper, and on webhook processor
+  # pods through the same if/else-if logic inlined in
+  # deployment-webhook-processor.yaml (chart 1.16.0, lines 118-128). The
+  # offline certificate does not use this block: it reaches all pod roles
+  # through config.extraEnv (local.n8n_license_cert_env).
   #
   # name/key fall back to kubernetes_secret.n8n when n8n_license_key_secret_ref
   # is null (the default, no change from before this input existed), and

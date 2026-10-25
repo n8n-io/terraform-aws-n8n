@@ -2455,10 +2455,17 @@ settable through `n8n_extra_env`, as before. The module never reads the
 Secret's value.
 
 The certificate removes the need to contact the license server for
-activation. The module does not change n8n's license auto-renewal, which is
-on by default, and this path was not tested live. If your cluster has no
-route to the license server and you see renewal errors in the main pod logs,
-set `N8N_LICENSE_AUTO_RENEW_ENABLED = "false"` through `n8n_extra_env`.
+activation. The module does not change n8n's license auto-renewal
+(`N8N_LICENSE_AUTO_RENEW_ENABLED`, on by default), and this path was not
+tested live. Do not turn auto-renewal off without checking with n8n first.
+n8n's
+[license environment variables](https://docs.n8n.io/deploy/host-n8n/configure-n8n/basic-configuration/use-environment-variables/license)
+page warns that with auto-renewal off you must renew the license manually
+every 10 days, or n8n disables all licensed features. Manual renewal also
+contacts the license server. Ask n8n how your certificate expires and how to
+renew it. Replacing a certificate means updating the caller-managed Secret
+and restarting the n8n pods, as described in
+[post-deployment](./docs/post-deployment.md#access-n8n-and-activate-your-license).
 
 ## Credential overwrites
 
