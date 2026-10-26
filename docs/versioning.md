@@ -30,7 +30,7 @@ waiting for a user to report a version nobody re-checked.
 | `TF_FLOOR_VERSION` (`test-floor` job) | `.github/workflows/terraform-tests.yml` | Not bumped on its own: always `X.Y.0` for a `required_version = ">= X.Y"` floor, the lowest release the floor admits. Moves only when the floor moves, in the same commit. `tests/scripts/check-terraform-floor.sh` (`task terraform-floor`) fails CI if the two disagree. `check-version-drift.sh` does not report it, because it is not meant to track the latest Terraform |
 | `MARKDOWNLINT_VERSION` (markdownlint job) | `.github/workflows/terraform-tests.yml` | Patch-safe, but keep in step with the `brew install markdownlint-cli` default contributors use locally, for the same reason as `TERRAFORM_DOCS_VERSION` |
 | `TERRAFORM_DOCS_VERSION` (docs job) | `.github/workflows/terraform-tests.yml` | Patch-safe, but keep in step with the `brew install terraform-docs` default contributors use locally (see `AGENTS.md`) |
-| `azure/setup-helm` version (chart job) | `.github/workflows/terraform-tests.yml` | Patch-safe |
+| Helm CLI version (the `azure/setup-helm` `version` input, `chart` and `chart-coverage` jobs) | `.github/workflows/terraform-tests.yml` | Patch-safe. Keep both jobs on the same version; `check-version-drift.sh` reports an `ERROR` when they differ |
 | `docs/helm-chart-coverage.md`'s declared chart version | `docs/helm-chart-coverage.md` | Must equal `n8n_chart_version`'s default; CI-gated by `tests/scripts/check-helm-chart-coverage.sh` |
 
 ## Bump tiers

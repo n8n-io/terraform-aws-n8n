@@ -209,17 +209,30 @@ EOF
 # than the first "version:" anywhere in the file: a generic whole-file match
 # would silently start reporting an unrelated step's version input the
 # moment one is added earlier in the file.
-pinned_helm="$(awk '
+#
+# Every setup-helm step is read, not only the first: more than one job pins
+# Helm (`chart` and `chart-coverage`), and reading only the first would let
+# the others drift apart unreported. Differing pins are an ERROR, not a
+# DRIFT, because no single pinned version can be compared against upstream.
+# The search stops at the next step (a line starting with "- "), so a
+# setup-helm step with no `version:` input contributes nothing rather than
+# picking up a later step's version.
+helm_pins="$(awk '
   /uses:[[:space:]]*azure\/setup-helm@/ { want = 1; next }
+  want && /^[[:space:]]*-[[:space:]]/ { want = 0 }
   want && /version:/ {
-    if (match($0, /v[0-9][^[:space:]]*/)) {
+    if (match($0, /v[0-9][^[:space:]"'"'"']*/)) {
       print substr($0, RSTART, RLENGTH)
-      exit
     }
+    want = 0
   }
-' "$WORKFLOW")"
+' "$WORKFLOW" | sort -u)"
 latest_helm="$(curl -sf --max-time 15 "https://api.github.com/repos/helm/helm/releases/latest" | jq -r '.tag_name // empty')" || latest_helm=""
-compare_pin "cli/helm" "$pinned_helm" "$latest_helm"
+if [[ "$(grep -c . <<<"$helm_pins")" -gt 1 ]]; then
+  report_error "cli/helm: setup-helm steps pin different versions ($(tr '\n' ' ' <<<"$helm_pins" | sed 's/ $//')); align them before comparing against latest ${latest_helm:-unknown}"
+else
+  compare_pin "cli/helm" "$helm_pins" "$latest_helm"
+fi
 
 pinned_tfdocs="$(sed -n 's/^[[:space:]]*TERRAFORM_DOCS_VERSION:[[:space:]]*\(v[0-9][^[:space:]]*\)/\1/p' "$WORKFLOW" | head -1)"
 latest_tfdocs="$(curl -sf --max-time 15 "https://api.github.com/repos/terraform-docs/terraform-docs/releases/latest" | jq -r '.tag_name // empty')" || latest_tfdocs=""
