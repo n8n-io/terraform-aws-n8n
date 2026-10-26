@@ -2454,10 +2454,57 @@ set the variable there as well. With the reference unset the name stays
 settable through `n8n_extra_env`, as before. The module never reads the
 Secret's value.
 
+### Match the certificate to the instance ID
+
+An offline certificate is issued for one device fingerprint, and n8n uses
+its instance ID as that fingerprint. By default n8n derives the instance ID
+from the encryption key, so every pod in a deployment shares it. If the
+certificate was issued for a different ID, the license does not validate.
+
+- **Simplest path:** run `n8n license:info` on a main pod of the running
+  deployment and request the certificate for the `deviceFingerprint` it
+  prints. No other setting is needed.
+- **Certificate already issued for another ID:** pin the instance ID with
+  `N8N_INSTANCE_ID` through `n8n_extra_env`. n8n supports this from 2.18.0.
+  The value must be at least 32 characters, or n8n falls back to the
+  derived ID
+  ([n8n#33852](https://github.com/n8n-io/n8n/issues/33852)).
+  `config.extraEnv` is chart-global, so the value reaches every pod role.
+
+```hcl
+n8n_extra_env = [
+  { name = "N8N_INSTANCE_ID", value = "<instance ID the certificate was issued for>" },
+]
+```
+
+Do not change the encryption key (`n8n_encryption_key` or
+`n8n_encryption_key_secret_ref`) to reach a particular instance ID. On an
+existing database, a different key makes every stored credential
+unreadable. In a live test it also crashed every pod at startup with
+`Deployment key 'signing.hmac' cannot be read`. Pinning `N8N_INSTANCE_ID`
+leaves the encryption key alone. Changing the instance ID of an existing
+deployment may affect other features that use it, which this module has
+not checked.
+
+### Switching back to a license key
+
+Keep the certificate Secret until the apply that switches back to
+`n8n_license_key` or `n8n_license_key_secret_ref` has finished and the pods
+have rolled. Delete it in a later apply. If your configuration deletes the
+Secret in the same apply, Terraform does not order that deletion after the
+Helm rollout. In a live test the Secret was gone about a minute before the
+pods restarted, so a pod restarting in that window would fail with
+`CreateContainerConfigError`.
+
+### License renewal
+
 The certificate removes the need to contact the license server for
 activation. The module does not change n8n's license auto-renewal
-(`N8N_LICENSE_AUTO_RENEW_ENABLED`, on by default), and this path was not
-tested live. Do not turn auto-renewal off without checking with n8n first.
+(`N8N_LICENSE_AUTO_RENEW_ENABLED`, on by default). In a live test with a
+certificate valid for three years, each pod logged "Skipping renewal on
+init: license cert is not due for renewal" and no renewal errors. Renewal
+nearer expiry was not observed. Do not turn auto-renewal off without
+checking with n8n first.
 n8n's
 [license environment variables](https://docs.n8n.io/deploy/host-n8n/configure-n8n/basic-configuration/use-environment-variables/license)
 page warns that with auto-renewal off you must renew the license manually

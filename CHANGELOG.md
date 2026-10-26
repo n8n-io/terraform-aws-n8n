@@ -331,11 +331,12 @@ this project adheres to the stability contract in
   `license.existingSecret` block, which only ever maps to
   `N8N_LICENSE_ACTIVATION_KEY`. `license.enabled` stays `true` on this path
   because the chart also gates `N8N_MULTI_MAIN_SETUP_ENABLED` on
-  `license.enabled`, not on which credential backs it. This was not tested
-  live: no offline license certificate was available. Validate offline
-  activation, worker execution, and multi-main leader election before
-  relying on this path. See ["Offline license
-  activation"](./README.md#offline-license-activation).
+  `license.enabled`, not on which credential backs it. Tested live on
+  `examples/small`: offline activation, worker execution, multi-main
+  leader election, and switching back to a license key. The certificate
+  must match n8n's instance ID; pin it with `N8N_INSTANCE_ID` through
+  `n8n_extra_env` rather than changing the encryption key. See ["Offline
+  license activation"](./README.md#offline-license-activation).
 
 - **`n8n_worker_keda_pause` and `n8n_worker_keda_paused_replica_count`**
   (chart `keda.worker.pause` / `pausedReplicaCount`). `pause = true`
