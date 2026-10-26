@@ -783,6 +783,16 @@ run "license_key_secret_ref_defaults_to_null_and_changes_nothing" {
     condition     = kubernetes_secret.n8n[0].data["N8N_LICENSE_ACTIVATION_KEY"] == "test-license-key-not-real"
     error_message = "Leaving n8n_license_key_secret_ref null must not change the default license key wiring"
   }
+
+  assert {
+    condition = (
+      local.n8n_license_values.enabled == true &&
+      !contains(keys(local.n8n_license_values), "activationKey") &&
+      local.n8n_license_values.existingSecret.name == "n8n-enterprise-secrets" &&
+      local.n8n_license_values.existingSecret.key == "N8N_LICENSE_ACTIVATION_KEY"
+    )
+    error_message = "With n8n_license_key, the license block must point existingSecret at the module-managed n8n-enterprise-secrets Secret and never set activationKey"
+  }
 }
 
 run "license_key_secret_ref_drops_the_key_from_the_shared_secret" {
@@ -821,6 +831,11 @@ run "license_key_secret_ref_key_can_be_overridden" {
     condition     = local.n8n_license_key_secret_ref_key == "n8n-license"
     error_message = "An explicit key on n8n_license_key_secret_ref must override the \"license-key\" default"
   }
+
+  assert {
+    condition     = local.n8n_license_values.existingSecret.key == "n8n-license"
+    error_message = "An explicit key on n8n_license_key_secret_ref must reach the license block's existingSecret.key"
+  }
 }
 
 run "license_key_secret_ref_rejects_being_set_alongside_the_value" {
@@ -849,6 +864,165 @@ run "license_key_is_required_when_neither_input_is_set" {
   expect_failures = [var.n8n_license_key_secret_ref]
 }
 
+# ── License certificate secret ref (offline activation, N8N_LICENSE_CERT) ────
+# Lives entirely in config.extraEnv (local.n8n_license_cert_env), not in the
+# shared kubernetes_secret.n8n or the chart's license.existingSecret block, the
+# same way n8n_license_key_secret_ref's own section above documents for the
+# key. helm_release.n8n.values is unknown at plan time under the mock
+# provider (see AGENTS.md, "Known mock provider limitations"), so these runs
+# assert at the local/variable-contract level: local.n8n_license_cert_env and
+# local.n8n_license_values, which helm_release.n8n renders verbatim. That the
+# cert entry actually lands in the rendered config.extraEnv list is verified
+# by a real terraform plan.
+
+run "license_cert_secret_ref_defaults_to_null_and_changes_nothing" {
+  command = plan
+
+  assert {
+    condition     = local.n8n_license_uses_cert == false && length(local.n8n_license_cert_env) == 0
+    error_message = "Leaving n8n_license_cert_secret_ref null must not enable the offline certificate path or emit an N8N_LICENSE_CERT env entry"
+  }
+}
+
+run "license_cert_secret_ref_drops_the_key_from_the_shared_secret_and_sets_extraenv" {
+  command = plan
+
+  variables {
+    n8n_license_key             = null
+    n8n_license_cert_secret_ref = { name = "caller-license-cert" }
+  }
+
+  assert {
+    condition     = !contains(keys(kubernetes_secret.n8n[0].data), "N8N_LICENSE_ACTIVATION_KEY")
+    error_message = "N8N_LICENSE_ACTIVATION_KEY must be dropped from kubernetes_secret.n8n's data when n8n_license_cert_secret_ref supplies the license through the offline certificate path instead"
+  }
+
+  assert {
+    condition     = local.n8n_license_cert_secret_ref_key == "cert"
+    error_message = "n8n_license_cert_secret_ref.key must default to \"cert\" when omitted"
+  }
+
+  assert {
+    condition = (
+      length(local.n8n_license_cert_env) == 1 &&
+      local.n8n_license_cert_env[0].name == "N8N_LICENSE_CERT" &&
+      local.n8n_license_cert_env[0].valueFrom.secretKeyRef.name == "caller-license-cert" &&
+      local.n8n_license_cert_env[0].valueFrom.secretKeyRef.key == "cert"
+    )
+    error_message = "local.n8n_license_cert_env must carry exactly one N8N_LICENSE_CERT entry sourced from n8n_license_cert_secret_ref via secretKeyRef"
+  }
+
+  assert {
+    condition     = keys(local.n8n_license_values) == ["enabled"] && local.n8n_license_values.enabled == true
+    error_message = "The license block must contain only enabled = true on the offline certificate path: no existingSecret and no activationKey"
+  }
+}
+
+run "license_values_point_existing_secret_at_caller_secret_on_key_ref_path" {
+  command = plan
+
+  variables {
+    n8n_license_key            = null
+    n8n_license_key_secret_ref = { name = "caller-license" }
+  }
+
+  assert {
+    condition = (
+      local.n8n_license_values.enabled == true &&
+      local.n8n_license_values.existingSecret.name == "caller-license" &&
+      local.n8n_license_values.existingSecret.key == "license-key"
+    )
+    error_message = "The license block must point existingSecret at n8n_license_key_secret_ref, with key defaulting to \"license-key\""
+  }
+}
+
+run "license_cert_secret_ref_key_can_be_overridden" {
+  command = plan
+
+  variables {
+    n8n_license_key             = null
+    n8n_license_cert_secret_ref = { name = "caller-license-cert", key = "n8n-license-cert" }
+  }
+
+  assert {
+    condition     = local.n8n_license_cert_secret_ref_key == "n8n-license-cert"
+    error_message = "An explicit key on n8n_license_cert_secret_ref must override the \"cert\" default"
+  }
+
+  assert {
+    condition     = local.n8n_license_cert_env[0].valueFrom.secretKeyRef.key == "n8n-license-cert"
+    error_message = "An explicit key on n8n_license_cert_secret_ref must reach the N8N_LICENSE_CERT secretKeyRef"
+  }
+}
+
+run "rejects_license_key_and_cert_secret_ref_together" {
+  command = plan
+
+  variables {
+    n8n_license_cert_secret_ref = { name = "caller-license-cert" }
+    # n8n_license_key stays at its file-level default (set), so both a key
+    # and a certificate reference are supplied at once.
+  }
+
+  expect_failures = [var.n8n_license_key_secret_ref]
+}
+
+run "rejects_license_key_secret_ref_and_cert_secret_ref_together" {
+  command = plan
+
+  variables {
+    n8n_license_key             = null
+    n8n_license_key_secret_ref  = { name = "caller-license-secret" }
+    n8n_license_cert_secret_ref = { name = "caller-license-cert" }
+  }
+
+  expect_failures = [var.n8n_license_key_secret_ref]
+}
+
+run "rejects_no_license_credential_set" {
+  command = plan
+
+  variables {
+    n8n_license_key = null
+    # Neither n8n_license_key_secret_ref nor n8n_license_cert_secret_ref set
+    # either: no license credential at all.
+  }
+
+  expect_failures = [var.n8n_license_key_secret_ref]
+}
+
+run "rejects_empty_license_cert_secret_ref_name" {
+  command = plan
+
+  variables {
+    n8n_license_key             = null
+    n8n_license_cert_secret_ref = { name = "" }
+  }
+
+  expect_failures = [var.n8n_license_cert_secret_ref]
+}
+
+run "rejects_invalid_license_cert_secret_ref_key" {
+  command = plan
+
+  variables {
+    n8n_license_key             = null
+    n8n_license_cert_secret_ref = { name = "caller-license-cert", key = "bad/key" }
+  }
+
+  expect_failures = [var.n8n_license_cert_secret_ref]
+}
+
+run "rejects_overlong_license_cert_secret_ref_key" {
+  command = plan
+
+  variables {
+    n8n_license_key             = null
+    n8n_license_cert_secret_ref = { name = "caller-license-cert", key = join("", [for i in range(254) : "a"]) }
+  }
+
+  expect_failures = [var.n8n_license_cert_secret_ref]
+}
 
 # ── Encryption key secret ref ─────────────────────────────────────────────────
 # The exception to the exception: secretRefs.existingSecret takes ONE Secret
@@ -905,6 +1079,27 @@ run "encryption_key_secret_ref_requires_the_license_ref_too" {
   }
 
   expect_failures = [var.n8n_encryption_key_secret_ref]
+}
+
+# The cert path never wrote the license key into kubernetes_secret.n8n in the
+# first place (local.n8n_license_cert_env carries it instead, via a Secret
+# this module does not create), so n8n_license_cert_secret_ref satisfies this
+# coupling exactly as n8n_license_key_secret_ref does, with no misleading
+# "license_key_secret_ref must also be set" error on a path that never needed
+# a license key secret at all.
+run "encryption_key_secret_ref_accepts_the_license_cert_ref_instead" {
+  command = plan
+
+  variables {
+    n8n_encryption_key_secret_ref = { name = "caller-core-secret" }
+    n8n_license_key               = null
+    n8n_license_cert_secret_ref   = { name = "caller-license-cert" }
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n) == 0
+    error_message = "n8n_encryption_key_secret_ref must still gate kubernetes_secret.n8n to zero when the license is supplied via n8n_license_cert_secret_ref"
+  }
 }
 
 run "encryption_key_secret_ref_rejects_being_set_alongside_the_value" {
@@ -8145,6 +8340,37 @@ run "extra_env_rejects_license_name" {
   }
 
   expect_failures = [var.n8n_extra_env]
+}
+
+# N8N_LICENSE_CERT is reserved CONDITIONALLY, the same shape as NODE_OPTIONS
+# below: local.n8n_license_cert_env is [] while n8n_license_cert_secret_ref is
+# null, so there is no module-rendered value for a caller entry to clobber,
+# and a caller already using the name through n8n_extra_env before this input
+# existed must stay unaffected on that path.
+run "extra_env_rejects_license_cert_name_when_cert_mode_is_active" {
+  command = plan
+
+  variables {
+    n8n_license_key             = null
+    n8n_license_cert_secret_ref = { name = "caller-license-cert" }
+    n8n_extra_env = [
+      { name = "N8N_LICENSE_CERT", value = "stolen-cert" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+run "extra_env_accepts_license_cert_name_when_cert_mode_is_inactive" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_LICENSE_CERT", value = "not-actually-reserved-here" },
+    ]
+  }
+  # No assert: a successful plan is the proof that the reservation does not
+  # apply while n8n_license_cert_secret_ref is null.
 }
 
 run "extra_env_rejects_aws_credentials_name" {
