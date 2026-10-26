@@ -49,7 +49,8 @@ for the versioning policy.
 
 | Version | Security fixes |
 | ------- | -------------- |
-| 0.1.x   | ✅ (current)   |
+| 0.6.x   | ✅ (current)   |
+| < 0.6   | ❌             |
 
 ## Out of scope for this policy
 

@@ -7,6 +7,76 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-26
+
+Minor release per the [stability contract](./README.md#stability--versioning).
+Several changes below are breaking. Read the upgrade notes under **Added**,
+**Changed** and **Fixed** before you upgrade. Pin this module to `~> 0.5.0`
+to stay on the previous line.
+
+**Breaking changes**, each with its own upgrade note below:
+
+- The minimum Terraform version is now `>= 1.13` (was `>= 1.11`). On 1.12
+  or older, `terraform init` stops before planning anything.
+- With module-managed EKS, the first apply replaces `aws_eks_node_group.n8n`.
+  The new group is created before the old one is deleted, so the account
+  needs EC2 quota and subnet IPs for both at once. Pods on the old nodes are
+  evicted. Selectors on the old `n8n-nodes` name stop matching. Node root
+  volumes are now encrypted with the region's default EBS key: if that is a
+  customer managed key, its policy must allow the Auto Scaling service-linked
+  role, or the new nodes fail to launch. Run the upgrade in a low-traffic
+  maintenance window.
+- Turning `eks_secrets_encryption_enabled` from `true` to `false` on an
+  existing cluster now fails at apply instead of replacing the cluster.
+- `N8N_PROXY_HOPS` and `N8N_GRACEFUL_SHUTDOWN_TIMEOUT` are now rejected at
+  plan time in `n8n_extra_env`, `n8n_worker_extra_env` and
+  `n8n_worker_pools[*].extra_env`. Use `n8n_proxy_hops` and
+  `n8n_graceful_shutdown_timeout` instead.
+- A caller who sets `n8n_webhook_hpa_min_replicas` above 4 without setting
+  `n8n_webhook_hpa_max_replicas` now fails at plan, because that default
+  dropped from `8` to `4`.
+- `n8n_worker_keda_min_replicas = 0` no longer removes the default workers.
+  The next apply creates a worker Deployment and `ScaledObject`, starts one
+  worker, and that worker runs any backlog on the default queue.
+- `random_password.db_password` moves to `random_password.db_password[0]`.
+  A `moved` block handles state; only scripts that target the old address
+  need a change.
+
+**What moves on apply** for a caller who changes nothing but the module
+source pin. Items that depend on a default apply only where the caller has
+not set that input, and items about EKS, controllers or Redis apply only
+where the module manages them:
+
+- `aws_eks_node_group.n8n` is replaced, as described above.
+- `n8n_chart_version` `1.11.0` to `1.16.0`: `helm upgrade` rolls every n8n
+  pod. With `n8n_image_tag = null`, the image moves from the floating
+  `stable` tag to `2.43.5`, across n8n's database migrations. **Pin the
+  running application version first** to avoid an unintended downgrade or
+  upgrade. Crossing from below chart `1.13.0` to `1.13.0` or newer can
+  terminate surplus worker pods; KEDA is expected to restore the floor. In
+  queue mode, task runners now run only on workers, and the worker runner
+  gains a liveness probe. On single-main, Helm deletes the `n8n-main`
+  PodDisruptionBudget. See [`docs/upgrading-n8n.md`](./docs/upgrading-n8n.md).
+- `lbc_chart_version` `3.5.0` to `3.6.0` and `keda_chart_version` `2.20.2`
+  to `2.21.0`: in-place controller upgrades. KEDA is cluster-wide, so read
+  its 2.21 migration guide first on a shared cluster.
+- Every n8n pod gains `N8N_PROXY_HOPS=1`, loses the deprecated `WEBHOOK_URL`
+  where the image is proven to be n8n `2.30.0` or newer, and, at the default
+  `db_postgresdb_pool_size`, gets `DB_POSTGRESDB_POOL_SIZE=9` (was 10).
+- The webhook processor HPA `maxReplicas` drops to 4.
+- The module creates a Redis parameter group with `maxmemory-policy =
+  noeviction` and attaches it to the cache in place.
+- Resources the module manages gain the `aws-apn-id` tag in place, and the
+  EBS CSI addon is reconfigured to tag new volumes. Existing volumes and the
+  addon's own Pod Identity association keep their tags. Set
+  `aws_partner_attribution_tag = ""` to opt out.
+- New PodDisruptionBudgets for webhook processors, workers and the AWS Load
+  Balancer Controller. Check for budgets you already run that select the
+  same pods before you upgrade.
+- In the examples: `medium` turns on RDS storage autoscaling, and
+  `worker-pools` requests an in-place resize to `db.t3.medium`, which
+  interrupts database availability when it runs.
+
 ### Added
 
 - `n8n_extra_ca_pem` makes the n8n containers trust extra CA certificates for
@@ -425,9 +495,10 @@ this project adheres to the stability contract in
   live on `examples/small`: no full outage, about 2.5 minutes with fewer n8n
   pods running and one failed request, against about 10 minutes of
   disruption (4 to 5 fully down) for the same replacement without
-  create-before-destroy. Webhook processors and workers have no
-  PodDisruptionBudget, so they can stop together for about a minute. Run the
-  upgrade in a low-traffic maintenance window. Anything that selects nodes by
+  create-before-destroy. That measurement predates the webhook processor and
+  worker PodDisruptionBudgets added in this release (see **Added**); without
+  them, both could stop together for about a minute. Run the upgrade in a
+  low-traffic maintenance window. Anything that selects nodes by
   the old name, such as a `nodeSelector` on
   `eks.amazonaws.com/nodegroup: n8n-nodes`, stops matching, and the new name
   changes on every replacement, so do not pin to it. Downgrading to an earlier
@@ -4245,7 +4316,8 @@ Initial release on the Terraform Registry as `n8n-io/n8n/aws`.
   block CI. Curated suppressions and a flip to hard-fail are tracked
   for v0.2.0.
 
-[Unreleased]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.5.0...HEAD
+[Unreleased]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.6.0...HEAD
+[0.6.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/n8n-io/terraform-aws-n8n/compare/0.2.0...0.3.0
