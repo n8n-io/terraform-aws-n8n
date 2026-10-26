@@ -50,7 +50,8 @@ where the module manages them:
 - `aws_eks_node_group.n8n` is replaced, as described above.
 - `n8n_chart_version` `1.11.0` to `1.16.0`: `helm upgrade` rolls every n8n
   pod. With `n8n_image_tag = null`, the image moves from the floating
-  `stable` tag to `2.43.5`, across n8n's database migrations. **Pin the
+  `stable` tag to the selected chart's default `appVersion` (`2.43.5` for
+  the upstream chart `1.16.0`), across n8n's database migrations. **Pin the
   running application version first** to avoid an unintended downgrade or
   upgrade. Crossing from below chart `1.13.0` to `1.13.0` or newer can
   terminate surplus worker pods; KEDA is expected to restore the floor. In
@@ -66,12 +67,14 @@ where the module manages them:
 - The webhook processor HPA `maxReplicas` drops to 4.
 - The module creates a Redis parameter group with `maxmemory-policy =
   noeviction` and attaches it to the cache in place.
-- Resources the module manages gain the `aws-apn-id` tag in place, and the
+- Taggable AWS resources the module manages gain the `aws-apn-id` tag in
+  place (Route 53 validation and alias records cannot be tagged), and the
   EBS CSI addon is reconfigured to tag new volumes. Existing volumes and the
   addon's own Pod Identity association keep their tags. Set
   `aws_partner_attribution_tag = ""` to opt out.
-- New PodDisruptionBudgets for webhook processors, workers and the AWS Load
-  Balancer Controller. Check for budgets you already run that select the
+- New PodDisruptionBudgets for webhook processors, the default workers and
+  the AWS Load Balancer Controller. Worker pool Deployments from
+  `n8n_worker_pools` are not covered. Check for budgets you already run that select the
   same pods before you upgrade.
 - In the examples: `medium` turns on RDS storage autoscaling, and
   `worker-pools` requests an in-place resize to `db.t3.medium`, which
