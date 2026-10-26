@@ -328,7 +328,13 @@ through `secretRefs.existingSecret`). See
    (`docker.n8n.io/n8nio/n8n:2.43.5` unless you set `n8n_image_repository`),
    or your pinned tag.
 4. `kubectl get pdb -n <namespace>`: multi-main lists `n8n-main` with
-   `MIN AVAILABLE` 1; single-main lists no `n8n-main`.
+   `MIN AVAILABLE` 1; single-main lists no `n8n-main`. It also lists
+   `n8n-webhook-processor` when `n8n_webhook_pdb_enabled` is `true` and
+   `n8n-worker` when `n8n_worker_pdb_enabled` is `true`, each with
+   `MAX UNAVAILABLE` 1. A listed budget is not proof of drain protection: at
+   the default `n8n_worker_keda_min_replicas = 1` the worker budget still
+   permits evicting the only worker, and `n8n_worker_pools` Deployments have
+   no budget.
 5. When `n8n_task_runners_enabled = true`, `kubectl get deploy n8n-worker -n <namespace> -o json | jq '.spec.template.spec.containers[] | select(.name == "task-runner") | .livenessProbe.httpGet'`
    prints path `/healthz` and port `5680`. Over the next few minutes the
    worker pods' restart counts stay flat and

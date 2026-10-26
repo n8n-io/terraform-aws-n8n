@@ -14966,8 +14966,13 @@ run "aws_partner_attribution_tag_empty_removes_the_tag" {
   }
 
   assert {
-    condition     = length(module.controllers.lbc_helm_release[0].values) == 0
+    condition     = !can(yamldecode(module.controllers.lbc_helm_release[0].values[0]).defaultTags)
     error_message = "An empty aws_partner_attribution_tag must not pass defaultTags to the AWS Load Balancer Controller"
+  }
+
+  assert {
+    condition     = yamldecode(module.controllers.lbc_helm_release[0].values[0]).podDisruptionBudget.maxUnavailable == 1
+    error_message = "An empty aws_partner_attribution_tag must keep the LBC podDisruptionBudget"
   }
 
   assert {
@@ -15481,5 +15486,109 @@ run "extra_ca_leaves_env_and_volume_name_free_when_unset" {
   assert {
     condition     = local.n8n_extra_ca_enabled == false
     error_message = "NODE_EXTRA_CA_CERTS and the ca-bundle volume name must stay usable while n8n_extra_ca_pem is null."
+  }
+}
+
+# The controllers submodule's helm values are built from variables only, so
+# unlike helm_release.n8n they are known at plan time and can be asserted.
+run "lbc_pdb_enabled_by_default" {
+  command = plan
+
+  assert {
+    condition     = yamldecode(module.controllers.lbc_helm_release[0].values[0]).podDisruptionBudget.maxUnavailable == 1
+    error_message = "LBC chart values must carry podDisruptionBudget.maxUnavailable = 1 by default"
+  }
+
+  # defaultTags and the budget share one values document: one must not drop the other.
+  assert {
+    condition     = length(yamldecode(module.controllers.lbc_helm_release[0].values[0]).defaultTags) > 0
+    error_message = "podDisruptionBudget must not displace defaultTags in the LBC values"
+  }
+}
+
+run "lbc_pdb_disabled_omits_budget" {
+  command = plan
+
+  variables {
+    lbc_pdb_enabled = false
+  }
+
+  assert {
+    condition     = !can(yamldecode(module.controllers.lbc_helm_release[0].values[0]).podDisruptionBudget)
+    error_message = "lbc_pdb_enabled = false must leave podDisruptionBudget out of the LBC values"
+  }
+
+  assert {
+    condition     = length(yamldecode(module.controllers.lbc_helm_release[0].values[0]).defaultTags) > 0
+    error_message = "lbc_pdb_enabled = false must keep defaultTags in the LBC values"
+  }
+}
+
+# With no budget and no tag there is nothing to send: values must stay [] so
+# callers who opt out of both see no in-place diff on the LBC release.
+run "lbc_pdb_disabled_and_empty_tag_send_no_values" {
+  command = plan
+
+  variables {
+    lbc_pdb_enabled             = false
+    aws_partner_attribution_tag = ""
+  }
+
+  assert {
+    condition     = length(module.controllers.lbc_helm_release[0].values) == 0
+    error_message = "lbc_pdb_enabled = false with an empty aws_partner_attribution_tag must send no values document to the LBC release"
+  }
+}
+
+# The chart renders a budget for main only; these two are module-owned. The
+# selectors must match the labels the chart puts on the pods or the budget
+# guards nothing, and mocks cannot catch a typo there, so pin them.
+run "webhook_and_worker_pdbs_default_to_max_unavailable_one" {
+  command = plan
+
+  assert {
+    condition = (
+      kubernetes_pod_disruption_budget_v1.n8n_webhook[0].spec[0].max_unavailable == "1" &&
+      kubernetes_pod_disruption_budget_v1.n8n_webhook[0].spec[0].selector[0].match_labels["app.kubernetes.io/component"] == "webhook-processor" &&
+      kubernetes_pod_disruption_budget_v1.n8n_webhook[0].spec[0].selector[0].match_labels["app.kubernetes.io/name"] == "n8n" &&
+      kubernetes_pod_disruption_budget_v1.n8n_webhook[0].spec[0].selector[0].match_labels["app.kubernetes.io/instance"] == "n8n"
+    )
+    error_message = "The webhook processor budget must allow one unavailable pod and select component=webhook-processor"
+  }
+
+  assert {
+    condition = (
+      kubernetes_pod_disruption_budget_v1.n8n_worker[0].spec[0].max_unavailable == "1" &&
+      kubernetes_pod_disruption_budget_v1.n8n_worker[0].spec[0].selector[0].match_labels["app.kubernetes.io/component"] == "worker" &&
+      kubernetes_pod_disruption_budget_v1.n8n_worker[0].spec[0].selector[0].match_labels["app.kubernetes.io/name"] == "n8n" &&
+      kubernetes_pod_disruption_budget_v1.n8n_worker[0].spec[0].selector[0].match_labels["app.kubernetes.io/instance"] == "n8n"
+    )
+    error_message = "The worker budget must allow one unavailable pod and select component=worker"
+  }
+}
+
+run "webhook_and_worker_pdbs_can_be_disabled_independently" {
+  command = plan
+
+  variables {
+    n8n_webhook_pdb_enabled = false
+  }
+
+  assert {
+    condition     = length(kubernetes_pod_disruption_budget_v1.n8n_webhook) == 0 && length(kubernetes_pod_disruption_budget_v1.n8n_worker) == 1
+    error_message = "n8n_webhook_pdb_enabled = false must drop only the webhook budget"
+  }
+}
+
+run "worker_pdb_can_be_disabled_independently" {
+  command = plan
+
+  variables {
+    n8n_worker_pdb_enabled = false
+  }
+
+  assert {
+    condition     = length(kubernetes_pod_disruption_budget_v1.n8n_worker) == 0 && length(kubernetes_pod_disruption_budget_v1.n8n_webhook) == 1
+    error_message = "n8n_worker_pdb_enabled = false must drop only the worker budget"
   }
 }

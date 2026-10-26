@@ -44,6 +44,13 @@
 # failurePolicy=Ignore on the webhook prevents the LBC admission webhook from
 # blocking Ingress mutations when LBC pods are unhealthy during destroy.
 
+locals {
+  lbc_values = merge(
+    length(var.lbc_default_tags) > 0 ? { defaultTags = var.lbc_default_tags } : {},
+    var.lbc_pdb_enabled ? { podDisruptionBudget = { maxUnavailable = 1 } } : {},
+  )
+}
+
 resource "helm_release" "lbc" {
   count = var.install_lbc ? 1 : 0
 
@@ -59,7 +66,15 @@ resource "helm_release" "lbc" {
 
   # The ALB is created by the controller, not by Terraform, so common_tags never
   # reach it. defaultTags is how the controller tags what it creates.
-  values = length(var.lbc_default_tags) > 0 ? [yamlencode({ defaultTags = var.lbc_default_tags })] : []
+  #
+  # podDisruptionBudget: the chart runs two replicas and renders no budget by
+  # default, so a drain could stop both at once. maxUnavailable = 1 lets a drain
+  # evict one replica at a time and refuses a second eviction while the first
+  # replica is still down.
+  #
+  # An empty map sends no values document at all, so callers who turn both off
+  # keep values = [] and see no diff.
+  values = length(local.lbc_values) > 0 ? [yamlencode(local.lbc_values)] : []
 
   set = [
     {
