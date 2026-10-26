@@ -540,7 +540,7 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
   | `EKS cluster` | Control-plane properties the module owns: API server endpoint access and Secrets encryption |
   | `Ingress` | ALB / ingress-controller settings |
   | `Nodes` | EKS managed node group sizing |
-  | `Cluster controllers` | The `install_*` toggles for LBC, Cluster Autoscaler, metrics-server and KEDA |
+  | `Cluster controllers` | The `install_*` toggles for LBC, Cluster Autoscaler, metrics-server and KEDA, plus `lbc_pdb_enabled` |
   | `Chart repositories` | The `*_chart_repository` overrides, one per chart the module installs |
   | `Chart versions` | The `*_chart_version` pins, plus n8n image tag/repository/pull secrets, Helm timeout, timezone and logging |
   | `n8n resource requests and limits` | CPU/memory requests and limits, one set per pod role |
