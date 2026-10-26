@@ -1358,8 +1358,9 @@ resource "helm_release" "n8n" {
 # maxUnavailable = 1, not
 # minAvailable: minAvailable = 1 on a one-replica Deployment (the default
 # worker floor) would block every voluntary eviction and stall drains.
-# depends_on the release: the pods' namespace may be caller-owned, and a budget
-# should be destroyed before the Deployment it guards.
+# The selector references helm_release.n8n.name, which orders each budget after
+# the release: the pods' namespace may be caller-owned, and a budget should be
+# destroyed before the Deployment it guards.
 resource "kubernetes_pod_disruption_budget_v1" "n8n_webhook" {
   count = var.n8n_webhook_pdb_enabled ? 1 : 0
 

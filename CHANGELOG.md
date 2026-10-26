@@ -28,7 +28,6 @@ this project adheres to the stability contract in
   Existing deployments gain the budget on the next apply (a Helm values change
   to the `aws-load-balancer-controller` release). Ignored when
   `install_lbc = false`.
-
 - `n8n_webhook_pdb_enabled` and `n8n_worker_pdb_enabled` (both default `true`)
   create PodDisruptionBudgets with `maxUnavailable = 1` for the webhook
   processor and default worker Deployments. The n8n chart renders a budget for
@@ -40,7 +39,17 @@ this project adheres to the stability contract in
   Deployments are not covered. EKS can still terminate nodes after a node group
   deletion timeout without honoring budgets. Set either to `false` to manage
   your own.
-
+- Upgrade note for the three budgets above: before upgrading, run
+  `kubectl get pdb -A -o yaml` and compare each budget's `spec.selector` with
+  the labels of the n8n webhook processor and worker pods and of the AWS Load
+  Balancer Controller pods in `kube-system`. If a budget you already run
+  selects them, set the matching `n8n_webhook_pdb_enabled`,
+  `n8n_worker_pdb_enabled` or `lbc_pdb_enabled` to `false`. When two budgets
+  select the same running pod, the Eviction API rejects its eviction with an
+  error even if both budgets allow a disruption, so `kubectl drain`, node group
+  updates and Cluster Autoscaler scale-down can fail or stall.
+  A budget you already own named `n8n-webhook-processor` or `n8n-worker` in
+  the n8n namespace makes the apply fail with "already exists".
 - `aws_partner_attribution_tag` adds the tag `aws-apn-id` to every taggable
   resource the module creates, through `local.common_tags`; to the ALB and the
   listeners, target groups and security groups the AWS Load Balancer Controller

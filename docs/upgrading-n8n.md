@@ -328,7 +328,10 @@ through `secretRefs.existingSecret`). See
    (`docker.n8n.io/n8nio/n8n:2.43.5` unless you set `n8n_image_repository`),
    or your pinned tag.
 4. `kubectl get pdb -n <namespace>`: multi-main lists `n8n-main` with
-   `MIN AVAILABLE` 1; single-main lists no `n8n-main`.
+   `MIN AVAILABLE` 1; single-main lists no `n8n-main`. Unless you set
+   `n8n_webhook_pdb_enabled` or `n8n_worker_pdb_enabled` to `false`, it also
+   lists `n8n-webhook-processor` and `n8n-worker`, each with
+   `MAX UNAVAILABLE` 1.
 5. When `n8n_task_runners_enabled = true`, `kubectl get deploy n8n-worker -n <namespace> -o json | jq '.spec.template.spec.containers[] | select(.name == "task-runner") | .livenessProbe.httpGet'`
    prints path `/healthz` and port `5680`. Over the next few minutes the
    worker pods' restart counts stay flat and

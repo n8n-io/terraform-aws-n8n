@@ -14971,6 +14971,11 @@ run "aws_partner_attribution_tag_empty_removes_the_tag" {
   }
 
   assert {
+    condition     = yamldecode(module.controllers.lbc_helm_release[0].values[0]).podDisruptionBudget.maxUnavailable == 1
+    error_message = "An empty aws_partner_attribution_tag must keep the LBC podDisruptionBudget"
+  }
+
+  assert {
     condition     = jsondecode(module.controllers.ebs_csi_addon[0].configuration_values).controller.extraVolumeTags == {}
     error_message = "An empty aws_partner_attribution_tag must send an empty extraVolumeTags, so a previously applied tag is cleared from the EBS CSI addon rather than left in place"
   }
@@ -15512,6 +15517,27 @@ run "lbc_pdb_disabled_omits_budget" {
     condition     = !can(yamldecode(module.controllers.lbc_helm_release[0].values[0]).podDisruptionBudget)
     error_message = "lbc_pdb_enabled = false must leave podDisruptionBudget out of the LBC values"
   }
+
+  assert {
+    condition     = length(yamldecode(module.controllers.lbc_helm_release[0].values[0]).defaultTags) > 0
+    error_message = "lbc_pdb_enabled = false must keep defaultTags in the LBC values"
+  }
+}
+
+# With no budget and no tag there is nothing to send: values must stay [] so
+# callers who opt out of both see no in-place diff on the LBC release.
+run "lbc_pdb_disabled_and_empty_tag_send_no_values" {
+  command = plan
+
+  variables {
+    lbc_pdb_enabled             = false
+    aws_partner_attribution_tag = ""
+  }
+
+  assert {
+    condition     = length(module.controllers.lbc_helm_release[0].values) == 0
+    error_message = "lbc_pdb_enabled = false with an empty aws_partner_attribution_tag must send no values document to the LBC release"
+  }
 }
 
 # The chart renders a budget for main only; these two are module-owned. The
@@ -15524,7 +15550,8 @@ run "webhook_and_worker_pdbs_default_to_max_unavailable_one" {
     condition = (
       kubernetes_pod_disruption_budget_v1.n8n_webhook[0].spec[0].max_unavailable == "1" &&
       kubernetes_pod_disruption_budget_v1.n8n_webhook[0].spec[0].selector[0].match_labels["app.kubernetes.io/component"] == "webhook-processor" &&
-      kubernetes_pod_disruption_budget_v1.n8n_webhook[0].spec[0].selector[0].match_labels["app.kubernetes.io/name"] == "n8n"
+      kubernetes_pod_disruption_budget_v1.n8n_webhook[0].spec[0].selector[0].match_labels["app.kubernetes.io/name"] == "n8n" &&
+      kubernetes_pod_disruption_budget_v1.n8n_webhook[0].spec[0].selector[0].match_labels["app.kubernetes.io/instance"] == "n8n"
     )
     error_message = "The webhook processor budget must allow one unavailable pod and select component=webhook-processor"
   }
@@ -15533,7 +15560,8 @@ run "webhook_and_worker_pdbs_default_to_max_unavailable_one" {
     condition = (
       kubernetes_pod_disruption_budget_v1.n8n_worker[0].spec[0].max_unavailable == "1" &&
       kubernetes_pod_disruption_budget_v1.n8n_worker[0].spec[0].selector[0].match_labels["app.kubernetes.io/component"] == "worker" &&
-      kubernetes_pod_disruption_budget_v1.n8n_worker[0].spec[0].selector[0].match_labels["app.kubernetes.io/name"] == "n8n"
+      kubernetes_pod_disruption_budget_v1.n8n_worker[0].spec[0].selector[0].match_labels["app.kubernetes.io/name"] == "n8n" &&
+      kubernetes_pod_disruption_budget_v1.n8n_worker[0].spec[0].selector[0].match_labels["app.kubernetes.io/instance"] == "n8n"
     )
     error_message = "The worker budget must allow one unavailable pod and select component=worker"
   }

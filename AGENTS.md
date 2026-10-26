@@ -545,7 +545,7 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
   | `Chart versions` | The `*_chart_version` pins, plus n8n image tag/repository/pull secrets, Helm timeout, timezone and logging |
   | `n8n resource requests and limits` | CPU/memory requests and limits, one set per pod role |
   | `Execution settings` | Worker concurrency, execution timeouts, pruning, execution-data storage mode |
-  | `Graceful shutdown` | Termination grace period, prestop sleep |
+  | `Graceful shutdown` | Termination grace period, prestop sleep, and the webhook processor and worker PodDisruptionBudget toggles |
   | `Task runners` | Task runner sizing and lifecycle |
   | `RDS PostgreSQL` | Everything database-related, including `create_database` and the customer-managed `db_*` references |
   | `ElastiCache Redis` | Redis sizing, HA/TLS/KMS topology, and the customer-managed `redis_*` references |
