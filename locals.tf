@@ -949,24 +949,20 @@ locals {
     # existing usage at plan time on upgrade for a collision that cannot
     # occur on the default (null) path.
     local.n8n_license_uses_cert ? ["N8N_LICENSE_CERT"] : [],
-    # N8N_CONCURRENCY_PRODUCTION_LIMIT is reserved ONLY while
-    # n8n_worker_concurrency is set, the same conditional pattern as
-    # NODE_OPTIONS above. Unlike N8N_GRACEFUL_SHUTDOWN_TIMEOUT and the other
-    # unconditional entries, the chart only computes this name itself (and
-    # only then does n8n.validateEnv catch a literal env.shared/env.worker
-    # duplicate of it) while n8n_execution_concurrency_limit != -1 -- but
-    # the chart ALSO fails the render whenever queueMode.workerConcurrency
-    # and a caller-supplied N8N_CONCURRENCY_PRODUCTION_LIMIT in env.shared or
-    # env.worker are both present, regardless of
-    # executions.concurrency.productionLimit's own value (_helpers.tpl's
+    # N8N_CONCURRENCY_PRODUCTION_LIMIT is reserved ONLY while the chart would
+    # see a clash, the same conditional pattern as NODE_OPTIONS above. Two
+    # cases: (1) n8n_execution_concurrency_limit != -1, where the chart
+    # computes the name itself from executions.concurrency.productionLimit and
+    # n8n.validateEnv rejects a literal env.shared/env.worker duplicate; and
+    # (2) n8n_worker_concurrency set, where the chart fails the render whenever
+    # queueMode.workerConcurrency and a caller-supplied
+    # N8N_CONCURRENCY_PRODUCTION_LIMIT are both present (_helpers.tpl's
     # worker-concurrency validation walks n8n.userEnv, not just
-    # n8n.chartEnv). n8n_execution_concurrency_limit's own validation already
-    # rejects n8n_worker_concurrency set alongside a non--1 limit, but a
-    # caller reaching the same env var directly through n8n_extra_env or
-    # n8n_worker_extra_env while leaving n8n_execution_concurrency_limit at
-    # -1 would otherwise reach that chart failure at apply time instead of
-    # here at plan time.
-    var.n8n_worker_concurrency != null ? ["N8N_CONCURRENCY_PRODUCTION_LIMIT"] : [],
+    # n8n.chartEnv). Either way a caller reaching the name through
+    # n8n_extra_env or n8n_worker_extra_env would otherwise hit that chart
+    # failure at apply time instead of here at plan time. With both at their
+    # defaults (-1 and null) nothing collides, so the name stays usable.
+    (var.n8n_worker_concurrency != null || var.n8n_execution_concurrency_limit != -1) ? ["N8N_CONCURRENCY_PRODUCTION_LIMIT"] : [],
   )
 
   # Env vars n8n has deprecated and logs a warning for on every start, even

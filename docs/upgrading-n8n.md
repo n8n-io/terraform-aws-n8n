@@ -246,7 +246,7 @@ upgrade: Helm cannot roll back database migrations.
 - **PostgreSQL TLS.** The chart now renders `database.ssl.enabled` as
   `DB_POSTGRESDB_SSL_ENABLED`, the name n8n reads (n8n-io/n8n-hosting#175).
   The module delivers `database.ssl.*` only with `db_postgresdb_ssl_ca_pem`,
-  and sets `DB_POSTGRESDB_SSL_ENABLED` itself through `env.shared`. On
+  and sets `DB_POSTGRESDB_SSL_ENABLED` itself through `config.extraEnv`. On
   the upstream chart at a numbered `1.15.0` or newer (not a prerelease), with
   a CA delivered, it now leaves that name to the chart; in every other case it
   keeps setting it. You do not
@@ -365,7 +365,11 @@ per-component maps (`env.shared`, `env.worker`, …) rather than the `1.x`
 `config.extraEnv`-style lists, with no `1.x` compatibility path. As a release
 candidate rather than a numbered release, `2.0.0-rc.1` sits outside the
 usual chart-pin verification tiers in `docs/versioning.md` until chart 2.0
-ships a stable release.
+ships a stable release. On chart `2.x`, the module's
+`DB_POSTGRESDB_SSL_ENABLED` entry goes through `env.shared` and is omitted
+whenever the chart itself renders Postgres SSL settings (chart major `>= 2`,
+regardless of repository or prerelease suffix — see
+[docs/versioning.md](./versioning.md)).
 
 **Every n8n pod rolls once**, the same as any chart version bump: the
 chart's `helm.sh/chart` label and the rendered env shape both change, so
@@ -413,8 +417,11 @@ becomes n8n's own worker concurrency of `10` instead. If you relied on the
 old effective value, set `n8n_execution_concurrency_limit = 100` (or
 whatever your old deployment actually ran at) explicitly rather than
 leaving both at their new defaults.
-`examples/medium` and `examples/large` were both re-benchmarked on chart 2.0
-and set `n8n_worker_concurrency = 10`; the measured basis, and when a higher
+`examples/medium` and `examples/large` were both re-benchmarked on a
+pre-release chart 2.0 build (the
+[n8n-io/n8n-hosting#250](https://github.com/n8n-io/n8n-hosting/pull/250)
+tree, before `2.0.0-rc.1` was published; not re-run on `2.0.0-rc.1`) and
+set `n8n_worker_concurrency = 10`; the measured basis, and when a higher
 value is right, is in each example's `main.tf`.
 
 **`n8n_extra_env` / `n8n_worker_extra_env` users: nothing to change.**
@@ -424,7 +431,10 @@ workers only for the other); only where the module places their values
 inside the chart's rendered values changed, which is this module's problem
 to get right, not yours. The plan-time reserved-name guards
 (`N8N_GRACEFUL_SHUTDOWN_TIMEOUT` and the other chart-managed names) are
-unchanged.
+unchanged. Separately, `N8N_CONCURRENCY_PRODUCTION_LIMIT` is now rejected
+in these same inputs whenever `n8n_worker_concurrency` is set or
+`n8n_execution_concurrency_limit` is not `-1`, since one of those inputs
+then governs the setting instead.
 
 **License cert and extra CA users: nothing to change.** `N8N_LICENSE_CERT`
 (`n8n_license_cert_secret_ref`) and `NODE_EXTRA_CA_CERTS`

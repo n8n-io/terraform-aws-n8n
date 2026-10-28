@@ -215,7 +215,11 @@ else
 fi
 if [[ "$main_deploy_readable" == false || "$configmaps_readable" == false || -n "$multi_main_flag" ]]; then
   MAIN_TOPOLOGY="multi-main"
-  info "Multi-main topology (N8N_MULTI_MAIN_SETUP_ENABLED present in the main env ConfigMaps)"
+  if [[ -n "$multi_main_flag" ]]; then
+    info "Multi-main topology (N8N_MULTI_MAIN_SETUP_ENABLED present in the main env ConfigMaps)"
+  else
+    info "Multi-main checks assumed: main Deployment or its env ConfigMaps could not be read (see failure above)"
+  fi
 else
   MAIN_TOPOLOGY="single-main"
   MAIN_MIN=1

@@ -171,7 +171,9 @@ module "n8n" {
   # ── Execution settings ────────────────────────────────────────────────────────
   # Chart 2.0 rejects setting both n8n_worker_concurrency and
   # n8n_execution_concurrency_limit, so only one can govern per-worker
-  # concurrency now. Re-benched after the chart 2.0 move (the 1.x value here
+  # concurrency now. Re-benched on a pre-release chart 2.0 build (the
+  # n8n-io/n8n-hosting#250 tree, before `2.0.0-rc.1` was published; not
+  # re-run on `2.0.0-rc.1`) after the chart 2.0 move (the 1.x value here
   # was n8n_execution_concurrency_limit = 200, which is what workers actually
   # ran at under 1.x — n8n_worker_concurrency = 20 never took effect because
   # n8n always prefers N8N_CONCURRENCY_PRODUCTION_LIMIT when it is set).

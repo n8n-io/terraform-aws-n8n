@@ -326,7 +326,7 @@ variable "n8n_chart_repository" {
 }
 
 variable "n8n_worker_pools_chart_verified" {
-  description = "Passed to the module's n8n_worker_pools_chart_verified. Leave false for the documented path, a prerelease build such as 1.11.0-preview.workerpools.1, which the module accepts from the version string alone. Set true only when n8n_chart_version is a numbered build of the feature branch served from a registry you control (see README.md, \"Getting a chart that renders pools\") and you have confirmed it renders queueMode.workerGroups; the module takes that at your word and never re-checks it."
+  description = "Passed to the module's n8n_worker_pools_chart_verified. Leave false for the documented path, a prerelease build such as 1.11.0-preview.workerpools.1, which the module accepts from the version string alone. An upstream release candidate matching \"-rc.<N>\" (such as 2.0.0-rc.1) does NOT qualify for that exemption: set true only when n8n_chart_version is a numbered build of the feature branch (or a verified -rc.<N> build) served from a registry you control (see README.md, \"Getting a chart that renders pools\") and you have confirmed it renders queueMode.workerGroups; the module takes that at your word and never re-checks it."
   type        = bool
   default     = false
   nullable    = false

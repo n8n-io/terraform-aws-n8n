@@ -17,9 +17,16 @@ this project adheres to the stability contract in
   `redis.extraEnv` / `s3.storage.extraEnv` / `queueMode.workerExtraEnv` /
   `webhookProcessor.extraEnv` / `webhook.extraEnv` / `executions.extraEnv` /
   `taskRunners.extraEnv` lists in favor of flat `env.<component>` maps; every
-  env var this module sets now lands in `env.shared` (main, worker, and
-  webhook processor) or `env.worker` (workers and `n8n_worker_pools` pools
-  only) instead. **The module's own inputs are unchanged:** `n8n_extra_env`,
+  env var this module previously passed through those extraEnv-style lists
+  (`n8n_extra_env` / `n8n_worker_extra_env` / each `n8n_worker_pools[*].extra_env`,
+  plus the module's own managed entries) now lands in `env.shared` (main,
+  worker, and webhook processor) or `env.worker` (workers and
+  `n8n_worker_pools` pools only) instead — except n8n's public editor and
+  webhook URLs, which now come from the chart's `editor.url` / `webhook.url`
+  fields rather than `env.shared`, and Secret-backed values (the encryption
+  key, license key, task-runner auth token), which still reach pods as
+  `secretKeyRef`s, not plain `env.shared` values.
+  **The module's own inputs are unchanged:** `n8n_extra_env`,
   `n8n_worker_extra_env`, and each `n8n_worker_pools[*].extra_env` still take
   the same `list(object({ name, value }))` shape and reach the same pods;
   only where their values land inside the chart's rendered values changed.
@@ -58,7 +65,9 @@ this project adheres to the stability contract in
     becomes n8n's own worker concurrency of `10`. Set
     `n8n_execution_concurrency_limit` explicitly to recover the old
     effective value. `examples/medium` and `examples/large` were both
-    re-benchmarked on chart 2.0 and now set `n8n_worker_concurrency = 10`
+    re-benchmarked on a pre-release chart 2.0 build (the
+    n8n-io/n8n-hosting#250 tree, before `2.0.0-rc.1` was published; not
+    re-run on `2.0.0-rc.1`) and now set `n8n_worker_concurrency = 10`
     (the old effective `200` and `2000` bought no throughput and cost tail
     latency; see each `main.tf` for the measured basis and its limits).
   - `examples/large`: the shipped PgBouncer (4 replicas at 500m CPU) was the

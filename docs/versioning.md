@@ -184,14 +184,16 @@ capacity model's worker-only accounting extends to `1.15.0`.
 The one change that reaches this module is n8n-io/n8n-hosting#175: the chart
 renders `database.ssl.enabled` as `DB_POSTGRESDB_SSL_ENABLED` instead of
 `DB_POSTGRESDB_SSL`. The module sets that name through `env.shared`, and
-sends `database.ssl.*` only while a CA is delivered, so on the upstream chart
-at a numbered `1.15.0` or newer (prereleases excluded) it omits its own entry
-in exactly that case
-(`local.n8n_chart_renders_postgres_ssl_enabled`). Keeping its entry there would
-give every container the name twice; in every other case the chart does not
-render the name, or the module cannot verify that it does, so the module's
-entry stays. A bump that moves this gate, or a chart that renames the
-key again, is caught by `tests/scripts/check-main-chart.sh`, which checks
+sends `database.ssl.*` only while a CA is delivered, so it omits its own
+entry whenever the chart renders `DB_POSTGRESDB_SSL_ENABLED` itself
+(`local.n8n_chart_renders_postgres_ssl_enabled`): unconditionally for any
+chart major `>= 2`, regardless of repository or prerelease suffix, and for
+chart `1.x` only on the upstream repository at a numbered `1.15.0` or newer
+(`1.x` prereleases are excluded from that check). Keeping its entry there
+would give every container the name twice; in every other case the chart
+does not render the name, or the module cannot verify that it does, so the
+module's entry stays. A bump that moves this gate, or a chart that renames
+the key again, is caught by `tests/scripts/check-main-chart.sh`, which checks
 the shared env ConfigMap's rendered data with and without a CA. The mocked
 suites cannot catch it: `helm_release.values` is unknown under plan mocks.
 
@@ -237,9 +239,9 @@ candidate published at the existing default `n8n_chart_repository`
 (`oci://ghcr.io/n8n-io/n8n-helm-chart`; appVersion `2.44.5`, n8n 2.x). This
 module's `n8n.tf`/`locals.tf` emit chart-2.0-shaped values (`env.*` maps,
 `editor.url`, `webhook.url` — see `docs/helm-chart-coverage.md`), verified
-directly against the published `2.0.0-rc.1` chart (`tests/scripts/
-check-main-chart.sh` and `tests/scripts/check-helm-chart-coverage.sh` both
-pass against it with no `N8N_CHART_DIR` override needed).
+directly against the published `2.0.0-rc.1` chart (`tests/scripts/check-main-chart.sh`
+and `tests/scripts/check-helm-chart-coverage.sh` both pass against it with
+no `N8N_CHART_DIR` override needed).
 
 This is a Verification-required bump, not Minor-required, despite moving
 only a chart version: decision `0012-env-as-per-component-maps.md` removes
@@ -250,7 +252,18 @@ only a chart version: decision `0012-env-as-per-component-maps.md` removes
 need the same rewrite this module just went through, not a values tweak.
 As a release candidate rather than a numbered release, `2.0.0-rc.1` also
 sits outside the usual chart-pin verification tiers above until chart 2.0
-ships a stable release.
+ships a stable release — but the Verification-required steps that are
+reachable *before* that stable release have been completed for
+`2.0.0-rc.1`: an upgrade guide section (see
+[Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1160-to-200-rc1)),
+`README.md`/`CHANGELOG.md` entries, a live functional deploy of
+`examples/small` with its smoke test passing (32/0), and a live in-place
+upgrade to n8n `3.0.0` on that deployment. Deferred to the stable `2.0.0`
+pin, because they depend on the stable release itself: re-running the
+`examples/medium`/`examples/large` benchmarks on that release (the current
+numbers are from a pre-release chart 2.0 build, not `2.0.0-rc.1` — see
+[Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1160-to-200-rc1)), and
+worker-pools verification (`n8n_worker_pools_chart_verified`).
 
 **What still has to happen before this module's `n8n_chart_version` default
 can move to a stable (non-`-rc.`) chart 2.0 release:**

@@ -27,7 +27,9 @@
 #     MAX_CLIENT_CONN=3000 x 8 = 24,000, sized
 #     for the fleet ceiling of ~9,200 (460 pods x pool_size 20; see the
 #     capacity arithmetic in main.tf's Main pods comment).
-#     **Measured 2026-10-17 (chart 2.0, synthetic 500ms-I/O workflow):**
+#     **Measured 2026-10-17 (pre-release chart 2.0 build — the
+#     n8n-io/n8n-hosting#250 tree, before `2.0.0-rc.1` was published; not
+#     re-run on `2.0.0-rc.1` — synthetic 500ms-I/O workflow):**
 #     the originally-shipped 4 replicas at `resources.limits.cpu = 500m`
 #     each pegged 96-100% CPU around 700-1,000 exec/s — PgBouncer is
 #     single-threaded (one process, up to ~1 vCPU per replica; the

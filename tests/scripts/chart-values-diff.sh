@@ -46,8 +46,12 @@ if [ -z "${N8N_CHART_DIR:-}" ]; then
     echo "  e.g.  $0 1.12.0" >&2
     exit 1
   fi
-elif [ -z "$CANDIDATE" ]; then
-  CANDIDATE="$N8N_CHART_DIR"
+else
+  if [ "$#" -gt 1 ]; then
+    echo "Usage: N8N_CHART_DIR=/path/to/chart $0 [label]" >&2
+    exit 1
+  fi
+  [ -z "$CANDIDATE" ] && CANDIDATE="$N8N_CHART_DIR"
 fi
 
 command -v helm >/dev/null 2>&1 || { echo "Required tool missing: helm" >&2; exit 1; }

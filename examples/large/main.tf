@@ -218,7 +218,9 @@ module "n8n" {
   n8n_worker_keda_max_replicas = 320
 
   # ── Execution settings ────────────────────────────────────────────────────────
-  # Measured (2026-10-17, chart 2.0, 20 pinned workers, synthetic 500ms-HTTP
+  # Measured (2026-10-17, pre-release chart 2.0 build — the
+  # n8n-io/n8n-hosting#250 tree, before `2.0.0-rc.1` was published; not
+  # re-run on `2.0.0-rc.1` — 20 pinned workers, synthetic 500ms-HTTP
   # I/O workflow and a trivial CPU workflow): throughput at a fixed worker
   # count is flat (~340-410 exec/s) across n8n_worker_concurrency 10/20/40/100
   # because each worker pod is CPU-bound at its 1-vCPU container limit

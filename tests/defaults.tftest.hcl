@@ -11238,9 +11238,9 @@ run "extra_env_rejects_concurrency_production_limit_name_when_worker_concurrency
   expect_failures = [var.n8n_extra_env]
 }
 
-# The same name is NOT reserved while n8n_worker_concurrency stays null (the
-# default): the chart only renders queueMode.workerConcurrency, and thus only
-# risks this collision, when the flag is actually set.
+# The same name is NOT reserved while n8n_worker_concurrency stays null and
+# n8n_execution_concurrency_limit stays -1 (both defaults): the chart then
+# neither computes the name nor renders queueMode.workerConcurrency.
 run "extra_env_accepts_concurrency_production_limit_name_when_worker_concurrency_unset" {
   command = plan
 
@@ -11254,6 +11254,24 @@ run "extra_env_accepts_concurrency_production_limit_name_when_worker_concurrency
     condition     = var.n8n_extra_env[0].name == "N8N_CONCURRENCY_PRODUCTION_LIMIT"
     error_message = "N8N_CONCURRENCY_PRODUCTION_LIMIT must be usable through n8n_extra_env while n8n_worker_concurrency is null: the chart only renders queueMode.workerConcurrency, and risks the collision, when that flag is set."
   }
+}
+
+# Also reserved while n8n_execution_concurrency_limit != -1 with
+# n8n_worker_concurrency left null: the chart then computes
+# N8N_CONCURRENCY_PRODUCTION_LIMIT itself from
+# executions.concurrency.productionLimit, and n8n.validateEnv rejects a
+# literal duplicate in env.shared/env.worker at render time.
+run "extra_env_rejects_concurrency_production_limit_name_when_limit_set" {
+  command = plan
+
+  variables {
+    n8n_execution_concurrency_limit = 50
+    n8n_extra_env = [
+      { name = "N8N_CONCURRENCY_PRODUCTION_LIMIT", value = "50" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
 }
 
 # ── n8n_executions_data_save_on_success / n8n_executions_data_save_on_error ──
