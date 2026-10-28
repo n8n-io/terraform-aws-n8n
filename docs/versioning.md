@@ -181,21 +181,23 @@ templates changed, plus a new `extraObjects.yaml`; no `deployment-*.yaml`
 changed, so queue-mode main pods still carry no task-runner sidecar and the
 capacity model's worker-only accounting extends to `1.15.0`.
 
-The one change that reaches this module is n8n-io/n8n-hosting#175: the chart
+The one change that reached this module is n8n-io/n8n-hosting#175: the chart
 renders `database.ssl.enabled` as `DB_POSTGRESDB_SSL_ENABLED` instead of
 `DB_POSTGRESDB_SSL`. The module sets that name through `env.shared`, and
-sends `database.ssl.*` only while a CA is delivered, so it omits its own
-entry whenever the chart renders `DB_POSTGRESDB_SSL_ENABLED` itself
-(`local.n8n_chart_renders_postgres_ssl_enabled`): unconditionally for any
-chart major `>= 2`, regardless of repository or prerelease suffix, and for
-chart `1.x` only on the upstream repository at a numbered `1.15.0` or newer
-(`1.x` prereleases are excluded from that check). Keeping its entry there
-would give every container the name twice; in every other case the chart
-does not render the name, or the module cannot verify that it does, so the
-module's entry stays. A bump that moves this gate, or a chart that renames
-the key again, is caught by `tests/scripts/check-main-chart.sh`, which checks
-the shared env ConfigMap's rendered data with and without a CA. The mocked
-suites cannot catch it: `helm_release.values` is unknown under plan mocks.
+sends `database.ssl.*` only while a CA is delivered, so at the time it
+added a chart-version gate that omitted the module's own entry whenever the
+pinned chart was known to render `DB_POSTGRESDB_SSL_ENABLED` itself:
+unconditionally for any chart major `>= 2`, and for chart `1.x` only on the
+upstream repository at a numbered `1.15.0` or newer (`1.x` prereleases were
+excluded from that check). Keeping its entry there would have given every
+container the name twice. That gate is gone now that `n8n_chart_version`
+requires chart major `2` or higher: every accepted chart renders the name
+unconditionally, so the module unconditionally omits its own entry whenever
+a CA is delivered, with no version check left to drop. A chart that renames
+the key again is still caught by `tests/scripts/check-main-chart.sh`, which
+checks the shared env ConfigMap's rendered data with and without a CA. The
+mocked suites cannot catch it: `helm_release.values` is unknown under plan
+mocks.
 
 The same release's upgrade note, that `database.ssl.enabled: true` now actually
 negotiates TLS and verifies the certificate, does not affect this module,
@@ -244,7 +246,8 @@ and `tests/scripts/check-helm-chart-coverage.sh` both pass against it with
 no `N8N_CHART_DIR` override needed).
 
 This is a Verification-required bump, not Minor-required, despite moving
-only a chart version: decision `0012-env-as-per-component-maps.md` removes
+only a chart version: decision `n8n-io/n8n-hosting`
+`decisions/0012-env-as-per-component-maps.md` removes
 `config.extraEnv`/`queueMode.workerExtraEnv`/`webhook.extraEnv`/
 `executions.extraEnv`/`s3.storage.extraEnv`/`secretRefs.env.N8N_HOST`/
 `N8N_PORT`/`N8N_PROTOCOL` outright; any `terraform-azurerm-n8n`- or

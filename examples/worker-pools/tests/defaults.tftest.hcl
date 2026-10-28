@@ -198,6 +198,19 @@ run "chart_version_is_required_and_must_be_exact" {
   expect_failures = [var.n8n_chart_version]
 }
 
+# A numbered 1.x chart is well-formed SemVer and would otherwise reach the
+# module's own precondition on helm_release.n8n, but this example's own
+# validation now rejects chart major < 2 outright, same as the module root.
+run "chart_version_rejects_a_pre_2_0_chart" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.16.0"
+  }
+
+  expect_failures = [var.n8n_chart_version]
+}
+
 # No assert on purpose: the coverage is that the plan succeeds. A prerelease
 # has to pass both this example's format validation and the module's
 # precondition on helm_release.n8n, and a run whose plan errors fails the run.

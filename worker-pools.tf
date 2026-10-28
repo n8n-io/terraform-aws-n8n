@@ -67,18 +67,18 @@ locals {
   # prerelease. Two prereleases are NOT exempt. An upstream release candidate
   # ("-rc.N", e.g. 2.0.0-rc.1) is cut from main, which does not carry the
   # feature, and 2.0.0-rc.1's values.yaml has no queueMode.workerGroups at
-  # all. A pre-2.0 preview (e.g. 1.11.0-preview.workerpools.1) carries the
-  # feature but predates the chart 2.0 env model, so it ignores the
-  # env.shared / env.worker values this module sends and n8n would start
-  # unconfigured; the exemption therefore requires chart major 2 or higher.
+  # all. n8n_chart_version's own validation already requires chart major 2
+  # or higher for every deployment (a 1.x chart predates the chart 2.0
+  # env.shared/env.worker model this module relies on), so a pre-2.0
+  # preview such as 1.11.0-preview.workerpools.1 can never reach this guard
+  # at all; nothing further to check for it here.
   # Replace this whole local with a real floor and a numeric compare once
   # n8n-io/n8n-hosting#189 merges to main and a numbered release carries the
   # feature; n8n_worker_pools_chart_verified can retire at the same time.
   n8n_chart_renders_worker_pools = (
     (
       can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+-", var.n8n_chart_version)) &&
-      !can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.", var.n8n_chart_version)) &&
-      tonumber(local.n8n_chart_version_parts[0]) >= 2
+      !can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.", var.n8n_chart_version))
     ) ||
     var.n8n_worker_pools_chart_verified
   )

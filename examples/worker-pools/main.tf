@@ -163,9 +163,10 @@ module "n8n" {
   # pools below add 9,000m of CPU requests at their maxima (4 x 1200m for heavy,
   # 3 x 700m each for secteam and itop, every pool pod carrying a task runner
   # sidecar), which takes the peak from small's 15,400m to 24,400m. The pinned
-  # preview chart (n8n_chart_version, below) predates worker-only task
-  # runners, so main pods still carry the sidecar too -- unlike a numbered
-  # 1.12.0+ chart, where small's baseline would be 14,200m. The default
+  # preview chart (n8n_chart_version, below) is not on the module's
+  # worker-only-task-runner allowlist, so main pods still carry the sidecar
+  # too -- unlike the module's own default chart (2.0.0-rc.1), where small's
+  # baseline would be 14,200m. The default
   # node_max of 6 t3.xlarge only schedules about 21,720m, so it needs 8.
   #
   # The module warns at plan time when these fall out of step; see

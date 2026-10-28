@@ -8156,7 +8156,7 @@ run "worker_pools_reject_proxy_hops_name" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "N8N_PROXY_HOPS", value = "2" }]
@@ -10312,7 +10312,7 @@ run "credentials_overwrite_secret_ref_rejects_a_pool_extra_env_conflict" {
     # incidentally trip the unrelated connection-budget check; this run is
     # only about the credentials_overwrite_secret_ref conflict.
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_credentials_overwrite_secret_ref = {
       name = "n8n-credentials-overwrite"
     }
@@ -10332,7 +10332,7 @@ run "credentials_overwrite_secret_ref_rejects_a_pool_extra_env_file_conflict" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_credentials_overwrite_secret_ref = {
       name = "n8n-credentials-overwrite"
     }
@@ -10660,71 +10660,6 @@ run "main_maximum_of_thirteen_fits_without_task_runners" {
   assert {
     condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].max_replicas == 4
     error_message = "Disabling task runners must not disturb the webhook ceiling"
-  }
-}
-
-run "explicit_1_12_0_keeps_worker_only_accounting" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.12.0"
-  }
-
-  assert {
-    condition     = local.n8n_peak_cpu_request_millis == 14200
-    error_message = "1.12.0 is independently verified worker-only-runner accounting, not just via the current default."
-  }
-}
-
-run "verified_chart_build_metadata_keeps_worker_only_accounting" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.12.0+build.5"
-  }
-
-  assert {
-    condition     = local.n8n_peak_cpu_request_millis == 14200
-    error_message = "Build metadata must not change verified release topology accounting."
-  }
-}
-
-run "older_chart_keeps_conservative_runner_accounting" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.11.0"
-  }
-
-  assert {
-    condition     = local.n8n_peak_cpu_request_millis == 15400
-    error_message = "Older charts must retain the main runner allowance."
-  }
-}
-
-run "preview_chart_keeps_conservative_runner_accounting" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.12.0-preview.workerpools.1"
-  }
-
-  assert {
-    condition     = local.n8n_peak_cpu_request_millis == 15400
-    error_message = "An unverified preview must retain the main runner allowance."
-  }
-}
-
-run "future_chart_keeps_conservative_runner_accounting" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.17.0"
-  }
-
-  assert {
-    condition     = local.n8n_peak_cpu_request_millis == 15400
-    error_message = "Future releases need topology verification before removing the main runner allowance."
   }
 }
 
@@ -11266,6 +11201,26 @@ run "extra_env_rejects_concurrency_production_limit_name_when_limit_set" {
 
   variables {
     n8n_execution_concurrency_limit = 50
+    n8n_extra_env = [
+      { name = "N8N_CONCURRENCY_PRODUCTION_LIMIT", value = "50" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# Also reserved while any n8n_worker_pools entry sets its own concurrency:
+# that renders the pool's queueMode.workerGroups[].concurrency, which the
+# chart's worker-concurrency validation treats the same as
+# queueMode.workerConcurrency above -- it walks n8n.userEnv as a whole, not
+# just the default worker's own entry.
+run "extra_env_rejects_concurrency_production_limit_name_when_pool_concurrency_set" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", concurrency = 5 }]
     n8n_extra_env = [
       { name = "N8N_CONCURRENCY_PRODUCTION_LIMIT", value = "50" },
     ]
@@ -12754,62 +12709,6 @@ run "worker_keda_paused_replica_count_warns_when_inert" {
   expect_failures = [check.worker_keda_paused_replica_count_requires_pause]
 }
 
-# keda.worker.pause has no effect on a chart that predates 1.12.0
-# (n8n-io/n8n-hosting#177): the ScaledObject template does not read the key,
-# so a caller requesting a pause on an old pin gets no error and no pause.
-run "worker_keda_pause_warns_on_a_chart_that_predates_it" {
-  command = plan
-
-  variables {
-    n8n_chart_version     = "1.11.0"
-    n8n_worker_keda_pause = true
-  }
-
-  expect_failures = [check.worker_keda_pause_requires_a_supported_chart]
-}
-
-# Chart 1.12.0 reads keda.worker.pause but still renders the worker's
-# spec.replicas, so a later Helm upgrade while paused overrides the held count.
-run "worker_keda_pause_warns_on_chart_1_12_0" {
-  command = plan
-
-  variables {
-    n8n_chart_version     = "1.12.0"
-    n8n_worker_keda_pause = true
-  }
-
-  expect_failures = [check.worker_keda_pause_requires_a_supported_chart]
-}
-
-# A preview off the 1.13 line is new enough; the prerelease suffix is ignored.
-run "worker_keda_pause_allowed_on_a_1_13_preview" {
-  command = plan
-
-  variables {
-    n8n_chart_version     = "1.13.0-preview.1"
-    n8n_worker_keda_pause = true
-  }
-
-  assert {
-    condition     = local.n8n_worker_keda_pause_supported
-    error_message = "A 1.13.x prerelease must count as pause-capable."
-  }
-}
-
-# A custom chart repository's version numbering is not verifiable against
-# upstream, so the guard stays silent there rather than guessing.
-run "worker_keda_pause_allowed_on_a_custom_chart_repository" {
-  command = plan
-
-  variables {
-    n8n_chart_repository  = "oci://registry.example.com/charts"
-    n8n_chart_version     = "1.11.0"
-    n8n_worker_keda_pause = true
-  }
-
-  # No expect_failures: the whole point is that this must NOT warn.
-}
-
 # node_min, node_max and node_desired were each floored at 1 on their own, but
 # never checked against each other. AWS rejects the resulting scaling config.
 run "node_max_below_node_min_is_rejected" {
@@ -13177,16 +13076,15 @@ run "db_postgresdb_ssl_ca_pem_renders_chart_ssl_values" {
     error_message = "db_postgresdb_ssl_ca_pem must render database.ssl = { enabled = true, rejectUnauthorized = true, ca = <trimmed PEM> } for the chart."
   }
 
-  # The default chart (1.16.0) renders database.ssl.enabled as
+  # Every pinned chart is 2.x, which renders database.ssl.enabled as
   # DB_POSTGRESDB_SSL_ENABLED itself, so with a CA delivered the module must
   # leave that name to the chart and set only REJECT_UNAUTHORIZED.
   assert {
     condition = (
-      local.n8n_chart_renders_postgres_ssl_enabled == true &&
       length(local.n8n_postgres_ssl_env) == 1 &&
       local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"] == "true"
     )
-    error_message = "With a CA delivered on chart 1.15.0 or later, local.n8n_postgres_ssl_env must carry only DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: the chart renders DB_POSTGRESDB_SSL_ENABLED and the CA, and a second SSL_ENABLED would give every n8n container the name twice. The default chart is 1.16.0."
+    error_message = "With a CA delivered, local.n8n_postgres_ssl_env must carry only DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: the chart renders DB_POSTGRESDB_SSL_ENABLED and the CA, and a second SSL_ENABLED would give every n8n container the name twice."
   }
 
   assert {
@@ -13195,54 +13093,6 @@ run "db_postgresdb_ssl_ca_pem_renders_chart_ssl_values" {
       length([for m in local.n8n_extra_volume_mounts : m if m.name == "postgres-ssl-ca"]) == 0
     )
     error_message = "The CA must not be mounted as a volume: the chart value replaces the module-managed ConfigMap and mount."
-  }
-}
-
-# The module's own DB_POSTGRESDB_SSL_ENABLED entry is dropped only where the
-# chart is known to render that name. Before 1.15.0 the chart rendered
-# DB_POSTGRESDB_SSL, which n8n ignores, so without the module's entry TLS would
-# silently never be enabled.
-run "db_postgresdb_ssl_enabled_stays_in_extra_env_on_a_chart_before_1_15_0" {
-  command = plan
-
-  variables {
-    n8n_chart_version                     = "1.14.0"
-    db_postgresdb_ssl_reject_unauthorized = true
-    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
-  }
-
-  assert {
-    condition = (
-      local.n8n_chart_renders_postgres_ssl_enabled == false &&
-      length(local.n8n_postgres_ssl_env) == 2 &&
-      local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_ENABLED"] == "true" &&
-      local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"] == "true"
-    )
-    error_message = "On chart 1.14.0 the chart renders DB_POSTGRESDB_SSL, not _ENABLED, so the module must keep DB_POSTGRESDB_SSL_ENABLED=true in env.shared even with a CA delivered."
-  }
-}
-
-# A custom chart repository carries version numbers this module cannot verify,
-# so on a 1.x chart it keeps its own entry (a duplicate with the same value is
-# harmless there; a missing one would disable TLS).
-run "db_postgresdb_ssl_enabled_stays_in_extra_env_on_a_custom_chart_repository" {
-  command = plan
-
-  variables {
-    n8n_chart_repository                  = "oci://registry.example.com/charts"
-    n8n_chart_version                     = "1.16.0"
-    db_postgresdb_ssl_reject_unauthorized = true
-    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
-  }
-
-  assert {
-    condition = (
-      local.n8n_chart_renders_postgres_ssl_enabled == false &&
-      length(local.n8n_postgres_ssl_env) == 2 &&
-      local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_ENABLED"] == "true" &&
-      local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"] == "true"
-    )
-    error_message = "A custom n8n_chart_repository on a 1.x chart must keep DB_POSTGRESDB_SSL_ENABLED=true in env.shared, since the module cannot verify that chart renders it."
   }
 }
 
@@ -13262,38 +13112,14 @@ run "db_postgresdb_ssl_enabled_leaves_env_shared_on_any_chart_2_x" {
 
   assert {
     condition = (
-      local.n8n_chart_renders_postgres_ssl_enabled == true &&
       !contains(keys(local.n8n_postgres_ssl_env), "DB_POSTGRESDB_SSL_ENABLED")
     )
     error_message = "On chart 2.x the module must not put DB_POSTGRESDB_SSL_ENABLED in env.shared: the chart renders it and rejects a duplicate."
   }
 }
 
-# A prerelease can be built from a branch that predates n8n-io/n8n-hosting#175
-# whatever its version number says, so it keeps the module's entry even at
-# 1.15.0 or above. Build metadata alone ("+...") does not count as a prerelease.
-run "db_postgresdb_ssl_enabled_stays_in_extra_env_on_a_prerelease_chart" {
-  command = plan
-
-  variables {
-    n8n_chart_version                     = "1.16.0-preview.workerpools.1+build.7"
-    db_postgresdb_ssl_reject_unauthorized = true
-    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
-  }
-
-  assert {
-    condition = (
-      local.n8n_chart_renders_postgres_ssl_enabled == false &&
-      length(local.n8n_postgres_ssl_env) == 2 &&
-      local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_ENABLED"] == "true" &&
-      local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"] == "true"
-    )
-    error_message = "A prerelease n8n_chart_version must keep DB_POSTGRESDB_SSL_ENABLED=true in env.shared, even at 1.15.0 or above."
-  }
-}
-
-# A numbered release past 1.x, with build metadata, still counts as rendering
-# the name: the major-version branch of the gate and the "+" strip.
+# A numbered chart release, with build metadata, still renders
+# DB_POSTGRESDB_SSL_ENABLED itself: every chart 2.x does, build metadata or not.
 run "db_postgresdb_ssl_enabled_left_to_the_chart_on_a_numbered_major_2_release" {
   command = plan
 
@@ -13305,7 +13131,6 @@ run "db_postgresdb_ssl_enabled_left_to_the_chart_on_a_numbered_major_2_release" 
 
   assert {
     condition = (
-      local.n8n_chart_renders_postgres_ssl_enabled == true &&
       length(local.n8n_postgres_ssl_env) == 1 &&
       local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"] == "true"
     )
@@ -13935,7 +13760,7 @@ run "worker_pools_reject_an_uppercase_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "ITop" }]
   }
 
@@ -13947,7 +13772,7 @@ run "worker_pools_reject_an_underscore_in_a_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "sec_team" }]
   }
 
@@ -13959,7 +13784,7 @@ run "worker_pools_reject_an_overlong_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "p${join("", [for i in range(63) : "a"])}" }]
   }
 
@@ -13974,7 +13799,7 @@ run "worker_pools_reject_the_name_default" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "default" }]
   }
 
@@ -13986,7 +13811,7 @@ run "worker_pools_reject_duplicate_names" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu" }, { name = "gpu" }]
   }
 
@@ -13998,7 +13823,7 @@ run "worker_pools_reject_min_replicas_above_max_replicas" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", min_replicas = 6, max_replicas = 2 }]
   }
 
@@ -14010,7 +13835,7 @@ run "worker_pools_reject_a_fractional_replica_bound" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", min_replicas = 1.5 }]
   }
 
@@ -14022,7 +13847,7 @@ run "worker_pools_reject_max_replicas_of_zero" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", min_replicas = 0, max_replicas = 0 }]
   }
 
@@ -14034,7 +13859,7 @@ run "worker_pools_reject_concurrency_below_one" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", concurrency = 0 }]
   }
 
@@ -14053,7 +13878,7 @@ run "worker_pools_reject_concurrency_with_execution_concurrency_limit_set" {
 
   variables {
     db_instance_class               = "db.m6g.2xlarge"
-    n8n_chart_version               = "1.11.0-preview.workerpools.1"
+    n8n_chart_version               = "2.0.0-preview.workerpools.1"
     n8n_execution_concurrency_limit = 2000
     n8n_worker_pools                = [{ name = "gpu", concurrency = 5 }]
   }
@@ -14086,7 +13911,7 @@ run "worker_pools_reject_extra_env_overriding_the_pool_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "N8N_WORKER_POOL_NAME", value = "somewhere-else" }]
@@ -14121,7 +13946,7 @@ run "worker_pools_reject_deprecated_binary_data_modes" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "N8N_AVAILABLE_BINARY_DATA_MODES", value = "filesystem,s3" }]
@@ -14157,7 +13982,7 @@ run "worker_pools_reject_deprecated_webhook_url" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "WEBHOOK_URL", value = "https://n8n.example.com" }]
@@ -14172,7 +13997,7 @@ run "worker_pools_reject_extra_env_overriding_a_module_managed_variable" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "N8N_ENCRYPTION_KEY", value = "nope" }]
@@ -14190,7 +14015,7 @@ run "worker_pools_reject_extra_env_setting_graceful_shutdown_timeout" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "N8N_GRACEFUL_SHUTDOWN_TIMEOUT", value = "120" }]
@@ -14263,7 +14088,7 @@ run "worker_pools_reject_a_cpu_quantity_the_capacity_model_cannot_read" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", cpu_request = "1Ki" }]
   }
 
@@ -14275,7 +14100,7 @@ run "worker_pools_reject_a_memory_quantity_the_capacity_model_cannot_read" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", memory_request = "2GB" }]
   }
 
@@ -14301,7 +14126,7 @@ run "module_wide_cpu_request_rejects_an_unparseable_quantity_a_pool_would_inheri
 
   variables {
     db_instance_class      = "db.m6g.2xlarge"
-    n8n_chart_version      = "1.11.0-preview.workerpools.1"
+    n8n_chart_version      = "2.0.0-preview.workerpools.1"
     n8n_worker_cpu_request = "not-a-quantity"
     n8n_worker_pools       = [{ name = "gpu" }]
   }
@@ -14390,7 +14215,7 @@ run "worker_pools_reject_a_trailing_hyphen_in_a_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu-" }]
   }
 
@@ -14402,7 +14227,7 @@ run "worker_pools_reject_a_name_longer_than_the_chart_allows" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # 44 characters: legal for the chart's schema (53) and for poolName (63),
     # but n8n-worker-<name> would be 55, one over KEDA's ScaledObject cap, so
     # the chart would fail the render at apply.
@@ -14438,7 +14263,7 @@ run "worker_pools_reject_a_blank_extra_env_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", extra_env = [{ name = "  ", value = "x" }] }]
   }
 
@@ -14454,7 +14279,7 @@ run "worker_pools_reject_a_whitespace_padded_extra_env_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = " N8N_ENCRYPTION_KEY ", value = "x" }]
@@ -14469,7 +14294,7 @@ run "worker_pools_reject_duplicate_extra_env_names_within_a_pool" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name = "gpu"
       # Deliberately not a module-managed name: with one of those this run
@@ -14503,7 +14328,7 @@ run "worker_pools_reject_a_non_identifier_extra_env_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", extra_env = [{ name = "2FA_MODE", value = "x" }] }]
   }
 
@@ -14547,41 +14372,10 @@ run "worker_pools_fail_the_plan_when_the_default_chart_predates_them" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    # No n8n_chart_version: the module default, which is a numbered release
-    # (1.13.0 at the time of writing) and so never passes the guard, whatever
-    # the number is.
+    # No n8n_chart_version: the module default is 2.0.0-rc.1, a prerelease
+    # the guard's "-rc." exclusion does not count, so it never passes
+    # either.
     n8n_worker_pools = [{ name = "gpu" }]
-  }
-
-  expect_failures = [helm_release.n8n]
-}
-
-run "worker_pools_fail_the_plan_on_any_numbered_release" {
-  command = plan
-
-  variables {
-    db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0"
-    n8n_worker_pools  = [{ name = "gpu" }]
-  }
-
-  expect_failures = [helm_release.n8n]
-}
-
-# n8n-hosting's own release-please cuts numbered releases from `main`
-# independently of the `preview/worker-pools` branch that actually carries
-# queueMode.workerGroups, so a numbered release can never be trusted as a
-# floor: 1.12.0 was this guard's own placeholder "earliest plausible" minimum
-# before it was tightened to reject every numbered release. A release cut
-# from `main` can never prove the feature is present, regardless of whether
-# any specific guessed version ever ships for real.
-run "worker_pools_reject_the_old_placeholder_minimum_regardless" {
-  command = plan
-
-  variables {
-    db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.12.0"
-    n8n_worker_pools  = [{ name = "gpu" }]
   }
 
   expect_failures = [helm_release.n8n]
@@ -14607,9 +14401,9 @@ run "worker_pools_reject_build_metadata_without_a_prerelease_segment" {
     # SemVer 2 allows a "+buildmetadata" suffix with no hyphen, and
     # n8n_chart_version's own validation accepts it, but Helm ignores build
     # metadata when resolving a chart from an HTTPS repository: this can
-    # resolve to plain "1.11.0", the exact silent no-render case the guard
+    # resolve to plain "2.0.0", the exact silent no-render case the guard
     # exists to stop. Build metadata is not a prerelease and must not pass.
-    n8n_chart_version = "1.11.0+build.5"
+    n8n_chart_version = "2.0.0+build.5"
     n8n_worker_pools  = [{ name = "gpu" }]
   }
 
@@ -14632,24 +14426,6 @@ run "worker_pools_accept_a_prerelease_chart_without_comparing_it" {
     condition     = local.n8n_chart_renders_worker_pools
     error_message = "a prerelease chart version must pass the guard"
   }
-}
-
-# A pre-2.0 preview (e.g. 1.11.0-preview.workerpools.1) carries the
-# queueMode.workerGroups feature itself, but predates the chart 2.0
-# env.shared / env.worker model: it ignores the values this module sends, so
-# n8n would start unconfigured. The automatic prerelease exemption therefore
-# requires chart major 2 or higher, and this pre-2.0 preview must still hit
-# the hard stop on helm_release.n8n.
-run "worker_pools_reject_a_pre_2_0_preview_despite_the_prerelease_marker" {
-  command = plan
-
-  variables {
-    db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
-    n8n_worker_pools  = [{ name = "gpu" }]
-  }
-
-  expect_failures = [helm_release.n8n]
 }
 
 # A chart 2.x preview passes the guard automatically, same as any other
@@ -14685,27 +14461,6 @@ run "worker_pools_reject_a_chart_2_x_release_candidate" {
   expect_failures = [helm_release.n8n]
 }
 
-# n8n_worker_pools_chart_verified still attests any version, pre-2.0 preview
-# included: it is a caller attestation that the pinned chart renders
-# queueMode.workerGroups on the chart 2.0 env model, not inferred from the
-# version string, so the module takes it at face value even when the
-# version's own prerelease marker would otherwise be rejected.
-run "worker_pools_accept_a_pre_2_0_preview_the_caller_has_verified" {
-  command = plan
-
-  variables {
-    db_instance_class               = "db.m6g.2xlarge"
-    n8n_chart_version               = "1.11.0-preview.workerpools.1"
-    n8n_worker_pools_chart_verified = true
-    n8n_worker_pools                = [{ name = "gpu" }]
-  }
-
-  assert {
-    condition     = local.n8n_chart_renders_worker_pools
-    error_message = "n8n_worker_pools_chart_verified must let a pre-2.0 preview pass the guard too"
-  }
-}
-
 # The escape hatch for a private mirror serving a numbered version: nothing
 # about the version string can prove it renders queueMode.workerGroups, so
 # this is taken as a caller attestation, not inferred.
@@ -14714,7 +14469,7 @@ run "worker_pools_accept_a_numbered_chart_the_caller_has_verified" {
 
   variables {
     db_instance_class               = "db.m6g.2xlarge"
-    n8n_chart_version               = "1.11.0"
+    n8n_chart_version               = "2.0.0"
     n8n_worker_pools_chart_verified = true
     n8n_worker_pools                = [{ name = "gpu" }]
   }
@@ -15116,58 +14871,6 @@ run "legacy_webhook_url_emitted_for_custom_image_without_a_version" {
   assert {
     condition     = local.n8n_needs_legacy_webhook_url_env
     error_message = "A custom image whose tags carry no version may predate 2.30.0, so the module must emit WEBHOOK_URL"
-  }
-}
-
-run "legacy_webhook_url_emitted_for_old_chart_default" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.3.0"
-  }
-
-  assert {
-    condition     = local.n8n_needs_legacy_webhook_url_env
-    error_message = "Charts 1.0.0 to 1.3.x default to n8n 2.9.0 to 2.12.2, so a null n8n_image_tag there must emit WEBHOOK_URL"
-  }
-}
-
-run "legacy_webhook_url_emitted_for_floating_chart_default" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.11.0"
-  }
-
-  assert {
-    condition     = local.n8n_needs_legacy_webhook_url_env
-    error_message = "Charts 1.4.0 to 1.11.x default to the floating `stable` tag, so a null n8n_image_tag there must emit WEBHOOK_URL"
-  }
-}
-
-run "legacy_webhook_url_emitted_for_chart_0_x_default" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "0.12.0"
-  }
-
-  assert {
-    condition     = local.n8n_needs_legacy_webhook_url_env
-    error_message = "A null n8n_image_tag counts as current only on a 1.x chart at 1.12.0 or newer, so a 0.x chart with minor 12 must still emit WEBHOOK_URL"
-  }
-}
-
-run "legacy_webhook_url_omitted_from_chart_1_12_0_default" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.12.0"
-  }
-
-  assert {
-    condition     = !local.n8n_needs_legacy_webhook_url_env
-    error_message = "Chart 1.12.0 defaults to n8n 2.39.6, so a null n8n_image_tag there must not emit WEBHOOK_URL"
   }
 }
 
@@ -15718,7 +15421,7 @@ run "extra_ca_rejects_env_collision_on_worker_pool_extra_env" {
 
   variables {
     n8n_extra_ca_pem  = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "NODE_EXTRA_CA_CERTS", value = "/other.crt" }]

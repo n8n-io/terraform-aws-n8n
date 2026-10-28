@@ -30,16 +30,25 @@ this project adheres to the stability contract in
   `n8n_worker_extra_env`, and each `n8n_worker_pools[*].extra_env` still take
   the same `list(object({ name, value }))` shape and reach the same pods;
   only where their values land inside the chart's rendered values changed.
-  - The core Kubernetes Secret (`kubernetes_secret.n8n`, referenced through
-    `secretRefs.existingSecret`) now carries only `N8N_ENCRYPTION_KEY`.
+  - The Kubernetes Secret `secretRefs.existingSecret` points at
+    (`kubernetes_secret.n8n`, or the caller's own Secret via
+    `n8n_encryption_key_secret_ref`) is now read for only `N8N_ENCRYPTION_KEY`.
     `N8N_HOST`, `N8N_PORT`, and `N8N_PROTOCOL` are no longer read from it.
     `n8n_encryption_key_secret_ref`'s caller-supplied Secret therefore only
     needs `N8N_ENCRYPTION_KEY` now; the other three keys it previously had
-    to carry are ignored if still present.
-  - n8n's public editor and webhook URLs are now set via the chart's
-    `editor.url` / `webhook.url` values (derived from `n8n_domain` and the
-    module's webhook base URL) instead of literal `N8N_EDITOR_BASE_URL` /
-    `WEBHOOK_URL` env entries. The effective URLs are unchanged.
+    to carry are ignored if still present. (The module-managed Secret can
+    still carry a second key, `N8N_LICENSE_ACTIVATION_KEY`, on the
+    module-managed license path — that key reaches the chart independently
+    through `license.existingSecret`, not through `secretRefs.existingSecret`.)
+  - n8n's public editor and webhook URLs, for n8n images that already
+    satisfy the chart's minimum supported version, are now set via the
+    chart's `editor.url` / `webhook.url` values (derived from `n8n_domain`
+    and the module's webhook base URL) instead of literal
+    `N8N_EDITOR_BASE_URL` / `WEBHOOK_URL` env entries. The effective URLs
+    are unchanged. For an image tag that may predate n8n 2.30.0 (where the
+    deprecated `WEBHOOK_URL` name was still the only one n8n read), the
+    module keeps emitting legacy `WEBHOOK_URL` through `env.shared`
+    alongside `webhook.url` as a fallback.
   - `n8n_worker_concurrency` is now nullable, defaulting to `null`: the
     module then omits `queueMode.workerConcurrency` entirely and n8n's own
     built-in default (`10`) applies, rather than the module always sending
@@ -102,6 +111,38 @@ this project adheres to the stability contract in
     `docs/versioning.md`; a stable chart `2.x` is expected alongside n8n's
     own stable `v3` line. See `docs/upgrading-n8n.md` for the full upgrade
     notes.
+  - **`n8n_chart_version` now rejects any chart `1.x` at plan time**, via a
+    new validation on the variable (`variables.tf`): the module passes n8n's
+    environment through chart 2.0's `env.shared`/`env.worker` maps
+    (`helm_release.n8n`), which a chart `1.x` silently ignores in favor of
+    its own pre-2.0 `config.extraEnv` list, so n8n would start with no
+    database, Redis, encryption key, or any other configuration at all.
+    Mirrored into `examples/worker-pools/variables.tf`'s own
+    `n8n_chart_version`. This makes every chart-`1.x`-specific version gate
+    elsewhere in the module dead code, now removed along with the
+    `tests/defaults.tftest.hcl` cases that only exercised it:
+    `local.n8n_chart_renders_postgres_ssl_enabled` (its `DB_POSTGRESDB_SSL_ENABLED`
+    chart-detection logic is gone — every accepted chart now renders it
+    unconditionally, see the entry below), the `n8n_worker_keda_pause_supported`
+    gate and its matching plan-time check (KEDA worker pause is readable on
+    every chart this module now accepts), `local.n8n_chart_version_parts`,
+    the major/minor branch of `local.n8n_image_known_current` (now always
+    true), and `n8n_worker_pools`'s pre-2.0-preview branch of its
+    chart-prerelease exemption (a pre-2.0 preview can no longer reach that
+    check at all, since `n8n_chart_version`'s own validation rejects it
+    first). `local.n8n_chart_has_worker_only_runners`'s verified-chart
+    allowlist narrows from six 1.x releases plus `2.0.0-rc.1` to
+    `2.0.0-rc.1` alone, for the same reason.
+  - **`N8N_CONCURRENCY_PRODUCTION_LIMIT` is now also reserved in a worker
+    pool's `extra_env`** (each `n8n_worker_pools[*].extra_env`) whenever any
+    `n8n_worker_pools` entry sets its own `concurrency`, not only when the
+    module-wide `n8n_worker_concurrency`/`n8n_execution_concurrency_limit`
+    conflict applies: a pool's `concurrency` renders
+    `queueMode.workerGroups[].concurrency`, which the chart's
+    worker-concurrency validation treats the same as the module-wide
+    `queueMode.workerConcurrency`, so a literal
+    `N8N_CONCURRENCY_PRODUCTION_LIMIT` in that same pool's `extra_env` fails
+    the Helm render the same way.
   - `n8n_worker_pools`'s chart-prerelease exemption (`n8n_worker_pools_chart_verified`)
     no longer accepts an upstream release candidate (a version matching
     `-rc.<N>`, such as `2.0.0-rc.1`): that suffix is cut from the chart's
@@ -123,14 +164,15 @@ this project adheres to the stability contract in
     `n8n_worker_pools_chart_verified = true` against a verified private
     mirror; see `examples/worker-pools/README.md`.
   - The `DB_POSTGRESDB_SSL_ENABLED` chart-renders-it-for-me gate
-    (`local.n8n_chart_renders_postgres_ssl_enabled`) now also treats any
-    chart major version `>= 2` as rendering it, in addition to the existing
-    numbered-`1.15.0`-or-newer-on-the-public-repository check: chart 2.0
-    renders `database.ssl.enabled` as `DB_POSTGRESDB_SSL_ENABLED`
-    unconditionally, and sending the module's own entry alongside it through
-    `env.shared` fails the chart's `n8n.validateEnv` render outright on a
-    duplicate name, rather than Kubernetes silently keeping one copy as on
-    chart 1.x.
+    (`local.n8n_chart_renders_postgres_ssl_enabled`) is gone: since
+    `n8n_chart_version` now requires chart major `2` or higher, chart 2.0
+    always renders `database.ssl.enabled` as `DB_POSTGRESDB_SSL_ENABLED`
+    unconditionally, so the module unconditionally omits its own entry
+    whenever a CA is delivered (`postgres_ssl_ca_active`), rather than
+    checking which chart version is pinned first. Sending the module's own
+    entry alongside it through `env.shared` would fail the chart's
+    `n8n.validateEnv` render outright on a duplicate name, rather than
+    Kubernetes silently keeping one copy as on chart 1.x.
   - `N8N_LICENSE_CERT` (`n8n_license_cert_secret_ref`, offline license
     activation) and `NODE_EXTRA_CA_CERTS` (`n8n_extra_ca_pem`, extra CA
     trust) now render through `env.shared` as chart 2.0

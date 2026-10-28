@@ -528,22 +528,23 @@ locals {
 
   # ── n8n service account ────────────────────────────────────────────────────
   # The chart creating its own ServiceAccount is the arrangement we want, with
-  # one exception: no chart 1.x release this module has pinned renders
-  # imagePullSecrets anywhere, not on the pod spec and not on the
-  # ServiceAccount, so a private registry has no way in through chart values
-  # at var.n8n_chart_version (still 1.15.0; chart 2.0 is not released and not
-  # pinned here, see docs/versioning.md). Attaching the secrets to the
-  # account the pods already run as is the remaining lever, and the chart
-  # supports it: serviceAccount.create = false with an externally managed name
-  # is documented in its own values.yaml, naming Terraform as the example.
+  # one exception: n8n_image_pull_secrets needs a way to reach the pods, and
+  # this module keeps its pre-2.0 workaround for that -- attaching the
+  # secrets to the account the pods already run as -- rather than passing
+  # through chart 2.0's own top-level imagePullSecrets value; see
+  # docs/upgrading-n8n.md. The chart supports the ServiceAccount route too:
+  # serviceAccount.create = false with an externally managed name is
+  # documented in its own values.yaml, naming Terraform as the example.
   #
-  # Chart 2.0 adds a top-level imagePullSecrets value (values.yaml) that
+  # Chart 2.0.0-rc.1, the version this module pins by default, added that
+  # top-level imagePullSecrets value (values.yaml), which
   # templates/deployment-{main,worker,webhook-processor}.yaml render directly
-  # onto every pod spec, independent of which ServiceAccount is in play, so
-  # once this module pins a chart 2.0 release var.n8n_image_pull_secrets
+  # onto every pod spec, independent of which ServiceAccount is in play
+  # (verified against the pulled 2.0.0-rc.1 chart). var.n8n_image_pull_secrets
   # could be passed straight through to that value instead, making this
-  # whole ServiceAccount take-over unnecessary for this purpose. Left as-is
-  # for now: the pinned chart is still 1.x, which has no such value.
+  # whole ServiceAccount take-over unnecessary for this purpose. Left as the
+  # pre-2.0 workaround for now (see docs/upgrading-n8n.md); switching is a
+  # possible follow-up, not part of this migration.
   #
   # So the module takes the account over, but only when there is something to
   # attach. With the default empty list the chart keeps creating it and nothing
@@ -697,19 +698,18 @@ locals {
   # local.postgres_ssl_ca_values below pins the chart's rejectUnauthorized to
   # true: the chart then never computes that name itself.
   #
-  # The exception: chart >= 1.15.0 (every chart 2.0 release included) renders
-  # database.ssl.enabled as DB_POSTGRESDB_SSL_ENABLED itself, and the module
-  # sends database.ssl.* only while postgres_ssl_ca_active. On chart 2.0, in
-  # that one case, setting the module's own entry in env.shared alongside it
-  # would fail the Helm render outright (chart 2.0's n8n.validateEnv rejects a
-  # name the chart already computes), not merely render a harmless duplicate
-  # the way an older chart's Kubernetes env list did; the module omits its own
-  # entry there for exactly that reason. With no CA, with SSL off, or on a
-  # chart that does not render it (older, or from a custom repository), the
-  # module's entry stays; see local.n8n_chart_renders_postgres_ssl_enabled
-  # below.
+  # The exception: every pinned chart is 2.x (n8n_chart_version requires
+  # major 2 or higher), which renders database.ssl.enabled as
+  # DB_POSTGRESDB_SSL_ENABLED itself, and the module sends database.ssl.*
+  # only while postgres_ssl_ca_active. In that one case, setting the
+  # module's own entry in env.shared alongside it would fail the Helm render
+  # outright (chart 2.0's n8n.validateEnv rejects a name the chart already
+  # computes), not merely render a harmless duplicate the way a 1.x chart's
+  # Kubernetes env list did; the module omits its own entry there for
+  # exactly that reason. With no CA or with SSL off, the module's entry
+  # stays.
   n8n_postgres_ssl_env = var.db_postgresdb_ssl_enabled ? merge(
-    local.postgres_ssl_ca_active && local.n8n_chart_renders_postgres_ssl_enabled ? {} : {
+    local.postgres_ssl_ca_active ? {} : {
       DB_POSTGRESDB_SSL_ENABLED = "true"
     },
     {
@@ -721,8 +721,8 @@ locals {
 
   # ── PostgreSQL SSL CA bundle (chart database.ssl.ca) ───────────────────────
   # The CA bundle reaches n8n through the chart's own database.ssl.ca value,
-  # merged into the database values in n8n.tf. Charts 1.14.0 through 1.16.0 render it into
-  # its ConfigMap as DB_POSTGRESDB_SSL_CA, only inside `if database.ssl.enabled`,
+  # merged into the database values in n8n.tf. Every pinned chart (1.14.0 and
+  # later) renders it into its ConfigMap as DB_POSTGRESDB_SSL_CA, only inside `if database.ssl.enabled`,
   # and n8n passes that string to the TLS socket as PEM content. Keeping the
   # CA inside the Helm release means a failed upgrade's atomic rollback
   # restores the previous CA together with the pods, removing the CA is a
@@ -758,28 +758,6 @@ locals {
     }
   } : {}
 
-  # True only when the pinned chart is known to render
-  # DB_POSTGRESDB_SSL_ENABLED from database.ssl.enabled: any chart 2.x, and
-  # the upstream repository at a numbered chart release 1.15.0 or newer
-  # (n8n-io/n8n-hosting#175; earlier charts rendered DB_POSTGRESDB_SSL, which
-  # n8n does not read). Chart 2.x is true regardless of repository or
-  # prerelease suffix: its n8n.validateEnv fails the whole render when
-  # env.shared repeats a name the chart computes, so on 2.x the module's own
-  # entry is the fatal error, not the safe one. For a 1.x chart from another
-  # repository, or a 1.x prerelease (e.g. a preview built from a branch that
-  # may predate #175), the chart contents cannot be verified, and the safe
-  # error there is a duplicate env entry (same value "true"), not a missing
-  # one, so the module keeps emitting its own entry. Nested ternaries, the
-  # repo's guard shape (AGENTS.md); same gate as terraform-google-n8n#39 and
-  # terraform-azurerm-n8n#77.
-  n8n_chart_renders_postgres_ssl_enabled = tonumber(local.n8n_chart_version_parts[0]) > 1 ? true : (
-    var.n8n_chart_repository != "oci://ghcr.io/n8n-io/n8n-helm-chart" ? false : (
-      strcontains(split("+", var.n8n_chart_version)[0], "-") ? false : (
-        tonumber(local.n8n_chart_version_parts[0]) < 1 ? false : tonumber(local.n8n_chart_version_parts[1]) >= 15
-      )
-    )
-  )
-
   # ── n8n_extra_env collision guard ──────────────────────────────────────────
   # env.shared (n8n.tf's local.n8n_env_shared) merges var.n8n_extra_env in
   # LAST, and merge() resolves a duplicate key last-wins, so any name a caller
@@ -800,7 +778,7 @@ locals {
   # prefix below. Keep in sync with local.n8n_env_shared in n8n.tf and the
   # chart values the module sets (database/redis/s3/multiMain/license/
   # secretRefs/webhook/editor).
-  n8n_managed_env_names = concat([
+  n8n_managed_env_names_base = concat([
     # Set by the module in env.shared or the n8n secret.
     "N8N_ENCRYPTION_KEY",
     "N8N_LOG_LEVEL",
@@ -951,18 +929,40 @@ locals {
     local.n8n_license_uses_cert ? ["N8N_LICENSE_CERT"] : [],
     # N8N_CONCURRENCY_PRODUCTION_LIMIT is reserved ONLY while the chart would
     # see a clash, the same conditional pattern as NODE_OPTIONS above. Two
-    # cases: (1) n8n_execution_concurrency_limit != -1, where the chart
-    # computes the name itself from executions.concurrency.productionLimit and
-    # n8n.validateEnv rejects a literal env.shared/env.worker duplicate; and
-    # (2) n8n_worker_concurrency set, where the chart fails the render whenever
-    # queueMode.workerConcurrency and a caller-supplied
-    # N8N_CONCURRENCY_PRODUCTION_LIMIT are both present (_helpers.tpl's
-    # worker-concurrency validation walks n8n.userEnv, not just
-    # n8n.chartEnv). Either way a caller reaching the name through
+    # cases here (a third, a pool's own concurrency, is checked separately
+    # below -- see n8n_managed_env_names): (1) n8n_execution_concurrency_limit
+    # != -1, where the chart computes the name itself from
+    # executions.concurrency.productionLimit and n8n.validateEnv rejects a
+    # literal env.shared/env.worker duplicate; and (2) n8n_worker_concurrency
+    # set, where the chart fails the render whenever queueMode.workerConcurrency
+    # and a caller-supplied N8N_CONCURRENCY_PRODUCTION_LIMIT are both present
+    # (_helpers.tpl's worker-concurrency validation walks n8n.userEnv, not
+    # just n8n.chartEnv). Either way a caller reaching the name through
     # n8n_extra_env or n8n_worker_extra_env would otherwise hit that chart
     # failure at apply time instead of here at plan time. With both at their
     # defaults (-1 and null) nothing collides, so the name stays usable.
     (var.n8n_worker_concurrency != null || var.n8n_execution_concurrency_limit != -1) ? ["N8N_CONCURRENCY_PRODUCTION_LIMIT"] : [],
+  )
+
+  # n8n_worker_pools's own extra_env validation (variables.tf) reads
+  # n8n_managed_env_names_base above, not this list: that validation lives on
+  # var.n8n_worker_pools itself, and this list's third disjunct below reads
+  # var.n8n_worker_pools, so referencing this list there would be a validation
+  # cycle (Terraform rejects a variable's validation depending on a local that
+  # depends on that same variable). The pool-sets-its-own-concurrency case is
+  # instead checked directly on var.n8n_worker_pools, reading the variable
+  # itself with no local in between; see that variable's validation blocks.
+  #
+  # n8n_extra_env and n8n_worker_extra_env have no such cycle (their own
+  # validations do not feed back into n8n_worker_pools), so they read this
+  # full list, adding the third disjunct: any n8n_worker_pools entry setting
+  # its own concurrency renders that pool's
+  # queueMode.workerGroups[].concurrency, which trips the same
+  # n8n.userEnv-wide worker-concurrency validation as n8n_worker_concurrency
+  # above, so N8N_CONCURRENCY_PRODUCTION_LIMIT must stay reserved there too.
+  n8n_managed_env_names = concat(
+    local.n8n_managed_env_names_base,
+    anytrue([for p in var.n8n_worker_pools : p.concurrency != null]) ? ["N8N_CONCURRENCY_PRODUCTION_LIMIT"] : [],
   )
 
   # Env vars n8n has deprecated and logs a warning for on every start, even

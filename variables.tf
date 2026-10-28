@@ -903,6 +903,16 @@ variable "n8n_chart_version" {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version))
     error_message = "n8n_chart_version must be an exact SemVer 2 version such as \"1.11.0\" or \"1.11.0-rc.1\". Helm resolves chart versions literally here, so a range (\">= 1.10\", \"~1.10.0\"), a leading \"v\", or a floating tag is not accepted."
   }
+
+  validation {
+    # Guarded by the SemVer-format validation above: an unparsable version
+    # already failed that one, so this one stays silent on it rather than
+    # crashing on tonumber() below. The major component sits before the
+    # first dot regardless of any "-prerelease" or "+build" suffix, so no
+    # stripping is needed to read it.
+    condition     = !can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version)) || tonumber(split(".", var.n8n_chart_version)[0]) >= 2
+    error_message = "n8n_chart_version must be chart major 2 or higher. The module passes n8n's environment through chart 2.0's env.shared / env.worker maps (see helm_release.n8n), which a chart 1.x silently ignores in favor of its own pre-2.0 config.extraEnv list, so n8n would start with no database, Redis, encryption key, or any other configuration at all."
+  }
 }
 
 variable "lbc_chart_version" {
@@ -1006,7 +1016,7 @@ variable "n8n_image_repository" {
 }
 
 variable "n8n_image_pull_secrets" {
-  description = "Names of existing Kubernetes secrets of type kubernetes.io/dockerconfigjson, in var.namespace, that the n8n pods authenticate to their image registry with. Leave empty (the default) for a public registry or an ECR repository in this account, which the node group's IAM role already pulls without credentials. Setting this changes who owns the ServiceAccount: the pinned chart renders imagePullSecrets nowhere, so the module creates the account itself, attaches these secrets to it, and passes serviceAccount.create = false, an arrangement the chart documents and supports. The module's account takes a different name from the chart's, so that turning this on for a deployment that already exists does not collide with the account Helm still owns; the S3 Pod Identity association follows whichever name is in play, so it keeps working either way. Creating and rotating the secrets stays the caller's job, because a dockerconfigjson generated here would sit in plaintext in Terraform state; kubectl create secret docker-registry, or an operator like External Secrets, are the usual routes. This is also the wrong tool for cross-account ECR, whose authorization tokens expire after 12 hours: add the node group role to the source registry's repository policy instead and leave this empty. The node_group_role_arn output is the principal to name in that policy."
+  description = "Names of existing Kubernetes secrets of type kubernetes.io/dockerconfigjson, in var.namespace, that the n8n pods authenticate to their image registry with. Leave empty (the default) for a public registry or an ECR repository in this account, which the node group's IAM role already pulls without credentials. Setting this changes who owns the ServiceAccount: the module does not use the chart's top-level imagePullSecrets value; it creates the account itself, attaches these secrets to it, and passes serviceAccount.create = false, an arrangement the chart documents and supports. The module's account takes a different name from the chart's, so that turning this on for a deployment that already exists does not collide with the account Helm still owns; the S3 Pod Identity association follows whichever name is in play, so it keeps working either way. Creating and rotating the secrets stays the caller's job, because a dockerconfigjson generated here would sit in plaintext in Terraform state; kubectl create secret docker-registry, or an operator like External Secrets, are the usual routes. This is also the wrong tool for cross-account ECR, whose authorization tokens expire after 12 hours: add the node group role to the source registry's repository policy instead and leave this empty. The node_group_role_arn output is the principal to name in that policy."
   type        = list(string)
   default     = []
 
@@ -3937,16 +3947,40 @@ variable "n8n_worker_pools" {
   }
 
   validation {
+    # Reads n8n_managed_env_names_base, not n8n_managed_env_names: the latter
+    # also depends on var.n8n_worker_pools (locals.tf), and this validation
+    # lives on var.n8n_worker_pools itself, so referencing it here would be a
+    # validation cycle. The pool-sets-its-own-concurrency reservation that
+    # n8n_managed_env_names adds on top is instead checked directly below,
+    # reading var.n8n_worker_pools with no local in between.
     condition = alltrue(flatten([
       for p in var.n8n_worker_pools : [
         for e in p.extra_env : !(
-          contains(local.n8n_managed_env_names, e.name) ||
+          contains(local.n8n_managed_env_names_base, e.name) ||
           anytrue([for pre in local.n8n_managed_env_prefixes : startswith(e.name, pre)]) ||
           e.name == "N8N_WORKER_POOL_NAME"
         )
       ]
     ]))
     error_message = "n8n_worker_pools extra_env must not set module-managed variables, and must not set N8N_WORKER_POOL_NAME: that name is owned by the pool's own `name` attribute, and overriding it would put the pool's workers on a different queue than the one this module creates a scaler for."
+  }
+
+  validation {
+    # The pool-concurrency disjunct of n8n_managed_env_names (locals.tf),
+    # checked here instead of through that local for the same validation-cycle
+    # reason as the extra_env check above. A pool's own concurrency renders
+    # queueMode.workerGroups[].concurrency, which trips the same
+    # n8n.userEnv-wide worker-concurrency validation as n8n_worker_concurrency
+    # (see the N8N_CONCURRENCY_PRODUCTION_LIMIT entry in
+    # n8n_managed_env_names_base's comment), so once any pool sets
+    # concurrency, no pool's own extra_env may set the name either -- not just
+    # the pool that set it.
+    condition = anytrue([for p in var.n8n_worker_pools : p.concurrency != null]) ? !anytrue(flatten([
+      for p in var.n8n_worker_pools : [
+        for e in p.extra_env : e.name == "N8N_CONCURRENCY_PRODUCTION_LIMIT"
+      ]
+    ])) : true
+    error_message = "An n8n_worker_pools entry's extra_env sets N8N_CONCURRENCY_PRODUCTION_LIMIT while an n8n_worker_pools entry (any of them) sets concurrency: that renders queueMode.workerGroups[].concurrency, which the chart's worker-concurrency validation treats the same as queueMode.workerConcurrency, and n8n.validateEnv rejects the whole render on the literal duplicate. Clear the pool's concurrency to control it through this extra_env entry instead, or remove the entry."
   }
 
   validation {

@@ -193,14 +193,15 @@ locals {
   #     with task runners disabled, where the input is documented as ignored.
   #
   # With no readable version, the image counts as current only when
-  # n8n_image_tag is null on the default chart repository at chart 1.12.0 or
-  # newer, whose appVersion is a concrete 2.39.6 or newer. A floating tag
-  # proves nothing: the chart pulls with IfNotPresent, so `stable`, `latest`,
-  # or the `stable` default of charts 1.4.0 to 1.11.x can run an older image
-  # a node cached earlier. Charts 1.0.0 to 1.3.x pin 2.9.0 to 2.12.2, and a
-  # custom n8n_chart_repository's appVersion cannot be verified. An
-  # n8n_image_repository override with a null tag still counts as current:
-  # the chart then tags it with that same concrete appVersion.
+  # n8n_image_tag is null on the default chart repository: the chart's own
+  # appVersion then applies, which for any pinned chart 2.x (n8n_chart_version
+  # requires major 2 or higher) is a concrete n8n 2.x release comfortably
+  # above 2.30.0 (chart 2.0.0-rc.1's is 2.44.5). A floating tag proves
+  # nothing: the chart pulls with IfNotPresent, so `stable` or `latest` can
+  # run an older image a node cached earlier. A custom n8n_chart_repository's
+  # appVersion cannot be verified. An n8n_image_repository override with a
+  # null tag still counts as current: the chart then tags it with that same
+  # concrete appVersion.
   # Everything else gets WEBHOOK_URL.
   #
   # The numeric patch is required, for both tags (#173): a custom tag such as
@@ -213,17 +214,9 @@ locals {
     ? try(regex(local.n8n_version_regex, var.n8n_task_runner_image_tag), null)
     : null
   )
-  # Major and minor only; the n8n_chart_version validation guarantees both are
-  # numeric, and split("+") drops build metadata as in scaling.tf.
-  n8n_chart_version_parts = split(".", split("+", var.n8n_chart_version)[0])
   n8n_image_known_current = (
     var.n8n_image_tag == null &&
-    var.n8n_chart_repository == "oci://ghcr.io/n8n-io/n8n-helm-chart" && (
-      tonumber(local.n8n_chart_version_parts[0]) > 1 || (
-        tonumber(local.n8n_chart_version_parts[0]) == 1 &&
-        tonumber(local.n8n_chart_version_parts[1]) >= 12
-      )
-    )
+    var.n8n_chart_repository == "oci://ghcr.io/n8n-io/n8n-helm-chart"
   )
   n8n_needs_legacy_webhook_url_env = local.n8n_image_version_core != null ? (
     tonumber(local.n8n_image_version_core[0]) < 2 ? true : (
@@ -1002,8 +995,12 @@ resource "helm_release" "n8n" {
     # ── KEDA: queue-depth autoscaling for workers ─────────────────────────────
     # Scales workers based on Redis queue depth rather than CPU — workers appear
     # only when there are jobs and scale in proportion to backlog.
-    # Two triggers: bull:jobs:wait (queued jobs) + bull:jobs:active (jobs held by
-    # workers waiting for a task runner). KEDA takes the MAX of both.
+    # Two triggers: bull:jobs:wait (jobs queued, not yet claimed by any worker)
+    # + bull:jobs:active (jobs already claimed into a worker's concurrency
+    # slots). KEDA takes the MAX of both: jobs:wait alone would miss backlog
+    # hidden inside workers' concurrency slots once jobs:wait hits zero, but
+    # jobs:active alone can't tell how many more workers are needed, since
+    # each worker's slot count is fixed regardless of replica count.
     # Webhook processor HPA is created externally in scaling.tf (chart skips it
     # when keda.enabled = true).
     #
@@ -1791,23 +1788,6 @@ check "worker_keda_paused_replica_count_requires_pause" {
   }
 }
 
-# Pause is only reliable from chart 1.13.0 (local.n8n_worker_keda_pause_supported
-# in scaling.tf). A chart older than 1.12.0 does not read keda.worker.pause at
-# all, so the pause silently never takes effect. Chart 1.12.0 reads it, but
-# still renders the worker's spec.replicas on every upgrade: while paused, any
-# later values change makes Helm write the floor back over KEDA's held count.
-# Normal autoscaling is stopped while paused, and KEDA may not restore the
-# held count without another ScaledObject reconciliation, so workers can keep
-# taking jobs while the ScaledObject still reads as paused. Skipped for a custom
-# n8n_chart_repository, whose version numbering this module cannot verify
-# against upstream (same reasoning as n8n_chart_has_worker_only_runners).
-check "worker_keda_pause_requires_a_supported_chart" {
-  assert {
-    condition     = (var.n8n_worker_keda_pause || var.n8n_worker_keda_paused_replica_count != null) ? local.n8n_worker_keda_pause_supported : true
-    error_message = "n8n_worker_keda_pause or n8n_worker_keda_paused_replica_count is set, but n8n_chart_version predates 1.13.0. Charts older than 1.12.0 do not read keda.worker.pause at all. Chart 1.12.0 reads it but still sets the worker Deployment's spec.replicas on every Helm upgrade, so any later apply that changes the release while paused can write the replica floor back over the held count, and KEDA may not restore it without another ScaledObject reconciliation. Bump n8n_chart_version to 1.13.0 or newer, or clear these inputs."
-  }
-}
-
 # The warning half of the shutdown-window rule. An explicit
 # n8n_graceful_shutdown_timeout that does not fit is a hard validation error on
 # that variable. Left null, the chart still renders its own default, which must
@@ -1815,7 +1795,7 @@ check "worker_keda_pause_requires_a_supported_chart" {
 # hard error here would break configurations that already plan. A warning
 # surfaces the risk without failing the plan. Skipped for a custom
 # n8n_chart_repository, whose values.yaml default this module cannot verify
-# (same reasoning as n8n_worker_keda_pause_supported in scaling.tf); the
+# (same reasoning as n8n_chart_has_worker_only_runners in scaling.tf); the
 # explicit-value validation still applies there, because it does not depend on
 # the chart's default.
 check "graceful_shutdown_fits_grace_period" {

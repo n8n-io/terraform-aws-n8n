@@ -70,7 +70,7 @@ variable "n8n_image_repository" {
 }
 
 variable "n8n_image_pull_secrets" {
-  description = "Names of existing Kubernetes secrets of type kubernetes.io/dockerconfigjson, in the n8n namespace, that the pods authenticate to their image registry with. Leave empty (the default) unless n8n_image_repository points somewhere the node group's IAM role cannot already reach: a public registry and an ECR repository in this account both pull without credentials. Setting it hands ownership of the n8n ServiceAccount from the Helm chart to the module, which is how the secrets reach the pods at all, since the pinned chart renders imagePullSecrets nowhere. Create and rotate the secrets yourself; the module takes names, not credentials, so none of them land in Terraform state. Cross-account ECR is the exception and should not use this: its authorization tokens expire after 12 hours, so add the node group role to the source repository's policy instead."
+  description = "Names of existing Kubernetes secrets of type kubernetes.io/dockerconfigjson, in the n8n namespace, that the pods authenticate to their image registry with. Leave empty (the default) unless n8n_image_repository points somewhere the node group's IAM role cannot already reach: a public registry and an ECR repository in this account both pull without credentials. Setting it hands ownership of the n8n ServiceAccount from the Helm chart to the module, which is how the secrets reach the pods at all, rather than through the chart's own top-level imagePullSecrets value, which the module leaves unset. Create and rotate the secrets yourself; the module takes names, not credentials, so none of them land in Terraform state. Cross-account ECR is the exception and should not use this: its authorization tokens expire after 12 hours, so add the node group role to the source repository's policy instead."
   type        = list(string)
   default     = []
 
@@ -312,7 +312,7 @@ variable "n8n_worker_keda_max_replicas" {
 # control; see README.md, "Getting a chart that renders pools".
 
 variable "n8n_chart_version" {
-  description = "n8n Helm chart version to deploy, passed to the module's n8n_chart_version. Required by this example because the module default predates queueMode.workerGroups and would render no pools. Must also be chart major 2 or higher (e.g. 2.0.0-preview.workerpools.1): the module's automatic prerelease exemption requires it, because a pre-2.0 preview predates the chart 2.0 env.shared/env.worker model and would leave n8n unconfigured. No chart 2.x build of preview/worker-pools exists yet, so this example cannot currently be deployed; pin the first release that carries the feature once it exists, or a chart 2.x prerelease build (published to n8n_chart_repository's default via n8n-io/n8n-hosting's Preview chart GitHub Action, or to a registry you control) once one exists."
+  description = "n8n Helm chart version to deploy, passed to the module's n8n_chart_version. Required by this example because the module default predates queueMode.workerGroups and would render no pools. Must also be chart major 2 or higher (e.g. 2.0.0-preview.workerpools.1), enforced by the validation below: the module requires it for every deployment, not just this example, since a chart 1.x silently ignores the chart 2.0 env.shared/env.worker values this module sends and n8n would start unconfigured. No chart 2.x build of preview/worker-pools exists yet, so this example cannot currently be deployed; pin the first release that carries the feature once it exists, or a chart 2.x prerelease build (published to n8n_chart_repository's default via n8n-io/n8n-hosting's Preview chart GitHub Action, or to a registry you control) once one exists."
   type        = string
   nullable    = false
 
@@ -322,6 +322,13 @@ variable "n8n_chart_version" {
     # module accepts is never rejected one level up.
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version))
     error_message = "n8n_chart_version must be an exact SemVer 2 version such as \"2.0.0\" or \"2.0.0-preview.workerpools.1\". Helm resolves chart versions literally here, so a range (\">= 1.10\", \"~1.10.0\"), a leading \"v\", or a floating tag is not accepted."
+  }
+
+  validation {
+    # Keep in sync with the module root's n8n_chart_version validation.
+    # Guarded by the SemVer-format validation above, same reasoning as there.
+    condition     = !can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version)) || tonumber(split(".", var.n8n_chart_version)[0]) >= 2
+    error_message = "n8n_chart_version must be chart major 2 or higher. The module requires it for every deployment (see the root module's own n8n_chart_version validation), and this example additionally needs a chart that renders queueMode.workerGroups on top of it."
   }
 }
 
@@ -333,7 +340,7 @@ variable "n8n_chart_repository" {
 }
 
 variable "n8n_worker_pools_chart_verified" {
-  description = "Passed to the module's n8n_worker_pools_chart_verified. Leave false for the documented path, a chart 2.x prerelease build such as 2.0.0-preview.workerpools.1, which the module accepts from the version string alone; a pre-2.0 preview such as 1.11.0-preview.workerpools.1 does NOT qualify for that automatic exemption, because it predates the chart 2.0 env.shared/env.worker model. An upstream release candidate matching \"-rc.<N>\" (such as 2.0.0-rc.1) also does NOT qualify. Set true only when n8n_chart_version is a numbered build of the feature branch (or a verified pre-2.0 preview or -rc.<N> build) served from a registry you control (see README.md, \"Getting a chart that renders pools\") and you have confirmed it renders queueMode.workerGroups on the chart 2.0 env model; the module takes that at your word and never re-checks it."
+  description = "Passed to the module's n8n_worker_pools_chart_verified. Leave false for the documented path, a chart 2.x prerelease build such as 2.0.0-preview.workerpools.1, which the module accepts from the version string alone. An upstream release candidate matching \"-rc.<N>\" (such as 2.0.0-rc.1) does NOT qualify for that automatic exemption, since that suffix is cut from the chart's main branch, which carries no queueMode.workerGroups at all. Set true only when n8n_chart_version is a numbered build of the feature branch (or a verified -rc.<N> build) served from a registry you control (see README.md, \"Getting a chart that renders pools\") and you have confirmed it renders queueMode.workerGroups on the chart 2.0 env model; the module takes that at your word and never re-checks it."
   type        = bool
   default     = false
   nullable    = false

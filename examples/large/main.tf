@@ -218,27 +218,13 @@ module "n8n" {
   n8n_worker_keda_max_replicas = 320
 
   # ── Execution settings ────────────────────────────────────────────────────────
-  # Measured (2026-10-17, pre-release chart 2.0 build — the
-  # n8n-io/n8n-hosting#250 tree, before `2.0.0-rc.1` was published; not
-  # re-run on `2.0.0-rc.1` — 20 pinned workers, synthetic 500ms-HTTP
-  # I/O workflow and a trivial CPU workflow): throughput at a fixed worker
-  # count is flat (~340-410 exec/s) across n8n_worker_concurrency 10/20/40/100
-  # because each worker pod is CPU-bound at its 1-vCPU container limit
-  # regardless of the flag, not slot-bound. Raising concurrency past 10 only
-  # costs visibility and tail latency: bull:jobs:wait (KEDA's queue-depth
-  # trigger) drops from ~390 deep (fully visible) at concurrency=10 to ~190
-  # at 20 to 0 (fully blind to KEDA) at >=40, and p99 latency grows from
-  # ~1.9s at 10 to 7+s at 100 from per-worker job-fairness loss under many
-  # concurrent promises. An unpinned A/B at this tier's real KEDA bounds
-  # (20-320) confirmed it: an instantaneous ramp to 1,200 req/s completed
-  # cleanly at n8n_worker_concurrency=10, but the old effective config (this
-  # value unset, limit=2000) crashed 2 of 3 k6 load-generator jobs, drove
-  # bull:jobs:active to ~2,900 (jobs claimed but not completing), and
-  # dropped a PgBouncer replica to not-ready, none of which happened at
-  # concurrency=10. n8n_execution_concurrency_limit stays at -1 (the
-  # module's default): setting it instead of this flag is what let the 1.x
-  # chart silently run this tier at the old 2,000 effective value, because
-  # the limit wins over the flag whenever both would otherwise apply.
+  # Measured flat (~340-410 exec/s) across n8n_worker_concurrency 10/20/40/100
+  # at a fixed worker count: each worker pod is CPU-bound at its 1-vCPU limit,
+  # not slot-bound, so raising concurrency buys no throughput while leaving
+  # backlog in workers' active slots, where new workers cannot claim it, and
+  # costing tail latency. See this example's
+  # README for the full measured basis and the A/B against the old effective
+  # value.
   # WARNING: pruning settings cannot bound table growth at this tier. n8n's
   # hard deletion runs at a hardcoded, non-configurable ceiling of 100
   # executions/s (batchSize=100, rescheduled every 1 second, leader-only),
