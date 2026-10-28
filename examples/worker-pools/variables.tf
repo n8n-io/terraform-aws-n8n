@@ -298,14 +298,21 @@ variable "n8n_worker_keda_max_replicas" {
 # accepts the key and silently renders nothing, so N8N_WORKER_POOLS_ENABLED
 # would land on every pod with no pool behind it. Making the version a
 # required input means this example cannot be applied without choosing a
-# chart on purpose. Until the release exists, that is an official prerelease
-# build published from the branch via n8n-io/n8n-hosting#191's "Preview
-# chart" GitHub Action to n8n_chart_repository's default, or a preview build
-# pushed to a registry you control; see README.md, "Getting a chart that
-# renders pools".
+# chart on purpose.
+#
+# The module's automatic prerelease exemption also requires chart major 2 or
+# higher: a pre-2.0 preview predates the chart 2.0 env.shared/env.worker
+# model, so it ignores the values this module sends and n8n would start
+# unconfigured. preview/worker-pools has not been rebased onto that model,
+# so no chart 2.x build of this feature exists yet -- this example documents
+# the shape but cannot currently be deployed. Once a chart 2.x prerelease
+# build exists, that is an official prerelease published from the branch via
+# n8n-io/n8n-hosting#191's "Preview chart" GitHub Action to
+# n8n_chart_repository's default, or a preview build pushed to a registry you
+# control; see README.md, "Getting a chart that renders pools".
 
 variable "n8n_chart_version" {
-  description = "n8n Helm chart version to deploy, passed to the module's n8n_chart_version. Required by this example because the module default predates queueMode.workerGroups and would render no pools. Pin the first release that carries the feature once it exists, or a prerelease build (e.g. 1.11.0-preview.workerpools.1, published to n8n_chart_repository's default via n8n-io/n8n-hosting's Preview chart GitHub Action, or to a registry you control) in the meantime."
+  description = "n8n Helm chart version to deploy, passed to the module's n8n_chart_version. Required by this example because the module default predates queueMode.workerGroups and would render no pools. Must also be chart major 2 or higher (e.g. 2.0.0-preview.workerpools.1): the module's automatic prerelease exemption requires it, because a pre-2.0 preview predates the chart 2.0 env.shared/env.worker model and would leave n8n unconfigured. No chart 2.x build of preview/worker-pools exists yet, so this example cannot currently be deployed; pin the first release that carries the feature once it exists, or a chart 2.x prerelease build (published to n8n_chart_repository's default via n8n-io/n8n-hosting's Preview chart GitHub Action, or to a registry you control) once one exists."
   type        = string
   nullable    = false
 
@@ -314,7 +321,7 @@ variable "n8n_chart_version" {
     # 2 with optional prerelease and build-metadata segments, so a version the
     # module accepts is never rejected one level up.
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version))
-    error_message = "n8n_chart_version must be an exact SemVer 2 version such as \"1.11.0\" or \"1.11.0-preview.workerpools.1\". Helm resolves chart versions literally here, so a range (\">= 1.10\", \"~1.10.0\"), a leading \"v\", or a floating tag is not accepted."
+    error_message = "n8n_chart_version must be an exact SemVer 2 version such as \"2.0.0\" or \"2.0.0-preview.workerpools.1\". Helm resolves chart versions literally here, so a range (\">= 1.10\", \"~1.10.0\"), a leading \"v\", or a floating tag is not accepted."
   }
 }
 
@@ -326,7 +333,7 @@ variable "n8n_chart_repository" {
 }
 
 variable "n8n_worker_pools_chart_verified" {
-  description = "Passed to the module's n8n_worker_pools_chart_verified. Leave false for the documented path, a prerelease build such as 1.11.0-preview.workerpools.1, which the module accepts from the version string alone. An upstream release candidate matching \"-rc.<N>\" (such as 2.0.0-rc.1) does NOT qualify for that exemption: set true only when n8n_chart_version is a numbered build of the feature branch (or a verified -rc.<N> build) served from a registry you control (see README.md, \"Getting a chart that renders pools\") and you have confirmed it renders queueMode.workerGroups; the module takes that at your word and never re-checks it."
+  description = "Passed to the module's n8n_worker_pools_chart_verified. Leave false for the documented path, a chart 2.x prerelease build such as 2.0.0-preview.workerpools.1, which the module accepts from the version string alone; a pre-2.0 preview such as 1.11.0-preview.workerpools.1 does NOT qualify for that automatic exemption, because it predates the chart 2.0 env.shared/env.worker model. An upstream release candidate matching \"-rc.<N>\" (such as 2.0.0-rc.1) also does NOT qualify. Set true only when n8n_chart_version is a numbered build of the feature branch (or a verified pre-2.0 preview or -rc.<N> build) served from a registry you control (see README.md, \"Getting a chart that renders pools\") and you have confirmed it renders queueMode.workerGroups on the chart 2.0 env model; the module takes that at your word and never re-checks it."
   type        = bool
   default     = false
   nullable    = false

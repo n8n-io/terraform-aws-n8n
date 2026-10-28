@@ -449,11 +449,15 @@ emits a pool's `extra_env` in the pre-2.0 list shape it expects. Until
 worker pools land on a chart `2.0` release (see `docs/versioning.md`'s Chart
 2.0 upgrade requirements), a worker pool's `extra_env` is not wired to any
 rendered value and will not reach that pool's pods. `n8n_worker_pools` also
-now requires either a `preview.workerpools.*` build or
+now requires either a chart `2.x` `preview.workerpools.*` build or
 `n8n_worker_pools_chart_verified = true` against a verified private mirror:
 the prerelease exemption no longer covers an upstream `-rc.<N>` release
 candidate such as `2.0.0-rc.1`, which is cut from the chart's `main` branch
-and does not carry `queueMode.workerGroups` either. See
+and does not carry `queueMode.workerGroups` either, nor a pre-2.0 preview
+such as `1.11.0-preview.workerpools.1`, which predates the chart `2.0`
+env-model this module now sends. No chart `2.x` build of
+`preview/worker-pools` exists yet, so `examples/worker-pools` cannot
+currently be deployed until upstream rebases that branch. See
 `examples/worker-pools/README.md`.
 
 **Other chart changes you will see.** Verified against the published

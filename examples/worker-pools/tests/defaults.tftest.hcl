@@ -26,9 +26,16 @@ variables {
   # time of writing the only chart that renders queueMode.workerGroups is a
   # preview build of n8n-io/n8n-hosting#189, and the module's precondition on
   # helm_release.n8n takes a prerelease at the caller's word rather than
-  # comparing it against a release that does not exist yet. The module default
-  # here would fail every run below for the right reason.
-  n8n_chart_version = "1.11.0-preview.workerpools.1"
+  # comparing it against a release that does not exist yet. It must also be
+  # chart major 2 or higher: the module's automatic prerelease exemption
+  # requires it, because a pre-2.0 preview predates the chart 2.0
+  # env.shared/env.worker model and would leave n8n unconfigured. No chart 2.x
+  # build of preview/worker-pools exists yet (it predates n8n-io/n8n-hosting's
+  # #250 env model work), so this version is illustrative only and the
+  # example cannot actually be deployed until upstream rebases that branch;
+  # see README.md. The module default here would fail every run below for the
+  # right reason.
+  n8n_chart_version = "2.0.0-preview.workerpools.1"
 }
 
 # NOTE on test coverage:
@@ -198,7 +205,7 @@ run "chart_version_accepts_a_prerelease_build" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.3"
+    n8n_chart_version = "2.0.0-preview.workerpools.3"
   }
 }
 

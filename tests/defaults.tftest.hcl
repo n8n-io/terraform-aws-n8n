@@ -13742,7 +13742,7 @@ run "worker_pools_map_each_pool_to_its_own_queue" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, and
     # against the database connection budget like any other replica ceiling,
     # so the capacity and connection-budget checks warn when their ceilings
@@ -13781,7 +13781,7 @@ run "worker_pools_inherit_module_wide_worker_sizing" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, and
     # against the database connection budget like any other replica ceiling,
     # so the capacity and connection-budget checks warn when their ceilings
@@ -13809,7 +13809,7 @@ run "worker_pools_per_pool_sizing_overrides_the_module_default" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, and
     # against the database connection budget like any other replica ceiling,
     # so the capacity and connection-budget checks warn when their ceilings
@@ -13847,7 +13847,7 @@ run "worker_pools_carry_their_own_keda_bounds" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, and
     # against the database connection budget like any other replica ceiling,
     # so the capacity and connection-budget checks warn when their ceilings
@@ -13880,7 +13880,7 @@ run "worker_pools_min_replicas_accepts_zero" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, and
     # against the database connection budget like any other replica ceiling,
     # so the capacity and connection-budget checks warn when their ceilings
@@ -13902,7 +13902,7 @@ run "worker_pools_extra_env_reaches_only_that_pool" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, and
     # against the database connection budget like any other replica ceiling,
     # so the capacity and connection-budget checks warn when their ceilings
@@ -14068,7 +14068,7 @@ run "worker_pools_accept_a_non_default_execution_concurrency_limit_without_pool_
 
   variables {
     db_instance_class               = "db.m6g.2xlarge"
-    n8n_chart_version               = "1.11.0-preview.workerpools.1"
+    n8n_chart_version               = "2.0.0-preview.workerpools.1"
     n8n_execution_concurrency_limit = 2000
     n8n_worker_pools                = [{ name = "gpu" }]
   }
@@ -14220,7 +14220,7 @@ run "capacity_model_counts_each_pool_at_its_ceiling" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
 
     # Room for the pools, so this pins the arithmetic rather than tripping the
     # capacity advisory the arithmetic feeds. A larger instance class keeps
@@ -14321,7 +14321,7 @@ run "worker_pools_carry_the_redis_tls_metadata_on_their_scalers" {
   command = plan
 
   variables {
-    n8n_chart_version                = "1.11.0-preview.workerpools.1"
+    n8n_chart_version                = "2.0.0-preview.workerpools.1"
     redis_transit_encryption_enabled = true
     # Larger instance class so the pools' default-sized ceiling does not
     # incidentally trip the unrelated connection-budget check; this run is
@@ -14364,7 +14364,7 @@ run "worker_pools_carry_empty_trigger_metadata_without_tls" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Larger instance class so the pool's default-sized ceiling does not
     # incidentally trip the unrelated connection-budget check; this run is
     # only about the empty trigger metadata without TLS.
@@ -14416,7 +14416,7 @@ run "worker_pools_accept_a_name_at_the_chart_ceiling" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Exactly 43 characters, both ends alphanumeric: n8n-worker-<name> lands
     # on KEDA's 54-character cap exactly. Larger instance class so the pool's
     # default-sized ceiling does not incidentally trip the unrelated
@@ -14514,7 +14514,7 @@ run "worker_pools_accept_a_conventional_extra_env_name" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Larger instance class so the pool's default-sized ceiling does not
     # incidentally trip the unrelated connection-budget check; this run is
     # only about the extra_env name grammar.
@@ -14624,13 +14624,85 @@ run "worker_pools_accept_a_prerelease_chart_without_comparing_it" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu" }]
   }
 
   assert {
     condition     = local.n8n_chart_renders_worker_pools
     error_message = "a prerelease chart version must pass the guard"
+  }
+}
+
+# A pre-2.0 preview (e.g. 1.11.0-preview.workerpools.1) carries the
+# queueMode.workerGroups feature itself, but predates the chart 2.0
+# env.shared / env.worker model: it ignores the values this module sends, so
+# n8n would start unconfigured. The automatic prerelease exemption therefore
+# requires chart major 2 or higher, and this pre-2.0 preview must still hit
+# the hard stop on helm_release.n8n.
+run "worker_pools_reject_a_pre_2_0_preview_despite_the_prerelease_marker" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  expect_failures = [helm_release.n8n]
+}
+
+# A chart 2.x preview passes the guard automatically, same as any other
+# prerelease, now that it also clears the major-2 floor.
+run "worker_pools_accept_a_chart_2_x_preview" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition     = local.n8n_chart_renders_worker_pools
+    error_message = "a chart 2.x preview must pass the guard"
+  }
+}
+
+# An upstream release candidate is cut from main, which does not carry the
+# feature at all: 2.0.0-rc.1's values.yaml has no queueMode.workerGroups,
+# regardless of major version, so the "-rc." exclusion must still win over
+# the major-2 floor.
+run "worker_pools_reject_a_chart_2_x_release_candidate" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    n8n_chart_version = "2.0.0-rc.1"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  expect_failures = [helm_release.n8n]
+}
+
+# n8n_worker_pools_chart_verified still attests any version, pre-2.0 preview
+# included: it is a caller attestation that the pinned chart renders
+# queueMode.workerGroups on the chart 2.0 env model, not inferred from the
+# version string, so the module takes it at face value even when the
+# version's own prerelease marker would otherwise be rejected.
+run "worker_pools_accept_a_pre_2_0_preview_the_caller_has_verified" {
+  command = plan
+
+  variables {
+    db_instance_class               = "db.m6g.2xlarge"
+    n8n_chart_version               = "1.11.0-preview.workerpools.1"
+    n8n_worker_pools_chart_verified = true
+    n8n_worker_pools                = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition     = local.n8n_chart_renders_worker_pools
+    error_message = "n8n_worker_pools_chart_verified must let a pre-2.0 preview pass the guard too"
   }
 }
 
@@ -14674,7 +14746,7 @@ run "worker_pools_warn_when_the_pinned_n8n_image_predates_them" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_image_tag     = "2.38.1"
     n8n_worker_pools  = [{ name = "gpu" }]
   }
@@ -14687,7 +14759,7 @@ run "worker_pools_accept_the_first_n8n_release_that_ships_them" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_image_tag     = "2.39.0"
     n8n_worker_pools  = [{ name = "gpu" }]
   }
