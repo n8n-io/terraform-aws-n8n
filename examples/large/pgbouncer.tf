@@ -163,11 +163,21 @@ resource "kubernetes_deployment" "pgbouncer" {
           # per pod, no SO_REUSEPORT multi-process supervisor in this
           # image), so a CPU limit above ~1 vCPU buys nothing — only more
           # replicas raise the ceiling. 500m pegged 96-100% around
-          # 700-1,000 exec/s (see the top-of-file comment); 1000m keeps
-          # per-replica usage under ~32% at this tier's measured ceiling.
+          # 700-1,000 exec/s (see the top-of-file comment). A separate round
+          # of testing confirmed the same shape: at a 500m limit PgBouncer
+          # was the bottleneck, at 1500m it cleared (~906 req/s, every check
+          # passing) and per-pod CPU levelled off at 0.88-0.90 cores, so the
+          # limit stays at 1000m and replicas carry the scaling.
+          #
+          # The request is sized to measured use, not the limit: per-replica
+          # CPU stayed at or below ~32% of 1000m (~320m) at this tier's
+          # ~900-1,000 req/s ceiling, so 350m covers it with a small margin.
+          # The limit above lets a replica burst toward a full core when its
+          # node has spare CPU. Reserving more (600m was used briefly) held
+          # ~4.8 vCPU across 8 replicas for ~2.6 vCPU of measured use.
           resources {
             requests = {
-              cpu    = "600m"
+              cpu    = "350m"
               memory = "128Mi"
             }
             limits = {
