@@ -88,14 +88,23 @@ cd /tmp/n8n-hosting
 git checkout preview/worker-pools
 
 # 2. Lint and render once locally, with this example's values shape, before pushing.
+#    The kind counts below only prove workerGroups rendered the Deployments
+#    and scalers; they say nothing about chart 2.0's env model. Grep the
+#    rendered output for the worker ConfigMap too: on chart 2.0 this is
+#    where env.shared/env.worker land (loaded into pods via envFrom), so
+#    its absence means the branch still predates the 2.0 env model even
+#    though its Chart.yaml says major 2.
 helm lint charts/n8n -f charts/n8n/ci/workerGroups-values.yaml
 helm template n8n charts/n8n -f charts/n8n/ci/workerGroups-values.yaml \
   | grep -E '^kind: (Deployment|ScaledObject)$' | sort | uniq -c
+helm template n8n charts/n8n -f charts/n8n/ci/workerGroups-values.yaml \
+  | grep -A5 '^kind: ConfigMap$' | grep -B5 'name: n8n-worker'
 
-# 3. Package with a prerelease version. Helm never picks a prerelease up by
-#    accident, and the module's chart-version check takes one at your word --
-#    but only at major 2 or higher; a pre-2.0 version string fails the guard
-#    even as a prerelease.
+# 3. Package with a prerelease version tagged "preview.*". The module's
+#    chart-version check takes that specific tag at your word -- any other
+#    prerelease ("-rc.<N>", "-beta.N", "-alpha.N") or a numbered version
+#    does not qualify for the automatic exemption and needs
+#    n8n_worker_pools_chart_verified = true instead.
 helm package charts/n8n --version "$CHART_VERSION" --destination /tmp/chart-pkg
 
 # 4. Push to ECR. The OCI path is <registry>/<repo>/<chart name>, so the ECR
@@ -105,7 +114,10 @@ aws ecr create-repository --repository-name n8n-helm-chart/n8n --region "$AWS_RE
 aws ecr get-login-password --region "$AWS_REGION" | helm registry login --username AWS --password-stdin "$REGISTRY"
 helm push "/tmp/chart-pkg/n8n-$CHART_VERSION.tgz" "oci://$REGISTRY/n8n-helm-chart"
 
-# 5. Confirm the module will find it.
+# 5. Confirm the module will find it. This only prints the chart's
+#    metadata (name, version, description) -- it does not prove the chart
+#    renders queueMode.workerGroups on the chart 2.0 env model; step 2's
+#    rendered output is what proves that.
 helm show chart "oci://$REGISTRY/n8n-helm-chart/n8n" --version "$CHART_VERSION" | head -5
 ```
 
@@ -119,12 +131,12 @@ n8n_image_tag        = "2.39.0"
 
 The `helm registry login` is per workstation session; if a later `terraform apply` fails with `unauthorized` on the chart pull, run step 4's login line again. ECR tokens last 12 hours.
 
-`CHART_VERSION` above is suffixed as a prerelease so the module's guard takes
-it at its word without any extra input, as long as it is also major 2 or
-higher. If you would rather package and distribute this internally under a
-real numbered version (dropping the `-preview.workerpools.1` suffix from
-`CHART_VERSION`, step 3's `--version`, and both `terraform.tfvars` snippets),
-add `n8n_worker_pools_chart_verified = true` to `terraform.tfvars` alongside
+`CHART_VERSION` above is suffixed with a "preview.*" prerelease tag so the
+module's guard takes it at its word without any extra input. If you would
+rather package and distribute this internally under a real numbered
+version (dropping the `-preview.workerpools.1` suffix from `CHART_VERSION`,
+step 3's `--version`, and both `terraform.tfvars` snippets), add
+`n8n_worker_pools_chart_verified = true` to `terraform.tfvars` alongside
 it: that is the one thing this guard cannot infer from a numbered version
 string, so it has to be an explicit attestation that you have already run
 steps 2 and 5 successfully against that exact chart.
@@ -138,7 +150,7 @@ cp terraform.tfvars.example terraform.tfvars
 # not using the module's default oci://ghcr.io/n8n-io/n8n-helm-chart).
 
 terraform init
-terraform plan    # fails unless n8n_chart_version is a chart 2.x or higher prerelease build that isn't an upstream "-rc.<N>" release candidate (a pre-2.0 preview or any numbered release instead needs n8n_worker_pools_chart_verified = true); a "worker_pools_require_n8n_2_39" warning means the image pin is too old
+terraform plan    # fails unless n8n_chart_version is a chart 2.x prerelease tagged "preview.*" (a "-rc.<N>", "-beta.N", or "-alpha.N" build does not qualify; neither does a numbered release) or n8n_worker_pools_chart_verified = true is set; a "worker_pools_require_n8n_2_39" warning means the image pin is too old
 terraform apply
 ```
 
@@ -299,7 +311,7 @@ See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the
 | <a name="input_n8n_execution_data_storage_mode"></a> [n8n\_execution\_data\_storage\_mode](#input\_n8n\_execution\_data\_storage\_mode) | Where n8n stores the data of each new execution. Passed to the module's n8n\_execution\_data\_storage\_mode. "database" keeps execution data in PostgreSQL; "s3" offloads it to the S3 bucket the module already creates for binary data. This example runs a db.t3.medium on the module's default 50 GB of gp2 (a 150 IOPS baseline), which leaves little room to absorb execution-data growth, so reaching for this is often cheaper than resizing the database. Requires n8n >= 2.27 (pin n8n\_image\_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is not the same one binary data offload uses. There is no backfill: existing executions stay readable where they were written. Read the execution data section of the root README before enabling it, in particular the durability trade-off and the S3 lifecycle constraint. | `string` | `"database"` | no |
 | <a name="input_n8n_extra_ca_pem"></a> [n8n\_extra\_ca\_pem](#input\_n8n\_extra\_ca\_pem) | Passed to the module's n8n\_extra\_ca\_pem: PEM CA certificate(s) trusted by the main, worker and webhook-processor pods for outbound TLS, for a TLS-inspecting egress proxy or a private CA; task-runner sidecars are not covered. Certificates only, never a private key. Leave null (the default) to add none. See [TLS proxy guide](../../docs/tls-proxy.md). | `string` | `null` | no |
 | <a name="input_n8n_extra_env"></a> [n8n\_extra\_env](#input\_n8n\_extra\_env) | Passed to the module's n8n\_extra\_env: extra environment variables for the n8n containers on every role (main, worker, webhook processor), not the task runner sidecars, e.g. HTTP\_PROXY, HTTPS\_PROXY and NO\_PROXY for an egress proxy. The module rejects names it manages. Values are stored in plaintext in Terraform state and the Helm release, so never embed credentials in a proxy URL (http://user:pass@proxy). See [TLS proxy guide](../../docs/tls-proxy.md). | <pre>list(object({<br/>    name  = string<br/>    value = string<br/>  }))</pre> | `[]` | no |
-| <a name="input_n8n_image_pull_secrets"></a> [n8n\_image\_pull\_secrets](#input\_n8n\_image\_pull\_secrets) | Names of existing Kubernetes secrets of type kubernetes.io/dockerconfigjson, in the n8n namespace, that the pods authenticate to their image registry with. Leave empty (the default) unless n8n\_image\_repository points somewhere the node group's IAM role cannot already reach: a public registry and an ECR repository in this account both pull without credentials. Setting it hands ownership of the n8n ServiceAccount from the Helm chart to the module, which is how the secrets reach the pods at all, rather than through the chart's own top-level imagePullSecrets value, which the module leaves unset. Create and rotate the secrets yourself; the module takes names, not credentials, so none of them land in Terraform state. Cross-account ECR is the exception and should not use this: its authorization tokens expire after 12 hours, so add the node group role to the source repository's policy instead. | `list(string)` | `[]` | no |
+| <a name="input_n8n_image_pull_secrets"></a> [n8n\_image\_pull\_secrets](#input\_n8n\_image\_pull\_secrets) | Names of existing Kubernetes secrets of type kubernetes.io/dockerconfigjson, in the n8n namespace, that the pods authenticate to their image registry with. Leave empty (the default) unless n8n\_image\_repository points somewhere the node group's IAM role cannot already reach: a public registry and an ECR repository in this account both pull without credentials. Setting it hands ownership of the n8n ServiceAccount from the Helm chart to the module, which is how the module delivers the secrets to the pods, rather than through the chart's own top-level imagePullSecrets value, which the module leaves unset. Create and rotate the secrets yourself; the module takes names, not credentials, so none of them land in Terraform state. Cross-account ECR is the exception and should not use this: its authorization tokens expire after 12 hours, so add the node group role to the source repository's policy instead. | `list(string)` | `[]` | no |
 | <a name="input_n8n_image_repository"></a> [n8n\_image\_repository](#input\_n8n\_image\_repository) | Container image repository for the n8n application, without a tag (e.g. "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n"). Leave null to use the Helm chart's own repository (docker.n8n.io/n8nio/n8n). Set this to run a custom image, for example one with community packages baked in so they are not reinstalled on every pod boot. The image must be pullable by the node group's IAM role (ECR in the same account is) or be public, otherwise name a dockerconfigjson secret in n8n\_image\_pull\_secrets, and n8n\_task\_runner\_image\_tag usually has to be set alongside it. | `string` | `null` | no |
 | <a name="input_n8n_image_tag"></a> [n8n\_image\_tag](#input\_n8n\_image\_tag) | n8n application image tag to deploy (e.g. "2.27.4"). Leave null to use the selected Helm chart's default. This example requires a preview or verified custom chart, whose image default can differ from the module's pinned release. Inspect and pin the running application version before upgrading the chart; see the [upgrade guide](../../docs/upgrading-n8n.md). | `string` | `null` | no |
 | <a name="input_n8n_license_key"></a> [n8n\_license\_key](#input\_n8n\_license\_key) | n8n Enterprise license activation key. Get one at https://n8n.io/pricing | `string` | n/a | yes |
@@ -309,7 +321,7 @@ See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the
 | <a name="input_n8n_task_runner_image_tag"></a> [n8n\_task\_runner\_image\_tag](#input\_n8n\_task\_runner\_image\_tag) | Image tag for the task runner sidecar (`n8nio/runners`). Leave null to inherit the n8n application image's tag, which is correct as long as that tag is a published n8n version. Set it to the underlying n8n version when running a custom image whose tag is not one (e.g. n8n\_image\_tag = "2.27.4-mypackages" together with n8n\_task\_runner\_image\_tag = "2.27.4"); otherwise the sidecar image cannot be pulled and every pod carrying a runner stays in ImagePullBackOff; runner placement depends on the selected preview or custom chart. | `string` | `null` | no |
 | <a name="input_n8n_worker_keda_max_replicas"></a> [n8n\_worker\_keda\_max\_replicas](#input\_n8n\_worker\_keda\_max\_replicas) | Maximum worker replicas KEDA may scale the default (unlabelled) worker deployment to. | `number` | `10` | no |
 | <a name="input_n8n_worker_keda_min_replicas"></a> [n8n\_worker\_keda\_min\_replicas](#input\_n8n\_worker\_keda\_min\_replicas) | Minimum worker replicas KEDA keeps running for the default (unlabelled) worker deployment. | `number` | `1` | no |
-| <a name="input_n8n_worker_pools_chart_verified"></a> [n8n\_worker\_pools\_chart\_verified](#input\_n8n\_worker\_pools\_chart\_verified) | Passed to the module's n8n\_worker\_pools\_chart\_verified. Leave false for the documented path, a chart 2.x prerelease build such as 2.0.0-preview.workerpools.1, which the module accepts from the version string alone. An upstream release candidate matching "-rc.<N>" (such as 2.0.0-rc.1) does NOT qualify for that automatic exemption, since that suffix is cut from the chart's main branch, which carries no queueMode.workerGroups at all. Set true only when n8n\_chart\_version is a numbered build of the feature branch (or a verified -rc.<N> build) served from a registry you control (see README.md, "Getting a chart that renders pools") and you have confirmed it renders queueMode.workerGroups on the chart 2.0 env model; the module takes that at your word and never re-checks it. | `bool` | `false` | no |
+| <a name="input_n8n_worker_pools_chart_verified"></a> [n8n\_worker\_pools\_chart\_verified](#input\_n8n\_worker\_pools\_chart\_verified) | Passed to the module's n8n\_worker\_pools\_chart\_verified. Leave false for the documented path, a chart prerelease build whose tag starts with "preview." such as 2.0.0-preview.workerpools.1, which the module accepts from the version string alone. An upstream release candidate matching "-rc.<N>" (such as 2.0.0-rc.1), or a "-beta.N"/"-alpha.N" build, does NOT qualify for that automatic exemption: none of those is the tag the preview/worker-pools branch itself publishes, and main carries no queueMode.workerGroups at all regardless of its prerelease tag. Set true only when n8n\_chart\_version is a numbered build of the feature branch (or any other non-"preview." tagged build) served from a registry you control (see README.md, "Getting a chart that renders pools") and you have confirmed it renders queueMode.workerGroups on the chart 2.0 env model; the module takes that at your word and never re-checks it. | `bool` | `false` | no |
 | <a name="input_route53_zone_id"></a> [route53\_zone\_id](#input\_route53\_zone\_id) | Route53 hosted zone ID for the parent of n8n\_domain (e.g. the zone for example.com if n8n\_domain = n8n.example.com). The module creates the ACM certificate, validation records, and alias A-record inside this zone. | `string` | n/a | yes |
 | <a name="input_s3_force_destroy"></a> [s3\_force\_destroy](#input\_s3\_force\_destroy) | Passed to the module's s3\_force\_destroy. Leave null (the default) to use the module's teardown-friendly default of true. | `bool` | `null` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Additional AWS tags to apply to every resource this example creates. | `map(string)` | `{}` | no |

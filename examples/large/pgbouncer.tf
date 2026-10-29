@@ -41,7 +41,7 @@
 #     CPU never exceeds ~32% even at the new ceiling, confirmed via
 #     `kubectl top pod` container metrics, not `SHOW POOLS`/`SHOW STATS`,
 #     which report pool and transaction counters rather than CPU) raised the
-#     CPU-bound ceiling roughly 1.5-1.6x, to ~950-1,000 req/s. Raising
+#     CPU-bound ceiling roughly 1.5-1.6x, to ~900-1,000 req/s. Raising
 #     `DEFAULT_POOL_SIZE` instead (tried 150->400) made throughput worse,
 #     not better: `pg_stat_activity` during the failure showed ~95% of all
 #     Aurora backends simultaneously blocked on `LWLock:BufferContent` — a
@@ -51,13 +51,13 @@
 #     to 160 cut the error rate at a fixed offered rate but did not fix
 #     the latency collapse). A larger pool just let more backends pile
 #     onto the same contended page. Aurora CPU (14-53%) and CommitLatency
-#     (0.1-1.8ms) stayed low throughout, so the ~950-1,000 req/s ceiling is
+#     (0.1-1.8ms) stayed low throughout, so the ~900-1,000 req/s ceiling is
 #     not an Aurora capacity limit either — it is Postgres-internal lock
 #     contention this example's schema/write pattern runs into above
 #     roughly 1,000 req/s, and raising replica count, pool size or webhook
 #     pod count does not move it. The exact contended relation was not
 #     identified (the live window closed before a `pg_locks` join could
-#     catch it); treat ~950-1,000 req/s as this tier's ceiling until that
+#     catch it); treat ~900-1,000 req/s as this tier's ceiling until that
 #     investigation happens at the application/query level — outside
 #     PgBouncer's reach. On the upstream leg, 8 x DEFAULT_POOL_SIZE 150 is
 #     at most 1,200 server connections to Aurora at full pool saturation,

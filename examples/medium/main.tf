@@ -172,12 +172,14 @@ module "n8n" {
   # Chart 2.0 rejects setting both n8n_worker_concurrency and
   # n8n_execution_concurrency_limit, so only one can govern per-worker
   # concurrency now; 10 is n8n's own default and the measured optimum for
-  # this tier's assumed CPU-bound/fast-call workload (worker CPU is the
-  # ceiling at ~60-80 exec/s across the 5-worker floor regardless of the
-  # setting). Raise it only if most workflows wait on slow external calls
-  # instead. See this example's README → "Worker concurrency benchmark" for
-  # the full sweep and the live-scaling A/B against the old chart-1.x
-  # effective value.
+  # this tier's assumed CPU-bound/fast-call workload, measured on upstream
+  # chart 2.0.0-rc.1 (worker CPU is the ceiling at ~60-80 exec/s across the
+  # 5-worker floor regardless of the setting). Not re-benchmarked since;
+  # treat this as validated on 2.0.0-rc.1 specifically, not on whichever
+  # chart 2.x this module's default happens to resolve to later. Raise it
+  # only if most workflows wait on slow external calls instead. See this
+  # example's README → "Worker concurrency benchmark" for the full sweep
+  # and the live-scaling A/B against the old chart-1.x effective value.
 
   # 7-day pruning keeps the execution_entity table at a manageable size without
   # losing useful debugging history. Caveat for sustained high rates: n8n's

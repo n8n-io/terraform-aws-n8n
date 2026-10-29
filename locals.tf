@@ -721,8 +721,8 @@ locals {
 
   # ── PostgreSQL SSL CA bundle (chart database.ssl.ca) ───────────────────────
   # The CA bundle reaches n8n through the chart's own database.ssl.ca value,
-  # merged into the database values in n8n.tf. Every pinned chart (1.14.0 and
-  # later) renders it into its ConfigMap as DB_POSTGRESDB_SSL_CA, only inside `if database.ssl.enabled`,
+  # merged into the database values in n8n.tf. Every chart 2.x this module
+  # accepts renders it into its ConfigMap as DB_POSTGRESDB_SSL_CA, only inside `if database.ssl.enabled`,
   # and n8n passes that string to the TLS socket as PEM content. Keeping the
   # CA inside the Helm release means a failed upgrade's atomic rollback
   # restores the previous CA together with the pods, removing the CA is a

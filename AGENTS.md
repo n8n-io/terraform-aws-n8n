@@ -73,16 +73,17 @@ notice, and a draft until upstream ships:** the chart side
 explicit `n8n_chart_version` and documents both an official GHCR preview
 build (published via n8n-io/n8n-hosting#191's `Preview chart` GitHub Action)
 and pushing a private preview build to your own registry; the module rejects
-every numbered `n8n_chart_version` release unless `n8n_worker_pools_chart_verified`
+every `n8n_chart_version` release unless `n8n_worker_pools_chart_verified`
 explicitly attests it, because an older chart accepts the key and silently
-renders nothing (a prerelease build is exempt automatically, taken at the
-caller's word, but only at chart major `2` or higher and not an `-rc.N`
-release candidate such as `2.0.0-rc.1`: the exemption checks the version
-string only, a pre-2.0 preview predates the chart 2.0 env model this module
-sends and would leave n8n unconfigured, and an `-rc.N` build is cut from the
-chart's `main` branch rather than the worker-pools branch). No chart `2.x`
-build of `preview/worker-pools` exists yet, so the example cannot currently
-be deployed until upstream rebases that branch.
+renders nothing. Only a prerelease tag starting with `preview.` (such as
+`2.0.0-preview.workerpools.1`, the tag the `Preview chart` action publishes)
+is exempt automatically, taken at the caller's word from the version string
+alone. An upstream `-rc.N` release candidate such as `2.0.0-rc.1` is cut
+from the chart's `main` branch rather than the worker-pools branch, so it
+does not carry the feature either. A `-beta.N` or `-alpha.N` build is in the
+same position for the same reason. No chart `2.x` build of
+`preview/worker-pools` exists yet, so the example cannot currently be
+deployed until upstream rebases that branch.
 
 Four **customer-managed examples**, also at `small` sizing, cover the
 `create_<x> = false` paths described in

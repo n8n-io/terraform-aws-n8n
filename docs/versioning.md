@@ -253,18 +253,27 @@ only a chart version: decision `n8n-io/n8n-hosting`
 `N8N_PORT`/`N8N_PROTOCOL` outright; any `terraform-azurerm-n8n`- or
 `terraform-google-n8n`-style caller still on chart `1.x` conventions would
 need the same rewrite this module just went through, not a values tweak.
-As a release candidate rather than a numbered release, `2.0.0-rc.1` also
-sits outside the usual chart-pin verification tiers above until chart 2.0
-ships a stable release — but the Verification-required steps that are
-reachable *before* that stable release have been completed for
-`2.0.0-rc.1`: an upgrade guide section (see
+As a release candidate rather than a numbered release, `2.0.0-rc.1` is
+still a Verification-required bump, governed by the same tier as any other
+chart major: the Verification-required steps reachable *before* chart 2.0's
+stable release have been completed for `2.0.0-rc.1`. The chart's own
+`UPGRADING.md` was read in full (not only a `values.yaml` diff): its five
+removed `extraEnv` paths are what drove the five value removals this
+module's chart 2.0 migration makes (`config.extraEnv`/
+`queueMode.workerExtraEnv`/`webhook.extraEnv`/`executions.extraEnv`/
+`s3.storage.extraEnv`). A plan-time diff against the affected resources was
+run: a real `terraform plan` of `examples/small` against a live cluster on
+`2.0.0-rc.1`, whose `helm_release.n8n` values were independently rendered
+with `helm template` against `2.0.0-rc.1` and checked for unknown keys.
+Also completed: an upgrade guide section (see
 [Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1160-to-200-rc1)),
 `README.md`/`CHANGELOG.md` entries, a live functional deploy of
 `examples/small` with its smoke test passing (32/0), and a live in-place
-upgrade to n8n `3.0.0` on that deployment. Deferred to the stable `2.0.0`
-pin, because they depend on the stable release itself: re-running the
-`examples/medium`/`examples/large` benchmarks on that release (the current
-numbers are from a pre-release chart 2.0 build, not `2.0.0-rc.1` — see
+upgrade to n8n `3.0.0` on that deployment with its smoke test passing
+(32/0). Deferred to the stable `2.0.0` pin, because they depend on the
+stable release itself: re-running the `examples/medium`/`examples/large`
+benchmarks on that release (the current numbers are from a pre-release
+chart 2.0 build, not `2.0.0-rc.1` — see
 [Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1160-to-200-rc1)), and
 worker-pools verification (`n8n_worker_pools_chart_verified`).
 
@@ -272,9 +281,10 @@ worker-pools verification (`n8n_worker_pools_chart_verified`).
 can move to a stable (non-`-rc.`) chart 2.0 release:**
 
 - The chart repository has to actually publish a stable `2.x` tag. Re-run
-  `tests/scripts/check-main-chart.sh` and `tests/scripts/
-  check-helm-chart-coverage.sh` against it (no override needed, since both
-  resolve the pin directly from `oci://ghcr.io/n8n-io/n8n-helm-chart`), and
+  `tests/scripts/check-main-chart.sh` and
+  `tests/scripts/check-helm-chart-coverage.sh` against it (no override
+  needed, since both resolve the pin directly from
+  `oci://ghcr.io/n8n-io/n8n-helm-chart`), and
   `tests/scripts/chart-values-diff.sh` to diff it against `2.0.0-rc.1`.
 - `docs/helm-chart-coverage.md`'s "Verified against chart version" line
   currently names `2.0.0-rc.1`; move it to the stable release version once
@@ -287,9 +297,10 @@ can move to a stable (non-`-rc.`) chart 2.0 release:**
   cannot verify that combination today, and `n8n_worker_pools_chart_verified`
   no longer treats an upstream `-rc.<N>` candidate as exempt (see
   `worker-pools.tf`).
-- Re-run the live-deploy verification scripts (`tests/scripts/
-  verify-custom-image.sh`, `tests/scripts/verify-worker-pools.sh`,
-  `tests/scripts/smoke-test.sh`) against a real cluster once a stable
+- Re-run the live-deploy verification scripts
+  (`tests/scripts/verify-custom-image.sh`,
+  `tests/scripts/verify-worker-pools.sh`, `tests/scripts/smoke-test.sh`)
+  against a real cluster once a stable
   release exists: they exercise `helm_release.n8n`'s actual values, which
   `check-main-chart.sh`'s mock-free-but-plan-mocked-provider setup cannot.
 

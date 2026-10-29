@@ -54,32 +54,30 @@ locals {
   # release-please cuts ship independently of it. There is no real floor to
   # compare against yet, so a numbered version only passes if the caller
   # explicitly attests it with n8n_worker_pools_chart_verified -- for example
-  # a private mirror serving a numbered build of the feature branch. A
-  # prerelease passes automatically, taken at the caller's word via the
-  # SemVer 2 "-prerelease" separator specifically, with no extra input
-  # needed. n8n_chart_version's own validation also allows an optional
-  # "+buildmetadata" suffix with no hyphen (e.g. "1.11.0+build.5"); Helm
-  # ignores build metadata when resolving a chart from an HTTPS repository,
-  # so that string can resolve to plain "1.11.0" -- the exact silent
-  # no-render case this guard exists to stop. Checking for the hyphen
-  # directly, rather than "fails a strict X.Y.Z match", is what keeps a
-  # build-metadata-only version from falling through as if it were a
-  # prerelease. Two prereleases are NOT exempt. An upstream release candidate
-  # ("-rc.N", e.g. 2.0.0-rc.1) is cut from main, which does not carry the
-  # feature, and 2.0.0-rc.1's values.yaml has no queueMode.workerGroups at
-  # all. n8n_chart_version's own validation already requires chart major 2
-  # or higher for every deployment (a 1.x chart predates the chart 2.0
-  # env.shared/env.worker model this module relies on), so a pre-2.0
-  # preview such as 1.11.0-preview.workerpools.1 can never reach this guard
-  # at all; nothing further to check for it here.
+  # a private mirror serving a numbered build of the feature branch. Only one
+  # specific prerelease tag is exempt automatically, taken at the caller's
+  # word: a prerelease segment starting with "preview." (SemVer 2's
+  # "-prerelease" separator), the tag the preview/worker-pools branch's own
+  # `Preview chart` GitHub Action publishes (e.g.
+  # "2.0.0-preview.workerpools.1", n8n-io/n8n-hosting#191). Every other
+  # prerelease -- an upstream release candidate ("-rc.N", e.g.
+  # "2.0.0-rc.1"), a "-beta.N" or "-alpha.N" build, or anything else cut from
+  # main -- does not carry the feature and is not exempt: main does not have
+  # queueMode.workerGroups at all, regardless of what its prerelease tag is
+  # named, so only the one tag the feature branch actually publishes gets the
+  # automatic pass. n8n_chart_version's own validation also allows an
+  # optional "+buildmetadata" suffix with no hyphen (e.g. "1.11.0+build.5");
+  # Helm ignores build metadata when resolving a chart from an HTTPS
+  # repository, so that string can resolve to plain "1.11.0" -- the exact
+  # silent no-render case this guard exists to stop. Checking for the
+  # "-preview." prefix directly, rather than "any prerelease", is what keeps
+  # a build-metadata-only version and every other prerelease tag from
+  # falling through as if it carried the feature.
   # Replace this whole local with a real floor and a numeric compare once
   # n8n-io/n8n-hosting#189 merges to main and a numbered release carries the
   # feature; n8n_worker_pools_chart_verified can retire at the same time.
   n8n_chart_renders_worker_pools = (
-    (
-      can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+-", var.n8n_chart_version)) &&
-      !can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.", var.n8n_chart_version))
-    ) ||
+    can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+-preview\\.", var.n8n_chart_version)) ||
     var.n8n_worker_pools_chart_verified
   )
 
@@ -172,12 +170,13 @@ locals {
 # The chart pairing is a hard stop, enforced as a precondition on
 # helm_release.n8n (n8n.tf) because it is a property of that resource and
 # because letting the apply proceed past a warning is exactly the silent
-# outcome described above. A prerelease version is exempt automatically,
-# which is how the official preview build (see the top of this file and
-# examples/worker-pools/README.md) is installed while no release carries
-# the feature; a numbered version passes only if the caller sets
-# n8n_worker_pools_chart_verified, for a private mirror serving a numbered
-# build it has already verified. The image pairing stays a warning, not a hard
+# outcome described above. A chart version whose prerelease segment starts
+# with "preview." is exempt automatically, which is how the official preview
+# build (see the top of this file and examples/worker-pools/README.md) is
+# installed while no release carries the feature; every other version --
+# numbered, "-rc.N", "-beta.N", "-alpha.N", or anything else -- passes only
+# if the caller sets n8n_worker_pools_chart_verified, for a private mirror
+# serving a build it has already verified. The image pairing stays a warning, not a hard
 # stop: n8n_image_tag is usually null (the chart's floating `stable`), which
 # the check cannot see, so it cannot be relied on to catch every case. Unlike
 # the chart pairing, an old image does not fail loudly -- it silently accepts
@@ -192,16 +191,16 @@ locals {
 locals {
   n8n_worker_pools_chart_error = join("", [
     "n8n_worker_pools declares ${length(var.n8n_worker_pools)} pool(s) but n8n_chart_version = \"${var.n8n_chart_version}\" ",
-    "is not a chart this module can trust to render them: a numbered release that n8n_worker_pools_chart_verified ",
-    "does not attest, an upstream release candidate (-rc.N), or a pre-2.0 prerelease. No numbered n8n-hosting ",
-    "release carries queueMode.workerGroups yet: the feature (n8n-io/n8n-hosting#189) is merged only to the ",
-    "chart's preview/worker-pools branch. A chart without it accepts the key and renders nothing for it, so the ",
-    "release would apply cleanly with N8N_WORKER_POOLS_ENABLED switched on and no pool Deployment or ScaledObject ",
-    "behind it. A pre-2.0 preview carries the feature but ignores this module's chart 2.0 env.shared / env.worker ",
-    "values, so n8n would start unconfigured. Pin n8n_chart_version to a chart 2.x prerelease build that carries ",
-    "the feature (taken at your word), set n8n_worker_pools_chart_verified = true if this is a numbered build you ",
-    "have already confirmed renders queueMode.workerGroups on the chart 2.0 env model, or remove the pools. ",
-    "See examples/worker-pools/README.md.",
+    "is not a chart this module can trust to render them: only a prerelease tag starting with \"preview.\" (e.g. ",
+    "2.0.0-preview.workerpools.1) is exempt automatically. Every other version -- a numbered release, an upstream ",
+    "release candidate (-rc.N), a -beta.N or -alpha.N build, or anything else cut from main -- needs ",
+    "n8n_worker_pools_chart_verified = true. No numbered n8n-hosting release carries queueMode.workerGroups yet: ",
+    "the feature (n8n-io/n8n-hosting#189) is merged only to the chart's preview/worker-pools branch. A chart ",
+    "without it accepts the key and renders nothing for it, so the release would apply cleanly with ",
+    "N8N_WORKER_POOLS_ENABLED switched on and no pool Deployment or ScaledObject behind it. Pin n8n_chart_version ",
+    "to a \"-preview.\" build that carries the feature (taken at your word), set ",
+    "n8n_worker_pools_chart_verified = true if this is a build you have already confirmed renders ",
+    "queueMode.workerGroups on the chart 2.0 env model, or remove the pools. See examples/worker-pools/README.md.",
   ])
 }
 

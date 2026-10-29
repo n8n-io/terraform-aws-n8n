@@ -14446,15 +14446,30 @@ run "worker_pools_accept_a_chart_2_x_preview" {
 }
 
 # An upstream release candidate is cut from main, which does not carry the
-# feature at all: 2.0.0-rc.1's values.yaml has no queueMode.workerGroups,
-# regardless of major version, so the "-rc." exclusion must still win over
-# the major-2 floor.
+# feature at all: 2.0.0-rc.1's values.yaml has no queueMode.workerGroups.
+# Only a "preview." prerelease tag is exempt automatically, so an "-rc.N"
+# tag must still fail the guard regardless of major version.
 run "worker_pools_reject_a_chart_2_x_release_candidate" {
   command = plan
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
     n8n_chart_version = "2.0.0-rc.1"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  expect_failures = [helm_release.n8n]
+}
+
+# A "-beta.N" build is also cut from main, like an "-rc.N" build, and lacks
+# queueMode.workerGroups for the same reason: only the "preview." tag the
+# preview/worker-pools branch publishes is exempt automatically.
+run "worker_pools_reject_a_chart_2_x_beta" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    n8n_chart_version = "2.0.0-beta.1"
     n8n_worker_pools  = [{ name = "gpu" }]
   }
 

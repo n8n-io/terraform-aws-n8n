@@ -144,23 +144,22 @@ this project adheres to the stability contract in
     `N8N_CONCURRENCY_PRODUCTION_LIMIT` in that same pool's `extra_env` fails
     the Helm render the same way.
   - `n8n_worker_pools`'s chart-prerelease exemption (`n8n_worker_pools_chart_verified`)
-    no longer accepts an upstream release candidate (a version matching
-    `-rc.<N>`, such as `2.0.0-rc.1`): that suffix is cut from the chart's
-    `main` branch, which does not carry `queueMode.workerGroups`
+    is now an allowlist rather than a blacklist: only a prerelease tag
+    starting with `preview.` (such as `2.0.0-preview.workerpools.1`, the
+    tag the `preview/worker-pools` branch's own `Preview chart` action
+    publishes) is exempt automatically. An upstream release candidate (a
+    version matching `-rc.<N>`, such as `2.0.0-rc.1`), a `-beta.N` build, or
+    a `-alpha.N` build no longer passes: that suffix is cut from the
+    chart's `main` branch, which does not carry `queueMode.workerGroups`
     (n8n-io/n8n-hosting#189, merged only to the `preview/worker-pools`
-    branch). `2.0.0-rc.1`'s `values.yaml` has no `queueMode.workerGroups` at
-    all, so a caller relying on the old blanket prerelease exemption with
-    worker pools configured now fails at plan with
-    `n8n_worker_pools_chart_error` instead of applying cleanly with no pool
-    behind it. **Pre-2.0 prereleases are no longer exempt either** (e.g.
-    `1.11.0-preview.workerpools.1`): `preview/worker-pools` predates chart
-    2.0's `env.shared`/`env.worker` model, so a pre-2.0 build of it ignores
-    the values this module now sends and n8n would start unconfigured; the
-    automatic exemption now requires chart major `2` or higher as well as a
-    prerelease marker. No chart `2.x` build of `preview/worker-pools` exists
+    branch). `2.0.0-rc.1`'s `values.yaml` has no `queueMode.workerGroups`
+    at all, so a caller relying on the old blanket prerelease exemption
+    with worker pools configured now fails at plan with
+    `n8n_worker_pools_chart_error` instead of applying cleanly with no
+    pool behind it. No chart `2.x` build of `preview/worker-pools` exists
     yet, so `examples/worker-pools` cannot currently be deployed until
-    upstream rebases that branch onto the `2.0` env model. Pin a chart `2.x`
-    `preview.workerpools.*` build once one exists, or set
+    upstream rebases that branch onto the `2.0` env model. Pin a chart
+    `2.x` `preview.workerpools.*` build once one exists, or set
     `n8n_worker_pools_chart_verified = true` against a verified private
     mirror; see `examples/worker-pools/README.md`.
   - The `DB_POSTGRESDB_SSL_ENABLED` chart-renders-it-for-me gate

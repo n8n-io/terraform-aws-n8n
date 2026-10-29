@@ -997,10 +997,12 @@ resource "helm_release" "n8n" {
     # only when there are jobs and scale in proportion to backlog.
     # Two triggers: bull:jobs:wait (jobs queued, not yet claimed by any worker)
     # + bull:jobs:active (jobs already claimed into a worker's concurrency
-    # slots). KEDA takes the MAX of both: jobs:wait alone would miss backlog
-    # hidden inside workers' concurrency slots once jobs:wait hits zero, but
-    # jobs:active alone can't tell how many more workers are needed, since
-    # each worker's slot count is fixed regardless of replica count.
+    # slots: an in-flight utilization signal, not backlog a newly scaled
+    # worker could pick up). KEDA takes the MAX of both: jobs:wait alone
+    # would miss the case where every worker is saturated (concurrency
+    # slots full) even though the wait queue has drained, but jobs:active
+    # alone can't tell how many more workers are needed, since each
+    # worker's slot count is fixed regardless of replica count.
     # Webhook processor HPA is created externally in scaling.tf (chart skips it
     # when keda.enabled = true).
     #
