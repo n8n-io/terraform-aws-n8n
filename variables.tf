@@ -3942,7 +3942,7 @@ variable "n8n_worker_pools" {
     # concurrency vs. queueMode.workerConcurrency), so n8n ignores it exactly
     # as it ignores the module-wide flag whenever n8n_execution_concurrency_limit
     # is not -1; a pool's own concurrency would be silently dropped otherwise.
-    condition     = alltrue([for p in var.n8n_worker_pools : p.concurrency == null || var.n8n_execution_concurrency_limit == -1])
+    condition     = alltrue([for p in var.n8n_worker_pools : p.concurrency != null ? var.n8n_execution_concurrency_limit == -1 : true])
     error_message = "An n8n_worker_pools entry sets concurrency while n8n_execution_concurrency_limit is not -1: n8n takes every worker's concurrency, pool or not, from n8n_execution_concurrency_limit (executions.concurrency.productionLimit) whenever it is set to anything other than -1, and ignores a pool's own concurrency (queueMode.workerGroups[].concurrency) exactly as it ignores n8n_worker_concurrency (queueMode.workerConcurrency) in that case. Leave n8n_execution_concurrency_limit at -1 while any pool sets concurrency, or clear the pool's concurrency (leave it null) to control it through n8n_execution_concurrency_limit instead."
   }
 
