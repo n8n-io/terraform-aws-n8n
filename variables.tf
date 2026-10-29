@@ -910,7 +910,7 @@ variable "n8n_chart_version" {
     # crashing on tonumber() below. The major component sits before the
     # first dot regardless of any "-prerelease" or "+build" suffix, so no
     # stripping is needed to read it.
-    condition     = !can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version)) || tonumber(split(".", var.n8n_chart_version)[0]) >= 2
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version)) ? tonumber(split(".", var.n8n_chart_version)[0]) >= 2 : true
     error_message = "n8n_chart_version must be chart major 2 or higher. The module passes n8n's environment through chart 2.0's env.shared / env.worker maps (see helm_release.n8n), which a chart 1.x silently ignores in favor of its own pre-2.0 config.extraEnv list, so n8n would start with no database, Redis, encryption key, or any other configuration at all."
   }
 }

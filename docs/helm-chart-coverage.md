@@ -43,7 +43,7 @@ This module targets chart **2.0 only**: no dual 1.x/2.x support. Chart 2.0 repla
 | `httpRoute.*` | Not exposed; chart default (`enabled: false`) used. This module routes with an AWS ALB `Ingress` (`ingress.*` above), not the Gateway API this key targets |
 | `persistence` | Not exposed. n8n itself is stateless and needs no PVC (see README) |
 | `extraObjects` | Not exposed |
-| `extraVolumes`, `extraVolumeMounts` | `n8n_extra_volumes` / `n8n_extra_volume_mounts`, plus one managed `credentials-overwrite` Secret volume and read-only mount appended when `n8n_credentials_overwrite_secret_ref` is set |
+| `extraVolumes`, `extraVolumeMounts` | `n8n_extra_volumes` / `n8n_extra_volume_mounts`, plus one managed `credentials-overwrite` Secret volume and read-only mount appended when `n8n_credentials_overwrite_secret_ref` is set, and one managed `ca-bundle` Secret volume and read-only `subPath` mount at `/etc/n8n-certs/ca-bundle.crt` appended when `n8n_extra_ca_pem` is set (the matching `NODE_EXTRA_CA_CERTS` entry goes through `env.shared`; see `docs/tls-proxy.md`) |
 | `extraContainers`, `extraInitContainers` | Not exposed |
 | `dnsPolicy` | Not exposed; chart default used |
 | `dnsConfig` | `n8n_dns_config` (null = not set, Kubernetes' own `ndots:5` default applies). Setting `options = [{ name = "ndots", value = "1" }]` addresses `ndots:5` search-path amplification: measured 80% DNS query reduction on a 246-pod deployment, see the variable's description |

@@ -327,7 +327,7 @@ variable "n8n_chart_version" {
   validation {
     # Keep in sync with the module root's n8n_chart_version validation.
     # Guarded by the SemVer-format validation above, same reasoning as there.
-    condition     = !can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version)) || tonumber(split(".", var.n8n_chart_version)[0]) >= 2
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.n8n_chart_version)) ? tonumber(split(".", var.n8n_chart_version)[0]) >= 2 : true
     error_message = "n8n_chart_version must be chart major 2 or higher. The module requires it for every deployment (see the root module's own n8n_chart_version validation), and this example additionally needs a chart that renders queueMode.workerGroups on top of it."
   }
 }
