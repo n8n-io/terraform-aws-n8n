@@ -1530,6 +1530,10 @@ variable "n8n_execution_concurrency_limit" {
   description = "Maximum concurrent production executions, maps to executions.concurrency.productionLimit (N8N_CONCURRENCY_PRODUCTION_LIMIT). Defaults to -1, the chart's own default, which disables the limit and leaves worker concurrency to n8n_worker_concurrency (or n8n's own default of 10 if that is also unset). Set this to a positive number to cap concurrent production executions; n8n then takes every worker's concurrency from this value instead of n8n_worker_concurrency's flag, and n8n_worker_concurrency must be left null while this is set to anything other than -1, since chart 2.0 fails the Helm render outright when both are set in queue mode (which this module always runs in). See the validation below, which enforces that."
   type        = number
   default     = -1
+  # null means nothing the module can act on: it would read as "set" in the
+  # cross-checks below (null != -1) yet render as an unset productionLimit.
+  # nullable = false makes an explicit null from a caller fall back to -1.
+  nullable = false
 
   validation {
     # Hosted here rather than on n8n_worker_concurrency because Terraform
