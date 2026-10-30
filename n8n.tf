@@ -92,6 +92,23 @@ locals {
   n8n_license_uses_cert           = var.n8n_license_cert_secret_ref != null
   n8n_license_cert_secret_ref_key = var.n8n_license_cert_secret_ref == null ? null : coalesce(var.n8n_license_cert_secret_ref.key, "cert")
 
+  # N8N_OTEL_EXPORTER_OTLP_HEADERS for env.shared: a secretKeyRef reference
+  # when n8n_otel_exporter_otlp_headers_secret_ref is set (chart 2.0 renders
+  # it into each container's explicit env list, never the env ConfigMap),
+  # the literal n8n_otel_exporter_otlp_headers otherwise, or nothing. The two
+  # inputs are mutually exclusive (validation on the _secret_ref variable).
+  n8n_otel_headers_env = merge(
+    var.n8n_otel_exporter_otlp_headers_secret_ref == null ? {} : {
+      N8N_OTEL_EXPORTER_OTLP_HEADERS = {
+        secretKeyRef = {
+          name = var.n8n_otel_exporter_otlp_headers_secret_ref.name
+          key  = coalesce(var.n8n_otel_exporter_otlp_headers_secret_ref.key, "headers")
+        }
+      }
+    },
+    var.n8n_otel_exporter_otlp_headers == null ? {} : { N8N_OTEL_EXPORTER_OTLP_HEADERS = var.n8n_otel_exporter_otlp_headers },
+  )
+
   # Rendered through env.shared as a secretKeyRef reference rather than the
   # chart's license.existingSecret block: chart 2.0's n8n.secretEnv helper
   # only ever maps license.existingSecret to N8N_LICENSE_ACTIVATION_KEY,
@@ -245,22 +262,22 @@ locals {
 # (sha256-addressed, retained per revision) on top of Terraform state. A
 # Secret reference keeps it in exactly one place. Every other credential the
 # module handles already works this way: the DB password, the Redis AUTH
-# token and the encryption key. The task runner auth token is the exception:
-# it encrypts nothing, so it is passed to the chart as a literal value like
-# it always has been.
+# token, the encryption key and, since chart 2.0, the task runner auth token
+# (kubernetes_secret_v1.n8n_task_runner_token above).
 #
 # This does not remove the license key from Terraform state: it is a module
 # input either way, so it stays in state regardless; what changes is that it
 # stops being copied into the Helm release as well.
 
 resource "kubernetes_secret" "n8n" {
-  # Exists whenever at least one of the two keys it can hold still needs a
-  # module-managed home: the encryption key (n8n_encryption_key_secret_ref ==
-  # null) or the license key (n8n_license_key_secret_ref and
-  # n8n_license_cert_secret_ref both null). Chart 2.0's
-  # secretRefs.existingSecret names a Secret holding only N8N_ENCRYPTION_KEY
-  # (n8n-io/n8n-hosting decision 0012): N8N_HOST, N8N_PORT and N8N_PROTOCOL are
-  # no longer read from it at all, and the license key reaches the chart
+  # Exists whenever at least one of the two credentials it can hold still
+  # needs a module-managed home: the encryption key
+  # (n8n_encryption_key_secret_ref == null) or the license key
+  # (n8n_license_key_secret_ref and n8n_license_cert_secret_ref both null).
+  # Chart 2.0's secretRefs.existingSecret reads only N8N_ENCRYPTION_KEY from
+  # this Secret (n8n-io/n8n-hosting decision 0012): N8N_HOST, N8N_PORT and
+  # N8N_PROTOCOL are no longer read from it (they stay in `data` below only
+  # for rollback to chart 1.x), and the license key reaches the chart
   # through the unrelated license.existingSecret value below. The two no
   # longer have to share one Secret's existence the way the old four-key
   # Secret forced them to: a caller supplying their own Secret for the
@@ -275,6 +292,25 @@ resource "kubernetes_secret" "n8n" {
 
   data = merge(
     var.n8n_encryption_key_secret_ref == null ? { N8N_ENCRYPTION_KEY = local.n8n_encryption_key } : {},
+    # Rollback compatibility with chart 1.x. Chart 2.0 never reads these three
+    # keys, but chart 1.x main and webhook-processor pods read all three as
+    # required secretKeyRefs (n8n.coreSecretsEnv). Terraform updates this
+    # Secret before helm_release.n8n, and a Helm rollback does not restore a
+    # Terraform-owned Secret, so without them any chart 1.x pod that starts
+    # while upgrading from 0.6.0 (scale-up, eviction, or an atomic rollback
+    # to the 1.x revision) stays in CreateContainerConfigError. Written on
+    # the same path 0.6.0 wrote them (the module owns the encryption key),
+    # with the same values. Remove once rolling back to a chart 1.x release
+    # is no longer supported; see docs/upgrading-n8n.md. This covers only the
+    # Terraform-owned Secret: chart 1.x pods also read keys from chart-owned
+    # objects that chart 2.0 drops (ConfigMap n8n, Secret n8n-task-runners),
+    # which a completed Helm rollback restores, but which an old pod that
+    # restarts mid-rollout can still miss (documented there too).
+    var.n8n_encryption_key_secret_ref == null ? {
+      N8N_HOST     = local.n8n_domain
+      N8N_PORT     = "5678"
+      N8N_PROTOCOL = "http"
+    } : {},
     # Dropped rather than merged in as null when the caller's own Secret
     # carries the license key instead, or when the offline certificate path
     # (n8n_license_cert_secret_ref) supplies the license through
@@ -620,13 +656,16 @@ locals {
     var.n8n_otel_enabled ? merge(
       { N8N_OTEL_ENABLED = "true" },
       var.n8n_otel_exporter_otlp_endpoint == null ? {} : { N8N_OTEL_EXPORTER_OTLP_ENDPOINT = var.n8n_otel_exporter_otlp_endpoint },
-      var.n8n_otel_exporter_otlp_headers == null ? {} : { N8N_OTEL_EXPORTER_OTLP_HEADERS = var.n8n_otel_exporter_otlp_headers },
       var.n8n_otel_exporter_service_name == null ? {} : { N8N_OTEL_EXPORTER_SERVICE_NAME = var.n8n_otel_exporter_service_name },
       var.n8n_otel_traces_sample_rate == null ? {} : { N8N_OTEL_TRACES_SAMPLE_RATE = tostring(var.n8n_otel_traces_sample_rate) },
       var.n8n_otel_traces_include_node_spans == null ? {} : { N8N_OTEL_TRACES_INCLUDE_NODE_SPANS = tostring(var.n8n_otel_traces_include_node_spans) },
       var.n8n_otel_traces_inject_outbound == null ? {} : { N8N_OTEL_TRACES_INJECT_OUTBOUND = tostring(var.n8n_otel_traces_inject_outbound) },
       var.n8n_otel_traces_production_only == null ? {} : { N8N_OTEL_TRACES_PRODUCTION_ONLY = tostring(var.n8n_otel_traces_production_only) },
     ) : {},
+    # Separate from the block above because it can be a secretKeyRef object
+    # rather than a string, and a conditional cannot unify an object of mixed
+    # attribute types with {}. Same gate on n8n_otel_enabled.
+    var.n8n_otel_enabled ? local.n8n_otel_headers_env : {},
 
     # n8n Enterprise log streaming, managed declaratively via env vars
     # (settings-env-vars activation pattern, n8n >= 2.19.0). When the
@@ -1227,7 +1266,7 @@ resource "helm_release" "n8n" {
     extraVolumeMounts = local.n8n_extra_volume_mounts
     },
     # Override the app image only where the caller asks for it; otherwise the
-    # selected chart defaults apply untouched (1.16.0 uses appVersion). Repository
+    # selected chart defaults apply untouched (the chart uses its appVersion). Repository
     # and tag are merged key by key rather than as a whole `image` map so setting
     # one does not blank the other: yamlencode would emit `repository: null`,
     # which the chart renders into an unpullable `null:2.27.4` reference.
@@ -1264,7 +1303,8 @@ resource "helm_release" "n8n" {
     # CAVEAT: podAnnotations is accepted by the templates but is NOT documented
     # in the chart's values.yaml, so it is an implicit interface that could be
     # renamed without a breaking-change note. Verified present at the pinned
-    # n8n_chart_version (1.16.0) and present as far back as 1.10.0. If a chart
+    # n8n_chart_version (2.0.0-rc.1, deployment-{main,worker,webhook-processor}.yaml)
+    # and present as far back as 1.10.0. If a chart
     # bump ever silently drops it, rotation goes back to being manual rather
     # than breaking anything, and the tests in defaults.tftest.hcl pin the shape.
     #
@@ -1346,7 +1386,7 @@ resource "helm_release" "n8n" {
 }
 
 # ── Pod disruption budgets ────────────────────────────────────────────────────
-# The chart (1.16.0, the default) renders a budget for the main pods only, and
+# The chart (2.0.0-rc.1, the default) renders a budget for the main pods only, and
 # only in multi-main, so the webhook processors and default workers get theirs
 # here, selecting the labels the chart puts on those Deployments' pods.
 # maxUnavailable = 1, not
@@ -1724,6 +1764,7 @@ check "otel_tuning_requires_master_switch" {
     condition = var.n8n_otel_enabled ? true : (
       var.n8n_otel_exporter_otlp_endpoint == null &&
       var.n8n_otel_exporter_otlp_headers == null &&
+      var.n8n_otel_exporter_otlp_headers_secret_ref == null &&
       var.n8n_otel_exporter_service_name == null &&
       var.n8n_otel_traces_sample_rate == null &&
       var.n8n_otel_traces_include_node_spans == null &&

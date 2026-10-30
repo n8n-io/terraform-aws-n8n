@@ -691,9 +691,9 @@ locals {
   # resource's env.shared could not be.
   #
   # Set here rather than through the chart's database.ssl.* values, except for
-  # the one case below. Charts before 1.15.0 render database.ssl.enabled as
-  # DB_POSTGRESDB_SSL, a name n8n does not read (n8n-io/n8n-hosting#175), so
-  # DB_POSTGRESDB_SSL_ENABLED has to come from env.shared.
+  # the one case below. The module sends the chart's database.ssl.* values
+  # only to deliver a CA bundle (local.postgres_ssl_ca_values), so outside
+  # that case DB_POSTGRESDB_SSL_ENABLED has to come from env.shared.
   # DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED stays here too, which is why
   # local.postgres_ssl_ca_values below pins the chart's rejectUnauthorized to
   # true: the chart then never computes that name itself.
@@ -845,6 +845,35 @@ locals {
     "EXECUTIONS_DATA_SAVE_ON_ERROR",
     "EXECUTIONS_DATA_SAVE_ON_PROGRESS",
     "EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS",
+    # Computed by chart 2.0 from the module's executions.timeout,
+    # executions.timeoutMax and executions.pruning values (n8n.tf;
+    # templates/_env.tpl), so n8n.validateEnv fails the render on an
+    # env.shared/env.worker duplicate. The chart only skips EXECUTIONS_TIMEOUT
+    # while the timeout is -1, but each name here has a dedicated input or a
+    # module-fixed value, so all are reserved unconditionally, the same as the
+    # four EXECUTIONS_DATA_SAVE_* names above:
+    #   - EXECUTIONS_TIMEOUT / _MAX: n8n_execution_timeout / _max.
+    #   - EXECUTIONS_DATA_MAX_AGE / _PRUNE_MAX_COUNT: n8n_pruning_max_age /
+    #     n8n_pruning_max_count.
+    #   - EXECUTIONS_DATA_PRUNE, EXECUTIONS_DATA_HARD_DELETE_BUFFER and
+    #     EXECUTIONS_DATA_PRUNE_{HARD,SOFT}_DELETE_INTERVAL: fixed by the
+    #     module (pruning always on, 1 h buffer, 15 min / 60 min intervals).
+    # On chart 1.x the same names in config.extraEnv rendered as a second
+    # container env entry that Kubernetes resolved last-wins, so a caller
+    # could override them; chart 2.0 has no such path through env.shared.
+    "EXECUTIONS_TIMEOUT",
+    "EXECUTIONS_TIMEOUT_MAX",
+    "EXECUTIONS_DATA_PRUNE",
+    "EXECUTIONS_DATA_MAX_AGE",
+    "EXECUTIONS_DATA_PRUNE_MAX_COUNT",
+    "EXECUTIONS_DATA_HARD_DELETE_BUFFER",
+    "EXECUTIONS_DATA_PRUNE_HARD_DELETE_INTERVAL",
+    "EXECUTIONS_DATA_PRUNE_SOFT_DELETE_INTERVAL",
+    # Computed by chart 2.0 on every n8n container from
+    # config.deploymentArtifact (default "helm-chart/<chart version>"), which
+    # this module does not set. Tells n8n's telemetry which artefact installed
+    # it; an env.shared duplicate fails the render.
+    "N8N_DEPLOYMENT_ARTIFACT",
     # Rendered by the chart from module values (identity, topology, storage,
     # license). DB_*, QUEUE_*, N8N_RUNNERS_*, N8N_EXTERNAL_STORAGE_S3_*,
     # N8N_MULTI_MAIN_*, and AWS_* are covered by n8n_managed_env_prefixes.
@@ -869,8 +898,10 @@ locals {
     "N8N_WORKER_POOL_NAME",
     "N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN",
     # N8N_HOST and N8N_PROTOCOL are deliberately absent, unlike chart 1.x:
-    # this module no longer sets either (kubernetes_secret.n8n, n8n.tf), the
-    # chart doesn't read them from anywhere, and n8n itself only falls back to
+    # kubernetes_secret.n8n (n8n.tf) still carries both for rollback to a
+    # chart 1.x release, but chart 2.0 never reads them from it or from
+    # anywhere else, so no n8n container receives them from the module or
+    # the chart. n8n itself only falls back to
     # them when N8N_WEBHOOK_URL and N8N_EDITOR_BASE_URL are both unset, which
     # they never are here (webhook.url/editor.url are always set). Both names
     # are free for a caller to use through n8n_extra_env.
@@ -1039,7 +1070,7 @@ locals {
   )
 
   # The chart's values.yaml default for redis.worker.timeout, in seconds, as of
-  # the pinned n8n_chart_version (1.16.0). Used only by n8n.tf's
+  # the pinned n8n_chart_version (2.0.0-rc.1). Used only by n8n.tf's
   # graceful_shutdown_fits_grace_period check, for callers who leave
   # n8n_graceful_shutdown_timeout null. tests/scripts/check-main-chart.sh
   # renders the real chart and fails if its default drifts from 30, so update

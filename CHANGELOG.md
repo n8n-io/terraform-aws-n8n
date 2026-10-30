@@ -7,6 +7,15 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+### Added
+
+- `n8n_otel_exporter_otlp_headers_secret_ref`: reads the OTLP header string
+  (`N8N_OTEL_EXPORTER_OTLP_HEADERS`) from a caller-managed Kubernetes Secret,
+  rendered into `env.shared` as a `secretKeyRef`. The value stays out of
+  Terraform state, the Helm release and the chart 2.0 env ConfigMaps, where
+  the literal `n8n_otel_exporter_otlp_headers` now lands. Mutually exclusive
+  with `n8n_otel_exporter_otlp_headers`.
+
 ### Changed
 
 - **Breaking: this module's Helm values now target the n8n chart's 2.0
@@ -26,10 +35,35 @@ this project adheres to the stability contract in
   fields rather than `env.shared`, and Secret-backed values (the encryption
   key, license key, task-runner auth token), which still reach pods as
   `secretKeyRef`s, not plain `env.shared` values.
-  **The module's own inputs are unchanged:** `n8n_extra_env`,
-  `n8n_worker_extra_env`, and each `n8n_worker_pools[*].extra_env` still take
-  the same `list(object({ name, value }))` shape and reach the same pods;
-  only where their values land inside the chart's rendered values changed.
+  `n8n_extra_env`, `n8n_worker_extra_env`, and each
+  `n8n_worker_pools[*].extra_env` keep the same
+  `list(object({ name, value }))` shape and reach the same pods, with three
+  differences callers can see:
+  - **More names are rejected at plan.** Chart 2.0 fails the render when an
+    env map repeats a name it computes itself, where chart 1.x rendered a
+    second env entry that won. `EXECUTIONS_TIMEOUT`,
+    `EXECUTIONS_TIMEOUT_MAX`, `EXECUTIONS_DATA_PRUNE`,
+    `EXECUTIONS_DATA_MAX_AGE`, `EXECUTIONS_DATA_PRUNE_MAX_COUNT`,
+    `EXECUTIONS_DATA_HARD_DELETE_BUFFER`,
+    `EXECUTIONS_DATA_PRUNE_HARD_DELETE_INTERVAL`,
+    `EXECUTIONS_DATA_PRUNE_SOFT_DELETE_INTERVAL` and
+    `N8N_DEPLOYMENT_ARTIFACT` are now reserved. Use `n8n_execution_timeout`,
+    `n8n_execution_timeout_max`, `n8n_pruning_max_age` and
+    `n8n_pruning_max_count` instead. Pruning on/off and the hard-delete
+    buffer and intervals are fixed by the module and can no longer be
+    overridden. If you set `EXECUTIONS_DATA_PRUNE = "false"`, removing it
+    turns pruning on: raise `n8n_pruning_max_age` and `n8n_pruning_max_count`
+    first, or stay on the previous module version.
+  - **`$(VAR)` references are no longer expanded.** Literal values now reach
+    pods through ConfigMap data loaded with `envFrom`, and Kubernetes only
+    expands `$(VAR)` in explicit `env[].value` entries. A value such as
+    `HTTPS_PROXY = "$(HTTP_PROXY)"` now arrives as that literal text. Write
+    the full value instead.
+  - **Literal values are readable from ConfigMaps.** Anyone who can read
+    ConfigMaps in the n8n namespace can read them, which includes
+    `n8n_otel_exporter_otlp_headers` and `n8n_log_streaming_destinations`.
+    Use `n8n_otel_exporter_otlp_headers_secret_ref` for collector
+    credentials.
   - The Kubernetes Secret `secretRefs.existingSecret` points at
     (`kubernetes_secret.n8n`, or the caller's own Secret via
     `n8n_encryption_key_secret_ref`) is now read for only `N8N_ENCRYPTION_KEY`.
@@ -40,6 +74,11 @@ this project adheres to the stability contract in
     still carry a second key, `N8N_LICENSE_ACTIVATION_KEY`, on the
     module-managed license path — that key reaches the chart independently
     through `license.existingSecret`, not through `secretRefs.existingSecret`.)
+    The module-managed Secret still writes `N8N_HOST`, `N8N_PORT` and
+    `N8N_PROTOCOL` with their 0.6.0 values, unread by chart 2.0, so a chart
+    1.x pod that starts during the upgrade or after a rollback can still
+    start. They will be removed once rolling back to chart 1.x is no longer
+    supported.
   - n8n's public editor and webhook URLs, for n8n images that already
     satisfy the chart's minimum supported version, are now set via the
     chart's `editor.url` / `webhook.url` values (derived from `n8n_domain`
@@ -64,8 +103,9 @@ this project adheres to the stability contract in
     together with a non-`-1` `n8n_execution_concurrency_limit`, and
     `n8n_extra_env`/`n8n_worker_extra_env`/a worker pool's `extra_env` reject
     the raw `N8N_CONCURRENCY_PRODUCTION_LIMIT` name whenever
-    `n8n_worker_concurrency` is set, closing the same chart-2.0 render
-    failure reached a different way.
+    `n8n_worker_concurrency` is set or `n8n_execution_concurrency_limit` is
+    not `-1`, closing the same chart-2.0 render failure reached a different
+    way.
     **Behavior change for callers who left both at their old defaults:**
     under chart 1.x the module always sent both values and n8n actually ran
     workers at `n8n_execution_concurrency_limit`'s old default of `100`
@@ -87,7 +127,10 @@ this project adheres to the stability contract in
     its README), and `STATS_USERS=n8n` is set so `SHOW POOLS`/`STATS` work;
     the PgBouncer PodDisruptionBudget moves from `min_available = 1` to
     `max_unavailable = 1` so a drain can still take at most one of the now
-    8 replicas regardless of count. The example's README no longer claims
+    8 replicas regardless of count. The Kubernetes provider replaces a
+    PodDisruptionBudget whose `spec` changes, so the budget is deleted and
+    recreated during this apply: avoid node drains until it completes.
+    The example's README no longer claims
     2,400 req/s peaks: its average target is restated as about 580-700
     req/s, with the measured ceiling stated beside it.
   - Every n8n pod rolls once on the upgrade to chart 2.0, as on any chart

@@ -1072,6 +1072,19 @@ run "encryption_key_secret_ref_defaults_to_null_and_changes_nothing" {
     condition     = length(kubernetes_secret.n8n) == 1
     error_message = "Leaving n8n_encryption_key_secret_ref null must keep kubernetes_secret.n8n exactly as before"
   }
+
+  # Rollback compatibility with chart 1.x (see kubernetes_secret.n8n in
+  # n8n.tf): chart 2.0 ignores these keys, but chart 1.x main and webhook pods
+  # read all three as required secretKeyRefs, so they stay on the path 0.6.0
+  # wrote them, with the same values.
+  assert {
+    condition = (
+      kubernetes_secret.n8n[0].data["N8N_HOST"] == local.n8n_domain &&
+      kubernetes_secret.n8n[0].data["N8N_PORT"] == "5678" &&
+      kubernetes_secret.n8n[0].data["N8N_PROTOCOL"] == "http"
+    )
+    error_message = "kubernetes_secret.n8n must keep N8N_HOST/N8N_PORT/N8N_PROTOCOL with their 0.6.0 values so a chart 1.x pod can still start during an upgrade or after a rollback"
+  }
 }
 
 run "encryption_key_secret_ref_gates_the_shared_secret_to_zero" {
@@ -1117,6 +1130,13 @@ run "encryption_key_secret_ref_set_alone_keeps_the_shared_secret_for_the_license
   assert {
     condition     = !contains(keys(kubernetes_secret.n8n[0].data), "N8N_ENCRYPTION_KEY")
     error_message = "kubernetes_secret.n8n must not carry N8N_ENCRYPTION_KEY when n8n_encryption_key_secret_ref supplies it instead"
+  }
+
+  # 0.6.0 did not write the legacy keys on this path either (the Secret did
+  # not exist), so there is no chart 1.x pod that could read them from here.
+  assert {
+    condition     = length(setintersection(keys(kubernetes_secret.n8n[0].data), ["N8N_HOST", "N8N_PORT", "N8N_PROTOCOL"])) == 0
+    error_message = "kubernetes_secret.n8n must not carry the chart 1.x legacy keys when n8n_encryption_key_secret_ref is set"
   }
 
   assert {
@@ -7783,6 +7803,7 @@ run "otel_defaults_off" {
     condition = (
       var.n8n_otel_exporter_otlp_endpoint == null &&
       var.n8n_otel_exporter_otlp_headers == null &&
+      var.n8n_otel_exporter_otlp_headers_secret_ref == null &&
       var.n8n_otel_exporter_service_name == null &&
       var.n8n_otel_traces_sample_rate == null &&
       var.n8n_otel_traces_include_node_spans == null &&
@@ -11402,6 +11423,247 @@ run "extra_env_rejects_execution_data_save_manual_executions_name" {
   }
 
   expect_failures = [var.n8n_extra_env]
+}
+
+# ── Chart-computed execution, pruning and artifact names ──────────────────────
+# Chart 2.0 computes these names itself from the module's executions.* values
+# and config.deploymentArtifact (templates/_env.tpl), and n8n.validateEnv fails
+# the render when env.shared or env.worker repeats one. On chart 1.x they were a
+# harmless second env entry, so callers may have them in n8n_extra_env. These
+# runs pin the plan-time rejection for every reserved name, through both
+# escape hatches, so the failure cannot move back to apply time.
+run "extra_env_rejects_every_chart_computed_execution_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "EXECUTIONS_TIMEOUT", value = "60" },
+      { name = "EXECUTIONS_TIMEOUT_MAX", value = "120" },
+      { name = "EXECUTIONS_DATA_PRUNE", value = "false" },
+      { name = "EXECUTIONS_DATA_MAX_AGE", value = "24" },
+      { name = "EXECUTIONS_DATA_PRUNE_MAX_COUNT", value = "100" },
+      { name = "EXECUTIONS_DATA_HARD_DELETE_BUFFER", value = "2" },
+      { name = "EXECUTIONS_DATA_PRUNE_HARD_DELETE_INTERVAL", value = "30" },
+      { name = "EXECUTIONS_DATA_PRUNE_SOFT_DELETE_INTERVAL", value = "90" },
+      { name = "N8N_DEPLOYMENT_ARTIFACT", value = "custom" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# The list check above passes as long as one entry is reserved, so assert the
+# full set directly against the local both escape hatches read.
+run "chart_computed_execution_names_are_all_reserved" {
+  command = plan
+
+  assert {
+    condition = length(setsubtract([
+      "EXECUTIONS_TIMEOUT",
+      "EXECUTIONS_TIMEOUT_MAX",
+      "EXECUTIONS_DATA_PRUNE",
+      "EXECUTIONS_DATA_MAX_AGE",
+      "EXECUTIONS_DATA_PRUNE_MAX_COUNT",
+      "EXECUTIONS_DATA_HARD_DELETE_BUFFER",
+      "EXECUTIONS_DATA_PRUNE_HARD_DELETE_INTERVAL",
+      "EXECUTIONS_DATA_PRUNE_SOFT_DELETE_INTERVAL",
+      "N8N_DEPLOYMENT_ARTIFACT",
+    ], local.n8n_managed_env_names_base)) == 0
+    error_message = "Every name chart 2.0 computes from executions.* or config.deploymentArtifact must be in local.n8n_managed_env_names_base, or n8n_extra_env passes plan and fails the Helm render."
+  }
+}
+
+run "worker_extra_env_rejects_chart_computed_pruning_name" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [
+      { name = "EXECUTIONS_DATA_PRUNE", value = "false" },
+    ]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
+
+# ── n8n_chart_version ────────────────────────────────────────────────────────
+# The module sends env through chart 2.0's env.shared / env.worker maps, which a
+# chart 1.x ignores, so a 1.x pin must fail at plan rather than start n8n
+# with no configuration.
+run "chart_version_rejects_a_1_x_release" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.16.0"
+  }
+
+  expect_failures = [var.n8n_chart_version]
+}
+
+run "chart_version_rejects_a_1_x_prerelease" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+  }
+
+  expect_failures = [var.n8n_chart_version]
+}
+
+run "chart_version_rejects_a_range" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "~> 2.0"
+  }
+
+  expect_failures = [var.n8n_chart_version]
+}
+
+run "chart_version_accepts_a_later_major" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "3.0.0"
+  }
+
+  assert {
+    condition     = helm_release.n8n.version == "3.0.0"
+    error_message = "n8n_chart_version must accept any chart major of 2 or higher."
+  }
+}
+
+# ── Worker pool extra_env vs pool concurrency ────────────────────────────────
+# Once any pool sets concurrency, the chart's worker-concurrency validation
+# rejects a literal N8N_CONCURRENCY_PRODUCTION_LIMIT anywhere in the user env,
+# including another pool's own extra_env.
+run "pool_extra_env_rejects_concurrency_production_limit_when_a_pool_sets_concurrency" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
+    n8n_worker_pools = [
+      { name = "gpu", concurrency = 5 },
+      { name = "bulk", extra_env = [{ name = "N8N_CONCURRENCY_PRODUCTION_LIMIT", value = "50" }] },
+    ]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "pool_extra_env_accepts_concurrency_production_limit_when_no_pool_sets_concurrency" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
+    n8n_worker_pools = [
+      { name = "bulk", extra_env = [{ name = "N8N_CONCURRENCY_PRODUCTION_LIMIT", value = "50" }] },
+    ]
+  }
+
+  assert {
+    condition     = var.n8n_worker_pools[0].extra_env[0].name == "N8N_CONCURRENCY_PRODUCTION_LIMIT"
+    error_message = "A pool's extra_env must keep accepting N8N_CONCURRENCY_PRODUCTION_LIMIT while no pool sets concurrency and both module-wide concurrency inputs are at their defaults."
+  }
+}
+
+# ── OTLP headers from a Secret ───────────────────────────────────────────────
+# A secretKeyRef value in env.shared renders into each container's explicit env
+# list, not the env ConfigMap, so collector credentials stay out of Terraform
+# state, the Helm release and the ConfigMaps.
+run "otel_headers_secret_ref_renders_a_secret_key_ref" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers" }
+  }
+
+  assert {
+    condition = (
+      local.n8n_otel_headers_env.N8N_OTEL_EXPORTER_OTLP_HEADERS.secretKeyRef.name == "otel-headers" &&
+      local.n8n_otel_headers_env.N8N_OTEL_EXPORTER_OTLP_HEADERS.secretKeyRef.key == "headers"
+    )
+    error_message = "n8n_otel_exporter_otlp_headers_secret_ref must render N8N_OTEL_EXPORTER_OTLP_HEADERS as a secretKeyRef, with key defaulting to \"headers\"."
+  }
+
+  assert {
+    condition     = local.n8n_env_shared.N8N_OTEL_EXPORTER_OTLP_HEADERS.secretKeyRef.name == "otel-headers"
+    error_message = "The secretKeyRef must reach env.shared."
+  }
+}
+
+run "otel_headers_literal_still_renders_a_string" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled               = true
+    n8n_otel_exporter_otlp_headers = "authorization=Bearer test"
+  }
+
+  assert {
+    condition     = nonsensitive(local.n8n_otel_headers_env.N8N_OTEL_EXPORTER_OTLP_HEADERS) == "authorization=Bearer test"
+    error_message = "n8n_otel_exporter_otlp_headers must keep rendering as a literal value."
+  }
+}
+
+run "otel_headers_defaults_render_nothing" {
+  command = plan
+
+  assert {
+    condition     = length(local.n8n_otel_headers_env) == 0
+    error_message = "With neither OTLP headers input set, nothing may be rendered."
+  }
+}
+
+run "otel_headers_secret_ref_with_master_off_triggers_check_warning" {
+  command = plan
+
+  variables {
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers" }
+  }
+
+  expect_failures = [check.otel_tuning_requires_master_switch]
+
+  assert {
+    condition     = !contains(keys(local.n8n_env_shared), "N8N_OTEL_EXPORTER_OTLP_HEADERS")
+    error_message = "With n8n_otel_enabled = false, the OTLP headers reference must not reach env.shared."
+  }
+}
+
+run "otel_headers_rejects_both_inputs" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers            = "authorization=Bearer test"
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers" }
+  }
+
+  expect_failures = [var.n8n_otel_exporter_otlp_headers_secret_ref]
+}
+
+run "otel_headers_secret_ref_rejects_an_invalid_name" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "Otel_Headers" }
+  }
+
+  expect_failures = [var.n8n_otel_exporter_otlp_headers_secret_ref]
+}
+
+run "otel_headers_secret_ref_rejects_an_invalid_key" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers", key = "bad key" }
+  }
+
+  expect_failures = [var.n8n_otel_exporter_otlp_headers_secret_ref]
 }
 
 # ── EKS control-plane hardening (issue #27) ───────────────────────────────────
