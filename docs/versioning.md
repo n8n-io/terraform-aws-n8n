@@ -18,7 +18,7 @@ waiting for a user to report a version nobody re-checked.
 | `random` provider constraint | `versions.tf` (root, `examples/large`) | Patch-safe |
 | `time` provider constraint | `versions.tf` (root only) | Patch-safe |
 | `required_version` (Terraform CLI floor) | 13 `versions.tf`/`providers.tf` files: root, `modules/controllers`, and every `examples/*` | Verification-required. Must stay equal to `TF_FLOOR_VERSION` (below) |
-| `n8n_chart_version` default | `variables.tf` | Minor-required |
+| `n8n_chart_version` default | `variables.tf` | Minor-required for same-major bumps; a chart major (e.g. `1.x` to `2.x`) is Verification-required — see [Chart 2.0 upgrade requirements](#chart-20-upgrade-requirements) |
 | `lbc_chart_version`, `cluster_autoscaler_chart_version`, `metrics_server_chart_version`, `keda_chart_version` defaults | `variables.tf` | Minor-required |
 | `kubernetes_version` default | `variables.tf`, and independently in `examples/customer-managed-cluster` and `examples/customer-managed-everything` | Verification-required (stays `1.35`; see below for why `1.36` isn't a currency gap) |
 | `db_engine_version` default | `variables.tf` | Minor-required |
@@ -66,11 +66,26 @@ accepts, not only the default: metrics-server chart `3.14.0` moved the
 floor from `1.31` to `1.34` in a chart minor, which the CHANGELOG has to
 say and the variable description has to carry.
 
-**Verification-required.** A provider major, the Terraform CLI floor, or
-`kubernetes_version`. These carry real breaking-change risk (see the Kubernetes
-provider 3.0 entry in `README.md`'s Compatibility section for a worked
-example) and are release-sized work in their own right, matching this
-project's past provider bumps (see `CHANGELOG.md`'s `v0.2.0` entry). Needs, at
+**Verification-required.** A provider major, the Terraform CLI floor,
+`kubernetes_version`, or an n8n chart major (e.g. `1.x` to `2.x`). These carry
+real breaking-change risk (see the Kubernetes provider 3.0 entry in
+`README.md`'s Compatibility section for a worked example) and are
+release-sized work in their own right, matching this project's past provider
+bumps (see `CHANGELOG.md`'s `v0.2.0` entry). A chart major needs the same
+rigor as a provider major plus the chart-specific steps the Minor-required
+tier lists (re-verification of `docs/helm-chart-coverage.md`, a passing
+`tests/scripts/check-main-chart.sh`): read the chart's own `UPGRADING.md` and
+architecture decision records in full, not only its `values.yaml` diff, since
+a chart major can restructure how values reach the container (as chart 2.0's
+move from per-container `extraEnv` lists to `env.<component>` maps did; see
+[Chart 2.0 upgrade requirements](#chart-20-upgrade-requirements) below) in
+ways a values-yaml diff alone does not surface. Before a numbered chart
+release exists, `N8N_CHART_DIR=<local checkout>` lets
+`tests/scripts/check-main-chart.sh` and
+`tests/scripts/check-helm-chart-coverage.sh` verify against a chart branch
+instead of a published version; see each script's header and
+`docs/helm-chart-coverage.md`'s own instructions.
+Needs, at
 minimum: the upstream release's own upgrade guide read in full, a plan-time
 diff against every affected resource, an updated `README.md` Compatibility
 entry with an upgrade note, and a CHANGELOG entry. A resource-type rename this
@@ -166,19 +181,23 @@ templates changed, plus a new `extraObjects.yaml`; no `deployment-*.yaml`
 changed, so queue-mode main pods still carry no task-runner sidecar and the
 capacity model's worker-only accounting extends to `1.15.0`.
 
-The one change that reaches this module is n8n-io/n8n-hosting#175: the chart
+The one change that reached this module is n8n-io/n8n-hosting#175: the chart
 renders `database.ssl.enabled` as `DB_POSTGRESDB_SSL_ENABLED` instead of
-`DB_POSTGRESDB_SSL`. The module sets that name through `config.extraEnv`, and
-sends `database.ssl.*` only while a CA is delivered, so on the upstream chart
-at a numbered `1.15.0` or newer (prereleases excluded) it omits its own entry
-in exactly that case
-(`local.n8n_chart_renders_postgres_ssl_enabled`). Keeping its entry there would
-give every container the name twice; in every other case the chart does not
-render the name, or the module cannot verify that it does, so the module's
-entry stays. A bump that moves this gate, or a chart that renames the
-key again, is caught by `tests/scripts/check-main-chart.sh`, which counts the
-name per container with and without a CA. The mocked suites cannot catch it:
-`helm_release.values` is unknown under plan mocks.
+`DB_POSTGRESDB_SSL`. The module sets that name through `env.shared`, and
+sends `database.ssl.*` only while a CA is delivered, so at the time it
+added a chart-version gate that omitted the module's own entry whenever the
+pinned chart was known to render `DB_POSTGRESDB_SSL_ENABLED` itself:
+unconditionally for any chart major `>= 2`, and for chart `1.x` only on the
+upstream repository at a numbered `1.15.0` or newer (`1.x` prereleases were
+excluded from that check). Keeping its entry there would have given every
+container the name twice. That gate is gone now that `n8n_chart_version`
+requires chart major `2` or higher: every accepted chart renders the name
+unconditionally, so the module unconditionally omits its own entry whenever
+a CA is delivered, with no version check left to drop. A chart that renames
+the key again is still caught by `tests/scripts/check-main-chart.sh`, which
+checks the shared env ConfigMap's rendered data with and without a CA. The
+mocked suites cannot catch it: `helm_release.values` is unknown under plan
+mocks.
 
 The same release's upgrade note, that `database.ssl.enabled: true` now actually
 negotiates TLS and verifies the certificate, does not affect this module,
@@ -214,6 +233,76 @@ in what the chart itself renders:
   `containerSecurityContext`, and `secretRefs.env.N8N_ENCRYPTION_KEY_FILE`.
 
 See [Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1150-to-1160).
+
+## Chart 2.0 upgrade requirements
+
+The default moves from `1.16.0` to `2.0.0-rc.1`, a chart 2.0 release
+candidate published at the existing default `n8n_chart_repository`
+(`oci://ghcr.io/n8n-io/n8n-helm-chart`; appVersion `2.44.5`, n8n 2.x). This
+module's `n8n.tf`/`locals.tf` emit chart-2.0-shaped values (`env.*` maps,
+`editor.url`, `webhook.url` — see `docs/helm-chart-coverage.md`), verified
+directly against the published `2.0.0-rc.1` chart (`tests/scripts/check-main-chart.sh`
+and `tests/scripts/check-helm-chart-coverage.sh` both pass against it with
+no `N8N_CHART_DIR` override needed).
+
+This is a Verification-required bump, not Minor-required, despite moving
+only a chart version: decision `n8n-io/n8n-hosting`
+`decisions/0012-env-as-per-component-maps.md` removes
+`config.extraEnv`/`queueMode.workerExtraEnv`/`webhook.extraEnv`/
+`executions.extraEnv`/`s3.storage.extraEnv`/`secretRefs.env.N8N_HOST`/
+`N8N_PORT`/`N8N_PROTOCOL` outright; any `terraform-azurerm-n8n`- or
+`terraform-google-n8n`-style caller still on chart `1.x` conventions would
+need the same rewrite this module just went through, not a values tweak.
+As a release candidate rather than a numbered release, `2.0.0-rc.1` is
+still a Verification-required bump, governed by the same tier as any other
+chart major: the Verification-required steps reachable *before* chart 2.0's
+stable release have been completed for `2.0.0-rc.1`. The chart's own
+`UPGRADING.md` was read in full (not only a `values.yaml` diff): its five
+removed `extraEnv` paths are what drove the five value removals this
+module's chart 2.0 migration makes (`config.extraEnv`/
+`queueMode.workerExtraEnv`/`webhook.extraEnv`/`executions.extraEnv`/
+`s3.storage.extraEnv`). A plan-time diff against the affected resources was
+run: a real `terraform plan` of `examples/small` against a live cluster on
+`2.0.0-rc.1`, whose `helm_release.n8n` values were independently rendered
+with `helm template` against `2.0.0-rc.1` and checked for unknown keys.
+Also completed: an upgrade guide section (see
+[Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1160-to-200-rc1)),
+`README.md`/`CHANGELOG.md` entries, a live functional deploy of
+`examples/small` with its smoke test passing (32/0), and a live in-place
+upgrade to n8n `3.0.0` on that deployment with its smoke test passing
+(32/0). Deferred to the stable `2.0.0` pin, because they depend on the
+stable release itself: re-running the `examples/medium`/`examples/large`
+benchmarks on that release (the current numbers are from a pre-release
+chart 2.0 build, not `2.0.0-rc.1` — see
+[Upgrading n8n](./upgrading-n8n.md#moving-from-chart-1160-to-200-rc1)), and
+worker-pools verification (`n8n_worker_pools_chart_verified`).
+
+**What still has to happen before this module's `n8n_chart_version` default
+can move to a stable (non-`-rc.`) chart 2.0 release:**
+
+- The chart repository has to actually publish a stable `2.x` tag. Re-run
+  `tests/scripts/check-main-chart.sh` and
+  `tests/scripts/check-helm-chart-coverage.sh` against it (no override
+  needed, since both resolve the pin directly from
+  `oci://ghcr.io/n8n-io/n8n-helm-chart`), and
+  `tests/scripts/chart-values-diff.sh` to diff it against `2.0.0-rc.1`.
+- `docs/helm-chart-coverage.md`'s "Verified against chart version" line
+  currently names `2.0.0-rc.1`; move it to the stable release version once
+  one exists (the doc's own intro spells out exactly what to change).
+- `queueMode.workerGroups` (this module's `n8n_worker_pools`) is not in
+  `2.0.0-rc.1`: it lives only on the chart's separate, older
+  `preview/worker-pools` branch. Confirm whether that preview gets rebased
+  onto 2.0 (or workerGroups lands on 2.0's main branch some other way) before
+  relying on worker pools against a published 2.0 release; this module
+  cannot verify that combination today, and `n8n_worker_pools_chart_verified`
+  no longer treats an upstream `-rc.<N>` candidate as exempt (see
+  `worker-pools.tf`).
+- Re-run the live-deploy verification scripts
+  (`tests/scripts/verify-custom-image.sh`,
+  `tests/scripts/verify-worker-pools.sh`, `tests/scripts/smoke-test.sh`)
+  against a real cluster once a stable
+  release exists: they exercise `helm_release.n8n`'s actual values, which
+  `check-main-chart.sh`'s mock-free-but-plan-mocked-provider setup cannot.
 
 ## Controller chart: AWS Load Balancer Controller 3.6.0
 

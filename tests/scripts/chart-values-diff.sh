@@ -7,30 +7,51 @@
 # that docs/versioning.md's Minor-required tier depends on) into one command
 # instead of a remembered `helm show values` invocation typed twice.
 # Never writes or bumps a pin: it only reads variables.tf and calls `helm
-# show values`. Exits 0 once both `helm show values` calls succeed and
-# `diff` ran, regardless of whether a diff was found; exits 1 on bad usage,
-# a missing tool, a failed `helm show values` call (network/registry issue,
-# bad candidate version), or a `diff` error.
+# show values`. Exits 0 once both sides of the diff are obtained and `diff`
+# ran, regardless of whether a diff was found; exits 1 on bad usage, a
+# missing tool, a failed `helm show values` call (network/registry issue, bad
+# candidate version), or a `diff` error.
 # Run it BEFORE moving n8n_chart_version's default: it reads the pin from
 # variables.tf, so once the default already equals the candidate there is
 # nothing left to compare.
 # Deciding whether a diff is worth exposing (or requires a module change) is
 # still a human call — see docs/versioning.md.
 #
+# N8N_CHART_DIR: diff the pinned chart's values.yaml against a local chart
+# checkout instead of `helm show values`-ing a released <candidate-version>.
+# Useful against a chart still in review (no released version to pull). When
+# set, <candidate-version> is optional and used only as a display label for
+# the diff header; the candidate side is read from
+# "$N8N_CHART_DIR/values.yaml" directly. Resolved to an absolute path before
+# this script cd's to the repo root, so a relative value is interpreted
+# relative to the directory the script was invoked from, not the repo.
+#
 # Usage: tests/scripts/chart-values-diff.sh <candidate-version>
 #   e.g. tests/scripts/chart-values-diff.sh 1.12.0
+#        N8N_CHART_DIR=/path/to/chart tests/scripts/chart-values-diff.sh [label]
 # Requires: helm. No terraform, no AWS credentials, no cluster.
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+if [ -n "${N8N_CHART_DIR:-}" ]; then
+  N8N_CHART_DIR="$(cd "$N8N_CHART_DIR" && pwd)" || { echo "N8N_CHART_DIR not found: $N8N_CHART_DIR" >&2; exit 1; }
+fi
 cd "$REPO_ROOT" || exit 1
 
 CANDIDATE="${1:-}"
-if [ "$#" -ne 1 ] || [ -z "$CANDIDATE" ]; then
-  echo "Usage: $0 <candidate-version>" >&2
-  echo "  e.g.  $0 1.12.0" >&2
-  exit 1
+if [ -z "${N8N_CHART_DIR:-}" ]; then
+  if [ "$#" -ne 1 ] || [ -z "$CANDIDATE" ]; then
+    echo "Usage: $0 <candidate-version>" >&2
+    echo "  e.g.  $0 1.12.0" >&2
+    exit 1
+  fi
+else
+  if [ "$#" -gt 1 ]; then
+    echo "Usage: N8N_CHART_DIR=/path/to/chart $0 [label]" >&2
+    exit 1
+  fi
+  [ -z "$CANDIDATE" ] && CANDIDATE="$N8N_CHART_DIR"
 fi
 
 command -v helm >/dev/null 2>&1 || { echo "Required tool missing: helm" >&2; exit 1; }
@@ -44,7 +65,7 @@ if [ -z "$PINNED" ]; then
   exit 1
 fi
 
-if [ "$PINNED" = "$CANDIDATE" ]; then
+if [ -z "${N8N_CHART_DIR:-}" ] && [ "$PINNED" = "$CANDIDATE" ]; then
   echo "Candidate $CANDIDATE is already the pinned version; nothing to diff." >&2
   exit 0
 fi
@@ -74,8 +95,13 @@ echo >&2
 
 helm show values "$CHART_REF" --version "$PINNED" >"$TMP_DIR/pinned.yaml" ||
   { echo "helm show values failed for pinned version $PINNED" >&2; exit 1; }
-helm show values "$CHART_REF" --version "$CANDIDATE" >"$TMP_DIR/candidate.yaml" ||
-  { echo "helm show values failed for candidate version $CANDIDATE" >&2; exit 1; }
+if [ -n "${N8N_CHART_DIR:-}" ]; then
+  cp "$N8N_CHART_DIR/values.yaml" "$TMP_DIR/candidate.yaml" ||
+    { echo "Could not read $N8N_CHART_DIR/values.yaml" >&2; exit 1; }
+else
+  helm show values "$CHART_REF" --version "$CANDIDATE" >"$TMP_DIR/candidate.yaml" ||
+    { echo "helm show values failed for candidate version $CANDIDATE" >&2; exit 1; }
+fi
 
 diff -u --label "values.yaml ($PINNED)" --label "values.yaml ($CANDIDATE)" \
   "$TMP_DIR/pinned.yaml" "$TMP_DIR/candidate.yaml"

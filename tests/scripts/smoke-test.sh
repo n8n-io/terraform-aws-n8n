@@ -6,11 +6,10 @@
 # main/worker/webhook-processor pod health, queue mode, Redis connectivity,
 # KEDA ScaledObject, HTTPS, API, and end-to-end execution. A missing
 # n8n-worker Deployment is a failure, not a different kind of install. The
-# main topology is detected from N8N_MULTI_MAIN_SETUP_ENABLED on the main
-# Deployment: unset means single-main (n8n_main_hpa_min_replicas = 1,
-# Business-tier path) and the script then asserts HPA min=max=1, Recreate and
-# no main PDB (chart 1.16.0+) or PDB minAvailable=0 (older charts) instead of
-# the multi-main leader-election checks.
+# main topology is detected from N8N_MULTI_MAIN_SETUP_ENABLED in the ConfigMaps
+# the main Deployment loads: unset means single-main (n8n_main_hpa_min_replicas
+# = 1, Business-tier path) and the script then asserts HPA min=max=1, Recreate
+# and no PDB object instead of the multi-main leader-election checks.
 #
 # Usage:
 #   # Run from the example directory — outputs are read automatically:
@@ -184,33 +183,47 @@ fi
 
 # The module runs one main pod without leader election when
 # n8n_main_hpa_min_replicas = 1 (Business-tier path). The topology signal
-# is the switch itself, N8N_MULTI_MAIN_SETUP_ENABLED on the main Deployment
-# spec, read from the spec rather than a pod so it works before the pod is
-# Ready. The chart only adds this env entry at all when
-# multiMain.enabled && license.enabled (n8n-helm-chart
-# templates/_configmap-env.tpl), and always via valueFrom.configMapKeyRef,
-# never a literal value, so detection checks the entry's presence (.name),
-# not a `.value` the chart never populates; querying `.value` here returned
-# empty for every topology and silently misdetected multi-main (the
-# module's own default) as single-main. The HPA clamp, strategy, and PDB
-# are then asserted, not used for detection, so a regression in any of them
-# fails instead of silently selecting the other branch.
+# is the switch itself, N8N_MULTI_MAIN_SETUP_ENABLED. Chart 2.0 delivers it as
+# a key in the main component's ConfigMap, loaded through envFrom, so it is
+# no longer an entry in the Deployment's env list; detection reads the
+# ConfigMaps the main container loads, from the spec rather than a pod so it
+# works before the pod is Ready. The chart only renders the key when
+# multiMain.enabled && license.enabled. The HPA clamp, strategy, and PDB are
+# then asserted, not used for detection, so a regression in any of them fails
+# instead of silently selecting the other branch.
 # An unreadable Deployment must not be mistaken for "flag unset".
 main_deploy_readable=true
-if ! multi_main_flag=$(kubectl get deployment n8n-main -n "$NAMESPACE" \
-    -o jsonpath='{.spec.template.spec.containers[?(@.name=="n8n-main")].env[?(@.name=="N8N_MULTI_MAIN_SETUP_ENABLED")].name}' \
+configmaps_readable=true
+multi_main_flag=""
+if ! main_env_configmaps=$(kubectl get deployment n8n-main -n "$NAMESPACE" \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="n8n-main")].envFrom[*].configMapRef.name}' \
     2>/dev/null); then
   main_deploy_readable=false
-  multi_main_flag=""
   fail "Cannot read Deployment n8n-main in namespace $NAMESPACE — topology unknown, falling back to multi-main checks"
+else
+  for _cm in $main_env_configmaps; do
+    if _val=$(kubectl get configmap "$_cm" -n "$NAMESPACE" \
+        -o jsonpath='{.data.N8N_MULTI_MAIN_SETUP_ENABLED}' 2>/dev/null); then
+      [[ -n "$_val" ]] && multi_main_flag="$_val"
+    else
+      configmaps_readable=false
+    fi
+  done
+  if [[ "$configmaps_readable" == false ]]; then
+    fail "Cannot read one or more ConfigMaps referenced by Deployment n8n-main's envFrom in namespace $NAMESPACE — topology unknown, falling back to multi-main checks"
+  fi
 fi
-if [[ "$main_deploy_readable" == false || -n "$multi_main_flag" ]]; then
+if [[ "$main_deploy_readable" == false || "$configmaps_readable" == false || -n "$multi_main_flag" ]]; then
   MAIN_TOPOLOGY="multi-main"
-  info "Multi-main topology (N8N_MULTI_MAIN_SETUP_ENABLED present on main Deployment)"
+  if [[ -n "$multi_main_flag" ]]; then
+    info "Multi-main topology (N8N_MULTI_MAIN_SETUP_ENABLED present in the main env ConfigMaps)"
+  else
+    info "Multi-main checks assumed: main Deployment or its env ConfigMaps could not be read (see failure above)"
+  fi
 else
   MAIN_TOPOLOGY="single-main"
   MAIN_MIN=1
-  info "Single-main topology (N8N_MULTI_MAIN_SETUP_ENABLED absent): expecting HPA 1/1, Recreate, no main PDB (chart 1.16.0+) or PDB minAvailable=0 (older charts)"
+  info "Single-main topology (N8N_MULTI_MAIN_SETUP_ENABLED absent): expecting HPA 1/1, Recreate, no PDB object"
 fi
 info "Checks: queue mode, HPA/KEDA, Redis, main topology"
 
@@ -421,8 +434,10 @@ main_pod=$(kubectl get pods -n "$NAMESPACE" \
 
 if [[ "$MAIN_TOPOLOGY" == "single-main" ]]; then
   # One main without leader election: the HPA must never allow a second main,
-  # upgrades must use Recreate so two mains never overlap, and node maintenance
-  # must be able to evict the only main (no main PDB, or minAvailable=0).
+  # upgrades must use Recreate so two mains never overlap, and chart 2.0
+  # renders no PodDisruptionBudget at all for a single main (pdb.yaml only
+  # renders once a second main can exist), so node maintenance can always
+  # evict it.
   # Runtime check in the pod, not the spec: this catches the flag from any
   # source (chart switch, extra env, valueFrom), not only a literal value.
   # The command always exits 0 and prints a sentinel when the variable is
@@ -464,27 +479,15 @@ if [[ "$MAIN_TOPOLOGY" == "single-main" ]]; then
     fail "Main Deployment strategy is '${main_strategy:-<unset>}' — expected Recreate for single-main"
   fi
 
-  # Chart 1.16.0 (n8n-io/n8n-hosting#228) renders no main PDB at all while main runs
-  # one replica; older charts still render the module's minAvailable=0
-  # budget. Both permit every voluntary eviction, so accept either shape.
-  # --ignore-not-found keeps a missing PDB (empty output, exit 0) apart from
-  # a failed lookup (non-zero exit), which must still fail loudly.
-  if pdb_lookup=$(kubectl get pdb n8n-main -n "$NAMESPACE" --ignore-not-found \
-      -o jsonpath='{.metadata.name}|{.spec.minAvailable}' 2>/dev/null); then
-    if [[ -z "$pdb_lookup" ]]; then
-      pass "Main has no PDB (chart 1.16.0+ skips a single-replica budget) — node drains can evict the only main"
-    else
-      pdb_min="${pdb_lookup#*|}"
-      pdb_allowed=$(kubectl get pdb n8n-main -n "$NAMESPACE" \
-        -o jsonpath='{.status.disruptionsAllowed}' 2>/dev/null || echo "")
-      if [[ "$pdb_min" == "0" ]]; then
-        pass "Main PDB minAvailable=0 (disruptionsAllowed=${pdb_allowed:-?}) — node drains can evict the only main"
-      else
-        fail "Main PDB minAvailable is '${pdb_min:-<unset>}' — expected no PDB (chart 1.16.0+) or minAvailable 0 for single-main"
-      fi
-    fi
+  if pdb_get_err=$(kubectl get pdb n8n-main -n "$NAMESPACE" 2>&1 >/dev/null); then
+    pdb_min=$(kubectl get pdb n8n-main -n "$NAMESPACE" \
+      -o jsonpath='{.spec.minAvailable}' 2>/dev/null || echo "")
+    fail "Main PDB exists (minAvailable=${pdb_min:-<unset>}) — expected no PDB object for a single main, otherwise node drains stall on it"
+  elif [[ "$pdb_get_err" == *"NotFound"* ]]; then
+    pass "No Main PDB object — node drains can evict the only main (chart 2.0 renders a main PDB only once a second main can exist)"
   else
-    fail "Main PDB lookup failed — expected no PDB (chart 1.16.0+) or minAvailable 0 for single-main"
+    fail "Cannot read PodDisruptionBudget n8n-main in namespace $NAMESPACE"
+    info "$pdb_get_err"
   fi
 
 elif [[ -n "$main_pod" ]]; then
@@ -497,6 +500,20 @@ elif [[ -n "$main_pod" ]]; then
   else
     warn "N8N_MULTI_MAIN_SETUP_ENABLED is not 'true' (got: '${multi_main:-<unset>}')"
     info "Expected when main replica count > 1"
+  fi
+
+  # Chart 2.0 renders the main PDB only once a second main can exist
+  # (mainReplicas > 1 or hpa.main.minReplicas > 1), which is exactly the
+  # multi-main case: at least one main must stay up during a voluntary
+  # disruption (node drain), rather than letting all mains go down at once.
+  pdb_min=$(kubectl get pdb n8n-main -n "$NAMESPACE" \
+    -o jsonpath='{.spec.minAvailable}' 2>/dev/null || echo "")
+  pdb_allowed=$(kubectl get pdb n8n-main -n "$NAMESPACE" \
+    -o jsonpath='{.status.disruptionsAllowed}' 2>/dev/null || echo "")
+  if [[ "$pdb_min" == "1" ]]; then
+    pass "Main PDB minAvailable=1 (disruptionsAllowed=${pdb_allowed:-?}) — at least one main stays up during a voluntary disruption"
+  else
+    fail "Main PDB minAvailable is '${pdb_min:-<unset>}' — expected 1 for multi-main"
   fi
 
   # Real line (n8n 2.x): "[Instance ID main-...] Leader is now this instance".

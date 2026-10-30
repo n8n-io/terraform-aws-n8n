@@ -41,7 +41,8 @@ clusters that cannot reach n8n's license server,
 `n8n_license_cert_secret_ref` (a caller-managed Secret holding an offline
 license certificate rendered as `N8N_LICENSE_CERT`). The three are mutually
 exclusive; exactly one must be set. The certificate renders through
-`config.extraEnv`, not the chart's `license.existingSecret` block; that
+`env.shared` as a `secretKeyRef`, not the chart's `license.existingSecret`
+block; that
 block's license helper only ever maps to `N8N_LICENSE_ACTIVATION_KEY`.
 `license.enabled` stays `true` on the certificate path because the chart
 also gates `N8N_MULTI_MAIN_SETUP_ENABLED` on `license.enabled`, not on which
@@ -73,10 +74,17 @@ notice, and a draft until upstream ships:** the chart side
 explicit `n8n_chart_version` and documents both an official GHCR preview
 build (published via n8n-io/n8n-hosting#191's `Preview chart` GitHub Action)
 and pushing a private preview build to your own registry; the module rejects
-every numbered `n8n_chart_version` release unless `n8n_worker_pools_chart_verified`
+every `n8n_chart_version` release unless `n8n_worker_pools_chart_verified`
 explicitly attests it, because an older chart accepts the key and silently
-renders nothing (a prerelease build is exempt automatically, taken at the
-caller's word).
+renders nothing. Only a prerelease tag starting with `preview.` (such as
+`2.0.0-preview.workerpools.1`, the tag the `Preview chart` action publishes)
+is exempt automatically, taken at the caller's word from the version string
+alone. An upstream `-rc.N` release candidate such as `2.0.0-rc.1` is cut
+from the chart's `main` branch rather than the worker-pools branch, so it
+does not carry the feature either. A `-beta.N` or `-alpha.N` build is in the
+same position for the same reason. No chart `2.x` build of
+`preview/worker-pools` exists yet, so the example cannot currently be
+deployed until upstream rebases that branch.
 
 Four **customer-managed examples**, also at `small` sizing, cover the
 `create_<x> = false` paths described in

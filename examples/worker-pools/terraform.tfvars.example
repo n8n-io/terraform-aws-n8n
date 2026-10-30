@@ -16,17 +16,21 @@ n8n_license_key = "your-enterprise-license-key-here"
 # queueMode.workerGroups. REQUIRED by this example: the module's default
 # chart predates the feature and would silently render no pools. That feature
 # (n8n-io/n8n-hosting#189) is merged to the chart's preview/worker-pools
-# branch but not released, so this is an official prerelease build published
-# from that branch via n8n-io/n8n-hosting#191's "Preview chart" GitHub
-# Action to oci://ghcr.io/n8n-io/n8n-helm-chart, the module's own default
-# n8n_chart_repository (no override needed below). If nobody has dispatched
-# that workflow yet, or you have no write access to n8n-io/n8n-hosting,
-# package a preview build yourself and push it to a registry you control
-# instead; see README.md, "Getting a chart that renders pools". Once the
-# feature is released, pin the released version here instead.
-n8n_chart_version = "1.11.0-preview.workerpools.1"
+# branch but not released. It must also be a chart 2.x prerelease: the
+# module's automatic prerelease exemption requires chart major 2 or higher,
+# because a pre-2.0 preview predates the chart 2.0 env.shared/env.worker
+# model and would leave n8n unconfigured. preview/worker-pools has not been
+# rebased onto that model, so no chart 2.x build of this feature exists yet
+# -- this example cannot currently be deployed. Once one does, it would be an
+# official prerelease published from the branch via n8n-io/n8n-hosting#191's
+# "Preview chart" GitHub Action to oci://ghcr.io/n8n-io/n8n-helm-chart, the
+# module's own default n8n_chart_repository (no override needed below), or a
+# preview build you package and push to a registry you control instead; see
+# README.md, "Getting a chart that renders pools". Once the feature is
+# released on a numbered version, pin that instead.
+n8n_chart_version = "2.0.0-preview.workerpools.1"
 # n8n_chart_repository = "oci://123456789012.dkr.ecr.us-east-1.amazonaws.com/n8n-helm-chart"  # only if using the private-mirror fallback
-# n8n_worker_pools_chart_verified = true  # only if that mirror serves a numbered (non-prerelease) build you have confirmed renders pools
+# n8n_worker_pools_chart_verified = true  # only if that mirror serves a numbered (non-prerelease) build, or a pre-2.0 preview, you have confirmed renders pools on the chart 2.0 env model
 
 # First n8n release that reads N8N_WORKER_POOLS_ENABLED and N8N_WORKER_POOL_NAME
 # is 2.39.0. The chart's floating `stable` tag may still be older, and an older

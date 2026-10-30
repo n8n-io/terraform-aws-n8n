@@ -34,6 +34,13 @@
 # and the two checks at the bottom of this file, and
 # examples/worker-pools/README.md for the exact command and a
 # private-mirror fallback.
+#
+# This feature's chart support also predates chart 2.0's env.shared/env.worker
+# model (decisions/0012-env-as-per-component-maps.md): queueMode.workerGroups
+# does not exist on the chart's main branch at all (2.0 and later), only on
+# preview/worker-pools, which has not been rebased onto 2.0. A pool's own
+# extra_env (below) is therefore left in its pre-2.0 {name, value} list shape,
+# unconverted -- see the comment on that field.
 
 locals {
   # First n8n release that reads N8N_WORKER_POOLS_ENABLED and
@@ -47,76 +54,106 @@ locals {
   # release-please cuts ship independently of it. There is no real floor to
   # compare against yet, so a numbered version only passes if the caller
   # explicitly attests it with n8n_worker_pools_chart_verified -- for example
-  # a private mirror serving a numbered build of the feature branch. A
-  # prerelease passes automatically, taken at the caller's word via the
-  # SemVer 2 "-prerelease" separator specifically, with no extra input
-  # needed. n8n_chart_version's own validation also allows an optional
-  # "+buildmetadata" suffix with no hyphen (e.g. "1.11.0+build.5"); Helm
-  # ignores build metadata when resolving a chart from an HTTPS repository,
-  # so that string can resolve to plain "1.11.0" -- the exact silent
-  # no-render case this guard exists to stop. Checking for the hyphen
-  # directly, rather than "fails a strict X.Y.Z match", is what keeps a
-  # build-metadata-only version from falling through as if it were a
-  # prerelease. Replace this whole local with a real floor and a numeric
-  # compare once n8n-io/n8n-hosting#189 merges to main and a numbered
-  # release carries the feature; n8n_worker_pools_chart_verified can retire
-  # at the same time.
+  # a private mirror serving a numbered build of the feature branch. Only one
+  # specific prerelease tag is exempt automatically, taken at the caller's
+  # word: a prerelease segment starting with "preview." (SemVer 2's
+  # "-prerelease" separator), the tag the preview/worker-pools branch's own
+  # `Preview chart` GitHub Action publishes (e.g.
+  # "2.0.0-preview.workerpools.1", n8n-io/n8n-hosting#191). Every other
+  # prerelease -- an upstream release candidate ("-rc.N", e.g.
+  # "2.0.0-rc.1"), a "-beta.N" or "-alpha.N" build, or anything else cut from
+  # main -- does not carry the feature and is not exempt: main does not have
+  # queueMode.workerGroups at all, regardless of what its prerelease tag is
+  # named, so only the one tag the feature branch actually publishes gets the
+  # automatic pass. n8n_chart_version's own validation also allows an
+  # optional "+buildmetadata" suffix with no hyphen (e.g. "1.11.0+build.5");
+  # Helm ignores build metadata when resolving a chart from an HTTPS
+  # repository, so that string can resolve to plain "1.11.0" -- the exact
+  # silent no-render case this guard exists to stop. Checking for the
+  # "-preview." prefix directly, rather than "any prerelease", is what keeps
+  # a build-metadata-only version and every other prerelease tag from
+  # falling through as if it carried the feature.
+  # Replace this whole local with a real floor and a numeric compare once
+  # n8n-io/n8n-hosting#189 merges to main and a numbered release carries the
+  # feature; n8n_worker_pools_chart_verified can retire at the same time.
   n8n_chart_renders_worker_pools = (
-    can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+-", var.n8n_chart_version)) ||
+    can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+-preview\\.", var.n8n_chart_version)) ||
     var.n8n_worker_pools_chart_verified
   )
 
   n8n_worker_groups = [
-    for p in var.n8n_worker_pools : {
-      # One group per pool, and the group is the pool: the chart allows a group
-      # with no poolName (extra workers on the default queue), but this module
-      # has n8n_worker_keda_{min,max}_replicas for sizing the default workers
-      # and does not need a second way to do it.
-      name     = p.name
-      poolName = p.name
+    for p in var.n8n_worker_pools : merge(
+      {
+        # One group per pool, and the group is the pool: the chart allows a group
+        # with no poolName (extra workers on the default queue), but this module
+        # has n8n_worker_keda_{min,max}_replicas for sizing the default workers
+        # and does not need a second way to do it.
+        name     = p.name
+        poolName = p.name
 
-      concurrency = coalesce(p.concurrency, var.n8n_worker_concurrency)
-      extraEnv    = p.extra_env
+        # Still the chart's pre-2.0 {name, value} list shape for
+        # queueMode.workerGroups[].extraEnv, unconverted: workerGroups exists
+        # only on the chart's preview/worker-pools branch (see the file header),
+        # which predates the chart 2.0 env.shared/env.worker/envFrom model
+        # (decisions/0012-env-as-per-component-maps.md) and has not been
+        # rebased onto it as of this module's chart 2.0 migration. There is no
+        # workerGroups on chart 2.0's main branch to verify this field's shape
+        # against at all. Leave this as the list shape until n8n-io/n8n-hosting
+        # #189 merges onto the 2.0 line and a render can confirm what
+        # workerGroups[].extraEnv looks like there -- do not guess at a map
+        # conversion here the way n8n_worker_extra_env's env.worker got.
+        extraEnv = p.extra_env
 
-      resources = {
-        requests = {
-          cpu    = coalesce(p.cpu_request, var.n8n_worker_cpu_request)
-          memory = coalesce(p.memory_request, var.n8n_worker_memory_request)
+        resources = {
+          requests = {
+            cpu    = coalesce(p.cpu_request, var.n8n_worker_cpu_request)
+            memory = coalesce(p.memory_request, var.n8n_worker_memory_request)
+          }
+          limits = {
+            cpu    = coalesce(p.cpu_limit, var.n8n_worker_cpu_limit)
+            memory = coalesce(p.memory_limit, var.n8n_worker_memory_limit)
+          }
         }
-        limits = {
-          cpu    = coalesce(p.cpu_limit, var.n8n_worker_cpu_limit)
-          memory = coalesce(p.memory_limit, var.n8n_worker_memory_limit)
+
+        keda = {
+          minReplicaCount = p.min_replicas
+          maxReplicaCount = p.max_replicas
+          # Same threshold the module gives the default worker's scaler, so a
+          # pool's queue depth is read on the same scale as the default queue's.
+          jobsPerReplica = var.n8n_worker_keda_jobs_per_replica
+
+          # The same TLS and AUTH metadata the default worker's two triggers
+          # carry (see the merge sites in n8n.tf). The chart builds a pool's
+          # triggers itself from the queue name, so this is the only route the
+          # metadata has into them, and without it a pool's scaler talks
+          # plaintext to a TLS-only endpoint and the pool sits at min_replicas
+          # with nothing crashing to announce it. Empty on a deployment without
+          # transit encryption or AUTH, and the chart guards the block with
+          # `with`, so it renders nothing on that path.
+          #
+          # Verified on a live TLS cluster, including the counterfactual: removing
+          # enableTLS from one pool's triggers put its ScaledObject into
+          # READY=False and logged `connection to redis failed: i/o timeout` in
+          # the KEDA operator, and restoring it recovered. Those two are the
+          # signals to trust. `kubectl get hpa` is not: its TARGETS column read
+          # <unknown> for every worker HPA in both the healthy and the broken
+          # state, so it gives a false alarm on a working release and false
+          # reassurance on a broken one. The metric itself resolves through
+          # /apis/external.metrics.k8s.io.
+          triggerMetadata = local.keda_redis_auth_metadata
         }
-      }
-
-      keda = {
-        minReplicaCount = p.min_replicas
-        maxReplicaCount = p.max_replicas
-        # Same threshold the module gives the default worker's scaler, so a
-        # pool's queue depth is read on the same scale as the default queue's.
-        jobsPerReplica = var.n8n_worker_keda_jobs_per_replica
-
-        # The same TLS and AUTH metadata the default worker's two triggers
-        # carry (see the merge sites in n8n.tf). The chart builds a pool's
-        # triggers itself from the queue name, so this is the only route the
-        # metadata has into them, and without it a pool's scaler talks
-        # plaintext to a TLS-only endpoint and the pool sits at min_replicas
-        # with nothing crashing to announce it. Empty on a deployment without
-        # transit encryption or AUTH, and the chart guards the block with
-        # `with`, so it renders nothing on that path.
-        #
-        # Verified on a live TLS cluster, including the counterfactual: removing
-        # enableTLS from one pool's triggers put its ScaledObject into
-        # READY=False and logged `connection to redis failed: i/o timeout` in
-        # the KEDA operator, and restoring it recovered. Those two are the
-        # signals to trust. `kubectl get hpa` is not: its TARGETS column read
-        # <unknown> for every worker HPA in both the healthy and the broken
-        # state, so it gives a false alarm on a working release and false
-        # reassurance on a broken one. The metric itself resolves through
-        # /apis/external.metrics.k8s.io.
-        triggerMetadata = local.keda_redis_auth_metadata
-      }
-    }
+      },
+      # Pool concurrency if set, else the module-wide default, which is
+      # itself nullable (n8n_worker_concurrency's own chart-2.0 default is
+      # empty). coalesce() errors when every argument is null, so this uses a
+      # plain ternary instead and omits the key entirely in that case,
+      # matching the chart's own default (no --concurrency flag, n8n's
+      # default of 10 applies) exactly as queueMode.workerConcurrency does
+      # for the default worker deployment above.
+      (p.concurrency != null ? p.concurrency : var.n8n_worker_concurrency) == null ? {} : {
+        concurrency = p.concurrency != null ? p.concurrency : var.n8n_worker_concurrency
+      },
+    )
   ]
 }
 
@@ -133,12 +170,13 @@ locals {
 # The chart pairing is a hard stop, enforced as a precondition on
 # helm_release.n8n (n8n.tf) because it is a property of that resource and
 # because letting the apply proceed past a warning is exactly the silent
-# outcome described above. A prerelease version is exempt automatically,
-# which is how the official preview build (see the top of this file and
-# examples/worker-pools/README.md) is installed while no release carries
-# the feature; a numbered version passes only if the caller sets
-# n8n_worker_pools_chart_verified, for a private mirror serving a numbered
-# build it has already verified. The image pairing stays a warning, not a hard
+# outcome described above. A chart version whose prerelease segment starts
+# with "preview." is exempt automatically, which is how the official preview
+# build (see the top of this file and examples/worker-pools/README.md) is
+# installed while no release carries the feature; every other version --
+# numbered, "-rc.N", "-beta.N", "-alpha.N", or anything else -- passes only
+# if the caller sets n8n_worker_pools_chart_verified, for a private mirror
+# serving a build it has already verified. The image pairing stays a warning, not a hard
 # stop: n8n_image_tag is usually null (the chart's floating `stable`), which
 # the check cannot see, so it cannot be relied on to catch every case. Unlike
 # the chart pairing, an old image does not fail loudly -- it silently accepts
@@ -153,17 +191,16 @@ locals {
 locals {
   n8n_worker_pools_chart_error = join("", [
     "n8n_worker_pools declares ${length(var.n8n_worker_pools)} pool(s) but n8n_chart_version = \"${var.n8n_chart_version}\" ",
-    "is a numbered release that n8n_worker_pools_chart_verified does not attest, and no numbered ",
-    "n8n-hosting release carries queueMode.workerGroups yet: the feature (n8n-io/n8n-hosting#189) is ",
-    "merged only to the chart's preview/worker-pools branch. That chart accepts the key and renders ",
-    "nothing for it, so the release would apply cleanly with N8N_WORKER_POOLS_ENABLED switched on and no ",
-    "pool Deployment or ScaledObject behind it, and every project pinned to a pool would run on the ",
-    "default queue. Pin n8n_chart_version to a prerelease build that carries the feature (a version with ",
-    "a hyphen is taken at your word, e.g. an official preview build such as ",
-    "1.11.0-preview.workerpools.1 published to oci://ghcr.io/n8n-io/n8n-helm-chart via n8n-io/n8n-hosting's ",
-    "Preview chart GitHub Action; see examples/worker-pools/README.md), set ",
-    "n8n_worker_pools_chart_verified = true if this numbered version is a private mirror you have already ",
-    "confirmed renders queueMode.workerGroups, or remove the pools.",
+    "is not a chart this module can trust to render them: only a prerelease tag starting with \"preview.\" (e.g. ",
+    "2.0.0-preview.workerpools.1) is exempt automatically. Every other version -- a numbered release, an upstream ",
+    "release candidate (-rc.N), a -beta.N or -alpha.N build, or anything else cut from main -- needs ",
+    "n8n_worker_pools_chart_verified = true. No numbered n8n-hosting release carries queueMode.workerGroups yet: ",
+    "the feature (n8n-io/n8n-hosting#189) is merged only to the chart's preview/worker-pools branch. A chart ",
+    "without it accepts the key and renders nothing for it, so the release would apply cleanly with ",
+    "N8N_WORKER_POOLS_ENABLED switched on and no pool Deployment or ScaledObject behind it. Pin n8n_chart_version ",
+    "to a \"-preview.\" build that carries the feature (taken at your word), set ",
+    "n8n_worker_pools_chart_verified = true if this is a build you have already confirmed renders ",
+    "queueMode.workerGroups on the chart 2.0 env model, or remove the pools. See examples/worker-pools/README.md.",
   ])
 }
 

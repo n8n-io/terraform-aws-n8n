@@ -295,14 +295,17 @@ run "vpc_cni_addon_warm_ip_tuning" {
 
 
 # ── PgBouncer ────────────────────────────────────────────────────────────────
-# Required anti-affinity, four replicas, and the PDB together guarantee that
+# Required anti-affinity, eight replicas, and the PDB together guarantee that
 # no single-node failure or voluntary drain can take all n8n DB traffic down,
 # and that the client-connection budget stays above the fleet ceiling (see
 # the replica assertion's message). Anti-affinity and the PDB were the
-# live-validated fixes from PR #4; the replica count was raised from two
-# during load validation. Pinning all of it at plan time means a future
-# refactor can't silently regress to `preferred` anti-affinity or an
-# undersized replica count.
+# live-validated fixes from PR #4; the replica count was raised from two to
+# four during that load validation, then from four to eight on 2026-10-17
+# after `resources.limits.cpu = 500m` x 4 replicas was found to peg CPU at
+# 96-100% around 700-1,000 exec/s (PgBouncer is single-threaded, so only
+# more replicas — not a higher per-replica limit — raise the ceiling).
+# Pinning all of it at plan time means a future refactor can't silently
+# regress to `preferred` anti-affinity or an undersized replica count.
 
 run "pgbouncer_namespace_and_replicas" {
   command = plan
@@ -314,9 +317,9 @@ run "pgbouncer_namespace_and_replicas" {
 
   assert {
     # The kubernetes provider returns replicas as a string per its schema, not
-    # an int — compare to "4" rather than 4.
-    condition     = kubernetes_deployment.pgbouncer.spec[0].replicas == "4"
-    error_message = "PgBouncer must run 4 replicas: fewer is a client-connection budget below the fleet ceiling (460 pods x pool_size 20 is about 9,200 potential connections against MAX_CLIENT_CONN 3,000 per replica), and exceeding max_client_conn queues new client connections, recreating the very pool-acquisition backlog the pool sizing exists to prevent"
+    # an int — compare to "8" rather than 8.
+    condition     = kubernetes_deployment.pgbouncer.spec[0].replicas == "8"
+    error_message = "PgBouncer must run 8 replicas: the client-connection budget alone needs at least 4 (460 pods x pool_size 20 is about 9,200 potential connections against MAX_CLIENT_CONN 3,000 per replica; 3 replicas' 9,000 falls short, 4 replicas' 12,000 clears it), but PgBouncer is single-threaded, so only more replicas -- not a higher per-replica limit -- raise its CPU ceiling: 500m x 4 replicas was measured pegging 96-100% CPU around 700-1,000 exec/s, which is why the replica count was doubled to 8"
   }
 }
 
@@ -348,10 +351,16 @@ run "pgbouncer_pdb_and_clusterip_service" {
   command = plan
 
   assert {
-    # The kubernetes provider returns min_available as a string per its schema
-    # (the field also accepts percentages like "20%") — compare to "1" not 1.
-    condition     = kubernetes_pod_disruption_budget_v1.pgbouncer.spec[0].min_available == "1"
-    error_message = "PgBouncer PDB must require at least 1 replica available during voluntary disruptions"
+    # The kubernetes provider returns max_unavailable as a string per its
+    # schema (the field also accepts percentages like "20%") — compare to "1"
+    # not 1.
+    condition     = kubernetes_pod_disruption_budget_v1.pgbouncer.spec[0].max_unavailable == "1"
+    error_message = "PgBouncer PDB must allow at most 1 replica down during voluntary disruptions (max_unavailable=1 over 8 replicas), not the old min_available=1 shape that let 7 of 8 go down at once"
+  }
+
+  assert {
+    condition     = kubernetes_pod_disruption_budget_v1.pgbouncer.spec[0].min_available == null
+    error_message = "PgBouncer PDB must not set min_available: the policy is expressed as max_unavailable instead"
   }
 
   assert {

@@ -151,7 +151,7 @@ variables {
 
 # ── n8n_domain DNS label grammar and length limits ───────────────────────────
 # ACM's RequestCertificate pattern (and the ALB Ingress host, and n8n's own
-# N8N_HOST/WEBHOOK_URL) enforce a 63-character label and a 253-character total,
+# editor.url/webhook.url) enforce a 63-character label and a 253-character total,
 # and reject an empty label or one starting/ending with a hyphen. Each run
 # below trips exactly one of those arms.
 
@@ -342,7 +342,7 @@ run "defaults_produce_valid_plan" {
 # Only the presence and content of the Secret is assertable here. That the values
 # are *absent* from the Helm release is not: helm_release.n8n.values embeds the
 # Redis endpoint, so it is unknown at plan time, the same limitation the KEDA and
-# extraEnv sections further down work around.
+# env.shared sections further down work around.
 
 # ── Bring your own EKS cluster (create_eks) ──────────────────────────────────
 
@@ -710,6 +710,30 @@ run "task_runner_token_secret_is_independent_of_task_runners_toggle" {
   }
 }
 
+# Chart 2.0 reads the token only from a Secret (taskRunners.authToken.value is
+# gone). It must live in a module-managed Secret of its own, not in the core
+# Secret, which does not exist once the encryption key and the license both
+# come from caller-managed Secrets.
+run "task_runner_token_secret_survives_caller_managed_core_secrets" {
+  command = plan
+
+  variables {
+    n8n_license_key               = null
+    n8n_license_key_secret_ref    = { name = "caller-license" }
+    n8n_encryption_key_secret_ref = { name = "caller-core-secret" }
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.n8n) == 0 && kubernetes_secret_v1.n8n_task_runner_token.metadata[0].name == "n8n-task-runner-token"
+    error_message = "The task runner token Secret must exist even when kubernetes_secret.n8n does not."
+  }
+
+  assert {
+    condition     = length(kubernetes_secret_v1.n8n_task_runner_token.data) == 1 && contains(keys(kubernetes_secret_v1.n8n_task_runner_token.data), "N8N_RUNNERS_AUTH_TOKEN")
+    error_message = "The task runner token Secret must carry exactly the N8N_RUNNERS_AUTH_TOKEN key the chart is pointed at."
+  }
+}
+
 # ── Encryption key override ──────────────────────────────────────────────────
 
 run "encryption_key_defaults_to_generated" {
@@ -774,7 +798,7 @@ run "encryption_key_rejects_non_hex" {
 # ── License key secret ref ────────────────────────────────────────────────────
 # Lives in the shared kubernetes_secret.n8n. Setting this drops
 # N8N_LICENSE_ACTIVATION_KEY from that Secret's data rather than gating the
-# Secret itself, since the other three keys it carries are still needed.
+# Secret itself, since the encryption key may still need a module-managed home.
 
 run "license_key_secret_ref_defaults_to_null_and_changes_nothing" {
   command = plan
@@ -810,7 +834,7 @@ run "license_key_secret_ref_drops_the_key_from_the_shared_secret" {
 
   assert {
     condition     = !contains(keys(kubernetes_secret.n8n[0].data), "N8N_RUNNERS_AUTH_TOKEN")
-    error_message = "The task runner token never rides in kubernetes_secret.n8n; it reaches the chart as a literal Helm value regardless of n8n_license_key_secret_ref"
+    error_message = "The task runner token never rides in kubernetes_secret.n8n; it lives in kubernetes_secret_v1.n8n_task_runner_token regardless of n8n_license_key_secret_ref"
   }
 
   assert {
@@ -865,15 +889,15 @@ run "license_key_is_required_when_neither_input_is_set" {
 }
 
 # ── License certificate secret ref (offline activation, N8N_LICENSE_CERT) ────
-# Lives entirely in config.extraEnv (local.n8n_license_cert_env), not in the
+# Lives entirely in env.shared (local.n8n_license_cert_env), not in the
 # shared kubernetes_secret.n8n or the chart's license.existingSecret block, the
 # same way n8n_license_key_secret_ref's own section above documents for the
 # key. helm_release.n8n.values is unknown at plan time under the mock
 # provider (see AGENTS.md, "Known mock provider limitations"), so these runs
-# assert at the local/variable-contract level: local.n8n_license_cert_env and
-# local.n8n_license_values, which helm_release.n8n renders verbatim. That the
-# cert entry actually lands in the rendered config.extraEnv list is verified
-# by a real terraform plan.
+# assert at the local/variable-contract level: local.n8n_license_cert_env,
+# local.n8n_env_shared and local.n8n_license_values, which helm_release.n8n
+# renders verbatim. That chart 2.0 renders the reference into the containers'
+# env list is verified by a real render (tests/scripts/check-main-chart.sh).
 
 run "license_cert_secret_ref_defaults_to_null_and_changes_nothing" {
   command = plan
@@ -884,7 +908,7 @@ run "license_cert_secret_ref_defaults_to_null_and_changes_nothing" {
   }
 }
 
-run "license_cert_secret_ref_drops_the_key_from_the_shared_secret_and_sets_extraenv" {
+run "license_cert_secret_ref_drops_the_key_from_the_shared_secret_and_sets_env_shared" {
   command = plan
 
   variables {
@@ -905,11 +929,18 @@ run "license_cert_secret_ref_drops_the_key_from_the_shared_secret_and_sets_extra
   assert {
     condition = (
       length(local.n8n_license_cert_env) == 1 &&
-      local.n8n_license_cert_env[0].name == "N8N_LICENSE_CERT" &&
-      local.n8n_license_cert_env[0].valueFrom.secretKeyRef.name == "caller-license-cert" &&
-      local.n8n_license_cert_env[0].valueFrom.secretKeyRef.key == "cert"
+      local.n8n_license_cert_env.N8N_LICENSE_CERT.secretKeyRef.name == "caller-license-cert" &&
+      local.n8n_license_cert_env.N8N_LICENSE_CERT.secretKeyRef.key == "cert"
     )
     error_message = "local.n8n_license_cert_env must carry exactly one N8N_LICENSE_CERT entry sourced from n8n_license_cert_secret_ref via secretKeyRef"
+  }
+
+  # Chart 2.0 treats a {secretKeyRef} map value in env.shared as a reference
+  # and renders it into each container's explicit env list. The value must
+  # reach env.shared unchanged, as a reference rather than a string.
+  assert {
+    condition     = local.n8n_env_shared.N8N_LICENSE_CERT.secretKeyRef.name == "caller-license-cert"
+    error_message = "N8N_LICENSE_CERT must reach env.shared as a secretKeyRef reference"
   }
 
   assert {
@@ -950,7 +981,7 @@ run "license_cert_secret_ref_key_can_be_overridden" {
   }
 
   assert {
-    condition     = local.n8n_license_cert_env[0].valueFrom.secretKeyRef.key == "n8n-license-cert"
+    condition     = local.n8n_license_cert_env.N8N_LICENSE_CERT.secretKeyRef.key == "n8n-license-cert"
     error_message = "An explicit key on n8n_license_cert_secret_ref must reach the N8N_LICENSE_CERT secretKeyRef"
   }
 }
@@ -1025,13 +1056,13 @@ run "rejects_overlong_license_cert_secret_ref_key" {
 }
 
 # ── Encryption key secret ref ─────────────────────────────────────────────────
-# The exception to the exception: secretRefs.existingSecret takes ONE Secret
-# name for all four of N8N_ENCRYPTION_KEY, N8N_HOST, N8N_PORT and
-# N8N_PROTOCOL, so setting this gates kubernetes_secret.n8n to zero entirely
-# rather than dropping one key from it, unlike the license key and task runner
-# token above. That leaves the license key and the task runner token with
-# nowhere to live unless both are also caller-supplied through their own
-# *_secret_ref inputs; the module rejects the plan otherwise. See
+# Chart 2.0's secretRefs.existingSecret reads only N8N_ENCRYPTION_KEY now (not
+# the old four-key N8N_HOST/N8N_PORT/N8N_PROTOCOL/N8N_ENCRYPTION_KEY Secret),
+# and the license key reaches the chart through the independent
+# license.existingSecret value. The two *_secret_ref inputs no longer have to
+# be set together: kubernetes_secret.n8n keeps existing, holding whichever of
+# the two keys still needs a module-managed home, as long as at least one of
+# n8n_encryption_key_secret_ref / n8n_license_key_secret_ref is left null. See
 # n8n_encryption_key_secret_ref's description.
 
 run "encryption_key_secret_ref_defaults_to_null_and_changes_nothing" {
@@ -1040,6 +1071,19 @@ run "encryption_key_secret_ref_defaults_to_null_and_changes_nothing" {
   assert {
     condition     = length(kubernetes_secret.n8n) == 1
     error_message = "Leaving n8n_encryption_key_secret_ref null must keep kubernetes_secret.n8n exactly as before"
+  }
+
+  # Rollback compatibility with chart 1.x (see kubernetes_secret.n8n in
+  # n8n.tf): chart 2.0 ignores these keys, but chart 1.x main and webhook pods
+  # read all three as required secretKeyRefs, so they stay on the path 0.6.0
+  # wrote them, with the same values.
+  assert {
+    condition = (
+      kubernetes_secret.n8n[0].data["N8N_HOST"] == local.n8n_domain &&
+      kubernetes_secret.n8n[0].data["N8N_PORT"] == "5678" &&
+      kubernetes_secret.n8n[0].data["N8N_PROTOCOL"] == "http"
+    )
+    error_message = "kubernetes_secret.n8n must keep N8N_HOST/N8N_PORT/N8N_PROTOCOL with their 0.6.0 values so a chart 1.x pod can still start during an upgrade or after a rollback"
   }
 }
 
@@ -1068,25 +1112,43 @@ run "encryption_key_secret_ref_gates_the_shared_secret_to_zero" {
   }
 }
 
-run "encryption_key_secret_ref_requires_the_license_ref_too" {
+run "encryption_key_secret_ref_set_alone_keeps_the_shared_secret_for_the_license_key" {
   command = plan
 
   variables {
     n8n_encryption_key_secret_ref = { name = "caller-core-secret" }
-    # n8n_license_key_secret_ref intentionally left unset, and n8n_license_key
-    # stays at its file-level default: kubernetes_secret.n8n no longer exists
-    # for it to land in.
+    # n8n_license_key_secret_ref intentionally left unset: the two no longer
+    # have to be set together, and kubernetes_secret.n8n must stay around to
+    # hold the license key alone.
   }
 
-  expect_failures = [var.n8n_encryption_key_secret_ref]
+  assert {
+    condition     = length(kubernetes_secret.n8n) == 1
+    error_message = "kubernetes_secret.n8n must keep existing for the license key when only n8n_encryption_key_secret_ref is set"
+  }
+
+  assert {
+    condition     = !contains(keys(kubernetes_secret.n8n[0].data), "N8N_ENCRYPTION_KEY")
+    error_message = "kubernetes_secret.n8n must not carry N8N_ENCRYPTION_KEY when n8n_encryption_key_secret_ref supplies it instead"
+  }
+
+  # 0.6.0 did not write the legacy keys on this path either (the Secret did
+  # not exist), so there is no chart 1.x pod that could read them from here.
+  assert {
+    condition     = length(setintersection(keys(kubernetes_secret.n8n[0].data), ["N8N_HOST", "N8N_PORT", "N8N_PROTOCOL"])) == 0
+    error_message = "kubernetes_secret.n8n must not carry the chart 1.x legacy keys when n8n_encryption_key_secret_ref is set"
+  }
+
+  assert {
+    condition     = kubernetes_secret.n8n[0].data["N8N_LICENSE_ACTIVATION_KEY"] == "test-license-key-not-real"
+    error_message = "kubernetes_secret.n8n must still carry the license key when n8n_license_key_secret_ref is left null"
+  }
 }
 
-# The cert path never wrote the license key into kubernetes_secret.n8n in the
-# first place (local.n8n_license_cert_env carries it instead, via a Secret
-# this module does not create), so n8n_license_cert_secret_ref satisfies this
-# coupling exactly as n8n_license_key_secret_ref does, with no misleading
-# "license_key_secret_ref must also be set" error on a path that never needed
-# a license key secret at all.
+# The cert path never writes the license key into kubernetes_secret.n8n
+# (local.n8n_license_cert_env carries it instead, via a Secret this module
+# does not create), so with the encryption key also caller-managed the
+# Secret would hold nothing at all and must not be created empty.
 run "encryption_key_secret_ref_accepts_the_license_cert_ref_instead" {
   command = plan
 
@@ -1108,8 +1170,6 @@ run "encryption_key_secret_ref_rejects_being_set_alongside_the_value" {
   variables {
     n8n_encryption_key            = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
     n8n_encryption_key_secret_ref = { name = "caller-core-secret" }
-    n8n_license_key               = null
-    n8n_license_key_secret_ref    = { name = "caller-core-secret" }
   }
 
   expect_failures = [var.n8n_encryption_key_secret_ref]
@@ -1120,8 +1180,6 @@ run "encryption_key_secret_ref_rejects_a_nonstandard_key" {
 
   variables {
     n8n_encryption_key_secret_ref = { name = "caller-core-secret", key = "custom-key" }
-    n8n_license_key               = null
-    n8n_license_key_secret_ref    = { name = "caller-core-secret" }
   }
 
   expect_failures = [var.n8n_encryption_key_secret_ref]
@@ -1470,7 +1528,7 @@ run "accepts_db_password_wo_at_the_128_character_limit" {
 # ── Database health-check ping tuning ─────────────────────────────────────────
 # Neither the chart nor n8n_extra_env can set these (DB_ is a module-managed
 # prefix), so these variables are the only route to them. Plan-time
-# variable-contract assertions only: the values ride config.extraEnv, whose
+# variable-contract assertions only: the values ride env.shared, whose
 # rendered content is unknown at plan time under the mock provider (see
 # AGENTS.md, "Known mock provider limitations"). Verify the wiring after a real
 # apply by inspecting the DB_PING_* environment variables on the n8n-main,
@@ -2032,7 +2090,7 @@ run "webhook_hpa_scale_up_stabilization_window_rejects_above_max" {
 }
 
 # ── V8 heap ceiling (NODE_OPTIONS) ────────────────────────────────────────────
-# Variable-contract assertions only. The value rides config.extraEnv, and
+# Variable-contract assertions only. The value rides env.shared, and
 # helm_release.values is unknown at plan time under the mock provider (see
 # AGENTS.md, "Known mock provider limitations"), so that NODE_OPTIONS is
 # actually rendered onto the pods is not assertable here.
@@ -2537,13 +2595,6 @@ run "db_snapshot_restore_with_the_encryption_key_secret_ref_is_quiet" {
     db_snapshot_identifier        = "n8n-postgres-pre-rebuild"
     db_storage_encrypted          = false
     n8n_encryption_key_secret_ref = { name = "byo-encryption-secret" }
-    # n8n_encryption_key_secret_ref gates kubernetes_secret.n8n entirely, so this
-    # must also be set; not what this test is about, just satisfying that rule.
-    # n8n_license_key must be nulled out too: the file-level default in this test
-    # file's own variables block sets it, which would otherwise collide with
-    # n8n_license_key_secret_ref below.
-    n8n_license_key            = null
-    n8n_license_key_secret_ref = { name = "byo-license-secret" }
   }
 
   assert {
@@ -7579,7 +7630,7 @@ run "custom_namespace_propagates_to_s3_binding" {
 # corrected defaults and the validators that prevent the regression. The Helm
 # values blob itself is unknown at plan time under the helm mock provider, so
 # we assert at the variable contract level: n8n.tf wires both vars through
-# verbatim into the extraEnv list.
+# verbatim into env.shared.
 
 run "log_defaults" {
   command = plan
@@ -7636,7 +7687,7 @@ run "log_output_accepts_console_and_file_combination" {
 # Both toggles map straight to n8n env vars and default to false so the env var
 # is omitted (n8n's own default applies). The Helm values blob is unknown at
 # plan time under the mock provider, so we assert at the variable contract
-# level; that the entries land in config.extraEnv is verified by a real
+# level; that the entries land in env.shared is verified by a real
 # terraform plan from the Terraform Cloud workspace.
 
 run "community_package_toggles_default_false" {
@@ -7734,8 +7785,8 @@ run "webhook_resources_decimal_cpu_below_threshold_triggers_check_warning" {
 # ── OpenTelemetry tracing toggles ─────────────────────────────────────────────
 # n8n_otel_enabled is the master switch (default false, contractually).
 # Each tuning variable defaults to null so that, when n8n_otel_enabled is
-# false, the whole config.extraEnv OTEL block collapses to []. The actual
-# extraEnv list lives inside helm_release.n8n.values (a JSON-encoded string)
+# false, the whole env.shared OTEL block collapses to {}. The actual
+# map lives inside helm_release.n8n.values (a JSON-encoded string)
 # and is awkward to inspect in plan-time tests; we assert at the variable
 # contract layer, plus we keep a regression guard that the master toggle's
 # default is false.
@@ -7752,6 +7803,7 @@ run "otel_defaults_off" {
     condition = (
       var.n8n_otel_exporter_otlp_endpoint == null &&
       var.n8n_otel_exporter_otlp_headers == null &&
+      var.n8n_otel_exporter_otlp_headers_secret_ref == null &&
       var.n8n_otel_exporter_service_name == null &&
       var.n8n_otel_traces_sample_rate == null &&
       var.n8n_otel_traces_include_node_spans == null &&
@@ -7870,7 +7922,7 @@ run "otel_tuning_set_with_master_on_plans_cleanly" {
 # Both toggles default to true (feature enabled, no env var set). When disabled
 # (false), they inject N8N_TEMPLATES_ENABLED=false or N8N_PERSONALIZATION_ENABLED=false.
 # The Helm values blob is unknown at plan time under the mock provider, so we
-# assert at the variable contract level; that the entries land in config.extraEnv
+# assert at the variable contract level; that the entries land in env.shared
 # is verified by a real terraform plan from the Terraform Cloud workspace.
 
 run "feature_toggles_default_enabled" {
@@ -7911,7 +7963,7 @@ run "feature_toggles_accept_false" {
 # destinations list is typed `any` (webhook/syslog/sentry shapes differ) and is
 # JSON-encoded into N8N_LOG_STREAMING_DESTINATIONS only when the master switch
 # is on. The Helm values blob is unknown at plan time under the mock provider,
-# so we assert at the variable contract level; the wiring into config.extraEnv
+# so we assert at the variable contract level; the wiring into env.shared
 # is verified by a real terraform plan.
 
 run "log_streaming_defaults_off" {
@@ -8012,9 +8064,9 @@ run "log_streaming_full_opt_in_plans_cleanly" {
 # N8N_LICENSE_DETACH_FLOATING_ON_SHUTDOWN is asserted at the variable-contract
 # level only: the Helm values blob is unknown at plan time under the mock
 # provider (helm_release depends on kubernetes_namespace, which is "(known
-# after apply)"), so the env var's actual value in config.extraEnv cannot be
+# after apply)"), so the env var's actual value in env.shared cannot be
 # asserted here. Verify the wiring with a real terraform plan against
-# n8n.tf's base env list.
+# n8n.tf's local.n8n_env_shared.
 
 run "license_detach_floating_on_shutdown_defaults_to_false" {
   command = plan
@@ -8034,7 +8086,7 @@ run "license_detach_floating_on_shutdown_defaults_to_false" {
 # helm_release.n8n directly: that resource depends on kubernetes_namespace,
 # which is "(known after apply)" under the mock provider, so its values blob
 # is unknown at plan time. The local has no such dependency, carries the exact
-# config.extraEnv entry n8n.tf renders, and is known at plan, so it is where
+# env.shared entry n8n.tf renders, and is known at plan, so it is where
 # the rendered value is actually assertable.
 
 run "proxy_hops_defaults_to_one" {
@@ -8044,7 +8096,7 @@ run "proxy_hops_defaults_to_one" {
     # The module's own ALB Ingress is one hop, so this must match it by
     # default or create_ingress = true deployments misattribute client IPs
     # and TLS termination state out of the box.
-    condition     = local.n8n_proxy_hops_env.value == "1"
+    condition     = local.n8n_proxy_hops_env["N8N_PROXY_HOPS"] == "1"
     error_message = "n8n_proxy_hops must default to 1 to match the module's own single-hop ALB Ingress."
   }
 }
@@ -8057,7 +8109,7 @@ run "proxy_hops_accepts_override_for_extra_hop" {
   }
 
   assert {
-    condition     = local.n8n_proxy_hops_env.value == "2"
+    condition     = local.n8n_proxy_hops_env["N8N_PROXY_HOPS"] == "2"
     error_message = "n8n_proxy_hops must accept an override for a caller-owned ingress with an extra hop in front of the ALB (e.g. CloudFront), and that override must reach the rendered N8N_PROXY_HOPS env entry."
   }
 }
@@ -8103,7 +8155,7 @@ run "proxy_hops_accepts_zero" {
   }
 
   assert {
-    condition     = local.n8n_proxy_hops_env == { name = "N8N_PROXY_HOPS", value = "0" }
+    condition     = local.n8n_proxy_hops_env == { N8N_PROXY_HOPS = "0" }
     error_message = "n8n_proxy_hops = 0 must be accepted and render N8N_PROXY_HOPS=0."
   }
 }
@@ -8125,7 +8177,7 @@ run "worker_pools_reject_proxy_hops_name" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "N8N_PROXY_HOPS", value = "2" }]
@@ -8138,7 +8190,7 @@ run "worker_pools_reject_proxy_hops_name" {
 # ── n8n_extra_env ────────────────────────────────────────────────────────────
 # Asserted at the variable-contract level: defaults, accepted shape, and the
 # three validation guards (non-empty name, no duplicates, no collision with
-# module-managed env vars). End-to-end wiring into config.extraEnv can't be
+# module-managed env vars). End-to-end wiring into env.shared can't be
 # checked here: helm_release.values depends on kubernetes_namespace (unknown at
 # plan time), and command = apply under the mock providers fails ARN validation
 # across IAM/RDS. Verify the wiring with a real terraform plan.
@@ -8282,10 +8334,11 @@ run "extra_env_rejects_log_streaming_managed_name" {
 }
 
 # Prefix-family guards: connection, license, and AWS-credential vars the chart
-# renders from module values must be rejected, because config.extraEnv is
-# appended last and Kubernetes resolves duplicate env names last-wins: an
-# override here would silently repoint the DB, disable Enterprise, or hijack
-# storage credentials.
+# renders from module values must be rejected: chart 2.0 fails the Helm
+# render outright on a name it also computes (n8n.validateEnv), rather than
+# the old chart's silent last-entry-wins Kubernetes env merge, so an
+# override here would otherwise break the render or hijack storage
+# credentials with no plan-time warning.
 run "extra_env_rejects_db_connection_name" {
   command = plan
 
@@ -8313,9 +8366,9 @@ run "extra_env_rejects_queue_connection_name" {
 # Regression guard for issue #147: chart 1.13.0 renders
 # N8N_GRACEFUL_SHUTDOWN_TIMEOUT from redis.worker.timeout unconditionally on
 # every n8n container (see the comment on this name in
-# local.n8n_managed_env_names). config.extraEnv is appended after it, and
-# Kubernetes keeps the last of two same-named entries, so a duplicate here
-# would silently override the chart's value with no plan- or apply-time error.
+# local.n8n_managed_env_names). Chart 2.0 fails the Helm render outright if
+# env.shared or env.worker also sets it (n8n.validateEnv), instead of the old
+# chart's silent last-entry-wins Kubernetes env merge.
 # Before this guard, the input accepted the name and the override went
 # unnoticed.
 run "extra_env_rejects_graceful_shutdown_timeout_name" {
@@ -10106,11 +10159,13 @@ run "credentials_overwrite_secret_ref_wires_default_key" {
     error_message = "The credential overwrite Secret must be mounted read-only at its dedicated directory."
   }
 
+  # Field by field rather than comparing the whole map to a literal: the
+  # conditional in locals.tf unifies its two branches into a type the literal
+  # does not share, and == across types is false rather than a type error.
   assert {
     condition = (
       length(local.n8n_credentials_overwrite_env) == 1 &&
-      local.n8n_credentials_overwrite_env[0].name == "CREDENTIALS_OVERWRITE_DATA_FILE" &&
-      local.n8n_credentials_overwrite_env[0].value == "/etc/n8n/credentials-overwrite/credentials-overwrite.json"
+      local.n8n_credentials_overwrite_env["CREDENTIALS_OVERWRITE_DATA_FILE"] == "/etc/n8n/credentials-overwrite/credentials-overwrite.json"
     )
     error_message = "CREDENTIALS_OVERWRITE_DATA_FILE must point at the projected default key."
   }
@@ -10129,7 +10184,7 @@ run "credentials_overwrite_secret_ref_wires_custom_key" {
   assert {
     condition = (
       local.n8n_extra_volumes[0].secret.items[0].key == "shared_oauth.json" &&
-      local.n8n_credentials_overwrite_env[0].value == "/etc/n8n/credentials-overwrite/shared_oauth.json"
+      local.n8n_credentials_overwrite_env["CREDENTIALS_OVERWRITE_DATA_FILE"] == "/etc/n8n/credentials-overwrite/shared_oauth.json"
     )
     error_message = "A custom Secret key must drive both the projected filename and CREDENTIALS_OVERWRITE_DATA_FILE."
   }
@@ -10235,11 +10290,11 @@ run "credentials_overwrite_secret_ref_rejects_overwrite_file_env_conflict" {
 }
 
 # The worker-only escape hatches reach the same variable. A pod's worker
-# container gets config.extraEnv first, carrying the module's own
-# CREDENTIALS_OVERWRITE_DATA_FILE, and then these afterwards; readEnv prefers
-# CREDENTIALS_OVERWRITE_DATA over the _FILE variant wherever it appears, so a
-# worker-only entry silently gives the workers a different set of credential
-# overwrites from the mains.
+# container gets env.shared first, carrying the module's own
+# CREDENTIALS_OVERWRITE_DATA_FILE, and env.worker (merged under it by the
+# chart) afterwards; readEnv prefers CREDENTIALS_OVERWRITE_DATA over the
+# _FILE variant wherever it appears, so a worker-only entry silently gives
+# the workers a different set of credential overwrites from the mains.
 run "credentials_overwrite_secret_ref_rejects_a_worker_extra_env_conflict" {
   command = plan
 
@@ -10278,7 +10333,7 @@ run "credentials_overwrite_secret_ref_rejects_a_pool_extra_env_conflict" {
     # incidentally trip the unrelated connection-budget check; this run is
     # only about the credentials_overwrite_secret_ref conflict.
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_credentials_overwrite_secret_ref = {
       name = "n8n-credentials-overwrite"
     }
@@ -10298,7 +10353,7 @@ run "credentials_overwrite_secret_ref_rejects_a_pool_extra_env_file_conflict" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_credentials_overwrite_secret_ref = {
       name = "n8n-credentials-overwrite"
     }
@@ -10479,8 +10534,8 @@ run "autoscaling_defaults_fit_the_default_node_group" {
   command = plan
 
   assert {
-    condition     = var.n8n_chart_version == "1.16.0" && local.n8n_peak_cpu_request_millis == 14200
-    error_message = "Upstream chart 1.16.0 must count runners only on workers: 14200m at default ceilings."
+    condition     = var.n8n_chart_version == "2.0.0-rc.1" && local.n8n_peak_cpu_request_millis == 14200
+    error_message = "Upstream chart 2.0.0-rc.1 must count runners only on workers: 14200m at default ceilings."
   }
 
   # No expect_failures: a warning from the capacity check would fail this run,
@@ -10626,71 +10681,6 @@ run "main_maximum_of_thirteen_fits_without_task_runners" {
   assert {
     condition     = kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook[0].spec[0].max_replicas == 4
     error_message = "Disabling task runners must not disturb the webhook ceiling"
-  }
-}
-
-run "explicit_1_12_0_keeps_worker_only_accounting" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.12.0"
-  }
-
-  assert {
-    condition     = local.n8n_peak_cpu_request_millis == 14200
-    error_message = "1.12.0 is independently verified worker-only-runner accounting, not just via the current default."
-  }
-}
-
-run "verified_chart_build_metadata_keeps_worker_only_accounting" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.12.0+build.5"
-  }
-
-  assert {
-    condition     = local.n8n_peak_cpu_request_millis == 14200
-    error_message = "Build metadata must not change verified release topology accounting."
-  }
-}
-
-run "older_chart_keeps_conservative_runner_accounting" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.11.0"
-  }
-
-  assert {
-    condition     = local.n8n_peak_cpu_request_millis == 15400
-    error_message = "Older charts must retain the main runner allowance."
-  }
-}
-
-run "preview_chart_keeps_conservative_runner_accounting" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.12.0-preview.workerpools.1"
-  }
-
-  assert {
-    condition     = local.n8n_peak_cpu_request_millis == 15400
-    error_message = "An unverified preview must retain the main runner allowance."
-  }
-}
-
-run "future_chart_keeps_conservative_runner_accounting" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.17.0"
-  }
-
-  assert {
-    condition     = local.n8n_peak_cpu_request_millis == 15400
-    error_message = "Future releases need topology verification before removing the main runner allowance."
   }
 }
 
@@ -10989,7 +10979,7 @@ run "equal_floor_and_ceiling_is_accepted" {
 
 # ── n8n_execution_data_storage_mode ──────────────────────────────────────────
 # Execution-data offload to S3 (issue #47). Asserted at the variable contract
-# level: the env var goes into config.extraEnv inside helm_release.n8n.values,
+# level: the env var goes into env.shared inside helm_release.n8n.values,
 # which is unknown at plan time under the mock provider (see "Known mock
 # provider limitations" in AGENTS.md). To verify end-to-end, run a real
 # `terraform plan` from examples/small/ with
@@ -11100,6 +11090,160 @@ run "extra_env_rejects_execution_data_storage_mode_name" {
   variables {
     n8n_extra_env = [
       { name = "N8N_EXECUTION_DATA_STORAGE_MODE", value = "s3" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# ── n8n_worker_concurrency / n8n_execution_concurrency_limit ─────────────────
+# n8n_worker_concurrency is nullable (default null, omitting
+# queueMode.workerConcurrency so n8n falls back to its own default of 10).
+# n8n_execution_concurrency_limit defaults to -1 (disabled,
+# executions.concurrency.productionLimit left to n8n). The two cannot both be
+# set to a non-default value at once: chart 2.0 fails the Helm render when
+# queueMode.workerConcurrency and executions.concurrency.productionLimit are
+# both set in queue mode, because n8n takes a worker's concurrency from the
+# production limit and ignores the flag whenever it is set. The cross-variable
+# validation is hosted on n8n_execution_concurrency_limit (Terraform forbids
+# two variables' validations from referencing each other).
+run "worker_concurrency_and_execution_concurrency_limit_default_to_disabled" {
+  command = plan
+
+  assert {
+    condition     = var.n8n_worker_concurrency == null
+    error_message = "n8n_worker_concurrency must default to null, omitting queueMode.workerConcurrency so n8n's own default (10) applies."
+  }
+
+  assert {
+    condition     = var.n8n_execution_concurrency_limit == -1
+    error_message = "n8n_execution_concurrency_limit must default to -1 (disabled), matching the chart's own default for executions.concurrency.productionLimit."
+  }
+}
+
+run "execution_concurrency_limit_accepts_a_value_alone" {
+  command = plan
+
+  variables {
+    n8n_execution_concurrency_limit = 2000
+  }
+
+  # No assert: helm_release.n8n.values is unknown at plan time under mocks (see
+  # the Worker pools section below), so there is no rendered value this run can
+  # check short of duplicating the resource's merge logic. The run still earns
+  # its keep by failing if a positive override ever trips
+  # n8n_execution_concurrency_limit's own validation while n8n_worker_concurrency
+  # stays null.
+}
+
+run "worker_concurrency_accepts_a_value_alone" {
+  command = plan
+
+  variables {
+    n8n_worker_concurrency = 20
+  }
+
+  # No assert, same reasoning as execution_concurrency_limit_accepts_a_value_alone
+  # above: this run's job is to fail if setting n8n_worker_concurrency alone ever
+  # trips its own or n8n_execution_concurrency_limit's validation while the limit
+  # stays at its -1 default.
+}
+
+# The chart 2.0 render-failure guard: setting both at once is rejected at plan
+# time instead of surfacing as a Helm render failure at apply time.
+run "rejects_worker_concurrency_set_together_with_an_execution_concurrency_limit" {
+  command = plan
+
+  variables {
+    n8n_worker_concurrency          = 20
+    n8n_execution_concurrency_limit = 2000
+  }
+
+  expect_failures = [var.n8n_execution_concurrency_limit]
+}
+
+run "worker_concurrency_rejects_below_one" {
+  command = plan
+
+  variables {
+    n8n_worker_concurrency = 0
+  }
+
+  expect_failures = [var.n8n_worker_concurrency]
+}
+
+# Regression guard: queueMode.workerConcurrency and a caller-supplied
+# N8N_CONCURRENCY_PRODUCTION_LIMIT in env.shared/env.worker both set each
+# worker's concurrency, and chart 2.0 fails the Helm render when both are
+# present -- even when n8n_execution_concurrency_limit stays at its -1
+# default, since the chart's validation walks the rendered env maps
+# directly, not just executions.concurrency.productionLimit. Before this
+# guard, a caller could reach that apply-time failure through n8n_extra_env
+# with n8n_execution_concurrency_limit's own cross-variable validation
+# never tripping (it only checks the dedicated input, not this literal name).
+run "extra_env_rejects_concurrency_production_limit_name_when_worker_concurrency_set" {
+  command = plan
+
+  variables {
+    n8n_worker_concurrency = 20
+    n8n_extra_env = [
+      { name = "N8N_CONCURRENCY_PRODUCTION_LIMIT", value = "50" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# The same name is NOT reserved while n8n_worker_concurrency stays null and
+# n8n_execution_concurrency_limit stays -1 (both defaults): the chart then
+# neither computes the name nor renders queueMode.workerConcurrency.
+run "extra_env_accepts_concurrency_production_limit_name_when_worker_concurrency_unset" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "N8N_CONCURRENCY_PRODUCTION_LIMIT", value = "50" },
+    ]
+  }
+
+  assert {
+    condition     = var.n8n_extra_env[0].name == "N8N_CONCURRENCY_PRODUCTION_LIMIT"
+    error_message = "N8N_CONCURRENCY_PRODUCTION_LIMIT must be usable through n8n_extra_env while n8n_worker_concurrency is null: the chart only renders queueMode.workerConcurrency, and risks the collision, when that flag is set."
+  }
+}
+
+# Also reserved while n8n_execution_concurrency_limit != -1 with
+# n8n_worker_concurrency left null: the chart then computes
+# N8N_CONCURRENCY_PRODUCTION_LIMIT itself from
+# executions.concurrency.productionLimit, and n8n.validateEnv rejects a
+# literal duplicate in env.shared/env.worker at render time.
+run "extra_env_rejects_concurrency_production_limit_name_when_limit_set" {
+  command = plan
+
+  variables {
+    n8n_execution_concurrency_limit = 50
+    n8n_extra_env = [
+      { name = "N8N_CONCURRENCY_PRODUCTION_LIMIT", value = "50" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# Also reserved while any n8n_worker_pools entry sets its own concurrency:
+# that renders the pool's queueMode.workerGroups[].concurrency, which the
+# chart's worker-concurrency validation treats the same as
+# queueMode.workerConcurrency above -- it walks n8n.userEnv as a whole, not
+# just the default worker's own entry.
+run "extra_env_rejects_concurrency_production_limit_name_when_pool_concurrency_set" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu", concurrency = 5 }]
+    n8n_extra_env = [
+      { name = "N8N_CONCURRENCY_PRODUCTION_LIMIT", value = "50" },
     ]
   }
 
@@ -11225,10 +11369,10 @@ run "executions_data_save_manual_executions_accepts_false" {
 
 # Regression guard: both keys became module-managed alongside the two inputs
 # above, so the escape hatch must reject them. The chart renders both keys
-# unconditionally, so an extraEnv override would silently duplicate the name
-# rather than being visibly rejected by Kubernetes (unlike, e.g., a
-# chart-ConfigMap-templated key), which is exactly the failure mode these
-# inputs exist to close.
+# unconditionally, so an env.shared duplicate would either fail the chart's
+# own render outright on chart 2.0 (n8n.validateEnv) or, on an older chart
+# that still renders a plain Kubernetes env list, silently duplicate the
+# name -- exactly the failure mode these inputs exist to close.
 run "extra_env_rejects_execution_data_save_on_success_name" {
   command = plan
 
@@ -11255,8 +11399,8 @@ run "extra_env_rejects_execution_data_save_on_error_name" {
 
 # The other two config.data keys are owned by n8n_executions_data_save_on_progress
 # and n8n_executions_data_save_manual_executions. The chart renders them through
-# the same unconditional path as the two above, so an extraEnv duplicate
-# reproduces the identical last-wins hazard; set the inputs instead.
+# the same unconditional path as the two above, so an env.shared duplicate
+# reproduces the identical hazard; set the inputs instead.
 run "extra_env_rejects_execution_data_save_on_progress_name" {
   command = plan
 
@@ -11279,6 +11423,285 @@ run "extra_env_rejects_execution_data_save_manual_executions_name" {
   }
 
   expect_failures = [var.n8n_extra_env]
+}
+
+# ── Chart-computed execution, pruning and artifact names ──────────────────────
+# Chart 2.0 computes these names itself from the module's executions.* values
+# and config.deploymentArtifact (templates/_env.tpl), and n8n.validateEnv fails
+# the render when env.shared or env.worker repeats one. On chart 1.x they were a
+# harmless second env entry, so callers may have them in n8n_extra_env. These
+# runs pin the plan-time rejection for every reserved name, through both
+# escape hatches, so the failure cannot move back to apply time.
+run "extra_env_rejects_every_chart_computed_execution_name" {
+  command = plan
+
+  variables {
+    n8n_extra_env = [
+      { name = "EXECUTIONS_TIMEOUT", value = "60" },
+      { name = "EXECUTIONS_TIMEOUT_MAX", value = "120" },
+      { name = "EXECUTIONS_DATA_PRUNE", value = "false" },
+      { name = "EXECUTIONS_DATA_MAX_AGE", value = "24" },
+      { name = "EXECUTIONS_DATA_PRUNE_MAX_COUNT", value = "100" },
+      { name = "EXECUTIONS_DATA_HARD_DELETE_BUFFER", value = "2" },
+      { name = "EXECUTIONS_DATA_PRUNE_HARD_DELETE_INTERVAL", value = "30" },
+      { name = "EXECUTIONS_DATA_PRUNE_SOFT_DELETE_INTERVAL", value = "90" },
+      { name = "N8N_DEPLOYMENT_ARTIFACT", value = "custom" },
+    ]
+  }
+
+  expect_failures = [var.n8n_extra_env]
+}
+
+# The list check above passes as long as one entry is reserved, so assert the
+# full set directly against the local both escape hatches read.
+run "chart_computed_execution_names_are_all_reserved" {
+  command = plan
+
+  assert {
+    condition = length(setsubtract([
+      "EXECUTIONS_TIMEOUT",
+      "EXECUTIONS_TIMEOUT_MAX",
+      "EXECUTIONS_DATA_PRUNE",
+      "EXECUTIONS_DATA_MAX_AGE",
+      "EXECUTIONS_DATA_PRUNE_MAX_COUNT",
+      "EXECUTIONS_DATA_HARD_DELETE_BUFFER",
+      "EXECUTIONS_DATA_PRUNE_HARD_DELETE_INTERVAL",
+      "EXECUTIONS_DATA_PRUNE_SOFT_DELETE_INTERVAL",
+      "N8N_DEPLOYMENT_ARTIFACT",
+    ], local.n8n_managed_env_names_base)) == 0
+    error_message = "Every name chart 2.0 computes from executions.* or config.deploymentArtifact must be in local.n8n_managed_env_names_base, or n8n_extra_env passes plan and fails the Helm render."
+  }
+}
+
+run "worker_extra_env_rejects_chart_computed_pruning_name" {
+  command = plan
+
+  variables {
+    n8n_worker_extra_env = [
+      { name = "EXECUTIONS_DATA_PRUNE", value = "false" },
+    ]
+  }
+
+  expect_failures = [var.n8n_worker_extra_env]
+}
+
+# ── n8n_chart_version ────────────────────────────────────────────────────────
+# The module sends env through chart 2.0's env.shared / env.worker maps, which a
+# chart 1.x ignores, so a 1.x pin must fail at plan rather than start n8n
+# with no configuration.
+run "chart_version_rejects_a_1_x_release" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.16.0"
+  }
+
+  expect_failures = [var.n8n_chart_version]
+}
+
+run "chart_version_rejects_a_1_x_prerelease" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "1.11.0-preview.workerpools.1"
+  }
+
+  expect_failures = [var.n8n_chart_version]
+}
+
+run "chart_version_rejects_a_range" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "~> 2.0"
+  }
+
+  expect_failures = [var.n8n_chart_version]
+}
+
+run "chart_version_accepts_a_later_major" {
+  command = plan
+
+  variables {
+    n8n_chart_version = "3.0.0"
+  }
+
+  assert {
+    condition     = helm_release.n8n.version == "3.0.0"
+    error_message = "n8n_chart_version must accept any chart major of 2 or higher."
+  }
+}
+
+# ── Worker pool extra_env vs pool concurrency ────────────────────────────────
+# Once any pool sets concurrency, the chart's worker-concurrency validation
+# rejects a literal N8N_CONCURRENCY_PRODUCTION_LIMIT anywhere in the user env,
+# including another pool's own extra_env.
+run "pool_extra_env_rejects_concurrency_production_limit_when_a_pool_sets_concurrency" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
+    n8n_worker_pools = [
+      { name = "gpu", concurrency = 5 },
+      { name = "bulk", extra_env = [{ name = "N8N_CONCURRENCY_PRODUCTION_LIMIT", value = "50" }] },
+    ]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+run "pool_extra_env_accepts_concurrency_production_limit_when_no_pool_sets_concurrency" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
+    n8n_worker_pools = [
+      { name = "bulk", extra_env = [{ name = "N8N_CONCURRENCY_PRODUCTION_LIMIT", value = "50" }] },
+    ]
+  }
+
+  assert {
+    condition     = var.n8n_worker_pools[0].extra_env[0].name == "N8N_CONCURRENCY_PRODUCTION_LIMIT"
+    error_message = "A pool's extra_env must keep accepting N8N_CONCURRENCY_PRODUCTION_LIMIT while no pool sets concurrency and both module-wide concurrency inputs are at their defaults."
+  }
+}
+
+# ── OTLP headers from a Secret ───────────────────────────────────────────────
+# A secretKeyRef value in env.shared renders into each container's explicit env
+# list, not the env ConfigMap, so collector credentials stay out of Terraform
+# state, the Helm release and the ConfigMaps.
+run "otel_headers_secret_ref_renders_a_secret_key_ref" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers" }
+  }
+
+  assert {
+    condition = (
+      local.n8n_otel_headers_env.N8N_OTEL_EXPORTER_OTLP_HEADERS.secretKeyRef.name == "otel-headers" &&
+      local.n8n_otel_headers_env.N8N_OTEL_EXPORTER_OTLP_HEADERS.secretKeyRef.key == "headers"
+    )
+    error_message = "n8n_otel_exporter_otlp_headers_secret_ref must render N8N_OTEL_EXPORTER_OTLP_HEADERS as a secretKeyRef, with key defaulting to \"headers\"."
+  }
+
+  assert {
+    condition     = local.n8n_env_shared.N8N_OTEL_EXPORTER_OTLP_HEADERS.secretKeyRef.name == "otel-headers"
+    error_message = "The secretKeyRef must reach env.shared."
+  }
+}
+
+run "otel_headers_literal_still_renders_a_string" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled               = true
+    n8n_otel_exporter_otlp_headers = "authorization=Bearer test"
+  }
+
+  assert {
+    condition     = nonsensitive(local.n8n_otel_headers_env.N8N_OTEL_EXPORTER_OTLP_HEADERS) == "authorization=Bearer test"
+    error_message = "n8n_otel_exporter_otlp_headers must keep rendering as a literal value."
+  }
+}
+
+run "otel_headers_defaults_render_nothing" {
+  command = plan
+
+  assert {
+    condition     = length(local.n8n_otel_headers_env) == 0
+    error_message = "With neither OTLP headers input set, nothing may be rendered."
+  }
+}
+
+run "otel_headers_secret_ref_with_master_off_triggers_check_warning" {
+  command = plan
+
+  variables {
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers" }
+  }
+
+  expect_failures = [check.otel_tuning_requires_master_switch]
+
+  assert {
+    condition     = !contains(keys(local.n8n_env_shared), "N8N_OTEL_EXPORTER_OTLP_HEADERS")
+    error_message = "With n8n_otel_enabled = false, the OTLP headers reference must not reach env.shared."
+  }
+}
+
+run "otel_headers_rejects_both_inputs" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers            = "authorization=Bearer test"
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers" }
+  }
+
+  expect_failures = [var.n8n_otel_exporter_otlp_headers_secret_ref]
+}
+
+run "otel_headers_secret_ref_rejects_an_invalid_name" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "Otel_Headers" }
+  }
+
+  expect_failures = [var.n8n_otel_exporter_otlp_headers_secret_ref]
+}
+
+# Kubernetes rejects ".", ".." and any key starting with ".." as Secret
+# data keys (IsConfigMapKey), even though they match the character set.
+run "otel_headers_secret_ref_rejects_a_dot_dot_key" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers", key = "..data" }
+  }
+
+  expect_failures = [var.n8n_otel_exporter_otlp_headers_secret_ref]
+}
+
+run "otel_headers_secret_ref_rejects_a_single_dot_key" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers", key = "." }
+  }
+
+  expect_failures = [var.n8n_otel_exporter_otlp_headers_secret_ref]
+}
+
+run "otel_headers_secret_ref_accepts_a_dotted_key" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers", key = "otlp.headers" }
+  }
+
+  assert {
+    condition     = local.n8n_otel_headers_env.N8N_OTEL_EXPORTER_OTLP_HEADERS.secretKeyRef.key == "otlp.headers"
+    error_message = "A key with a single inner dot is a valid Secret key and must be accepted."
+  }
+}
+
+run "otel_headers_secret_ref_rejects_an_invalid_key" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers", key = "bad key" }
+  }
+
+  expect_failures = [var.n8n_otel_exporter_otlp_headers_secret_ref]
 }
 
 # ── EKS control-plane hardening (issue #27) ───────────────────────────────────
@@ -11721,7 +12144,7 @@ run "iam_permissions_boundary_accepts_an_aws_managed_policy" {
 # variables.tf.
 #
 # These runs assert on the inputs rather than on the rendered env list, for the
-# same reason the execution-data runs do: config.extraEnv lives inside
+# same reason the execution-data runs do: env.shared lives inside
 # helm_release.n8n.values, which is unknown at plan, so the emitted names are not
 # assertable under `command = plan`. The collision-guard runs below are what
 # prove the module considers these names its own.
@@ -12586,62 +13009,6 @@ run "worker_keda_paused_replica_count_warns_when_inert" {
   expect_failures = [check.worker_keda_paused_replica_count_requires_pause]
 }
 
-# keda.worker.pause has no effect on a chart that predates 1.12.0
-# (n8n-io/n8n-hosting#177): the ScaledObject template does not read the key,
-# so a caller requesting a pause on an old pin gets no error and no pause.
-run "worker_keda_pause_warns_on_a_chart_that_predates_it" {
-  command = plan
-
-  variables {
-    n8n_chart_version     = "1.11.0"
-    n8n_worker_keda_pause = true
-  }
-
-  expect_failures = [check.worker_keda_pause_requires_a_supported_chart]
-}
-
-# Chart 1.12.0 reads keda.worker.pause but still renders the worker's
-# spec.replicas, so a later Helm upgrade while paused overrides the held count.
-run "worker_keda_pause_warns_on_chart_1_12_0" {
-  command = plan
-
-  variables {
-    n8n_chart_version     = "1.12.0"
-    n8n_worker_keda_pause = true
-  }
-
-  expect_failures = [check.worker_keda_pause_requires_a_supported_chart]
-}
-
-# A preview off the 1.13 line is new enough; the prerelease suffix is ignored.
-run "worker_keda_pause_allowed_on_a_1_13_preview" {
-  command = plan
-
-  variables {
-    n8n_chart_version     = "1.13.0-preview.1"
-    n8n_worker_keda_pause = true
-  }
-
-  assert {
-    condition     = local.n8n_worker_keda_pause_supported
-    error_message = "A 1.13.x prerelease must count as pause-capable."
-  }
-}
-
-# A custom chart repository's version numbering is not verifiable against
-# upstream, so the guard stays silent there rather than guessing.
-run "worker_keda_pause_allowed_on_a_custom_chart_repository" {
-  command = plan
-
-  variables {
-    n8n_chart_repository  = "oci://registry.example.com/charts"
-    n8n_chart_version     = "1.11.0"
-    n8n_worker_keda_pause = true
-  }
-
-  # No expect_failures: the whole point is that this must NOT warn.
-}
-
 # node_min, node_max and node_desired were each floored at 1 on their own, but
 # never checked against each other. AWS rejects the resulting scaling config.
 run "node_max_below_node_min_is_rejected" {
@@ -12818,7 +13185,7 @@ run "chart_version_rejects_a_leading_v" {
 }
 
 # ── db_postgresdb_connection_timeout_ms ───────────────────────────────────────
-# Chart wiring (DB_POSTGRESDB_CONNECTION_TIMEOUT in config.extraEnv) cannot be
+# Chart wiring (DB_POSTGRESDB_CONNECTION_TIMEOUT in env.shared) cannot be
 # asserted under command = plan: helm_release.values is unknown at plan time
 # because the resource depends on kubernetes_namespace, whose attributes are
 # (known after apply) under the mock provider. See AGENTS.md's "Known mock
@@ -12923,13 +13290,14 @@ run "db_postgresdb_ssl_defaults_match_prior_behavior" {
     error_message = "db_postgresdb_ssl_ca_pem must default to null, so no database.ssl chart value renders unless a caller opts in."
   }
 
+  # Field by field rather than comparing the whole map to a literal: the
+  # conditional in locals.tf unifies its two branches into a type the literal
+  # does not share, and == across types is false rather than a type error.
   assert {
     condition = (
       length(local.n8n_postgres_ssl_env) == 2 &&
-      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_ENABLED" &&
-      local.n8n_postgres_ssl_env[0].value == "true" &&
-      local.n8n_postgres_ssl_env[1].name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED" &&
-      local.n8n_postgres_ssl_env[1].value == "false"
+      local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_ENABLED"] == "true" &&
+      local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"] == "false"
     )
     error_message = "With every db_postgresdb_ssl_* input at its default, local.n8n_postgres_ssl_env must render byte-identical to the module's prior hardcoded list, so an existing deployment sees no Helm values diff."
   }
@@ -12948,7 +13316,7 @@ run "db_postgresdb_ssl_reject_unauthorized_true_renders_env" {
   }
 
   assert {
-    condition     = one([for e in local.n8n_postgres_ssl_env : e.value if e.name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"]) == "true"
+    condition     = local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"] == "true"
     error_message = "db_postgresdb_ssl_reject_unauthorized = true must render DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=true."
   }
 }
@@ -12968,8 +13336,7 @@ run "db_postgresdb_ssl_disabled_omits_reject_unauthorized_and_ca" {
   assert {
     condition = (
       length(local.n8n_postgres_ssl_env) == 1 &&
-      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_ENABLED" &&
-      local.n8n_postgres_ssl_env[0].value == "false"
+      local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_ENABLED"] == "false"
     )
     error_message = "db_postgresdb_ssl_enabled = false must omit DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED entirely, matching the module's prior behavior for this input."
   }
@@ -12992,7 +13359,7 @@ run "db_postgresdb_ssl_ca_pem_renders_chart_ssl_values" {
 
   # rejectUnauthorized is always true in the chart values: the chart renders
   # DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED only when it is false, and the
-  # module's own config.extraEnv entry owns that name, so a false here would
+  # module's own env.shared entry owns that name, so a false here would
   # give every n8n container the same env name twice.
   # Field by field rather than comparing the whole map to a literal: the
   # conditional in locals.tf unifies its two branches into a type the literal
@@ -13009,17 +13376,15 @@ run "db_postgresdb_ssl_ca_pem_renders_chart_ssl_values" {
     error_message = "db_postgresdb_ssl_ca_pem must render database.ssl = { enabled = true, rejectUnauthorized = true, ca = <trimmed PEM> } for the chart."
   }
 
-  # The default chart (1.16.0) renders database.ssl.enabled as
+  # Every pinned chart is 2.x, which renders database.ssl.enabled as
   # DB_POSTGRESDB_SSL_ENABLED itself, so with a CA delivered the module must
   # leave that name to the chart and set only REJECT_UNAUTHORIZED.
   assert {
     condition = (
-      local.n8n_chart_renders_postgres_ssl_enabled == true &&
       length(local.n8n_postgres_ssl_env) == 1 &&
-      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED" &&
-      length([for e in local.n8n_postgres_ssl_env : e if e.name == "DB_POSTGRESDB_SSL_CA_FILE" || e.name == "DB_POSTGRESDB_SSL_CA" || e.name == "DB_POSTGRESDB_SSL_ENABLED"]) == 0
+      local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"] == "true"
     )
-    error_message = "With a CA delivered on chart 1.15.0 or later, local.n8n_postgres_ssl_env must carry only DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: the chart renders DB_POSTGRESDB_SSL_ENABLED and the CA, and a second SSL_ENABLED would give every n8n container the name twice. The default chart is 1.16.0."
+    error_message = "With a CA delivered, local.n8n_postgres_ssl_env must carry only DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: the chart renders DB_POSTGRESDB_SSL_ENABLED and the CA, and a second SSL_ENABLED would give every n8n container the name twice."
   }
 
   assert {
@@ -13031,78 +13396,30 @@ run "db_postgresdb_ssl_ca_pem_renders_chart_ssl_values" {
   }
 }
 
-# The module's own DB_POSTGRESDB_SSL_ENABLED entry is dropped only where the
-# chart is known to render that name. Before 1.15.0 the chart rendered
-# DB_POSTGRESDB_SSL, which n8n ignores, so without the module's entry TLS would
-# silently never be enabled.
-run "db_postgresdb_ssl_enabled_stays_in_extra_env_on_a_chart_before_1_15_0" {
-  command = plan
-
-  variables {
-    n8n_chart_version                     = "1.14.0"
-    db_postgresdb_ssl_reject_unauthorized = true
-    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
-  }
-
-  assert {
-    condition = (
-      local.n8n_chart_renders_postgres_ssl_enabled == false &&
-      length(local.n8n_postgres_ssl_env) == 2 &&
-      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_ENABLED" &&
-      local.n8n_postgres_ssl_env[0].value == "true"
-    )
-    error_message = "On chart 1.14.0 the chart renders DB_POSTGRESDB_SSL, not _ENABLED, so the module must keep DB_POSTGRESDB_SSL_ENABLED=true in config.extraEnv even with a CA delivered."
-  }
-}
-
-# A custom chart repository carries version numbers this module cannot verify,
-# so it keeps its own entry (a duplicate with the same value is harmless; a
-# missing one would disable TLS).
-run "db_postgresdb_ssl_enabled_stays_in_extra_env_on_a_custom_chart_repository" {
+# On chart 2.x the duplicate is no longer harmless: n8n.validateEnv fails the
+# whole render when env.shared repeats a name the chart computes. Every 2.x
+# chart renders DB_POSTGRESDB_SSL_ENABLED from database.ssl.enabled, so the
+# module drops its entry whatever the repository or prerelease suffix.
+run "db_postgresdb_ssl_enabled_leaves_env_shared_on_any_chart_2_x" {
   command = plan
 
   variables {
     n8n_chart_repository                  = "oci://registry.example.com/charts"
+    n8n_chart_version                     = "2.0.0-rc.1"
     db_postgresdb_ssl_reject_unauthorized = true
     db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
   }
 
   assert {
     condition = (
-      local.n8n_chart_renders_postgres_ssl_enabled == false &&
-      length(local.n8n_postgres_ssl_env) == 2 &&
-      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_ENABLED" &&
-      local.n8n_postgres_ssl_env[0].value == "true"
+      !contains(keys(local.n8n_postgres_ssl_env), "DB_POSTGRESDB_SSL_ENABLED")
     )
-    error_message = "A custom n8n_chart_repository must keep DB_POSTGRESDB_SSL_ENABLED=true in config.extraEnv, since the module cannot verify that chart renders it."
+    error_message = "On chart 2.x the module must not put DB_POSTGRESDB_SSL_ENABLED in env.shared: the chart renders it and rejects a duplicate."
   }
 }
 
-# A prerelease can be built from a branch that predates n8n-io/n8n-hosting#175
-# whatever its version number says, so it keeps the module's entry even at
-# 1.15.0 or above. Build metadata alone ("+...") does not count as a prerelease.
-run "db_postgresdb_ssl_enabled_stays_in_extra_env_on_a_prerelease_chart" {
-  command = plan
-
-  variables {
-    n8n_chart_version                     = "1.16.0-preview.workerpools.1+build.7"
-    db_postgresdb_ssl_reject_unauthorized = true
-    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n"
-  }
-
-  assert {
-    condition = (
-      local.n8n_chart_renders_postgres_ssl_enabled == false &&
-      length(local.n8n_postgres_ssl_env) == 2 &&
-      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_ENABLED" &&
-      local.n8n_postgres_ssl_env[0].value == "true"
-    )
-    error_message = "A prerelease n8n_chart_version must keep DB_POSTGRESDB_SSL_ENABLED=true in config.extraEnv, even at 1.15.0 or above."
-  }
-}
-
-# A numbered release past 1.x, with build metadata, still counts as rendering
-# the name: the major-version branch of the gate and the "+" strip.
+# A numbered chart release, with build metadata, still renders
+# DB_POSTGRESDB_SSL_ENABLED itself: every chart 2.x does, build metadata or not.
 run "db_postgresdb_ssl_enabled_left_to_the_chart_on_a_numbered_major_2_release" {
   command = plan
 
@@ -13114,9 +13431,8 @@ run "db_postgresdb_ssl_enabled_left_to_the_chart_on_a_numbered_major_2_release" 
 
   assert {
     condition = (
-      local.n8n_chart_renders_postgres_ssl_enabled == true &&
       length(local.n8n_postgres_ssl_env) == 1 &&
-      local.n8n_postgres_ssl_env[0].name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"
+      local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"] == "true"
     )
     error_message = "A numbered chart release 2.0.0 (build metadata ignored) must leave DB_POSTGRESDB_SSL_ENABLED to the chart when a CA is delivered."
   }
@@ -13140,8 +13456,8 @@ run "db_postgresdb_ssl_ca_pem_delivered_without_verification" {
   }
 
   assert {
-    condition     = one([for e in local.n8n_postgres_ssl_env : e.value if e.name == "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"]) == "false"
-    error_message = "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED must stay false in config.extraEnv, so the delivered CA does not turn verification on."
+    condition     = local.n8n_postgres_ssl_env["DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED"] == "false"
+    error_message = "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED must stay false in env.shared, so the delivered CA does not turn verification on."
   }
 
   expect_failures = [check.db_postgresdb_ssl_ca_pem_requires_verification]
@@ -13247,7 +13563,7 @@ run "rejects_reserved_ssl_ca_environment_name" {
   # needs no dedicated reservation: it already falls under the generic "DB_"
   # prefix in local.n8n_managed_env_prefixes. This run exists to catch a
   # future refactor of that prefix list silently narrowing it to miss this
-  # name, which would let config.extraEnv shadow the chart's CA.
+  # name, which would let env.shared shadow the chart's CA.
   variables {
     n8n_extra_env = [
       { name = "DB_POSTGRESDB_SSL_CA", value = "-----BEGIN CERTIFICATE-----\nMIIOverride\n-----END CERTIFICATE-----" },
@@ -13551,7 +13867,7 @@ run "worker_pools_map_each_pool_to_its_own_queue" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, and
     # against the database connection budget like any other replica ceiling,
     # so the capacity and connection-budget checks warn when their ceilings
@@ -13590,7 +13906,7 @@ run "worker_pools_inherit_module_wide_worker_sizing" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, and
     # against the database connection budget like any other replica ceiling,
     # so the capacity and connection-budget checks warn when their ceilings
@@ -13604,13 +13920,13 @@ run "worker_pools_inherit_module_wide_worker_sizing" {
 
   assert {
     condition = (
-      local.n8n_worker_groups[0].concurrency == var.n8n_worker_concurrency &&
+      !contains(keys(local.n8n_worker_groups[0]), "concurrency") &&
       local.n8n_worker_groups[0].resources.requests.cpu == var.n8n_worker_cpu_request &&
       local.n8n_worker_groups[0].resources.requests.memory == var.n8n_worker_memory_request &&
       local.n8n_worker_groups[0].resources.limits.cpu == var.n8n_worker_cpu_limit &&
       local.n8n_worker_groups[0].resources.limits.memory == var.n8n_worker_memory_limit
     )
-    error_message = "a pool that overrides no sizing must inherit the module-wide n8n_worker_* concurrency and resources"
+    error_message = "a pool that overrides no sizing must inherit the module-wide n8n_worker_* resources, and with n8n_worker_concurrency left null (the default) must omit the concurrency key entirely, matching the chart's own default worker deployment"
   }
 }
 
@@ -13618,7 +13934,7 @@ run "worker_pools_per_pool_sizing_overrides_the_module_default" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, and
     # against the database connection budget like any other replica ceiling,
     # so the capacity and connection-budget checks warn when their ceilings
@@ -13656,7 +13972,7 @@ run "worker_pools_carry_their_own_keda_bounds" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, and
     # against the database connection budget like any other replica ceiling,
     # so the capacity and connection-budget checks warn when their ceilings
@@ -13689,7 +14005,7 @@ run "worker_pools_min_replicas_accepts_zero" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, and
     # against the database connection budget like any other replica ceiling,
     # so the capacity and connection-budget checks warn when their ceilings
@@ -13711,7 +14027,7 @@ run "worker_pools_extra_env_reaches_only_that_pool" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Pools count against the node group budget like any other autoscaler, and
     # against the database connection budget like any other replica ceiling,
     # so the capacity and connection-budget checks warn when their ceilings
@@ -13744,7 +14060,7 @@ run "worker_pools_reject_an_uppercase_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "ITop" }]
   }
 
@@ -13756,7 +14072,7 @@ run "worker_pools_reject_an_underscore_in_a_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "sec_team" }]
   }
 
@@ -13768,7 +14084,7 @@ run "worker_pools_reject_an_overlong_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "p${join("", [for i in range(63) : "a"])}" }]
   }
 
@@ -13783,7 +14099,7 @@ run "worker_pools_reject_the_name_default" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "default" }]
   }
 
@@ -13795,7 +14111,7 @@ run "worker_pools_reject_duplicate_names" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu" }, { name = "gpu" }]
   }
 
@@ -13807,7 +14123,7 @@ run "worker_pools_reject_min_replicas_above_max_replicas" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", min_replicas = 6, max_replicas = 2 }]
   }
 
@@ -13819,7 +14135,7 @@ run "worker_pools_reject_a_fractional_replica_bound" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", min_replicas = 1.5 }]
   }
 
@@ -13831,7 +14147,7 @@ run "worker_pools_reject_max_replicas_of_zero" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", min_replicas = 0, max_replicas = 0 }]
   }
 
@@ -13843,11 +14159,49 @@ run "worker_pools_reject_concurrency_below_one" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", concurrency = 0 }]
   }
 
   expect_failures = [var.n8n_worker_pools]
+}
+
+# Mirrors n8n_execution_concurrency_limit's own cross-check against
+# n8n_worker_concurrency above (see that run): a pool's concurrency maps to the
+# same --concurrency flag, so it conflicts with a non--1 execution limit the
+# same way the module-wide n8n_worker_concurrency does. Pool concurrency alone,
+# with the limit left at its -1 default, is already covered end-to-end by
+# worker_pools_per_pool_sizing_overrides_the_module_default above, which also
+# asserts the pool's rendered concurrency.
+run "worker_pools_reject_concurrency_with_execution_concurrency_limit_set" {
+  command = plan
+
+  variables {
+    db_instance_class               = "db.m6g.2xlarge"
+    n8n_chart_version               = "2.0.0-preview.workerpools.1"
+    n8n_execution_concurrency_limit = 2000
+    n8n_worker_pools                = [{ name = "gpu", concurrency = 5 }]
+  }
+
+  expect_failures = [var.n8n_worker_pools]
+}
+
+# Control: a non--1 execution limit must not reject a pool that leaves its own
+# concurrency null, inheriting the limit exactly like the module-wide worker.
+run "worker_pools_accept_a_non_default_execution_concurrency_limit_without_pool_concurrency" {
+  command = plan
+
+  variables {
+    db_instance_class               = "db.m6g.2xlarge"
+    n8n_chart_version               = "2.0.0-preview.workerpools.1"
+    n8n_execution_concurrency_limit = 2000
+    n8n_worker_pools                = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition     = !contains(keys(local.n8n_worker_groups[0]), "concurrency")
+    error_message = "a pool with concurrency left null must stay accepted alongside a non--1 n8n_execution_concurrency_limit, and must omit the concurrency key so n8n takes it from the execution limit"
+  }
 }
 
 # N8N_WORKER_POOL_NAME is set from the pool's own name. Letting extra_env
@@ -13857,7 +14211,7 @@ run "worker_pools_reject_extra_env_overriding_the_pool_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "N8N_WORKER_POOL_NAME", value = "somewhere-else" }]
@@ -13865,30 +14219,6 @@ run "worker_pools_reject_extra_env_overriding_the_pool_name" {
   }
 
   expect_failures = [var.n8n_worker_pools]
-}
-
-# s3.storage.availableModes: dropped from chart 1.14.0 on, kept for older pins
-# whose own "filesystem" default would drop S3 on n8n 1.x.
-run "s3_storage_values_omit_available_modes_on_the_default_chart" {
-  command = plan
-
-  assert {
-    condition     = local.n8n_s3_storage_values == { mode = "s3" }
-    error_message = "Chart 1.14.0 removed s3.storage.availableModes, so the module must send only mode"
-  }
-}
-
-run "s3_storage_values_keep_available_modes_before_chart_1_14_0" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.13.0"
-  }
-
-  assert {
-    condition     = local.n8n_s3_storage_values == { mode = "s3", availableModes = "filesystem,s3" }
-    error_message = "A chart older than 1.14.0 defaults availableModes to filesystem, so the module must keep sending filesystem,s3"
-  }
 }
 
 # local.n8n_deprecated_env_names: n8n warns on every start while one is set.
@@ -13916,7 +14246,7 @@ run "worker_pools_reject_deprecated_binary_data_modes" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "N8N_AVAILABLE_BINARY_DATA_MODES", value = "filesystem,s3" }]
@@ -13952,7 +14282,7 @@ run "worker_pools_reject_deprecated_webhook_url" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "WEBHOOK_URL", value = "https://n8n.example.com" }]
@@ -13967,7 +14297,7 @@ run "worker_pools_reject_extra_env_overriding_a_module_managed_variable" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "N8N_ENCRYPTION_KEY", value = "nope" }]
@@ -13985,7 +14315,7 @@ run "worker_pools_reject_extra_env_setting_graceful_shutdown_timeout" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "N8N_GRACEFUL_SHUTDOWN_TIMEOUT", value = "120" }]
@@ -14015,7 +14345,7 @@ run "capacity_model_counts_each_pool_at_its_ceiling" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
 
     # Room for the pools, so this pins the arithmetic rather than tripping the
     # capacity advisory the arithmetic feeds. A larger instance class keeps
@@ -14058,7 +14388,7 @@ run "worker_pools_reject_a_cpu_quantity_the_capacity_model_cannot_read" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", cpu_request = "1Ki" }]
   }
 
@@ -14070,7 +14400,7 @@ run "worker_pools_reject_a_memory_quantity_the_capacity_model_cannot_read" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", memory_request = "2GB" }]
   }
 
@@ -14096,7 +14426,7 @@ run "module_wide_cpu_request_rejects_an_unparseable_quantity_a_pool_would_inheri
 
   variables {
     db_instance_class      = "db.m6g.2xlarge"
-    n8n_chart_version      = "1.11.0-preview.workerpools.1"
+    n8n_chart_version      = "2.0.0-preview.workerpools.1"
     n8n_worker_cpu_request = "not-a-quantity"
     n8n_worker_pools       = [{ name = "gpu" }]
   }
@@ -14116,7 +14446,7 @@ run "worker_pools_carry_the_redis_tls_metadata_on_their_scalers" {
   command = plan
 
   variables {
-    n8n_chart_version                = "1.11.0-preview.workerpools.1"
+    n8n_chart_version                = "2.0.0-preview.workerpools.1"
     redis_transit_encryption_enabled = true
     # Larger instance class so the pools' default-sized ceiling does not
     # incidentally trip the unrelated connection-budget check; this run is
@@ -14159,7 +14489,7 @@ run "worker_pools_carry_empty_trigger_metadata_without_tls" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Larger instance class so the pool's default-sized ceiling does not
     # incidentally trip the unrelated connection-budget check; this run is
     # only about the empty trigger metadata without TLS.
@@ -14185,7 +14515,7 @@ run "worker_pools_reject_a_trailing_hyphen_in_a_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu-" }]
   }
 
@@ -14197,7 +14527,7 @@ run "worker_pools_reject_a_name_longer_than_the_chart_allows" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # 44 characters: legal for the chart's schema (53) and for poolName (63),
     # but n8n-worker-<name> would be 55, one over KEDA's ScaledObject cap, so
     # the chart would fail the render at apply.
@@ -14211,7 +14541,7 @@ run "worker_pools_accept_a_name_at_the_chart_ceiling" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Exactly 43 characters, both ends alphanumeric: n8n-worker-<name> lands
     # on KEDA's 54-character cap exactly. Larger instance class so the pool's
     # default-sized ceiling does not incidentally trip the unrelated
@@ -14233,7 +14563,7 @@ run "worker_pools_reject_a_blank_extra_env_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", extra_env = [{ name = "  ", value = "x" }] }]
   }
 
@@ -14249,7 +14579,7 @@ run "worker_pools_reject_a_whitespace_padded_extra_env_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = " N8N_ENCRYPTION_KEY ", value = "x" }]
@@ -14264,7 +14594,7 @@ run "worker_pools_reject_duplicate_extra_env_names_within_a_pool" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name = "gpu"
       # Deliberately not a module-managed name: with one of those this run
@@ -14298,7 +14628,7 @@ run "worker_pools_reject_a_non_identifier_extra_env_name" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu", extra_env = [{ name = "2FA_MODE", value = "x" }] }]
   }
 
@@ -14309,7 +14639,7 @@ run "worker_pools_accept_a_conventional_extra_env_name" {
   command = plan
 
   variables {
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     # Larger instance class so the pool's default-sized ceiling does not
     # incidentally trip the unrelated connection-budget check; this run is
     # only about the extra_env name grammar.
@@ -14342,41 +14672,10 @@ run "worker_pools_fail_the_plan_when_the_default_chart_predates_them" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    # No n8n_chart_version: the module default, which is a numbered release
-    # (1.13.0 at the time of writing) and so never passes the guard, whatever
-    # the number is.
+    # No n8n_chart_version: the module default is 2.0.0-rc.1, a prerelease
+    # the guard's "-rc." exclusion does not count, so it never passes
+    # either.
     n8n_worker_pools = [{ name = "gpu" }]
-  }
-
-  expect_failures = [helm_release.n8n]
-}
-
-run "worker_pools_fail_the_plan_on_any_numbered_release" {
-  command = plan
-
-  variables {
-    db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0"
-    n8n_worker_pools  = [{ name = "gpu" }]
-  }
-
-  expect_failures = [helm_release.n8n]
-}
-
-# n8n-hosting's own release-please cuts numbered releases from `main`
-# independently of the `preview/worker-pools` branch that actually carries
-# queueMode.workerGroups, so a numbered release can never be trusted as a
-# floor: 1.12.0 was this guard's own placeholder "earliest plausible" minimum
-# before it was tightened to reject every numbered release. A release cut
-# from `main` can never prove the feature is present, regardless of whether
-# any specific guessed version ever ships for real.
-run "worker_pools_reject_the_old_placeholder_minimum_regardless" {
-  command = plan
-
-  variables {
-    db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.12.0"
-    n8n_worker_pools  = [{ name = "gpu" }]
   }
 
   expect_failures = [helm_release.n8n]
@@ -14402,9 +14701,9 @@ run "worker_pools_reject_build_metadata_without_a_prerelease_segment" {
     # SemVer 2 allows a "+buildmetadata" suffix with no hyphen, and
     # n8n_chart_version's own validation accepts it, but Helm ignores build
     # metadata when resolving a chart from an HTTPS repository: this can
-    # resolve to plain "1.11.0", the exact silent no-render case the guard
+    # resolve to plain "2.0.0", the exact silent no-render case the guard
     # exists to stop. Build metadata is not a prerelease and must not pass.
-    n8n_chart_version = "1.11.0+build.5"
+    n8n_chart_version = "2.0.0+build.5"
     n8n_worker_pools  = [{ name = "gpu" }]
   }
 
@@ -14419,7 +14718,7 @@ run "worker_pools_accept_a_prerelease_chart_without_comparing_it" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools  = [{ name = "gpu" }]
   }
 
@@ -14427,6 +14726,54 @@ run "worker_pools_accept_a_prerelease_chart_without_comparing_it" {
     condition     = local.n8n_chart_renders_worker_pools
     error_message = "a prerelease chart version must pass the guard"
   }
+}
+
+# A chart 2.x preview passes the guard automatically, same as any other
+# prerelease, now that it also clears the major-2 floor.
+run "worker_pools_accept_a_chart_2_x_preview" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  assert {
+    condition     = local.n8n_chart_renders_worker_pools
+    error_message = "a chart 2.x preview must pass the guard"
+  }
+}
+
+# An upstream release candidate is cut from main, which does not carry the
+# feature at all: 2.0.0-rc.1's values.yaml has no queueMode.workerGroups.
+# Only a "preview." prerelease tag is exempt automatically, so an "-rc.N"
+# tag must still fail the guard regardless of major version.
+run "worker_pools_reject_a_chart_2_x_release_candidate" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    n8n_chart_version = "2.0.0-rc.1"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  expect_failures = [helm_release.n8n]
+}
+
+# A "-beta.N" build is also cut from main, like an "-rc.N" build, and lacks
+# queueMode.workerGroups for the same reason: only the "preview." tag the
+# preview/worker-pools branch publishes is exempt automatically.
+run "worker_pools_reject_a_chart_2_x_beta" {
+  command = plan
+
+  variables {
+    db_instance_class = "db.m6g.2xlarge"
+    n8n_chart_version = "2.0.0-beta.1"
+    n8n_worker_pools  = [{ name = "gpu" }]
+  }
+
+  expect_failures = [helm_release.n8n]
 }
 
 # The escape hatch for a private mirror serving a numbered version: nothing
@@ -14437,7 +14784,7 @@ run "worker_pools_accept_a_numbered_chart_the_caller_has_verified" {
 
   variables {
     db_instance_class               = "db.m6g.2xlarge"
-    n8n_chart_version               = "1.11.0"
+    n8n_chart_version               = "2.0.0"
     n8n_worker_pools_chart_verified = true
     n8n_worker_pools                = [{ name = "gpu" }]
   }
@@ -14469,7 +14816,7 @@ run "worker_pools_warn_when_the_pinned_n8n_image_predates_them" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_image_tag     = "2.38.1"
     n8n_worker_pools  = [{ name = "gpu" }]
   }
@@ -14482,7 +14829,7 @@ run "worker_pools_accept_the_first_n8n_release_that_ships_them" {
 
   variables {
     db_instance_class = "db.m6g.2xlarge"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_image_tag     = "2.39.0"
     n8n_worker_pools  = [{ name = "gpu" }]
   }
@@ -14502,7 +14849,7 @@ run "worker_extra_env_defaults_to_empty" {
 
   assert {
     condition     = length(var.n8n_worker_extra_env) == 0
-    error_message = "n8n_worker_extra_env must default to an empty list so an untouched deployment sees no diff in queueMode.workerExtraEnv"
+    error_message = "n8n_worker_extra_env must default to an empty list so an untouched deployment sees no diff in env.worker"
   }
 }
 
@@ -14566,9 +14913,11 @@ run "worker_extra_env_rejects_graceful_shutdown_timeout_name" {
 # n8n logs a deprecation warning for WEBHOOK_URL from 2.30.0, the release that
 # added N8N_WEBHOOK_URL. Older images build webhook URLs from it, so the module
 # drops the legacy name only when the tags prove the image is current and sends
-# it whenever they cannot. helm_release values are unknown under mocks (see
-# AGENTS.md), so these assert the gating local and local.n8n_webhook_url_env,
-# the exact list helm_release.n8n splices into config.extraEnv.
+# it whenever they cannot. N8N_WEBHOOK_URL itself is chart-owned now (the
+# chart's webhook.url value, rendered from local.n8n_webhook_base_url) rather
+# than an env.shared entry; these runs assert the gating local, the exact
+# base-URL value, and local.n8n_webhook_url_env, the map carrying only the
+# legacy WEBHOOK_URL when it applies.
 
 run "legacy_webhook_url_omitted_for_chart_default_image" {
   command = plan
@@ -14579,15 +14928,18 @@ run "legacy_webhook_url_omitted_for_chart_default_image" {
   }
 
   assert {
-    condition = local.n8n_webhook_url_env == [
-      { name = "N8N_WEBHOOK_URL", value = "https://n8n.test.example.com" },
-    ]
-    error_message = "At the default, config.extraEnv must carry N8N_WEBHOOK_URL alone"
+    condition     = local.n8n_webhook_base_url == "https://n8n.test.example.com"
+    error_message = "At the default, local.n8n_webhook_base_url (the chart's webhook.url value) must resolve to the module's own domain"
+  }
+
+  assert {
+    condition     = length(local.n8n_webhook_url_env) == 0
+    error_message = "At the default (a current image), env.shared must carry no legacy WEBHOOK_URL entry: N8N_WEBHOOK_URL itself is chart-owned (webhook.url), not an env.shared entry"
   }
 
   assert {
     condition     = !contains(keys(kubernetes_secret.n8n[0].data), "WEBHOOK_URL")
-    error_message = "kubernetes_secret.n8n must not carry WEBHOOK_URL: coreSecretsEnv never reads it"
+    error_message = "kubernetes_secret.n8n must not carry WEBHOOK_URL: only N8N_ENCRYPTION_KEY and N8N_LICENSE_ACTIVATION_KEY ever live in this Secret"
   }
 }
 
@@ -14617,11 +14969,11 @@ run "legacy_webhook_url_emitted_before_2_30_0" {
   }
 
   assert {
-    condition = local.n8n_webhook_url_env == [
-      { name = "N8N_WEBHOOK_URL", value = "https://n8n.test.example.com" },
-      { name = "WEBHOOK_URL", value = "https://n8n.test.example.com" },
-    ]
-    error_message = "For a pre-2.30.0 image, config.extraEnv must carry WEBHOOK_URL with the same value as N8N_WEBHOOK_URL"
+    condition = (
+      length(local.n8n_webhook_url_env) == 1 &&
+      local.n8n_webhook_url_env["WEBHOOK_URL"] == "https://n8n.test.example.com"
+    )
+    error_message = "For a pre-2.30.0 image, env.shared must carry the legacy WEBHOOK_URL alone; N8N_WEBHOOK_URL is chart-owned (webhook.url)"
   }
 }
 
@@ -14647,11 +14999,16 @@ run "legacy_webhook_url_follows_n8n_webhook_url" {
   }
 
   assert {
-    condition = local.n8n_webhook_url_env == [
-      { name = "N8N_WEBHOOK_URL", value = "https://hooks.example.com" },
-      { name = "WEBHOOK_URL", value = "https://hooks.example.com" },
-    ]
-    error_message = "Both webhook env vars must carry n8n_webhook_url when it is set"
+    condition = (
+      length(local.n8n_webhook_url_env) == 1 &&
+      local.n8n_webhook_url_env["WEBHOOK_URL"] == "https://hooks.example.com"
+    )
+    error_message = "The legacy WEBHOOK_URL entry must carry n8n_webhook_url when it is set"
+  }
+
+  assert {
+    condition     = local.n8n_webhook_base_url == "https://hooks.example.com"
+    error_message = "local.n8n_webhook_base_url (the chart's webhook.url value) must carry n8n_webhook_url when it is set"
   }
 }
 
@@ -14829,58 +15186,6 @@ run "legacy_webhook_url_emitted_for_custom_image_without_a_version" {
   assert {
     condition     = local.n8n_needs_legacy_webhook_url_env
     error_message = "A custom image whose tags carry no version may predate 2.30.0, so the module must emit WEBHOOK_URL"
-  }
-}
-
-run "legacy_webhook_url_emitted_for_old_chart_default" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.3.0"
-  }
-
-  assert {
-    condition     = local.n8n_needs_legacy_webhook_url_env
-    error_message = "Charts 1.0.0 to 1.3.x default to n8n 2.9.0 to 2.12.2, so a null n8n_image_tag there must emit WEBHOOK_URL"
-  }
-}
-
-run "legacy_webhook_url_emitted_for_floating_chart_default" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.11.0"
-  }
-
-  assert {
-    condition     = local.n8n_needs_legacy_webhook_url_env
-    error_message = "Charts 1.4.0 to 1.11.x default to the floating `stable` tag, so a null n8n_image_tag there must emit WEBHOOK_URL"
-  }
-}
-
-run "legacy_webhook_url_emitted_for_chart_0_x_default" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "0.12.0"
-  }
-
-  assert {
-    condition     = local.n8n_needs_legacy_webhook_url_env
-    error_message = "A null n8n_image_tag counts as current only on a 1.x chart at 1.12.0 or newer, so a 0.x chart with minor 12 must still emit WEBHOOK_URL"
-  }
-}
-
-run "legacy_webhook_url_omitted_from_chart_1_12_0_default" {
-  command = plan
-
-  variables {
-    n8n_chart_version = "1.12.0"
-  }
-
-  assert {
-    condition     = !local.n8n_needs_legacy_webhook_url_env
-    error_message = "Chart 1.12.0 defaults to n8n 2.39.6, so a null n8n_image_tag there must not emit WEBHOOK_URL"
   }
 }
 
@@ -15341,8 +15646,8 @@ run "extra_ca_renders_secret_mount_env_and_checksum" {
   }
 
   assert {
-    condition     = length(local.n8n_ca_bundle_env) == 1 && local.n8n_ca_bundle_env[0].name == "NODE_EXTRA_CA_CERTS" && local.n8n_ca_bundle_env[0].value == "/etc/n8n-certs/ca-bundle.crt"
-    error_message = "NODE_EXTRA_CA_CERTS must point at the mounted bundle file."
+    condition     = local.n8n_ca_bundle_env["NODE_EXTRA_CA_CERTS"] == "/etc/n8n-certs/ca-bundle.crt" && length(local.n8n_ca_bundle_env) == 1 && local.n8n_env_shared["NODE_EXTRA_CA_CERTS"] == "/etc/n8n-certs/ca-bundle.crt"
+    error_message = "NODE_EXTRA_CA_CERTS must point at the mounted bundle file and reach env.shared."
   }
 
   assert {
@@ -15431,7 +15736,7 @@ run "extra_ca_rejects_env_collision_on_worker_pool_extra_env" {
 
   variables {
     n8n_extra_ca_pem  = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
-    n8n_chart_version = "1.11.0-preview.workerpools.1"
+    n8n_chart_version = "2.0.0-preview.workerpools.1"
     n8n_worker_pools = [{
       name      = "gpu"
       extra_env = [{ name = "NODE_EXTRA_CA_CERTS", value = "/other.crt" }]

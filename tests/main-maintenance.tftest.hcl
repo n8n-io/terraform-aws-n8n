@@ -34,7 +34,7 @@ variables {
   n8n_license_key = "test-license-key-not-real"
 }
 
-run "multi_main_keeps_chart_strategy_and_protects_one_main" {
+run "multi_main_keeps_chart_strategy" {
   command = plan
 
   assert {
@@ -42,8 +42,8 @@ run "multi_main_keeps_chart_strategy_and_protects_one_main" {
     error_message = "Multi-main must retain the chart's default rollout strategy."
   }
   assert {
-    condition     = local.n8n_main_pdb_min_available == 1
-    error_message = "Multi-main must protect one available main during voluntary eviction."
+    condition     = local.n8n_multi_main_enabled == true
+    error_message = "The default n8n_main_hpa_min_replicas (2) must enable multi-main, which is what makes chart 2.0 render the main PodDisruptionBudget at all (templates/pdb.yaml)."
   }
 }
 
@@ -60,8 +60,8 @@ run "single_main_recreates_and_allows_eviction" {
     error_message = "Single-main must use Recreate and clear previous rollingUpdate settings to prevent upgrade overlap."
   }
   assert {
-    condition     = local.n8n_main_pdb_min_available == 0
-    error_message = "A single main must permit voluntary eviction, accepting maintenance downtime."
+    condition     = local.n8n_multi_main_enabled == false
+    error_message = "A single main must leave multi-main disabled, which is what makes chart 2.0 render no main PodDisruptionBudget at all (templates/pdb.yaml): a lone main has nothing a PDB would protect, and voluntary eviction must stay unblocked for maintenance."
   }
   assert {
     condition     = local.n8n_main_hpa_effective_max_replicas == 1 && !local.n8n_multi_main_enabled

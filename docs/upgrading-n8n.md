@@ -6,8 +6,8 @@ This covers bumping the deployed n8n version on an existing deployment. It does 
 
 | Variable | Controls | Default |
 | --- | --- | --- |
-| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"1.16.0"`, pinned |
-| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.43.5` in chart `1.16.0`) |
+| `n8n_chart_version` | The [n8n Helm chart](https://github.com/n8n-io/n8n-hosting/tree/main/charts/n8n) version, which determines the chart's templates, defaults, and which values it accepts. | `"2.0.0-rc.1"`, pinned |
+| `n8n_image_tag` | The n8n application image tag actually running inside the pods. | `null`, meaning the selected chart's default applies (`appVersion: 2.44.5` in chart `2.0.0-rc.1`) |
 | `n8n_task_runner_image_tag` | Task runner image tag; keep aligned with the underlying n8n version when using a custom application tag. | `null`, meaning the application image tag |
 
 Bumping the image tag alone gets you a new n8n version without changing the chart's templates or value schema. Bumping the chart version can also change what values the chart accepts, so treat it as the larger-blast-radius change of the two.
@@ -253,9 +253,12 @@ upgrade: Helm cannot roll back database migrations.
   need to change any input. After the upgrade a container with a CA delivered
   carries the name once, from the chart's ConfigMap, and one without a CA
   carries it once, from the module. If you set `n8n_chart_repository` to a
-  private mirror, the module cannot verify that mirror's version numbers and
-  keeps its own entry, so the name may appear twice with the same value, which
-  Kubernetes resolves last-wins.
+  private mirror, the module cannot verify that mirror's version and keeps
+  its own entry regardless; if that mirror's chart also renders the name
+  (chart 2.0's `n8n.validateEnv` rejects any `env.shared`/`env.worker` key
+  the chart itself computes), the Helm render fails outright rather than
+  silently keeping either value, so a private mirror at 1.15.0 or newer with
+  a CA delivered needs its own case-by-case check.
 - **"Postgres TLS now applies" in the chart's release notes** concerns
   `database.ssl.enabled: true` without a CA, which this module never sends.
   Callers who manage that value in their own chart values are the audience.
@@ -350,6 +353,189 @@ the launcher's health server), or the apply rolling back to `1.15.0`.
 
 The worker-only task-runner capacity accounting covers `1.16.0`.
 
+## Moving from chart 1.16.0 to 2.0.0-rc.1
+
+`n8n_chart_version` now defaults to `"2.0.0-rc.1"` (was `"1.16.0"`), a chart
+2.0 release candidate published at the existing default
+`n8n_chart_repository` (`oci://ghcr.io/n8n-io/n8n-helm-chart`; appVersion
+`2.44.5`, n8n 2.x). This module's Helm values target chart 2.0's schema
+([n8n-io/n8n-hosting#250](https://github.com/n8n-io/n8n-hosting/pull/250),
+[#203](https://github.com/n8n-io/terraform-aws-n8n/issues/203)): env vars are
+per-component maps (`env.shared`, `env.worker`, …) rather than the `1.x`
+`config.extraEnv`-style lists, with no `1.x` compatibility path. As a release
+candidate rather than a numbered release, `2.0.0-rc.1` sits outside the
+usual chart-pin verification tiers in `docs/versioning.md` until chart 2.0
+ships a stable release. On chart `2.x`, the module's
+`DB_POSTGRESDB_SSL_ENABLED` entry goes through `env.shared` and is omitted
+whenever the chart itself renders Postgres SSL settings (chart major `>= 2`,
+regardless of repository or prerelease suffix — see
+[docs/versioning.md](./versioning.md)).
+
+**Every n8n pod rolls once**, the same as any chart version bump: the
+chart's `helm.sh/chart` label and the rendered env shape both change, so
+main, worker, and webhook-processor pods all get new pod templates in one
+apply.
+
+**Secret contract change.** Chart `2.0` reads only `N8N_ENCRYPTION_KEY`
+from the core Kubernetes Secret (the one this module creates, or the one
+`n8n_encryption_key_secret_ref` points at). Chart `1.x` also read
+`N8N_HOST`, `N8N_PORT`, and `N8N_PROTOCOL` from it, on main and
+webhook-processor pods. Chart `2.0` gets the equivalents from
+`editor.url`, `webhook.url` and `service.port` instead.
+
+The module-managed Secret keeps writing those three keys, with the same
+values as before. Terraform updates the Secret before the Helm release, and
+a Helm rollback does not restore a Secret that Terraform owns. Without the
+keys, a chart `1.x` main or webhook pod that starts during the upgrade
+(scale-up or eviction) or after an atomic rollback to the `1.x` revision
+would stay in `CreateContainerConfigError`. If you use
+`n8n_encryption_key_secret_ref`, keep those three keys in your own Secret
+for the same reason until you no longer need to roll back to chart `1.x`.
+
+**URL change.** Before this upgrade, the module set n8n's public editor and
+webhook URLs as literal `N8N_EDITOR_BASE_URL` / `WEBHOOK_URL` env entries.
+Chart `2.0` instead takes them as first-class `editor.url` / `webhook.url`
+values, which the module now sets from the same `n8n_domain` and webhook
+base URL it always computed. The effective URLs n8n hands out do not
+change; only the chart value they travel through does.
+
+**Concurrency change.** `n8n_worker_concurrency` is now nullable and
+defaults to `null`: the module then omits `queueMode.workerConcurrency`
+entirely and n8n's own built-in default (`10`) applies, instead of the
+module always sending `10` as before. Chart `2.0` fails to render if
+`queueMode.workerConcurrency` is set together with
+`executions.concurrency.productionLimit` at anything other than `-1`,
+because n8n honors `productionLimit` for worker job concurrency regardless
+of `workerConcurrency`, so the chart rejects the pair as a conflict rather
+than silently preferring one. `n8n_execution_concurrency_limit`'s default
+changes from `100` to `-1` (n8n's own "unlimited" sentinel) so the pair no
+longer conflicts by default; it remains an ordinary, overridable input
+beyond that. Set `n8n_worker_concurrency` together with a non-`-1`
+`n8n_execution_concurrency_limit` and `terraform plan` now fails.
+
+**This changes the effective default.** Under chart `1.x` the module always
+sent both values, and n8n actually ran workers at
+`n8n_execution_concurrency_limit`'s old default of `100`:
+`n8n_worker_concurrency`'s old default of `10` never took effect. With
+`n8n_worker_concurrency` now `null` by default and
+`n8n_execution_concurrency_limit`'s default now `-1`, the effective default
+becomes n8n's own worker concurrency of `10` instead. If you relied on the
+old effective value, set `n8n_execution_concurrency_limit = 100` (or
+whatever your old deployment actually ran at) explicitly rather than
+leaving both at their new defaults.
+`examples/medium` and `examples/large` were both re-benchmarked on a
+pre-release chart 2.0 build (the
+[n8n-io/n8n-hosting#250](https://github.com/n8n-io/n8n-hosting/pull/250)
+tree, before `2.0.0-rc.1` was published; not re-run on `2.0.0-rc.1`) and
+set `n8n_worker_concurrency = 10`; the measured basis, and when a higher
+value is right, is in each example's `main.tf`.
+
+**`n8n_extra_env` / `n8n_worker_extra_env` users: check three things.**
+These inputs keep the same `list(object({ name, value }))` shape and still
+reach the same pods (main + worker + webhook processor for the first,
+workers only for the other). Their values now reach the pods differently,
+which changes three things:
+
+- **More names are rejected at plan.** Chart `2.0` fails the render when
+  an env map repeats a name the chart computes itself. Chart `1.x` instead
+  rendered a second env entry, and the later one won. These names are now
+  reserved, and `terraform plan` fails if your inputs set them:
+  - `EXECUTIONS_TIMEOUT` and `EXECUTIONS_TIMEOUT_MAX`: use
+    `n8n_execution_timeout` and `n8n_execution_timeout_max`.
+  - `EXECUTIONS_DATA_MAX_AGE` and `EXECUTIONS_DATA_PRUNE_MAX_COUNT`: use
+    `n8n_pruning_max_age` and `n8n_pruning_max_count`.
+  - `EXECUTIONS_DATA_PRUNE`, `EXECUTIONS_DATA_HARD_DELETE_BUFFER`,
+    `EXECUTIONS_DATA_PRUNE_HARD_DELETE_INTERVAL` and
+    `EXECUTIONS_DATA_PRUNE_SOFT_DELETE_INTERVAL`: fixed by the module
+    (pruning on, 1 hour buffer, 15 and 60 minute intervals). There is no
+    input for these; remove the entries. **If you set
+    `EXECUTIONS_DATA_PRUNE = "false"`, removing it turns pruning on:** the
+    next start deletes executions older than `n8n_pruning_max_age` or beyond
+    `n8n_pruning_max_count`. Raise those limits first, or stay on the
+    previous module version if you need pruning off.
+  - `N8N_DEPLOYMENT_ARTIFACT`: set by the chart; remove the entry.
+
+  `N8N_CONCURRENCY_PRODUCTION_LIMIT` is also rejected whenever
+  `n8n_worker_concurrency` is set, `n8n_execution_concurrency_limit` is not
+  `-1`, or a worker pool sets `concurrency`, since one of those then governs
+  the setting instead. The other reserved names are unchanged.
+- **`$(VAR)` references are no longer expanded.** Literal values now reach
+  pods through ConfigMap data loaded with `envFrom`. Kubernetes expands
+  `$(VAR)` only in explicit `env[].value` entries
+  ([Kubernetes docs](https://kubernetes.io/docs/tasks/inject-data-application/define-interdependent-environment-variables/)),
+  so a value such as `HTTPS_PROXY = "$(HTTP_PROXY)"` arrives as that literal
+  text, with no error. Write the full value in each entry instead.
+- **Literal values are readable from ConfigMaps.** Anyone who can read
+  ConfigMaps in the n8n namespace can read them. This also applies to
+  `n8n_otel_exporter_otlp_headers` and `n8n_log_streaming_destinations`.
+  For collector credentials, switch to
+  `n8n_otel_exporter_otlp_headers_secret_ref`.
+
+**License cert and extra CA users: nothing to change.** `N8N_LICENSE_CERT`
+(`n8n_license_cert_secret_ref`) and `NODE_EXTRA_CA_CERTS`
+(`n8n_extra_ca_pem`) now render through `env.shared` as chart 2.0
+`{ secretKeyRef }` / literal map values instead of the chart 1.x
+`config.extraEnv` list; the pods, mounts, and annotations they produce are
+unchanged.
+
+**Worker pool `extra_env` users: this does not reach pool pods yet.** Chart
+`2.0.0-rc.1` has no `queueMode.workerGroups`, and `worker-pools.tf` still
+emits a pool's `extra_env` in the pre-2.0 list shape it expects. Until
+worker pools land on a chart `2.0` release (see `docs/versioning.md`'s Chart
+2.0 upgrade requirements), a worker pool's `extra_env` is not wired to any
+rendered value and will not reach that pool's pods. `n8n_worker_pools` also
+now requires either a chart `2.x` `preview.workerpools.*` build or
+`n8n_worker_pools_chart_verified = true` against a verified private mirror:
+the prerelease exemption no longer covers an upstream `-rc.<N>` release
+candidate such as `2.0.0-rc.1`, which is cut from the chart's `main` branch
+and does not carry `queueMode.workerGroups` either, nor a pre-2.0 preview
+such as `1.11.0-preview.workerpools.1`, which predates the chart `2.0`
+env-model this module now sends. No chart `2.x` build of
+`preview/worker-pools` exists yet, so `examples/worker-pools` cannot
+currently be deployed until upstream rebases that branch. See
+`examples/worker-pools/README.md`.
+
+**Other chart changes you will see.** Verified against the published
+`2.0.0-rc.1` release (`oci://ghcr.io/n8n-io/n8n-helm-chart`), not against a
+live upgrade. Each item below is a chart default this module does not set
+(confirmed against `n8n.tf`/`locals.tf`), so it applies exactly as the
+chart ships it:
+
+- **Worker readiness/liveness probes default to `httpGet`** against
+  `/healthz` and `/healthz/readiness` on port `5678`, because
+  `redis.healthCheck.enabled` now defaults to `true` (was `false`). Chart
+  `1.x` defaulted to an exec probe (`pgrep -f 'n8n worker'`) instead. A new
+  `startupProbe` (also httpGet, enabled by default) gates liveness/readiness
+  on the worker finishing its database/migration/Redis startup.
+- **`imagePullSecrets`** is now a top-level chart value rendered directly
+  onto every pod spec. This module still uses its own pre-2.0 workaround
+  (`n8n_image_pull_secrets` creates and attaches secrets to a ServiceAccount
+  it manages itself) rather than this new value; see
+  `local.n8n_manages_service_account` in `locals.tf`.
+- **`webhook.timeout`** (request timeout in milliseconds, `120000` in chart
+  `1.x`) is removed from chart `2.0` entirely. This module never set it, so
+  there is nothing to change here, but it is gone if you referenced it in
+  your own chart-values research.
+- **`enableServiceLinks`** and **`httpRoute`** are new top-level chart
+  values (defaults `false` and `{enabled: false, ...}`). Not set by this
+  module; see [docs/helm-chart-coverage.md](./helm-chart-coverage.md).
+
+`containerSecurityContext`, `hostAliases`, `image.digest` /
+`taskRunners.image.digest` and `persistence.annotations` already exist in
+chart `1.16.0` and are not changes in this move.
+
+**Plan for a mixed-revision window.** During the rolling update, old
+chart `1.16.0` pods keep running beside new ones. Old pods read keys that
+chart `2.0` removes from the chart-owned ConfigMap `n8n` (for example
+`N8N_WEBHOOK_TIMEOUT`, `N8N_MULTI_MAIN_SETUP_*` and `N8N_RUNNERS_MODE`) and
+the chart-owned Secret `n8n-task-runners`. An old container that restarts in
+that window (crash, eviction, node drain) can stay in
+`CreateContainerConfigError` until the rollout finishes. The module keeps
+the Terraform-owned legacy Secret keys (see **Secret contract change**
+above), and a completed Helm rollback restores the chart-owned objects, so
+the window closes either way. Upgrade in a low-traffic window, and avoid node
+drains and node group updates until the release reports `deployed`.
+
 ## Before bumping
 
 1. Read the breaking-changes doc for every major version you're crossing, not just the target: [n8n v2.0 breaking changes](https://docs.n8n.io/2-0-breaking-changes/), [n8n v3.0 breaking changes](https://docs.n8n.io/changelog/v30-breaking-changes) (scheduled October 2026). Jumping from, say, 1.x straight to a 3.x tag means both apply.
@@ -367,11 +553,11 @@ but makes the editor, REST API, and scheduled triggers unavailable until the
 replacement starts. Plan a maintenance window; missed schedule times are not
 promised to replay.
 
-With chart `1.16.0` and newer, no main PodDisruptionBudget is rendered in
-this topology, so node drains and managed node updates can always evict the
-only main. Older charts render a main PDB with `minAvailable = 0`, which
-permits the same eviction. Either way, such maintenance causes downtime.
-Worker and webhook rollout strategies are unchanged.
+Chart `2.0` renders no main `PodDisruptionBudget` at all in this topology
+(`templates/pdb.yaml` renders one only when a second main pod can exist),
+so node drains and managed node updates can evict the only main with
+nothing to block them. Such maintenance also causes downtime. Worker and
+webhook rollout strategies are unchanged.
 
 Moving from single-main back to two or more mains is not overlap-free: the
 Deployment scales the existing single-main ReplicaSet up before the
@@ -400,8 +586,8 @@ before the replacement starts, and verify a node drain can evict the main.
 Rendering tests cannot establish controller behavior.
 `tests/scripts/smoke-test.sh` detects the single-main topology from the
 multi-main flag on the main Deployment and fails if the HPA is not pinned to
-`1/1`, the strategy is not `Recreate`, or the disruption budget (where the
-chart renders one, before `1.16.0`) is not `minAvailable = 0`.
+`1/1`, the strategy is not `Recreate`, or a main `PodDisruptionBudget` exists
+at all (chart `2.0` renders none in this topology; see above).
 
 For scale, on `examples/small` (n8n 2.37.10, `t3.xlarge` nodes) a
 `kubectl rollout restart` of the main produced about 30 seconds of ALB 503
@@ -429,5 +615,15 @@ numbers longer.
 ## Rolling back
 
 Do not only restore the old tags. If the upgrade ran database migrations, stop n8n and either run `n8n db:revert` on the current version once per reversible migration or restore the pre-upgrade database. Check release notes for irreversible migrations. Then restore the previous chart, application, and task-runner tags and apply. See n8n's [reverting an upgrade](https://docs.n8n.io/deploy/host-n8n/install-options/install-with-npm/#reverting-an-upgrade) guidance.
+
+**Rolling back from chart `2.x` to chart `1.x`.** This module version rejects any chart `1.x` at plan, so restoring `n8n_chart_version = "1.16.0"` alone fails. Roll the module back too:
+
+1. Handle database migrations as described above.
+2. Pin the module back to the release you upgraded from (`0.6.0` or earlier): the registry `version`, or the `ref` in a Git `source`. Restore the previous chart, application, and task-runner tags with it, then run `terraform init` so Terraform installs that module version. Do not add `-upgrade`, which can also move your providers.
+3. Restore that release's inputs. In particular, `n8n_execution_concurrency_limit` defaulted to `100` and `n8n_worker_concurrency` to `10` there. Inputs added in this release, such as `n8n_otel_exporter_otlp_headers_secret_ref`, do not exist in the older version.
+4. If you use `n8n_encryption_key_secret_ref`, your own Secret must carry `N8N_HOST`, `N8N_PORT` and `N8N_PROTOCOL` as well as `N8N_ENCRYPTION_KEY`: chart `1.x` requires all four, and the module does not write them on that path. Without `n8n_encryption_key_secret_ref`, the module-managed Secret already carries all four.
+5. Run `terraform plan`, review it, and apply.
+
+A Helm-only rollback (`helm rollback`) restores the chart `1.x` pods, but leaves the Terraform configuration targeting chart `2.x`. The next `terraform apply` upgrades again.
 
 If the release is stuck in `pending-rollback` from a failed upgrade, you cannot `terraform apply` your way out of it directly; the release must be unstuck first. See [Recovery from a stuck `pending-rollback` release](./troubleshooting.md#recovery-from-a-stuck-pending-rollback-release).

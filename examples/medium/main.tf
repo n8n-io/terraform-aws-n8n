@@ -161,25 +161,34 @@ module "n8n" {
   n8n_webhook_memory_limit     = "2Gi"
 
   # ── Workers ───────────────────────────────────────────────────────────────────
-  # concurrency=20: doubles throughput per pod vs the default 10.
   # pool_size=10 is a per-process lazy maximum, not a value derived from worker
   # or workflow concurrency. Keep aggregate database capacity within the budget
   # described above.
   n8n_worker_keda_min_replicas = 5
   n8n_worker_keda_max_replicas = 40
-  n8n_worker_concurrency       = 20
   db_postgresdb_pool_size      = 10
 
   # ── Execution settings ────────────────────────────────────────────────────────
-  # Concurrency limit of 200 gives 2× headroom over the worker floor × concurrency.
+  # Chart 2.0 rejects setting both n8n_worker_concurrency and
+  # n8n_execution_concurrency_limit, so only one can govern per-worker
+  # concurrency now; 10 is n8n's own default and the measured optimum for
+  # this tier's assumed CPU-bound/fast-call workload, measured on a
+  # pre-release chart 2.0 build (the n8n-io/n8n-hosting#250 tree, before
+  # 2.0.0-rc.1 was published; worker CPU is the ceiling at ~60-80 exec/s
+  # across the 5-worker floor regardless of the setting). Not re-run on
+  # 2.0.0-rc.1 or any later chart 2.x. Raise it
+  # only if most workflows wait on slow external calls instead. See this
+  # example's README → "Worker concurrency benchmark" for the full sweep
+  # and the live-scaling A/B against the old chart-1.x effective value.
+
   # 7-day pruning keeps the execution_entity table at a manageable size without
   # losing useful debugging history. Caveat for sustained high rates: n8n's
   # hard deletion is hardcoded at a 100 executions/s ceiling (~8.6M/day,
   # leader-only), so retention math stops holding as sustained completion
   # rates approach 100/s; see the large example's warning for the mechanism.
-  n8n_execution_concurrency_limit = 200
-  n8n_pruning_max_age             = 168
-  n8n_pruning_max_count           = 500000
+  n8n_worker_concurrency = 10
+  n8n_pruning_max_age    = 168
+  n8n_pruning_max_count  = 500000
 
   # ── TLS proxy support ───────────────────────────────────────────────────────
   # Outbound CA trust, inbound proxy hop count, and proxy routing env. See

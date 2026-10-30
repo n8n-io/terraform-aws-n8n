@@ -7,6 +7,237 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+### Added
+
+- `n8n_otel_exporter_otlp_headers_secret_ref`: reads the OTLP header string
+  (`N8N_OTEL_EXPORTER_OTLP_HEADERS`) from a caller-managed Kubernetes Secret,
+  rendered into `env.shared` as a `secretKeyRef`. The value stays out of
+  Terraform state, the Helm release and the chart 2.0 env ConfigMaps, where
+  the literal `n8n_otel_exporter_otlp_headers` now lands. Mutually exclusive
+  with `n8n_otel_exporter_otlp_headers`.
+
+### Changed
+
+- **Breaking: this module's Helm values now target the n8n chart's 2.0
+  input schema** (env as per-component maps,
+  [n8n-io/n8n-hosting#250](https://github.com/n8n-io/n8n-hosting/pull/250);
+  [#203](https://github.com/n8n-io/terraform-aws-n8n/issues/203)), with no 1.x
+  compatibility path. Chart 2.0 drops the `config.extraEnv` /
+  `redis.extraEnv` / `s3.storage.extraEnv` / `queueMode.workerExtraEnv` /
+  `webhookProcessor.extraEnv` / `webhook.extraEnv` / `executions.extraEnv` /
+  `taskRunners.extraEnv` lists in favor of flat `env.<component>` maps; every
+  env var this module previously passed through those extraEnv-style lists
+  (`n8n_extra_env` / `n8n_worker_extra_env` / each `n8n_worker_pools[*].extra_env`,
+  plus the module's own managed entries) now lands in `env.shared` (main,
+  worker, and webhook processor) or `env.worker` (workers and
+  `n8n_worker_pools` pools only) instead — except n8n's public editor and
+  webhook URLs, which now come from the chart's `editor.url` / `webhook.url`
+  fields rather than `env.shared`, and Secret-backed values (the encryption
+  key, license key, task-runner auth token), which still reach pods as
+  `secretKeyRef`s, not plain `env.shared` values.
+  `n8n_extra_env`, `n8n_worker_extra_env`, and each
+  `n8n_worker_pools[*].extra_env` keep the same
+  `list(object({ name, value }))` shape and reach the same pods. Callers can
+  see these differences:
+  - **More names are rejected at plan.** Chart 2.0 fails the render when an
+    env map repeats a name it computes itself, where chart 1.x rendered a
+    second env entry that won. `EXECUTIONS_TIMEOUT`,
+    `EXECUTIONS_TIMEOUT_MAX`, `EXECUTIONS_DATA_PRUNE`,
+    `EXECUTIONS_DATA_MAX_AGE`, `EXECUTIONS_DATA_PRUNE_MAX_COUNT`,
+    `EXECUTIONS_DATA_HARD_DELETE_BUFFER`,
+    `EXECUTIONS_DATA_PRUNE_HARD_DELETE_INTERVAL`,
+    `EXECUTIONS_DATA_PRUNE_SOFT_DELETE_INTERVAL` and
+    `N8N_DEPLOYMENT_ARTIFACT` are now reserved. Use `n8n_execution_timeout`,
+    `n8n_execution_timeout_max`, `n8n_pruning_max_age` and
+    `n8n_pruning_max_count` instead. Pruning on/off and the hard-delete
+    buffer and intervals are fixed by the module and can no longer be
+    overridden. If you set `EXECUTIONS_DATA_PRUNE = "false"`, removing it
+    turns pruning on: raise `n8n_pruning_max_age` and `n8n_pruning_max_count`
+    first, or stay on the previous module version.
+  - **`$(VAR)` references are no longer expanded.** Literal values now reach
+    pods through ConfigMap data loaded with `envFrom`, and Kubernetes only
+    expands `$(VAR)` in explicit `env[].value` entries. A value such as
+    `HTTPS_PROXY = "$(HTTP_PROXY)"` now arrives as that literal text. Write
+    the full value instead.
+  - **Literal values are readable from ConfigMaps.** Anyone who can read
+    ConfigMaps in the n8n namespace can read them, which includes
+    `n8n_otel_exporter_otlp_headers` and `n8n_log_streaming_destinations`.
+    Use `n8n_otel_exporter_otlp_headers_secret_ref` for collector
+    credentials.
+  - The Kubernetes Secret `secretRefs.existingSecret` points at
+    (`kubernetes_secret.n8n`, or the caller's own Secret via
+    `n8n_encryption_key_secret_ref`) is now read for only `N8N_ENCRYPTION_KEY`.
+    `N8N_HOST`, `N8N_PORT`, and `N8N_PROTOCOL` are no longer read from it.
+    `n8n_encryption_key_secret_ref`'s caller-supplied Secret therefore only
+    needs `N8N_ENCRYPTION_KEY` now; the other three keys it previously had
+    to carry are ignored if still present. (The module-managed Secret can
+    still carry a second key, `N8N_LICENSE_ACTIVATION_KEY`, on the
+    module-managed license path — that key reaches the chart independently
+    through `license.existingSecret`, not through `secretRefs.existingSecret`.)
+    The module-managed Secret still writes `N8N_HOST`, `N8N_PORT` and
+    `N8N_PROTOCOL` with their 0.6.0 values, unread by chart 2.0, so a chart
+    1.x pod that starts during the upgrade or after a rollback can still
+    start. They will be removed once rolling back to chart 1.x is no longer
+    supported.
+  - n8n's public editor and webhook URLs, for n8n images that already
+    satisfy the chart's minimum supported version, are now set via the
+    chart's `editor.url` / `webhook.url` values (derived from `n8n_domain`
+    and the module's webhook base URL) instead of literal
+    `N8N_EDITOR_BASE_URL` / `WEBHOOK_URL` env entries. The effective URLs
+    are unchanged. For an image tag that may predate n8n 2.30.0 (where the
+    deprecated `WEBHOOK_URL` name was still the only one n8n read), the
+    module keeps emitting legacy `WEBHOOK_URL` through `env.shared`
+    alongside `webhook.url` as a fallback.
+  - `n8n_worker_concurrency` is now nullable, defaulting to `null`: the
+    module then omits `queueMode.workerConcurrency` entirely and n8n's own
+    built-in default (`10`) applies, rather than the module always sending
+    `10` as before. Chart 2.0 fails to render if `queueMode.workerConcurrency`
+    is set together with `executions.concurrency.productionLimit` at
+    anything other than `-1`, because n8n honors `productionLimit` for
+    worker job concurrency regardless of `workerConcurrency`, so the chart
+    rejects the pair as a conflict. `n8n_execution_concurrency_limit`'s
+    default changes from `100` to `-1` (n8n's own "unlimited" sentinel) so
+    the pair no longer conflicts by default; it remains an ordinary,
+    overridable input beyond that;
+    a new plan-time validation rejects setting `n8n_worker_concurrency`
+    together with a non-`-1` `n8n_execution_concurrency_limit`, and
+    `n8n_extra_env`/`n8n_worker_extra_env`/a worker pool's `extra_env` reject
+    the raw `N8N_CONCURRENCY_PRODUCTION_LIMIT` name whenever
+    `n8n_worker_concurrency` is set or `n8n_execution_concurrency_limit` is
+    not `-1`, closing the same chart-2.0 render failure reached a different
+    way.
+    **Behavior change for callers who left both at their old defaults:**
+    under chart 1.x the module always sent both values and n8n actually ran
+    workers at `n8n_execution_concurrency_limit`'s old default of `100`
+    (`n8n_worker_concurrency`'s old default of `10` never took effect); with
+    `n8n_worker_concurrency` now `null` by default, the effective default
+    becomes n8n's own worker concurrency of `10`. Set
+    `n8n_execution_concurrency_limit` explicitly to recover the old
+    effective value. `examples/medium` and `examples/large` were both
+    re-benchmarked on a pre-release chart 2.0 build (the
+    n8n-io/n8n-hosting#250 tree, before `2.0.0-rc.1` was published; not
+    re-run on `2.0.0-rc.1`) and now set `n8n_worker_concurrency = 10`
+    (the old effective `200` and `2000` bought no throughput and cost tail
+    latency; see each `main.tf` for the measured basis and its limits).
+  - `examples/large`: the shipped PgBouncer (4 replicas at 500m CPU) was the
+    first limiter at about 600-620 req/s. It is now 8 replicas at 1000m
+    (PgBouncer is single-threaded, so only replicas add capacity), measured
+    at about 900-1,000 req/s sustained (itself a noisy, bistable range near a
+    Postgres lock-contention ceiling — see `examples/large/pgbouncer.tf` and
+    its README), and `STATS_USERS=n8n` is set so `SHOW POOLS`/`STATS` work;
+    the PgBouncer PodDisruptionBudget moves from `min_available = 1` to
+    `max_unavailable = 1` so a drain can still take at most one of the now
+    8 replicas regardless of count. The Kubernetes provider replaces a
+    PodDisruptionBudget whose `spec` changes, so the budget is deleted and
+    recreated during this apply: avoid node drains until it completes.
+    The example's README no longer claims
+    2,400 req/s peaks: its average target is restated as about 580-700
+    req/s, with the measured ceiling stated beside it.
+  - Every n8n pod rolls once on the upgrade to chart 2.0, as on any chart
+    version bump.
+  - At single-main (`n8n_main_hpa_min_replicas = 1`), chart 2.0 renders no
+    main `PodDisruptionBudget` at all, rather than one with
+    `minAvailable = 0` as chart 1.x did: `templates/pdb.yaml` only renders
+    the object when a second main pod can exist. The module still sends
+    `minAvailable = 1` unconditionally (`local.n8n_main_pdb_min_available`
+    is gone); the chart's own single-main gate makes that value moot there.
+    Node drains and managed node updates can still evict the only main
+    either way. See `docs/upgrading-n8n.md#single-main-maintenance`.
+  - **Default `n8n_chart_version` moves to `"2.0.0-rc.1"`** (was `"1.16.0"`),
+    a chart 2.0 release candidate published at the existing default
+    `n8n_chart_repository` (`oci://ghcr.io/n8n-io/n8n-helm-chart`; appVersion
+    `2.44.5`, n8n 2.x). `n8n_chart_version` now requires a chart `2.x`: a 1.x
+    chart silently ignores this module's `env.shared`/`env.worker` values and
+    the deployment would run with no n8n configuration at all. As a
+    release-candidate rather than a numbered release, `2.0.0-rc.1` is not
+    covered by the usual chart-pin verification tiers in
+    `docs/versioning.md`; a stable chart `2.x` is expected alongside n8n's
+    own stable `v3` line. See `docs/upgrading-n8n.md` for the full upgrade
+    notes.
+  - **`n8n_chart_version` now rejects any chart `1.x` at plan time**, via a
+    new validation on the variable (`variables.tf`): the module passes n8n's
+    environment through chart 2.0's `env.shared`/`env.worker` maps
+    (`helm_release.n8n`), which a chart `1.x` silently ignores in favor of
+    its own pre-2.0 `config.extraEnv` list, so n8n would start with no
+    database, Redis, encryption key, or any other configuration at all.
+    Mirrored into `examples/worker-pools/variables.tf`'s own
+    `n8n_chart_version`. This makes every chart-`1.x`-specific version gate
+    elsewhere in the module dead code, now removed along with the
+    `tests/defaults.tftest.hcl` cases that only exercised it:
+    `local.n8n_chart_renders_postgres_ssl_enabled` (its `DB_POSTGRESDB_SSL_ENABLED`
+    chart-detection logic is gone — every accepted chart now renders it
+    unconditionally, see the entry below), the `n8n_worker_keda_pause_supported`
+    gate and its matching plan-time check (KEDA worker pause is readable on
+    every chart this module now accepts), `local.n8n_chart_version_parts`,
+    the major/minor branch of `local.n8n_image_known_current` (now always
+    true), and `n8n_worker_pools`'s pre-2.0-preview branch of its
+    chart-prerelease exemption (a pre-2.0 preview can no longer reach that
+    check at all, since `n8n_chart_version`'s own validation rejects it
+    first). `local.n8n_chart_has_worker_only_runners`'s verified-chart
+    allowlist narrows from six 1.x releases plus `2.0.0-rc.1` to
+    `2.0.0-rc.1` alone, for the same reason.
+  - **`N8N_CONCURRENCY_PRODUCTION_LIMIT` is now also reserved in a worker
+    pool's `extra_env`** (each `n8n_worker_pools[*].extra_env`) whenever any
+    `n8n_worker_pools` entry sets its own `concurrency`, not only when the
+    module-wide `n8n_worker_concurrency`/`n8n_execution_concurrency_limit`
+    conflict applies: a pool's `concurrency` renders
+    `queueMode.workerGroups[].concurrency`, which the chart's
+    worker-concurrency validation treats the same as the module-wide
+    `queueMode.workerConcurrency`, so a literal
+    `N8N_CONCURRENCY_PRODUCTION_LIMIT` in that same pool's `extra_env` fails
+    the Helm render the same way.
+  - `n8n_worker_pools`'s chart-prerelease exemption (`n8n_worker_pools_chart_verified`)
+    is now an allowlist rather than a blacklist: only a prerelease tag
+    starting with `preview.` (such as `2.0.0-preview.workerpools.1`, the
+    tag the `preview/worker-pools` branch's own `Preview chart` action
+    publishes) is exempt automatically. An upstream release candidate (a
+    version matching `-rc.<N>`, such as `2.0.0-rc.1`), a `-beta.N` build, or
+    a `-alpha.N` build no longer passes: that suffix is cut from the
+    chart's `main` branch, which does not carry `queueMode.workerGroups`
+    (n8n-io/n8n-hosting#189, merged only to the `preview/worker-pools`
+    branch). `2.0.0-rc.1`'s `values.yaml` has no `queueMode.workerGroups`
+    at all, so a caller relying on the old blanket prerelease exemption
+    with worker pools configured now fails at plan with
+    `n8n_worker_pools_chart_error` instead of applying cleanly with no
+    pool behind it. No chart `2.x` build of `preview/worker-pools` exists
+    yet, so `examples/worker-pools` cannot currently be deployed until
+    upstream rebases that branch onto the `2.0` env model. Pin a chart
+    `2.x` `preview.workerpools.*` build once one exists, or set
+    `n8n_worker_pools_chart_verified = true` against a verified private
+    mirror; see `examples/worker-pools/README.md`.
+  - The `DB_POSTGRESDB_SSL_ENABLED` chart-renders-it-for-me gate
+    (`local.n8n_chart_renders_postgres_ssl_enabled`) is gone: since
+    `n8n_chart_version` now requires chart major `2` or higher, chart 2.0
+    always renders `database.ssl.enabled` as `DB_POSTGRESDB_SSL_ENABLED`
+    unconditionally, so the module unconditionally omits its own entry
+    whenever a CA is delivered (`postgres_ssl_ca_active`), rather than
+    checking which chart version is pinned first. Sending the module's own
+    entry alongside it through `env.shared` would fail the chart's
+    `n8n.validateEnv` render outright on a duplicate name, rather than
+    Kubernetes silently keeping one copy as on chart 1.x.
+  - `N8N_LICENSE_CERT` (`n8n_license_cert_secret_ref`, offline license
+    activation) and `NODE_EXTRA_CA_CERTS` (`n8n_extra_ca_pem`, extra CA
+    trust) now render through `env.shared` as chart 2.0
+    `{ secretKeyRef }` / literal map values, rather than the chart 1.x
+    `config.extraEnv` list; the effective pods, mounts and annotations are
+    unchanged. `kubernetes_secret.n8n` is now created whenever at least one
+    of the encryption key (`n8n_encryption_key_secret_ref == null`) or the
+    license key (`n8n_license_key_secret_ref == null` and
+    `n8n_license_cert_secret_ref == null`) still needs a module-managed
+    home; the validation that `n8n_encryption_key_secret_ref` requires a
+    caller-managed license Secret is dropped, because chart 2.0's
+    `secretRefs.existingSecret` and `license.existingSecret` are independent
+    values and no longer have to share one Secret.
+  - Values chart `2.0.0-rc.1` removed, and fails the render on, are no
+    longer sent: `database.useExternal`, `redis.useExternal`,
+    `s3.storage.mode` (`s3.enabled` alone selects the `s3` binary data mode),
+    `taskRunners.broker.listenAddress` (the broker listens on localhost) and
+    `taskRunners.authToken.value`. The task runner token now lives in a new
+    module-managed Secret, `kubernetes_secret_v1.n8n_task_runner_token` (key
+    `N8N_RUNNERS_AUTH_TOKEN`), referenced through
+    `taskRunners.authToken.existingSecret`, so it never depends on the core
+    Secret, which may be the caller's own.
+
 ## [0.6.0] - 2026-10-26
 
 Minor release per the [stability contract](./README.md#stability--versioning).
