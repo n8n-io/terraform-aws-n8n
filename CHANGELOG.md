@@ -37,8 +37,8 @@ this project adheres to the stability contract in
   `secretKeyRef`s, not plain `env.shared` values.
   `n8n_extra_env`, `n8n_worker_extra_env`, and each
   `n8n_worker_pools[*].extra_env` keep the same
-  `list(object({ name, value }))` shape and reach the same pods, with three
-  differences callers can see:
+  `list(object({ name, value }))` shape and reach the same pods. Callers can
+  see these differences:
   - **More names are rejected at plan.** Chart 2.0 fails the render when an
     env map repeats a name it computes itself, where chart 1.x rendered a
     second env entry that won. `EXECUTIONS_TIMEOUT`,

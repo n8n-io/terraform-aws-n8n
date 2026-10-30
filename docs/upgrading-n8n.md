@@ -621,7 +621,7 @@ Do not only restore the old tags. If the upgrade ran database migrations, stop n
 1. Handle database migrations as described above.
 2. Pin the module back to the release you upgraded from (`0.6.0` or earlier): the registry `version`, or the `ref` in a Git `source`. Restore the previous chart, application, and task-runner tags with it, then run `terraform init` so Terraform installs that module version. Do not add `-upgrade`, which can also move your providers.
 3. Restore that release's inputs. In particular, `n8n_execution_concurrency_limit` defaulted to `100` and `n8n_worker_concurrency` to `10` there. Inputs added in this release, such as `n8n_otel_exporter_otlp_headers_secret_ref`, do not exist in the older version.
-4. If you use `n8n_encryption_key_secret_ref`, make sure your Secret still carries `N8N_HOST`, `N8N_PORT` and `N8N_PROTOCOL`. Chart `1.x` requires all four keys. The module-managed Secret still carries them.
+4. If you use `n8n_encryption_key_secret_ref`, your own Secret must carry `N8N_HOST`, `N8N_PORT` and `N8N_PROTOCOL` as well as `N8N_ENCRYPTION_KEY`: chart `1.x` requires all four, and the module does not write them on that path. Without `n8n_encryption_key_secret_ref`, the module-managed Secret already carries all four.
 5. Run `terraform plan`, review it, and apply.
 
 A Helm-only rollback (`helm rollback`) restores the chart `1.x` pods, but leaves the Terraform configuration targeting chart `2.x`. The next `terraform apply` upgrades again.

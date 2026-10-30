@@ -3337,8 +3337,10 @@ variable "n8n_otel_exporter_otlp_headers_secret_ref" {
       var.n8n_otel_exporter_otlp_headers_secret_ref == null ? true :
       can(regex("^[-._a-zA-Z0-9]+$", coalesce(var.n8n_otel_exporter_otlp_headers_secret_ref.key, "headers")))
       && length(coalesce(var.n8n_otel_exporter_otlp_headers_secret_ref.key, "headers")) <= 253
+      && !contains([".", ".."], coalesce(var.n8n_otel_exporter_otlp_headers_secret_ref.key, "headers"))
+      && !startswith(coalesce(var.n8n_otel_exporter_otlp_headers_secret_ref.key, "headers"), "..")
     )
-    error_message = "n8n_otel_exporter_otlp_headers_secret_ref.key must be a valid Secret key of 253 characters or fewer: alphanumerics, '-', '_' and '.' only."
+    error_message = "n8n_otel_exporter_otlp_headers_secret_ref.key must be a valid Secret key of 253 characters or fewer: alphanumerics, '-', '_' and '.' only, and not \".\", \"..\" or a name starting with \"..\", which Kubernetes rejects."
   }
 }
 

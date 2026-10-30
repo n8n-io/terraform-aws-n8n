@@ -11655,6 +11655,44 @@ run "otel_headers_secret_ref_rejects_an_invalid_name" {
   expect_failures = [var.n8n_otel_exporter_otlp_headers_secret_ref]
 }
 
+# Kubernetes rejects ".", ".." and any key starting with ".." as Secret
+# data keys (IsConfigMapKey), even though they match the character set.
+run "otel_headers_secret_ref_rejects_a_dot_dot_key" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers", key = "..data" }
+  }
+
+  expect_failures = [var.n8n_otel_exporter_otlp_headers_secret_ref]
+}
+
+run "otel_headers_secret_ref_rejects_a_single_dot_key" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers", key = "." }
+  }
+
+  expect_failures = [var.n8n_otel_exporter_otlp_headers_secret_ref]
+}
+
+run "otel_headers_secret_ref_accepts_a_dotted_key" {
+  command = plan
+
+  variables {
+    n8n_otel_enabled                          = true
+    n8n_otel_exporter_otlp_headers_secret_ref = { name = "otel-headers", key = "otlp.headers" }
+  }
+
+  assert {
+    condition     = local.n8n_otel_headers_env.N8N_OTEL_EXPORTER_OTLP_HEADERS.secretKeyRef.key == "otlp.headers"
+    error_message = "A key with a single inner dot is a valid Secret key and must be accepted."
+  }
+}
+
 run "otel_headers_secret_ref_rejects_an_invalid_key" {
   command = plan
 
