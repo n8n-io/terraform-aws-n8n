@@ -556,7 +556,9 @@ Route to the Services the module exposes as outputs:
 
 The module runs the chart with `disableProductionWebhooksOnMainProcess = true`,
 which disables **five** endpoint families on the main pods, not one, plus two
-fixed callback paths. Each returns 404 if it reaches `n8n-main`:
+fixed callback paths. `n8n-main` serves none of them. A `POST` that reaches it
+returns 404, and a `GET` returns the editor HTML with a 200, so the failure is
+easy to miss:
 
 | Prefix | Breaks if misrouted |
 | --- | --- |
@@ -3109,7 +3111,7 @@ doing at this node count, but neither removes the fivefold waste at source.
 | <a name="output_n8n_service_name"></a> [n8n\_service\_name](#output\_n8n\_service\_name) | Name of the Kubernetes Service fronting the n8n main pods (the editor UI and REST API), on port 5678. Point a customer-managed Ingress at this when create\_ingress = false. |
 | <a name="output_n8n_service_port"></a> [n8n\_service\_port](#output\_n8n\_service\_port) | Port both n8n Services listen on. Use with n8n\_service\_name / n8n\_webhook\_service\_name when building your own Ingress. |
 | <a name="output_n8n_url"></a> [n8n\_url](#output\_n8n\_url) | URL to access n8n once DNS propagates |
-| <a name="output_n8n_webhook_path_prefixes"></a> [n8n\_webhook\_path\_prefixes](#output\_n8n\_webhook\_path\_prefixes) | Path prefixes that must be routed to n8n\_webhook\_service\_name rather than n8n\_service\_name. The main pods run with production webhooks disabled, so every one of these returns 404 if it reaches them: /webhook, /webhook-waiting, /form, /form-waiting, /mcp, and the Slack and Telegram human-in-the-loop callbacks /webhook-waiting-slack and /webhook-waiting-telegram. The two callbacks are separate paths that the /webhook-waiting prefix does not match. Route all of them when building your own Ingress with create\_ingress = false. |
+| <a name="output_n8n_webhook_path_prefixes"></a> [n8n\_webhook\_path\_prefixes](#output\_n8n\_webhook\_path\_prefixes) | Path prefixes that must be routed to n8n\_webhook\_service\_name rather than n8n\_service\_name. The main pods run with production webhooks disabled and serve none of these, so a request that reaches them never runs a workflow (a POST returns 404, a GET returns the editor HTML with a 200): /webhook, /webhook-waiting, /form, /form-waiting, /mcp, and the Slack and Telegram human-in-the-loop callbacks /webhook-waiting-slack and /webhook-waiting-telegram. The two callbacks are separate paths that the /webhook-waiting prefix does not match. Route all of them when building your own Ingress with create\_ingress = false. |
 | <a name="output_n8n_webhook_service_name"></a> [n8n\_webhook\_service\_name](#output\_n8n\_webhook\_service\_name) | Name of the Kubernetes Service fronting the n8n webhook processors, on port 5678. Production webhooks are disabled on the main pods, so a customer-managed Ingress must route /webhook here. |
 | <a name="output_namespace"></a> [namespace](#output\_namespace) | Kubernetes namespace n8n is deployed into. |
 | <a name="output_node_group_role_arn"></a> [node\_group\_role\_arn](#output\_node\_group\_role\_arn) | IAM role ARN the EKS node group runs under, and therefore the principal the kubelet pulls container images as. Name it in a cross-account ECR repository policy to let this cluster pull a custom n8n image from a registry in another account, which is the mechanism to reach for there: an ECR authorization token lasts 12 hours, so an imagePullSecrets holding one goes stale long before the next apply. For registries that issue static credentials, use n8n\_image\_pull\_secrets instead. Null when create\_eks = false: the module creates no node group on that path, and an existing node group's role (if the caller even runs a conventional EKS-managed one) is not something this module can discover generically. |

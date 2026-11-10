@@ -32,7 +32,8 @@ this project adheres to the stability contract in
   on a public load balancer, which is where Slack and Telegram need to reach
   them. An Ingress that hardcodes the prefixes needs both paths added by hand.
   The two entries are appended to the list, so existing positions do not
-  change.
+  change. The list grows from five entries to seven, so a caller that asserts
+  its exact length needs that assertion updated.
 
 ## [0.6.0] - 2026-10-26
 

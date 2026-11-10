@@ -137,11 +137,11 @@ A production webhook, Form Trigger, Wait-node resumption, or MCP Server Trigger 
 
 Most often seen on `/webhook-waiting`, `/form`, `/form-waiting`, and `/mcp`, while plain `/webhook` works.
 
-The same misrouting looks different for requests that are not `GET`, such as a webhook that receives a `POST`: they return `404`, not `200`. The Slack and Telegram human-in-the-loop callbacks are the common case. The approval button in Slack shows a warning, the Telegram button does nothing, and the waiting execution never resumes.
+The same misrouting looks different for a `POST`, such as a webhook that receives one: it returns `404`, not `200`. The Slack and Telegram human-in-the-loop callbacks are the common case. The approval button in Slack shows a warning, the Telegram button does nothing, and the waiting execution never resumes.
 
 ### Cause
 
-The request reached the **main** pods rather than the webhook processors. This module runs the chart with `disableProductionWebhooksOnMainProcess = true`, which disables five endpoint families on the mains: `/webhook`, `/webhook-waiting`, `/form`, `/form-waiting`, and `/mcp`. It also disables the two fixed paths for the Slack and Telegram human-in-the-loop callbacks, `/webhook-waiting-slack` and `/webhook-waiting-telegram`. When one of those paths hits a main pod, no handler is registered. A `GET` request then falls through to the editor's single-page-app handler, which answers `200` with the editor HTML. That handler serves `GET` requests only, so any other method, including the `POST` that Slack and Telegram send, gets `404`.
+The request reached the **main** pods rather than the webhook processors. This module runs the chart with `disableProductionWebhooksOnMainProcess = true`, which disables five endpoint families on the mains: `/webhook`, `/webhook-waiting`, `/form`, `/form-waiting`, and `/mcp`. It also disables the two fixed paths for the Slack and Telegram human-in-the-loop callbacks, `/webhook-waiting-slack` and `/webhook-waiting-telegram`. When one of those paths hits a main pod, no handler is registered. A `GET` request then falls through to the editor's single-page-app handler, which answers `200` with the editor HTML. That handler does not serve a `POST`, so the callbacks that Slack and Telegram send get `404`.
 
 Three ways to end up here:
 

@@ -84,8 +84,12 @@ locals {
   #
   # Append new entries at the end. The list is exposed as the
   # n8n_webhook_path_prefixes output, so reordering it moves entries a caller
-  # may read by position. Order does not affect ALB rule priority: the AWS Load
-  # Balancer Controller sorts Prefix paths by length before assigning it.
+  # may read by position. Order does not affect routing. No entry matches a
+  # path another entry matches, because Prefix matching works on whole path
+  # elements, and the "/" catch-all is declared after this list in n8n.tf.
+  # The AWS Load Balancer Controller also sorts Prefix paths longest first
+  # before assigning rule priority, from v2.4.3 on. var.lbc_chart_version
+  # accepts older charts, where rules keep the declared order instead.
   n8n_webhook_path_prefixes = [
     "/webhook",
     "/webhook-waiting",
