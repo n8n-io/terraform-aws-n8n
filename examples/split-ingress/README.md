@@ -79,7 +79,9 @@ The admin alias is a **public** Route53 record pointing at private addresses. An
 
 Both ALBs route the prefixes n8n disables on the main pods, read from `module.n8n.n8n_webhook_path_prefixes` rather than hardcoded, so this example cannot drift as n8n adds endpoints:
 
-`/webhook` · `/webhook-waiting` · `/form` · `/form-waiting` · `/mcp`
+`/webhook` · `/webhook-waiting` · `/form` · `/form-waiting` · `/mcp` · `/webhook-waiting-slack` · `/webhook-waiting-telegram`
+
+The last two are the fixed paths n8n serves the Slack and Telegram human-in-the-loop callbacks on. Slack and Telegram call them from the internet, so they have to be on the public ALB.
 
 | | Public ALB | Internal ALB |
 | --- | --- | --- |

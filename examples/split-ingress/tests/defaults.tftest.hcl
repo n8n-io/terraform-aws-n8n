@@ -270,8 +270,8 @@ run "module_ingress_is_disabled" {
   command = plan
 
   assert {
-    condition     = length(module.n8n.n8n_webhook_path_prefixes) == 5
-    error_message = "The module should expose all five webhook prefixes for this example to route"
+    condition     = length(module.n8n.n8n_webhook_path_prefixes) == 7
+    error_message = "The module should expose all seven webhook paths for this example to route: the five prefix families plus the Slack and Telegram callback paths"
   }
 
   # With create_ingress = false the module owns no Ingress, so alb_hostname is
@@ -290,10 +290,10 @@ run "public_alb_routes_every_webhook_prefix" {
 
   assert {
     condition = alltrue([
-      for prefix in ["/webhook", "/webhook-waiting", "/form", "/form-waiting", "/mcp"] :
+      for prefix in ["/webhook", "/webhook-waiting", "/form", "/form-waiting", "/mcp", "/webhook-waiting-slack", "/webhook-waiting-telegram"] :
       contains([for p in kubernetes_ingress_v1.webhook_public.spec[0].rule[0].http[0].path : p.path], prefix)
     ])
-    error_message = "The public ALB must route all five webhook prefixes"
+    error_message = "The public ALB must route every webhook path the module exposes, the Slack and Telegram callback paths included"
   }
 
   assert {
@@ -328,7 +328,7 @@ run "internal_alb_routes_webhooks_and_ui_to_the_right_services" {
 
   assert {
     condition = alltrue([
-      for prefix in ["/webhook", "/webhook-waiting", "/form", "/form-waiting", "/mcp"] :
+      for prefix in ["/webhook", "/webhook-waiting", "/form", "/form-waiting", "/mcp", "/webhook-waiting-slack", "/webhook-waiting-telegram"] :
       length([
         for p in kubernetes_ingress_v1.admin_internal.spec[0].rule[0].http[0].path :
         p if p.path == prefix && p.backend[0].service[0].name == "n8n-webhook-processor"

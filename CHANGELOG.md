@@ -7,6 +7,33 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+### Fixed
+
+- **Slack and Telegram human-in-the-loop callbacks returned 404.** n8n serves
+  them at `/webhook-waiting-slack` and `/webhook-waiting-telegram`. These are
+  separate paths, which the `/webhook-waiting` prefix does not match, so the
+  module-managed Ingress sent them to the main pods, where production webhooks
+  are disabled. Approval buttons from a Slack or Telegram "Send and wait for
+  response" node with a captured responder never resumed the execution. Both
+  paths are now in `n8n_webhook_path_prefixes` and routed to the webhook
+  processors
+  ([#211](https://github.com/n8n-io/terraform-aws-n8n/issues/211)).
+
+  The next apply updates the Ingress in place and adds two rules per hostname
+  to the HTTPS listener. An ALB that the module does not share stays well
+  inside the default quota of 100 rules. If you share the ALB with other
+  Ingresses through `ingress_annotations`, check that it has room for the
+  extra rules. Terraform does not wait for the AWS Load Balancer Controller on
+  an update, so a rule that the controller could not create shows up in the
+  controller's events on the Ingress, not as a failed apply.
+
+  With `create_ingress = false`, an Ingress that iterates
+  `n8n_webhook_path_prefixes` picks up both paths on the next apply, including
+  on a public load balancer, which is where Slack and Telegram need to reach
+  them. An Ingress that hardcodes the prefixes needs both paths added by hand.
+  The two entries are appended to the list, so existing positions do not
+  change.
+
 ## [0.6.0] - 2026-10-26
 
 Minor release per the [stability contract](./README.md#stability--versioning).

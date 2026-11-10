@@ -3191,26 +3191,51 @@ run "service_coordinates_match_module_ingress_backends" {
   }
 }
 
-# n8n disables exactly five endpoint families on the main pods when
+# n8n disables five endpoint families on the main pods when
 # disableProductionWebhooksOnMainProcess = true, which this module always sets:
 # form, webhook, form-waiting, webhook-waiting and mcp (see the
 # `if (this.webhooksEnabled)` block in packages/cli/src/abstract-server.ts).
 # Every one of them must reach the webhook processors instead. Routing only
 # /webhook, as this module did before, leaves waiting-webhook resumption,
 # Form Trigger nodes and MCP server triggers returning 404 in production.
-# The list mirrors charts/n8n/templates/ingress-webhook.yaml upstream.
+# The first four mirror charts/n8n/templates/ingress-webhook.yaml upstream.
+#
+# The same block also registers two fixed paths for the Slack and Telegram
+# human-in-the-loop callbacks: /webhook-waiting-slack and
+# /webhook-waiting-telegram. Under pathType Prefix, /webhook-waiting matches
+# /webhook-waiting and /webhook-waiting/* only, so each callback needs its own
+# entry (#211).
+#
+# The output is compared in order, not as a set: new entries are appended so a
+# caller that reads the list by position keeps the same first five entries.
 
 run "all_webhook_prefixes_route_to_the_webhook_processor" {
   command = plan
 
   assert {
-    condition     = toset(output.n8n_webhook_path_prefixes) == toset(["/webhook", "/webhook-waiting", "/form", "/form-waiting", "/mcp"])
-    error_message = "The webhook prefix list must match the endpoint families n8n disables on the main pods"
+    condition = tolist(output.n8n_webhook_path_prefixes) == tolist([
+      "/webhook",
+      "/webhook-waiting",
+      "/form",
+      "/form-waiting",
+      "/mcp",
+      "/webhook-waiting-slack",
+      "/webhook-waiting-telegram",
+    ])
+    error_message = "The webhook prefix list must match, in this order, the endpoint families and callback paths n8n disables on the main pods. Append new entries; do not reorder."
   }
 
   assert {
     condition = alltrue([
-      for prefix in ["/webhook", "/webhook-waiting", "/form", "/form-waiting", "/mcp"] :
+      for path in ["/webhook-waiting-slack", "/webhook-waiting-telegram"] :
+      contains(output.n8n_webhook_path_prefixes, path)
+    ])
+    error_message = "The Slack and Telegram human-in-the-loop callbacks need their own entries: /webhook-waiting does not match /webhook-waiting-slack or /webhook-waiting-telegram under pathType Prefix"
+  }
+
+  assert {
+    condition = alltrue([
+      for prefix in ["/webhook", "/webhook-waiting", "/form", "/form-waiting", "/mcp", "/webhook-waiting-slack", "/webhook-waiting-telegram"] :
       length([
         for p in kubernetes_ingress_v1.n8n[0].spec[0].rule[0].http[0].path :
         p if p.path == prefix && p.backend[0].service[0].name == "n8n-webhook-processor"
