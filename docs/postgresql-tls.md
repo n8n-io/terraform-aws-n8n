@@ -62,6 +62,11 @@ container as one environment variable, and Linux refuses to start a process
 when a single environment string is longer than 128 KiB: the container fails
 with `argument list too long`. The module checks the size at plan time.
 
+The limit counts UTF-8 bytes. CRLF line endings count two bytes per line
+break, so a bundle saved with Windows line endings is about one byte per line
+larger than its LF form; convert it to LF if it is close to the limit.
+Explanatory text between certificates counts its full UTF-8 length.
+
 This rules out the combined `global-bundle.pem` (about 170 KB, every region
 and every CA generation). A regional bundle is about 5 KB. If n8n connects to
 databases in more than one region, concatenate only those regional bundles:
