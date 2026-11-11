@@ -168,15 +168,17 @@ expected by the Terraform Registry:
 | `tests/scripts/verify-worker-pools.sh` | Post-`apply` check that `n8n_worker_pools` actually rendered: counts pool Deployments and ScaledObjects against the declared list, which is the only place a chart that ignored `queueMode.workerGroups` is visible. |
 | `tests/scripts/check-main-chart.sh` | Renders the pinned n8n chart for one, two, and three mains and checks the topology locals against it (CI `chart` job). |
 | `tests/scripts/check-helm-chart-coverage.sh` | Fails when `docs/helm-chart-coverage.md`'s version line or top-level key set is stale against the pinned chart (CI `chart-coverage` job). |
+| `tests/scripts/check-webhook-routes.sh` | Fails when `local.n8n_webhook_path_prefixes` and the routes n8n registers in its `if (this.webhooksEnabled)` block disagree, at the n8n version the pinned chart ships. Reads n8n's source from GitHub at that tag. Exit `1` is a mismatch; exit `2` means nothing was compared, with `FETCH FAILED` or `PARSE FAILED` (CI `webhook-routes` job, `task webhook-routes`). |
+| `tests/scripts/test-check-webhook-routes.sh` | Offline, no-network test for `check-webhook-routes.sh`: runs the real script against small synthetic fixtures and asserts the exit code and message for each outcome, including every `PARSE FAILED` path. Runs first in the same `webhook-routes` CI job. |
 | `tests/scripts/check-terraform-floor.sh` | Fails unless every `required_version` (root, `modules/*`, `examples/*`) is exactly `">= X.Y"` and `TF_FLOOR_VERSION` is exactly `X.Y.0` (CI `test-floor` job, `task terraform-floor`). |
 | `tests/scripts/check-checkov.sh`  | Runs checkov at exactly `CHECKOV_VERSION`; refuses any other local version (CI `checkov` job). Two passes: defaults, then `tests/checkov/opt-in.tfvars` so count-gated opt-in resources are evaluated too. |
 | `tests/scripts/check-version-drift.sh` | Report-only: every pin reachable from a public API versus upstream latest. Weekly via `version-drift.yml`; never gates. |
 | `tests/scripts/lib/constraints.sh` | Shared `constraint_accepts()`: evaluates a Terraform version constraint (comma-separated `~>`, `>=`, `>`, `<=`, `<`, `!=`, `=`, or a bare version, over numeric `N[.N[.N]]` versions; a prerelease version is an explicit error) against a candidate release. Sourced by `check-version-drift.sh` and `test-version-drift-constraints.sh` (ported from the sibling terraform-google-n8n module, n8n-io/terraform-google-n8n#40). |
 | `tests/scripts/test-version-drift-constraints.sh` | Offline, no-network unit test for `constraints.sh`'s `constraint_accepts()`: a fixed matrix of (constraint, version, expected exit) cases. Runs on every pull request as the `drift-constraints` CI job; `check-version-drift.sh` itself runs weekly through `version-drift.yml`, as a report that never gates. |
 | `tests/scripts/chart-values-diff.sh` | Diffs the pinned n8n chart's `values.yaml` against a candidate version via `helm show values` (`task chart-diff CANDIDATE=<version>`). Informational, never bumps a pin, not in CI. |
-| `tests/scripts/lib/tf-defaults.sh` | Shared `read_default` awk helper that reads a variable's string default out of `variables.tf`. Sourced by `check-version-drift.sh`, `check-helm-chart-coverage.sh` and `chart-values-diff.sh`; the one place that knows the format. |
+| `tests/scripts/lib/tf-defaults.sh` | Shared `read_default` awk helper that reads a variable's string default out of `variables.tf`. Sourced by `check-version-drift.sh`, `check-helm-chart-coverage.sh`, `check-webhook-routes.sh` and `chart-values-diff.sh`; the one place that knows the format. |
 | `docs/`                           | Long-form supplementary docs (troubleshooting, post-deploy, cleanup, upgrades, Pod Identity, Helm chart coverage, Istio ingress routing, version currency policy). |
-| `.github/workflows/`              | `terraform-tests.yml`: fmt, validate, test, test-floor, chart, chart-coverage, drift-constraints, tflint, checkov, docs, markdownlint. `version-drift.yml`: weekly report-only pin drift, synced to a tracking issue. |
+| `.github/workflows/`              | `terraform-tests.yml`: fmt, validate, test, test-floor, chart, chart-coverage, webhook-routes, drift-constraints, tflint, checkov, docs, markdownlint. `version-drift.yml`: weekly report-only pin drift, synced to a tracking issue. |
 | `.github/CODEOWNERS`              | Default reviewers for PRs.                                  |
 | `Taskfile.yml`                    | Optional convenience wrapper (`task ci`) around the local dev loop below; CI does not depend on it. |
 
@@ -309,6 +311,30 @@ pin, and probes, the way `tests/defaults.tftest.hcl`'s
   chart has a top-level key the doc's coverage table never mentions. Run with
   `task chart-coverage` (requires Helm); CI runs the same script. It checks
   that the doc is not stale, not that a row's content is still accurate.
+- `tests/scripts/check-webhook-routes.sh` compares
+  `local.n8n_webhook_path_prefixes` with the routes n8n registers. The list is
+  written by hand and was wrong twice (0.3.0, and #211), and a mocked
+  `terraform test` never looks at n8n, so the runs that pin the list cannot
+  notice a route n8n adds. The script resolves the pinned chart's
+  `appVersion`, downloads `packages/cli/src/abstract-server.ts` and two files
+  it depends on from `n8n-io/n8n` at that tag, and extracts every route in
+  the `if (this.webhooksEnabled)` block. It fails both ways, with `Prefix`
+  path semantics: a route no entry covers, and an entry that covers no
+  route. Run with `task webhook-routes` (requires Helm and curl); CI runs the
+  same two scripts.
+  - **Read the exit code.** `1` is a real mismatch. `2` means nothing was
+    compared: `FETCH FAILED` is the network, so re-run; `PARSE FAILED` means
+    n8n changed the shape of the code. The parser is strict on purpose and
+    stops on any statement it does not recognize, so it never reports `OK`
+    on a guess. Compare by hand, then update the script and
+    `tests/scripts/test-check-webhook-routes.sh` in the same pull request.
+  - **A stale entry is a decision, not a cleanup.** The list is a public
+    output, and callers can pin an older n8n through `n8n_image_tag`. Either
+    remove the entry, with a `CHANGELOG.md` note, or keep it and name it in
+    the script's `RETAINED_PREFIXES_DEFAULT`.
+  - **It covers the module default only.** A custom `n8n_image_tag`, or
+    `N8N_ENDPOINT_*` set through `n8n_extra_env`, is outside what it reads.
+    It also reads source text, not a running n8n.
 - `tests/scripts/check-version-drift.sh` is report-only and never gates:
   `.github/workflows/version-drift.yml` runs it weekly and syncs the output
   to one tracking issue. See `docs/versioning.md` for the bump tiers and for
@@ -624,6 +650,8 @@ terraform validate
 terraform test -verbose                        # plan-time, no AWS creds needed
 tests/scripts/check-main-chart.sh              # chart rendering, Helm + jq needed
 tests/scripts/check-helm-chart-coverage.sh     # helm-chart-coverage.md drift, Helm needed
+tests/scripts/test-check-webhook-routes.sh     # route check's own offline test
+tests/scripts/check-webhook-routes.sh          # webhook prefixes vs n8n's routes, Helm + curl needed
 tests/scripts/check-terraform-floor.sh         # required_version == TF_FLOOR_VERSION
 tests/scripts/test-version-drift-constraints.sh # constraint evaluator, python3 needed
 tflint --init && tflint --format compact

@@ -291,6 +291,34 @@ jobs:
       - name: check docs/helm-chart-coverage.md against the pinned chart
         run: tests/scripts/check-helm-chart-coverage.sh
 
+  # local.n8n_webhook_path_prefixes is a hand-written copy of the routes n8n
+  # turns off on the main pods, and it has been wrong twice (#211 most
+  # recently). This job compares it with n8n's source at the version the
+  # pinned chart ships. It is a gate, not a weekly report, because the answer
+  # can only change in a pull request: one that moves n8n_chart_version or
+  # edits the list. The offline test runs first, so a broken parser fails
+  # before the network is touched. The script's exit code and first line tell
+  # the cases apart: 1 is a real mismatch, 2 with "FETCH FAILED" is the
+  # network (re-run), 2 with "PARSE FAILED" means n8n reshaped the code and
+  # the script needs an update. Needs no token: every download is public.
+  webhook-routes:
+    name: n8n_webhook_path_prefixes matches n8n's routes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.3.1
+
+      - name: unit-test the route check offline
+        run: tests/scripts/test-check-webhook-routes.sh
+
+      - name: check local.n8n_webhook_path_prefixes against the pinned chart's n8n
+        run: tests/scripts/check-webhook-routes.sh
+
   # Offline and fast: no network and no cloud credentials, only python3, which
   # the runner image carries. It exists so a change to the drift script's
   # constraint evaluator is exercised on every pull request instead of only when

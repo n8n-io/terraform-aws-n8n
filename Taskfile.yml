@@ -68,6 +68,16 @@ tasks:
     cmds:
       - ./tests/scripts/check-helm-chart-coverage.sh
 
+  webhook-routes:
+    desc: >-
+      Check local.n8n_webhook_path_prefixes against the routes n8n registers at
+      the version the pinned chart ships, after the script's own offline test
+      (requires Helm and curl). Exit 1 is a mismatch; exit 2 means nothing was
+      compared (FETCH FAILED or PARSE FAILED).
+    cmds:
+      - ./tests/scripts/test-check-webhook-routes.sh
+      - ./tests/scripts/check-webhook-routes.sh
+
   chart-diff:
     desc: >-
       Diff the pinned n8n chart's values.yaml against a candidate version
@@ -157,7 +167,7 @@ tasks:
   ci:
     desc: >-
       Run the full local loop (fmt, validate, test, chart, chart-coverage,
-      drift-constraints, lint, terraform-floor, banners, example-parity, docs,
+      webhook-routes, drift-constraints, lint, terraform-floor, banners, example-parity, docs,
       markdown). Mirrors every CI job except checkov, which is a hard-fail gate in CI but is left out
       here because it needs a pinned checkov install that the other tasks do
       not: run `task checkov` separately once you have it. `test` runs on the
@@ -170,6 +180,7 @@ tasks:
       - task: test
       - task: chart
       - task: chart-coverage
+      - task: webhook-routes
       - task: drift-constraints
       - task: lint
       - task: terraform-floor
