@@ -48,7 +48,7 @@ pass() {
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 # new_case <name>: creates $tmp/<name>/ with a matching set of files and points
 # SRC and LOCALS at it. A case then overwrites the one file it wants to break.
-# The baseline registers four routes: two prefix families, and two fixed paths
+# The baseline registers three routes: two prefix families, and one fixed path
 # built from a suffix constant (the shape behind #211).
 new_case() {
   SRC="$tmp/$1/src"
