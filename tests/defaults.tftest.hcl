@@ -13237,9 +13237,14 @@ run "rejects_db_postgresdb_ssl_ca_pem_over_the_size_limit_while_ssl_is_off" {
   # off the CA is not delivered, but a bundle this large can never work, so
   # it fails now rather than in the apply that turns SSL on. This pins that
   # choice, so gating the rule later cannot go unnoticed.
+  #
+  # The fixture is the one-CRLF boundary value, 131050 characters but 131051
+  # bytes, so this is also the case the changelog upgrade note describes: a
+  # bundle the character count let through, which used to plan with only a
+  # warning while SSL was off and now fails the plan.
   variables {
     db_postgresdb_ssl_enabled = false
-    db_postgresdb_ssl_ca_pem  = "-----BEGIN CERTIFICATE-----\n${format("%0130997d", 0)}\n-----END CERTIFICATE-----\n"
+    db_postgresdb_ssl_ca_pem  = "-----BEGIN CERTIFICATE-----\r\n${format("%0130996d", 0)}\n-----END CERTIFICATE-----"
   }
 
   expect_failures = [var.db_postgresdb_ssl_ca_pem]
