@@ -27,6 +27,13 @@ this project adheres to the stability contract in
   an update, so a rule that the controller could not create shows up in the
   controller's events on the Ingress, not as a failed apply.
 
+  When the module manages the Route 53 alias (`route53_zone_id` set and
+  `create_ingress = true`), the plan also lists the alias records, such as
+  `aws_route53_record.n8n_alias`, as in-place updates. Their target is read
+  from the load balancer behind the Ingress, which Terraform cannot know
+  until the Ingress update is applied. The load balancer stays the same, so
+  the apply leaves the records unchanged.
+
   With `create_ingress = false`, an Ingress that iterates
   `n8n_webhook_path_prefixes` picks up both paths on the next apply, including
   on a public load balancer, which is where Slack and Telegram need to reach
