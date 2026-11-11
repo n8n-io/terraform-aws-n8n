@@ -73,7 +73,7 @@ tasks:
       Check local.n8n_webhook_path_prefixes against the routes n8n registers at
       the version the pinned chart ships, after the script's own offline test
       (requires Helm and curl). Exit 1 is a mismatch; exit 2 means nothing was
-      compared (FETCH FAILED or PARSE FAILED).
+      compared (FETCH FAILED, PARSE FAILED, or a missing tool).
     cmds:
       - ./tests/scripts/test-check-webhook-routes.sh
       - ./tests/scripts/check-webhook-routes.sh

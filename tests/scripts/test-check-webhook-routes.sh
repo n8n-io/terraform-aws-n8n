@@ -203,6 +203,16 @@ new_case concatenation
 write_server "this.app.all(\`/\${this.endpointWebhook}\` + '-new', createWebhookHandlerFor(liveWebhooks, 'webhook'));"
 check_case "a path built by concatenation" 2 "PARSE FAILED"
 
+# A chained registration is one statement that registers two routes. Reading
+# only the first would report OK for a route nobody compared.
+new_case chained_all
+write_server "this.app.all(\`/\${this.endpointWebhook}/*path\`, createWebhookHandlerFor(liveWebhooks)).all(\`/new/*path\`, createWebhookHandlerFor(liveWebhooks));"
+check_case "a second route chained onto a registration" 2 "PARSE FAILED"
+
+new_case chained_other_method
+write_server "this.app.all(\`/\${this.endpointWebhook}/*path\`, createWebhookHandlerFor(liveWebhooks)).get('/new', createWebhookHandlerFor(liveWebhooks));"
+check_case "another method chained onto a registration" 2 "PARSE FAILED"
+
 new_case helper_call
 write_server "this.registerMoreWebhooks();"
 check_case "an unrecognized statement in the block" 2 "this.registerMoreWebhooks()"

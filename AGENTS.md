@@ -328,6 +328,7 @@ pin, and probes, the way `tests/defaults.tftest.hcl`'s
     stops on any statement it does not recognize, so it never reports `OK`
     on a guess. Compare by hand, then update the script and
     `tests/scripts/test-check-webhook-routes.sh` in the same pull request.
+    A missing `helm` or `curl` also exits `2` and says so.
   - **A stale entry is a decision, not a cleanup.** The list is a public
     output, and callers can pin an older n8n through `n8n_image_tag`. Either
     remove the entry, with a `CHANGELOG.md` note, or keep it and name it in

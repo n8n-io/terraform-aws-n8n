@@ -211,7 +211,7 @@ EOF
 # moment one is added earlier in the file.
 #
 # Every setup-helm step is read, not only the first: more than one job pins
-# Helm (`chart` and `chart-coverage`), and reading only the first would let
+# Helm (`chart`, `chart-coverage` and `webhook-routes`), and reading only the first would let
 # the others drift apart unreported. Differing pins are an ERROR, not a
 # DRIFT, because no single pinned version can be compared against upstream.
 # The search stops at the next step (a line starting with "- "), so a

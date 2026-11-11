@@ -16,7 +16,8 @@ this project adheres to the stability contract in
   both ways: a route no entry covers, and an entry that covers no route. The
   list is written by hand and was wrong twice, and both times a user found
   the gap in production. Exit `1` is a mismatch. Exit `2` means nothing was
-  compared, with `FETCH FAILED` or `PARSE FAILED` as the reason.
+  compared, with `FETCH FAILED`, `PARSE FAILED` or a missing tool as the
+  reason.
   `tests/scripts/test-check-webhook-routes.sh` tests the script offline and
   runs first in the same job. No change for callers: no input, output or
   resource changes. On its first run the check reported the two paths from

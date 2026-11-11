@@ -29,7 +29,8 @@
 #   2  Could not check, so nothing was compared. The message starts with
 #      "FETCH FAILED" (Helm or a download failed: re-run) or "PARSE FAILED"
 #      (a file no longer has the shape this script reads: compare by hand,
-#      then update this script).
+#      then update this script). The one exception is a missing helm or
+#      curl, which says "Required tool missing".
 #
 # The parser is strict on purpose. It reads TypeScript with text matching, so
 # every statement in the block must be one of three known forms, and every
@@ -132,8 +133,7 @@ else
   pinned_version="$(read_default n8n_chart_version "$VARS_FILE")"
   pinned_repository="$(read_default n8n_chart_repository "$VARS_FILE")"
   if [[ -z "$pinned_version" || -z "$pinned_repository" ]]; then
-    echo "Could not read n8n_chart_version/n8n_chart_repository defaults from $VARS_FILE" >&2
-    exit 2
+    parse_failed "could not read the n8n_chart_version and n8n_chart_repository defaults from $VARS_FILE."
   fi
 
   # The chart's appVersion is the n8n version the module deploys by default
@@ -152,12 +152,7 @@ else
     in_block && /^}/ { exit }
   ' "$VARS_FILE")"
   if [[ "$image_tag_default" != "null" ]]; then
-    {
-      echo "n8n_image_tag's default in $VARS_FILE is '${image_tag_default:-not found}', not null."
-      echo "This script assumes the module deploys the pinned chart's appVersion by default."
-      echo "Update it to read the n8n version from that default instead. Nothing was compared."
-    } >&2
-    exit 2
+    parse_failed "n8n_image_tag's default in $VARS_FILE is '${image_tag_default:-not found}', not null. This script assumes the module deploys the pinned chart's appVersion by default, so it must now read the n8n version from that default instead."
   fi
 
   chart_meta="$(helm show chart "${pinned_repository}/n8n" --version "$pinned_version" 2>"$tmp/helm.err")" \
@@ -280,8 +275,13 @@ lookup_one() {
 # The three statement forms the block may contain. In the route form, the
 # backtick template must be the whole first argument: it is followed directly
 # by a comma. A template with something appended to it does not match.
+#
+# The handler argument is matched with balanced parentheses, one level of
+# nesting deep, and no backtick. A looser ".*" there would also swallow a call
+# chained onto the registration, `this.app.all(...).all(...)`, read only the
+# first route, and report OK for a second route nobody compared.
 re_const='^const [A-Za-z_][A-Za-z0-9_]* = Container\.get\([A-Za-z_][A-Za-z0-9_]*\)$'
-re_route='^this\.app\.all\(`([^`]*)`, ?createWebhookHandlerFor\(.*\),?\)$'
+re_route='^this\.app\.all\(`([^`]*)`, ?createWebhookHandlerFor\(([^()`]|\([^()`]*\))*\),?\)$'
 re_endpoint='^this\.(endpoint[A-Za-z0-9]+)$'
 re_constant='^[A-Z][A-Z0-9_]*$'
 re_prefix='^(/[A-Za-z0-9._~-]+)+$'
