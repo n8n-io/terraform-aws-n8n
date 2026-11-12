@@ -13218,8 +13218,13 @@ run "db_postgresdb_ssl_ca_pem_accepts_a_multi_certificate_bundle" {
 # environment string ("NAME=value" plus its terminating NUL) exceeds 32 pages,
 # 131072 bytes with 4 KiB pages, so the value may be at most 131050 bytes.
 # Measured in Docker: 131050 bytes starts, 131051 fails with "argument list
-# too long". The framing below is 54 characters, so the zero-padded body is
-# sized to land exactly on each side of that limit.
+# too long". The framing below is 54 bytes (27 + 25 + two line breaks), so the
+# zero-padded body is sized to land exactly on each side of that limit.
+#
+# The limit is in UTF-8 bytes, and length() counts grapheme clusters: "ő" (two
+# bytes) counts once, and so does a CRLF pair (two bytes). The runs after the
+# first three sit on each side of the byte limit with values whose character
+# count says otherwise (issue #209).
 
 run "db_postgresdb_ssl_ca_pem_accepts_a_bundle_at_the_size_limit" {
   command = plan
@@ -13233,7 +13238,7 @@ run "db_postgresdb_ssl_ca_pem_accepts_a_bundle_at_the_size_limit" {
 
   assert {
     condition     = length(local.postgres_ssl_ca_values.ssl.ca) == 131050
-    error_message = "A bundle of exactly 131050 characters after trimming must be accepted and delivered whole."
+    error_message = "An ASCII bundle of exactly 131050 bytes after trimming must be accepted and delivered whole."
   }
 }
 
@@ -13250,19 +13255,111 @@ run "rejects_db_postgresdb_ssl_ca_pem_over_the_size_limit" {
   expect_failures = [var.db_postgresdb_ssl_ca_pem]
 }
 
-run "rejects_non_ascii_db_postgresdb_ssl_ca_pem" {
+run "rejects_db_postgresdb_ssl_ca_pem_over_the_size_limit_while_ssl_is_off" {
   command = plan
 
-  # The size validation counts characters, and Linux limits bytes. A PEM is
-  # ASCII, so the two agree only because non-ASCII text is rejected: without
-  # this, a bundle with multibyte characters between the delimiters could pass
-  # the size check and still exceed the environment string limit.
+  # The limit is deliberately not gated on db_postgresdb_ssl_enabled: with SSL
+  # off the CA is not delivered, but a bundle this large can never work, so
+  # it fails now rather than in the apply that turns SSL on. This pins that
+  # choice, so gating the rule later cannot go unnoticed.
+  #
+  # The fixture is the one-CRLF boundary value, 131050 characters but 131051
+  # bytes, so this is also the case the changelog upgrade note describes: a
+  # bundle the character count let through, which used to plan with only a
+  # warning while SSL was off and now fails the plan.
   variables {
-    db_postgresdb_ssl_reject_unauthorized = true
-    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFak\u00e9\n-----END CERTIFICATE-----\n"
+    db_postgresdb_ssl_enabled = false
+    db_postgresdb_ssl_ca_pem  = "-----BEGIN CERTIFICATE-----\r\n${format("%0130996d", 0)}\n-----END CERTIFICATE-----"
   }
 
   expect_failures = [var.db_postgresdb_ssl_ca_pem]
+}
+
+run "rejects_windows_line_ending_db_postgresdb_ssl_ca_pem_over_the_byte_limit" {
+  command = plan
+
+  # A realistic bundle saved with Windows line endings: 2015 lines of 64
+  # characters, each ending in CRLF, inside the framing. 131028 characters
+  # after trimming, which a length()-based rule accepts, but 133044 bytes.
+  # range() caps at 1024 values, so the body is built with replace() over a
+  # zero-padded string.
+  variables {
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\r\n${replace(format("%02015d", 0), "0", "${format("%064d", 1)}\r\n")}-----END CERTIFICATE-----"
+  }
+
+  expect_failures = [var.db_postgresdb_ssl_ca_pem]
+}
+
+run "rejects_crlf_db_postgresdb_ssl_ca_pem_one_byte_over_the_limit" {
+  command = plan
+
+  # One CRLF and one LF line break: 131051 bytes, but only 131050 characters,
+  # because length() counts the CRLF pair once. The run above is 2 KB over;
+  # this one pins the boundary.
+  variables {
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\r\n${format("%0130996d", 0)}\n-----END CERTIFICATE-----"
+  }
+
+  expect_failures = [var.db_postgresdb_ssl_ca_pem]
+}
+
+run "rejects_multibyte_db_postgresdb_ssl_ca_pem_one_byte_over_the_limit" {
+  command = plan
+
+  # 54 + "ő" (2 bytes) + 130995 = 131051 bytes, but only 131050 characters.
+  variables {
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nő${format("%0130995d", 0)}\n-----END CERTIFICATE-----"
+  }
+
+  expect_failures = [var.db_postgresdb_ssl_ca_pem]
+}
+
+run "db_postgresdb_ssl_ca_pem_accepts_a_non_ascii_bundle_at_the_byte_limit" {
+  command = plan
+
+  # 54 + "ő" (2 bytes) + 130994 = 131050 bytes, 131049 characters. The module
+  # checks framing and size only, so non-ASCII text is not rejected as such.
+  variables {
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nő${format("%0130994d", 0)}\n-----END CERTIFICATE-----"
+  }
+
+  assert {
+    condition     = local.postgres_ssl_ca_values.ssl.ca == "-----BEGIN CERTIFICATE-----\nő${format("%0130994d", 0)}\n-----END CERTIFICATE-----"
+    error_message = "A non-ASCII bundle of exactly 131050 bytes must be accepted and reach database.ssl.ca unchanged."
+  }
+
+  # Guards the fixture itself: if it were not exactly at the limit, the run
+  # would no longer prove the boundary.
+  assert {
+    condition = (
+      length(base64encode(local.postgres_ssl_ca_values.ssl.ca)) / 4 * 3 -
+      length(regex("=*$", base64encode(local.postgres_ssl_ca_values.ssl.ca))) == 131050 &&
+      length(local.postgres_ssl_ca_values.ssl.ca) == 131049
+    )
+    error_message = "The fixture must be exactly 131050 bytes and 131049 characters, so the run sits on the byte limit."
+  }
+}
+
+run "db_postgresdb_ssl_ca_pem_accepts_a_non_ascii_label_between_certificates" {
+  command = plan
+
+  # RFC 7468 section 5.2 allows explanatory text outside the BEGIN/END lines,
+  # and Node's tls.connect({ ca }) ignores it, so a non-ASCII label between
+  # two certificates (as in bundles cut from Mozilla's CA list) must be
+  # accepted and delivered as it is.
+  variables {
+    db_postgresdb_ssl_reject_unauthorized = true
+    db_postgresdb_ssl_ca_pem              = "-----BEGIN CERTIFICATE-----\nMIIFakeOne\n-----END CERTIFICATE-----\nNetLock Arany (Class Gold) Főtanúsítvány\n-----BEGIN CERTIFICATE-----\nMIIFakeTwo\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition     = local.postgres_ssl_ca_values.ssl.ca == "-----BEGIN CERTIFICATE-----\nMIIFakeOne\n-----END CERTIFICATE-----\nNetLock Arany (Class Gold) Főtanúsítvány\n-----BEGIN CERTIFICATE-----\nMIIFakeTwo\n-----END CERTIFICATE-----"
+    error_message = "A bundle with a non-ASCII label between certificates must be accepted and reach database.ssl.ca with only the surrounding whitespace trimmed."
+  }
 }
 
 run "rejects_reserved_ssl_ca_environment_name" {
