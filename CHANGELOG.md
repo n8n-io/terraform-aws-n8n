@@ -7,6 +7,25 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+### Added
+
+- `tests/scripts/check-webhook-routes.sh`, CI-gated as a new `webhook-routes`
+  job (`task webhook-routes`): fails the build when
+  `local.n8n_webhook_path_prefixes` and the routes n8n registers disagree.
+  It reads n8n's source at the version the pinned chart ships and compares
+  both ways: a route no entry covers, and an entry that covers no route. The
+  list is written by hand and was wrong twice, and both times a user found
+  the gap in production. Exit `1` is a mismatch. Exit `2` means nothing was
+  compared, with `FETCH FAILED`, `PARSE FAILED` or a missing tool as the
+  reason.
+  `tests/scripts/test-check-webhook-routes.sh` tests the script offline and
+  runs first in the same job. No change for callers: no input, output or
+  resource changes. On its first run the check reported the two paths from
+  #211, `/webhook-waiting-slack` and `/webhook-waiting-telegram`. The check
+  covers the module's default n8n version only; see
+  [docs/upgrading-n8n.md](./docs/upgrading-n8n.md#before-bumping) when you
+  pin a newer `n8n_image_tag`.
+
 ### Fixed
 
 - **Slack and Telegram human-in-the-loop callbacks returned 404.** n8n serves

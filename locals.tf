@@ -78,9 +78,12 @@ locals {
   # through to the catch-all and n8n-main answers 404 (#211).
   #
   # So this list is not only the five prefix families: n8n also registers
-  # fixed-path routes in that block. When bumping the n8n chart or image,
-  # re-read the whole block for new routes rather than assuming the five
-  # families cover them. Nothing automated compares this list to n8n.
+  # fixed-path routes in that block. tests/scripts/check-webhook-routes.sh
+  # compares this list with that block in CI, at the n8n version the pinned
+  # chart ships, and fails when a route has no entry (#213). It cannot see a
+  # custom n8n_image_tag: for an n8n version newer than the chart's
+  # appVersion, re-read the whole block for new routes rather than assuming
+  # the five families cover them.
   #
   # Append new entries at the end. The list is exposed as the
   # n8n_webhook_path_prefixes output, so reordering it moves entries a caller

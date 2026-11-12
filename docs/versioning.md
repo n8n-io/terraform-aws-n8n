@@ -30,7 +30,7 @@ waiting for a user to report a version nobody re-checked.
 | `TF_FLOOR_VERSION` (`test-floor` job) | `.github/workflows/terraform-tests.yml` | Not bumped on its own: always `X.Y.0` for a `required_version = ">= X.Y"` floor, the lowest release the floor admits. Moves only when the floor moves, in the same commit. `tests/scripts/check-terraform-floor.sh` (`task terraform-floor`) fails CI if the two disagree. `check-version-drift.sh` does not report it, because it is not meant to track the latest Terraform |
 | `MARKDOWNLINT_VERSION` (markdownlint job) | `.github/workflows/terraform-tests.yml` | Patch-safe, but keep in step with the `brew install markdownlint-cli` default contributors use locally, for the same reason as `TERRAFORM_DOCS_VERSION` |
 | `TERRAFORM_DOCS_VERSION` (docs job) | `.github/workflows/terraform-tests.yml` | Patch-safe, but keep in step with the `brew install terraform-docs` default contributors use locally (see `AGENTS.md`) |
-| Helm CLI version (the `azure/setup-helm` `version` input, `chart` and `chart-coverage` jobs) | `.github/workflows/terraform-tests.yml` | Patch-safe. Keep both jobs on the same version; `check-version-drift.sh` reports an `ERROR` when they differ |
+| Helm CLI version (the `azure/setup-helm` `version` input, `chart`, `chart-coverage` and `webhook-routes` jobs) | `.github/workflows/terraform-tests.yml` | Patch-safe. Keep all three jobs on the same version; `check-version-drift.sh` reports an `ERROR` when they differ |
 | `docs/helm-chart-coverage.md`'s declared chart version | `docs/helm-chart-coverage.md` | Must equal `n8n_chart_version`'s default; CI-gated by `tests/scripts/check-helm-chart-coverage.sh` |
 
 ## Bump tiers
@@ -60,7 +60,11 @@ the n8n chart (see that doc's own instructions; `task chart-diff
 CANDIDATE=<version>` prints the `values.yaml` diff that re-verification
 starts from), and a passing
 `tests/scripts/check-main-chart.sh` when it's a chart this module templates
-against. For a controller chart, also compare the new `appVersion`'s
+against. An n8n chart bump also moves the default n8n version, so it needs a
+passing `tests/scripts/check-webhook-routes.sh` (`task webhook-routes`): if
+the new n8n registers a production webhook route that
+`local.n8n_webhook_path_prefixes` does not cover, add the entry in the same
+pull request. For a controller chart, also compare the new `appVersion`'s
 supported Kubernetes range against every `kubernetes_version` this module
 accepts, not only the default: metrics-server chart `3.14.0` moved the
 floor from `1.31` to `1.34` in a chart minor, which the CHANGELOG has to
