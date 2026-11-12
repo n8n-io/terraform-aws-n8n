@@ -7,6 +7,22 @@ this project adheres to the stability contract in
 
 ## [Unreleased]
 
+### Fixed
+
+- **`db_postgresdb_ssl_ca_pem` now measures its 131,050-byte limit in UTF-8
+  bytes after trimming, not characters** (#209). Terraform's `length()`
+  counts a CRLF line break once, so a bundle saved with Windows line endings
+  could pass the plan and then fail every main, worker, and webhook-processor
+  container with `argument list too long`. CRLF line endings now count two
+  bytes per line break. The ASCII-only rule that stood in for a byte count is
+  removed. The module now checks only the PEM framing and the size, so
+  non-ASCII text inside the bundle, such as a label line between
+  certificates, is accepted. It does not parse the certificates; n8n does
+  that when it connects. Upgrade note: the limit also applies when the CA is
+  not delivered (`db_postgresdb_ssl_enabled = false`). A CRLF bundle near the
+  limit that used to plan with only a warning now fails the plan. Convert it
+  to LF line endings, trim it, or remove it.
+
 ## [0.6.0] - 2026-10-26
 
 Minor release per the [stability contract](./README.md#stability--versioning).

@@ -278,8 +278,14 @@ echo "PASS: chart $chart_version, n8n_graceful_shutdown_timeout reaches N8N_GRAC
 # one DB_POSTGRESDB_SSL_CA and one DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED (the
 # chart must not render a second one next to the module's), and without a CA
 # the chart renders no DB_POSTGRESDB_SSL* key at all.
-ca_pem=$'\n-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----\n'
-ca_trimmed=$'-----BEGIN CERTIFICATE-----\nMIIFake\n-----END CERTIFICATE-----'
+#
+# The fixture is two certificates with a non-ASCII label line between them and
+# one CRLF line ending (issue #209). The module accepts both and counts their
+# UTF-8 bytes, so the chart has to deliver them byte for byte: a chart that
+# normalised the line ending or re-encoded the label would make the size
+# validation measure something other than what reaches the container.
+ca_pem=$'\n-----BEGIN CERTIFICATE-----\r\nMIIFakeOne\n-----END CERTIFICATE-----\nNetLock Arany (Class Gold) Főtanúsítvány\n-----BEGIN CERTIFICATE-----\nMIIFakeTwo\n-----END CERTIFICATE-----\n'
+ca_trimmed=$'-----BEGIN CERTIFICATE-----\r\nMIIFakeOne\n-----END CERTIFICATE-----\nNetLock Arany (Class Gold) Főtanúsítvány\n-----BEGIN CERTIFICATE-----\nMIIFakeTwo\n-----END CERTIFICATE-----'
 for scenario in default ca; do
   ca_vars=()
   if [[ "$scenario" == ca ]]; then

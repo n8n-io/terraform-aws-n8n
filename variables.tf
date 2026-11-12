@@ -2460,7 +2460,7 @@ variable "db_postgresdb_ssl_reject_unauthorized" {
 }
 
 variable "db_postgresdb_ssl_ca_pem" {
-  description = "PEM-encoded CA certificate bundle n8n trusts for the database TLS connection, covering both the module-managed RDS path and the external db_host path. When set while db_postgresdb_ssl_enabled = true, the module passes it, with surrounding whitespace trimmed, to the n8n Helm chart's database.ssl.ca value. The chart renders it into its own ConfigMap as DB_POSTGRESDB_SSL_CA for the main, worker, and webhook-processor pods, so a Helm rollback restores the previous CA and a CA change rolls the pods. Required in practice for db_postgresdb_ssl_reject_unauthorized = true against the module-managed RDS instance: AWS's RDS CA is not a publicly trusted root, so Node.js rejects the server certificate without it. Use the bundle for your region, https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem, and pass it with file(); the module never fetches it itself. The trimmed bundle may be at most 131050 bytes, because the chart passes it to each container as an environment variable and Linux refuses to start a process whose single environment string exceeds 128 KiB. That rules out the combined global-bundle.pem (about 170 KB); concatenate only the regional bundles you need instead. See docs/postgresql-tls.md for the full procedure and AWS's CA rotation schedule. Not delivered when db_postgresdb_ssl_enabled = false, and delivered but unused when db_postgresdb_ssl_reject_unauthorized = false; a plan-time warning fires in both cases. Defaults to null, which omits the database.ssl chart value entirely and changes nothing for existing deployments."
+  description = "PEM-encoded CA certificate bundle n8n trusts for the database TLS connection, covering both the module-managed RDS path and the external db_host path. When set while db_postgresdb_ssl_enabled = true, the module passes it, with surrounding whitespace trimmed, to the n8n Helm chart's database.ssl.ca value. The chart renders it into its own ConfigMap as DB_POSTGRESDB_SSL_CA for the main, worker, and webhook-processor pods, so a Helm rollback restores the previous CA and a CA change rolls the pods. Required in practice for db_postgresdb_ssl_reject_unauthorized = true against the module-managed RDS instance: AWS's RDS CA is not a publicly trusted root, so Node.js rejects the server certificate without it. Use the bundle for your region, https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem, and pass it with file(); the module never fetches it itself. The trimmed bundle may be at most 131050 bytes in UTF-8 (CRLF line endings count as two bytes per line break), because the chart passes it to each container as an environment variable and Linux refuses to start a process whose single environment string exceeds 128 KiB. That rules out the combined global-bundle.pem (about 170 KB); concatenate only the regional bundles you need instead. See docs/postgresql-tls.md for the full procedure and AWS's CA rotation schedule. Not delivered when db_postgresdb_ssl_enabled = false, and delivered but unused when db_postgresdb_ssl_reject_unauthorized = false; a plan-time warning fires in both cases. Defaults to null, which omits the database.ssl chart value entirely and changes nothing for existing deployments."
   type        = string
   default     = null
 
@@ -2476,16 +2476,6 @@ variable "db_postgresdb_ssl_ca_pem" {
     error_message = "db_postgresdb_ssl_ca_pem must be null or a PEM-encoded CA bundle (containing -----BEGIN CERTIFICATE----- / -----END CERTIFICATE----- delimiters)."
   }
 
-  # PEM is ASCII (RFC 7468), and the size validation below counts characters
-  # while Linux limits bytes. The framing regex above does not stop non-ASCII
-  # text between the delimiters, so without this a bundle with multibyte
-  # characters could pass the size check and still exceed the environment
-  # string limit.
-  validation {
-    condition     = var.db_postgresdb_ssl_ca_pem == null ? true : can(regex("^[[:ascii:]]*$", var.db_postgresdb_ssl_ca_pem))
-    error_message = "db_postgresdb_ssl_ca_pem must contain only ASCII text. A PEM-encoded CA bundle is ASCII; check that the file was not altered or saved with a non-ASCII encoding."
-  }
-
   # The chart passes database.ssl.ca to every n8n container as the
   # environment variable DB_POSTGRESDB_SSL_CA (chart 1.16.0,
   # templates/_configmap-env.tpl). Linux caps a single environment string,
@@ -2493,16 +2483,34 @@ variable "db_postgresdb_ssl_ca_pem" {
   # is 131072 bytes with 4 KiB pages. Above that the container fails to start
   # with "argument list too long". 131072 minus "DB_POSTGRESDB_SSL_CA=" (21)
   # minus the NUL leaves 131050, the boundary measured in Docker. Larger pages
-  # only raise the kernel limit, so this never rejects a value that would
-  # work. length() counts characters, not bytes; the ASCII validation above
-  # makes the two equal.
+  # only raise the kernel limit, so this never accepts a value that fails to
+  # start. On a node with larger pages it can reject a value that would work
+  # there.
+  #
+  # The limit is in bytes, and length() counts grapheme clusters: a multibyte
+  # character counts once, and so does a CRLF pair, so length() under-counts
+  # a bundle saved with Windows line endings (issue #209). base64encode()
+  # encodes the string's UTF-8 bytes, so its length (always a multiple of 4)
+  # / 4 * 3, minus the "=" padding, is the exact byte count. Same calculation
+  # as terraform-azurerm-n8n's postgres_ssl_ca_pem and terraform-google-n8n's
+  # db_postgresdb_ssl_ca_pem. It is written out in the condition and again in
+  # the message because a local derived from this variable would form a cycle
+  # with its own validation.
+  #
+  # Together with the framing rule above, this is all the module checks. It
+  # does not restrict the characters inside the bundle and does not parse the
+  # certificates; n8n does that when it connects.
+  #
   # Measures the trimmed value, which is what reaches the chart
   # (local.postgres_ssl_ca_values). Not gated on db_postgresdb_ssl_enabled:
   # a bundle this large can never work, so it fails now rather than in the
   # apply that turns SSL on.
   validation {
-    condition     = var.db_postgresdb_ssl_ca_pem == null ? true : length(trimspace(var.db_postgresdb_ssl_ca_pem)) <= 131050
-    error_message = "db_postgresdb_ssl_ca_pem is ${var.db_postgresdb_ssl_ca_pem == null ? 0 : length(trimspace(var.db_postgresdb_ssl_ca_pem))} bytes after trimming, but may be at most 131050: the chart passes it to each n8n container as an environment variable, and Linux refuses to start a container with a larger one. Use the bundle for your region instead of global-bundle.pem: https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem. If n8n connects to databases in several regions, concatenate only those regional bundles."
+    condition = var.db_postgresdb_ssl_ca_pem == null ? true : (
+      length(base64encode(trimspace(var.db_postgresdb_ssl_ca_pem))) / 4 * 3 -
+      length(regex("=*$", base64encode(trimspace(var.db_postgresdb_ssl_ca_pem)))) <= 131050
+    )
+    error_message = "db_postgresdb_ssl_ca_pem is ${var.db_postgresdb_ssl_ca_pem == null ? 0 : length(base64encode(trimspace(var.db_postgresdb_ssl_ca_pem))) / 4 * 3 - length(regex("=*$", base64encode(trimspace(var.db_postgresdb_ssl_ca_pem))))} bytes in UTF-8 after trimming (CRLF line endings count two bytes each), but may be at most 131050: the chart passes it to each n8n container as an environment variable, and Linux refuses to start a container with a larger one. If the file has CRLF line endings, converting them to LF saves one byte per line. Use the bundle for your region instead of global-bundle.pem: https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem. If n8n connects to databases in several regions, concatenate only those regional bundles."
   }
 }
 
