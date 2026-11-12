@@ -64,8 +64,15 @@ does. Route every prefix `n8n_webhook_path_prefixes` returns, not just
 `/webhook`: the module runs the chart with
 `disableProductionWebhooksOnMainProcess = true`, which disables five endpoint
 families on the main pods, not one (`/webhook`, `/webhook-waiting`, `/form`,
-`/form-waiting`, `/mcp`). Iterate over the output rather than hardcoding the
-list, so routing stays in step as n8n adds endpoints.
+`/form-waiting`, `/mcp`), plus the two fixed paths n8n serves the Slack and
+Telegram human-in-the-loop callbacks on (`/webhook-waiting-slack`,
+`/webhook-waiting-telegram`). Iterate over the output rather than hardcoding
+the list, so routing stays in step as n8n adds endpoints.
+
+The two callback paths are not sub-paths of `/webhook-waiting`, so the
+`/webhook-waiting` matches below do not cover them. n8n serves each callback
+on that one path only, so the examples match them with `exact` and no
+`prefix`.
 
 Replace `<namespace>` in the backend Service addresses with
 `module.n8n.namespace`. Keep each Gateway and its VirtualService in the same
@@ -142,6 +149,10 @@ spec:
             exact: /mcp
         - uri:
             prefix: /mcp/
+        - uri:
+            exact: /webhook-waiting-slack
+        - uri:
+            exact: /webhook-waiting-telegram
       route:
         - destination:
             host: n8n-webhook-processor.<namespace>.svc.cluster.local
@@ -212,6 +223,10 @@ spec:
             exact: /mcp
         - uri:
             prefix: /mcp/
+        - uri:
+            exact: /webhook-waiting-slack
+        - uri:
+            exact: /webhook-waiting-telegram
       route:
         - destination:
             host: n8n-webhook-processor.<namespace>.svc.cluster.local

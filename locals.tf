@@ -51,9 +51,10 @@ locals {
   # Path prefixes that must reach the webhook processors rather than the mains.
   #
   # The module runs the chart with disableProductionWebhooksOnMainProcess = true,
-  # which in n8n disables exactly these five endpoint families on the main pods
+  # which in n8n disables five endpoint families on the main pods
   # (packages/cli/src/abstract-server.ts, where the `if (this.webhooksEnabled)` block
-  # registers handlers for form, webhook, form-waiting, webhook-waiting and mcp).
+  # registers handlers for form, webhook, form-waiting, webhook-waiting and mcp),
+  # plus the two fixed callback paths described below.
   # Any of them left routed to n8n-main returns 404: waiting webhooks never
   # resume, Form Trigger nodes break, and MCP server triggers are unreachable.
   #
@@ -66,14 +67,37 @@ locals {
   # expands "/webhook" to match both the bare prefix and "/webhook/*", so the
   # slashless form is a superset and cannot regress a bare-prefix request.
   #
-  # The Slack and Telegram human-in-the-loop callbacks use fixed paths under
-  # /webhook-waiting, so they are already covered by that prefix.
+  # The Slack and Telegram human-in-the-loop callbacks are NOT under
+  # /webhook-waiting. The same `if (this.webhooksEnabled)` block registers them
+  # by appending a suffix to the endpoint name with no slash
+  # (SLACK_HITL_WEBHOOK_SUFFIX = "-slack", TELEGRAM_HITL_WEBHOOK_SUFFIX =
+  # "-telegram", packages/core/src/utils/hitl-callback-reference.ts), giving the
+  # fixed paths /webhook-waiting-slack and /webhook-waiting-telegram. Under
+  # pathType Prefix, "/webhook-waiting" matches "/webhook-waiting" and
+  # "/webhook-waiting/*" only, so each callback needs its own entry or it falls
+  # through to the catch-all and n8n-main answers 404 (#211).
+  #
+  # So this list is not only the five prefix families: n8n also registers
+  # fixed-path routes in that block. When bumping the n8n chart or image,
+  # re-read the whole block for new routes rather than assuming the five
+  # families cover them. Nothing automated compares this list to n8n.
+  #
+  # Append new entries at the end. The list is exposed as the
+  # n8n_webhook_path_prefixes output, so reordering it moves entries a caller
+  # may read by position. Order does not affect routing. No entry matches a
+  # path another entry matches, because Prefix matching works on whole path
+  # elements, and the "/" catch-all is declared after this list in n8n.tf.
+  # The AWS Load Balancer Controller also sorts Prefix paths longest first
+  # before assigning rule priority, from v2.4.3 on. var.lbc_chart_version
+  # accepts older charts, where rules keep the declared order instead.
   n8n_webhook_path_prefixes = [
     "/webhook",
     "/webhook-waiting",
     "/form",
     "/form-waiting",
     "/mcp",
+    "/webhook-waiting-slack",
+    "/webhook-waiting-telegram",
   ]
 
   # Single source of truth for var.alb_ssl_policy's default, so the
