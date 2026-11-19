@@ -13,9 +13,13 @@ this project adheres to the stability contract in
   infrastructure-only deployment. The module then makes no call to the
   Kubernetes API and creates no `kubernetes_*` or `helm_*` resource, so a
   cluster operator installs the controllers and n8n with Helm, Argo CD or
-  Flux. It still creates the EKS cluster and node group, the EKS add-ons, RDS,
-  ElastiCache, S3, the ACM certificate, and every IAM role and Pod Identity
-  association. It skips the controller releases, the `gp3` StorageClass, the
+  Flux. The AWS side is not affected: the EKS cluster and node group, the EKS
+  add-ons, RDS, ElastiCache, S3, the ACM certificate, and the IAM roles and
+  Pod Identity associations each keep following the input that already
+  controls them (`create_eks`, `create_ebs_csi`, `create_database`,
+  `create_elasticache`, `create_s3_bucket`, `route53_zone_id`, and on an
+  existing cluster `install_lbc` and `install_cluster_autoscaler` for the
+  controller IAM). It skips the controller releases, the `gp3` StorageClass, the
   namespace, every Secret, the n8n release, the webhook autoscaler, both
   PodDisruptionBudgets, the Ingress and the Route 53 alias records, and it
   overrides the existing `install_*`, `create_namespace`, `create_ingress`
@@ -26,8 +30,10 @@ this project adheres to the stability contract in
   `kubernetes_secret_v1.n8n_task_runner_token`,
   `time_sleep.wait_for_alb_cleanup`).
   - **New deployments only.** Setting it to `false` on a running deployment
-    makes Terraform uninstall n8n and delete the namespace and its Secrets.
-    There is no migration path.
+    makes Terraform uninstall n8n and the controllers and delete the Secrets
+    and the namespace it created, with everything in that namespace. A
+    namespace or Secret you supplied yourself stays. There is no migration
+    path.
   - New sensitive output `n8n_helm_values`: the YAML the module passes to its
     own n8n release, for the operator to install with. The rendered values on
     the default path are unchanged.
@@ -43,9 +49,12 @@ this project adheres to the stability contract in
     associations and the EBS CSI add-on keep their existing gates.
   - New example [`examples/infrastructure-only`](./examples/infrastructure-only/)
     and reference page [docs/infrastructure-only.md](./docs/infrastructure-only.md).
-  - Not covered by the mocked tests: a caller leaving the `kubernetes` and
-    `helm` providers unconfigured, and the chart accepting the values with
-    operator-created Secrets.
+  - Not covered by the mocked tests: the chart accepting the values with
+    operator-created Secrets, and a caller leaving the `kubernetes` and
+    `helm` providers unconfigured. The second was checked in an isolated
+    configuration at the locked provider versions, where plan and apply
+    succeed with no provider block and no kubeconfig, but not with the whole
+    module against AWS.
 - `n8n_otel_exporter_otlp_headers_secret_ref`: reads the OTLP header string
   (`N8N_OTEL_EXPORTER_OTLP_HEADERS`) from a caller-managed Kubernetes Secret,
   rendered into `env.shared` as a `secretKeyRef`. The value stays out of

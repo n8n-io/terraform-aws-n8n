@@ -110,7 +110,8 @@ of the mode; its README is the operator walkthrough and
 [`docs/infrastructure-only.md`](./docs/infrastructure-only.md) is the
 reference for what the operator must create. The mode is for new deployments
 only: turning the toggle off on a running deployment makes Terraform
-uninstall n8n and delete its namespace and Secrets.
+uninstall n8n and the controllers and delete the Secrets and namespace it
+created.
 
 The DNS, topology, infrastructure-only and single-layer customer-managed
 variants are each

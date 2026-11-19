@@ -19,9 +19,11 @@ below cover responsibilities that exist regardless of which layer ownership
 mode is selected.
 
 With `create_kubernetes_resources = false` the boundary moves further: the
-module creates nothing inside the cluster, so every row below that describes
-a controller, a Kubernetes Secret, the Ingress or the n8n release becomes the
-caller's. See [Infrastructure-only mode](./infrastructure-only.md).
+module makes no call to the Kubernetes API, so every row below that describes
+a Helm-installed controller, a Kubernetes Secret, the Ingress or the n8n
+release becomes the caller's. The EKS add-ons the module installs through the
+AWS API, such as the Pod Identity Agent and the EBS CSI driver, stay with the
+module. See [Infrastructure-only mode](./infrastructure-only.md).
 
 | Area | What the module does | What the caller owns | Related input / doc |
 |---|---|---|---|

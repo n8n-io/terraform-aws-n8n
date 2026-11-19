@@ -10,8 +10,8 @@ variable "cluster_name" {
   default     = "n8n-cluster"
 
   validation {
-    condition     = length(var.cluster_name) <= 14
-    error_message = "cluster_name must be 14 characters or fewer."
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", var.cluster_name)) && length(var.cluster_name) <= 14
+    error_message = "cluster_name must be non-empty, use only lowercase letters, digits and hyphens, start and end with a letter or digit, and be 14 characters or fewer."
   }
 }
 
@@ -120,7 +120,7 @@ variable "n8n_task_runner_image_tag" {
 }
 
 variable "n8n_task_runner_image_repository" {
-  description = "Container image repository for the task runner sidecar (n8nio/runners), without a tag or digest (e.g. \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners\"). Leave null to use the Helm chart's own repository (n8nio/runners). Set alongside n8n_image_repository when mirroring both images into the same private registry; the two are independent. Use n8n_task_runner_image_tag for the runner tag. Private-registry pull access is granted the same way as n8n_image_repository, through n8n_image_pull_secrets on the module-managed ServiceAccount."
+  description = "Container image repository for the task runner sidecar (n8nio/runners), without a tag or digest (e.g. \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners\"). Leave null to use the Helm chart's own repository (n8nio/runners). Set alongside n8n_image_repository when mirroring both images into the same private registry; the two are independent. Use n8n_task_runner_image_tag for the runner tag. Private-registry pull access is granted the same way as n8n_image_repository, through n8n_image_pull_secrets. In this example the module creates no ServiceAccount, so attach those secrets to the ServiceAccount n8n-enterprise-pull that you create yourself."
   type        = string
   default     = null
 

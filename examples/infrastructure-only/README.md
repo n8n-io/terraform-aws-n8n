@@ -9,8 +9,8 @@ This is [`examples/small`](../small/) with one deliberate difference:
 
 **`terraform apply` alone does not give you a running n8n.** That is the
 point of this mode. Use it for a new deployment only: setting the toggle to
-`false` on a running deployment makes Terraform uninstall n8n and delete its
-namespace and Secrets.
+`false` on a running deployment makes Terraform uninstall n8n and the
+controllers and delete the Secrets and namespace it created.
 
 ## What it creates
 
@@ -78,9 +78,11 @@ These steps use `kubectl` and `helm`. Use the equivalent in your own tooling.
    NS=$(terraform output -raw namespace)
    kubectl create namespace "$NS"
 
+   # Set N8N_LICENSE_KEY to your n8n license key first.
+
    kubectl -n "$NS" create secret generic n8n-enterprise-secrets \
      --from-literal=N8N_ENCRYPTION_KEY="$(openssl rand -hex 32)" \
-     --from-literal=N8N_LICENSE_ACTIVATION_KEY="<your license key>"
+     --from-literal=N8N_LICENSE_ACTIVATION_KEY="$N8N_LICENSE_KEY"
 
    kubectl -n "$NS" create secret generic n8n-task-runner-token \
      --from-literal=N8N_RUNNERS_AUTH_TOKEN="$(openssl rand -hex 32)"
@@ -100,12 +102,16 @@ These steps use `kubectl` and `helm`. Use the equivalent in your own tooling.
    ```bash
    terraform output -raw n8n_helm_values > values.yaml
 
+   # The module's n8n_chart_version. This example does not override it, so it
+   # is the default in the module's variables.tf.
+   CHART_VERSION=2.0.0-rc.1
+
    helm upgrade --install n8n oci://ghcr.io/n8n-io/n8n-helm-chart/n8n \
-     --version <n8n_chart_version> --namespace "$NS" --values values.yaml
+     --version "$CHART_VERSION" --namespace "$NS" --values values.yaml
    ```
 
-   Use the chart version the module is pinned to (`n8n_chart_version`). The
-   values are written for that version. `values.yaml` can hold sensitive
+   The values are written for that chart version, so check `CHART_VERSION`
+   against the module version you use before you run this. `values.yaml` can hold sensitive
    settings, so check it before you commit it to Git.
 
 5. Create the webhook autoscaler, the two PodDisruptionBudgets and the
@@ -194,7 +200,7 @@ See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the
 | <a name="input_n8n_image_tag"></a> [n8n\_image\_tag](#input\_n8n\_image\_tag) | n8n application image tag to deploy (e.g. "2.27.4"). Leave null to use the selected Helm chart's default (appVersion 2.44.5 in chart 2.0.0-rc.1). Inspect and pin the running application version before upgrading the chart to avoid a downgrade; see the [upgrade guide](../../docs/upgrading-n8n.md). | `string` | `null` | no |
 | <a name="input_n8n_main_hpa_min_replicas"></a> [n8n\_main\_hpa\_min\_replicas](#input\_n8n\_main\_hpa\_min\_replicas) | Minimum (and therefore default) replica count for n8n main pods, passed straight through to the module's own n8n\_main\_hpa\_min\_replicas. Leave null (the default) to use the module's default of 2 (multi-main, needs an Enterprise/Startup license carrying feat:multipleMainInstances). Set to 1 to run a single main pod in plain queue mode instead, which only needs a Business-tier license: n8n's multi-main leader-election gate never engages at 1 replica. | `number` | `null` | no |
 | <a name="input_n8n_proxy_hops"></a> [n8n\_proxy\_hops](#input\_n8n\_proxy\_hops) | Passed to the module's n8n\_proxy\_hops: number of proxies in front of n8n that add an X-Forwarded-For entry (the module's own ALB counts as 1, an additional proxy or WAF that adds its own entry makes 2). At any hop count of 1 or more, a caller that bypasses the declared proxy chain can forge X-Forwarded-For and spoof its client IP, including an in-cluster caller that reaches the n8n Services directly. When a proxy sits in front of the ALB, restrict the ALB to that proxy's egress addresses with the module's alb\_inbound\_cidrs or alb\_inbound\_prefix\_list\_ids input, which this example does not pass through (add it in main.tf), and keep in-cluster callers off the n8n Services. Leave null (the default) to use the module's default of 1. See [TLS proxy guide](../../docs/tls-proxy.md). | `number` | `null` | no |
-| <a name="input_n8n_task_runner_image_repository"></a> [n8n\_task\_runner\_image\_repository](#input\_n8n\_task\_runner\_image\_repository) | Container image repository for the task runner sidecar (n8nio/runners), without a tag or digest (e.g. "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners"). Leave null to use the Helm chart's own repository (n8nio/runners). Set alongside n8n\_image\_repository when mirroring both images into the same private registry; the two are independent. Use n8n\_task\_runner\_image\_tag for the runner tag. Private-registry pull access is granted the same way as n8n\_image\_repository, through n8n\_image\_pull\_secrets on the module-managed ServiceAccount. | `string` | `null` | no |
+| <a name="input_n8n_task_runner_image_repository"></a> [n8n\_task\_runner\_image\_repository](#input\_n8n\_task\_runner\_image\_repository) | Container image repository for the task runner sidecar (n8nio/runners), without a tag or digest (e.g. "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners"). Leave null to use the Helm chart's own repository (n8nio/runners). Set alongside n8n\_image\_repository when mirroring both images into the same private registry; the two are independent. Use n8n\_task\_runner\_image\_tag for the runner tag. Private-registry pull access is granted the same way as n8n\_image\_repository, through n8n\_image\_pull\_secrets. In this example the module creates no ServiceAccount, so attach those secrets to the ServiceAccount n8n-enterprise-pull that you create yourself. | `string` | `null` | no |
 | <a name="input_n8n_task_runner_image_tag"></a> [n8n\_task\_runner\_image\_tag](#input\_n8n\_task\_runner\_image\_tag) | Image tag for the task runner sidecar (`n8nio/runners`). Leave null to inherit the n8n application image's tag, which is correct as long as that tag is a published n8n version. Set it to the underlying n8n version when running a custom image whose tag is not one (e.g. n8n\_image\_tag = "2.27.4-mypackages" together with n8n\_task\_runner\_image\_tag = "2.27.4"); otherwise the sidecar image cannot be pulled and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 2.0.0-rc.1 queue mode). | `string` | `null` | no |
 | <a name="input_route53_zone_id"></a> [route53\_zone\_id](#input\_route53\_zone\_id) | Route53 hosted zone ID for the parent of n8n\_domain (e.g. the zone for example.com if n8n\_domain = n8n.example.com). The module creates the ACM certificate and its validation records inside this zone. It creates no alias A-record in this example: add the record yourself once your Ingress has a load balancer. | `string` | n/a | yes |
 | <a name="input_s3_force_destroy"></a> [s3\_force\_destroy](#input\_s3\_force\_destroy) | Passed to the module's s3\_force\_destroy. Leave null (the default) to use the module's teardown-friendly default of true. | `bool` | `null` | no |

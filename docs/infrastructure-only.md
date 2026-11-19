@@ -6,7 +6,9 @@ cluster operator owns everything behind the Kubernetes API with tooling of
 their own, such as Helm, Argo CD or Flux.
 
 `create_kubernetes_resources = false` gives you that split. The module then
-makes no call to the Kubernetes API. This page is the reference for what the
+makes no call to the Kubernetes API. EKS add-ons such as the Pod Identity
+Agent and the EBS CSI driver still run in the cluster, because the module
+installs them through the AWS API. This page is the reference for what the
 module still creates, what it skips, and what the operator must create so
 that n8n starts.
 
@@ -16,9 +18,14 @@ For a runnable configuration and a step-by-step walkthrough, see
 ## Before you choose this mode
 
 - **It is for new deployments only.** Setting the toggle to `false` on a
-  running deployment makes Terraform uninstall n8n and the controllers and
-  delete the namespace with its Secrets. Nothing is handed over. Setting it
-  back to `true` later does not adopt a release the operator installed.
+  running deployment makes Terraform destroy every cluster object it manages:
+  the n8n release, the controllers, and the Secrets the module created. If
+  the module created the namespace (`create_namespace = true`, the default),
+  it deletes the namespace too, and Kubernetes then removes everything else
+  in it. A namespace or Secret you supplied yourself (`create_namespace =
+  false`, a `*_secret_ref` input) is not Terraform's and stays. Nothing is
+  handed over. Setting the toggle back to `true` later does not adopt a
+  release the operator installed.
 - **The operator owns the application secrets.** The module generates no n8n
   encryption key and no task runner token in this mode. Losing the encryption
   key makes every credential stored in n8n unreadable, so the operator must
@@ -36,15 +43,32 @@ For a runnable configuration and a step-by-step walkthrough, see
 
 ## What the module creates and skips
 
-| Still created | Skipped |
+The toggle skips everything the module would create through the Kubernetes
+API:
+
+- the Load Balancer Controller, Cluster Autoscaler, metrics-server and KEDA
+  Helm releases,
+- the `gp3` StorageClass,
+- the namespace, the Secrets and the ServiceAccount,
+- the n8n Helm release,
+- the webhook HorizontalPodAutoscaler, both PodDisruptionBudgets and the
+  Ingress,
+- the Route 53 alias records for the load balancer,
+- the optional `redis_exporter`.
+
+It changes nothing on the AWS side. Each AWS resource keeps following the
+input that already controls it:
+
+| AWS resource | Controlled by |
 | --- | --- |
-| EKS cluster, node group, and the EKS add-ons, including the EBS CSI driver | Load Balancer Controller, Cluster Autoscaler, metrics-server and KEDA Helm releases |
-| RDS PostgreSQL, ElastiCache Redis, S3 bucket | The `gp3` StorageClass |
-| Every IAM role and Pod Identity association | The n8n Helm release |
-| ACM certificate and its Route 53 validation records | Namespace, Secrets, ServiceAccount |
-| | Webhook HorizontalPodAutoscaler, both PodDisruptionBudgets, the Ingress |
-| | Route 53 alias records for the load balancer |
-| | The optional `redis_exporter` |
+| EKS cluster, node group, Pod Identity Agent add-on | `create_eks` |
+| EBS CSI driver add-on and its IAM role | `create_ebs_csi` |
+| RDS PostgreSQL | `create_database` |
+| ElastiCache Redis | `create_elasticache` |
+| S3 bucket | `create_s3_bucket` |
+| IAM role and Pod Identity association for n8n's S3 access | Always created |
+| IAM roles and Pod Identity associations for the Load Balancer Controller and Cluster Autoscaler | Always created on a cluster the module creates. On an existing cluster, `install_lbc` and `install_cluster_autoscaler`. |
+| ACM certificate and its Route 53 validation records | `route53_zone_id`. With `certificate_arn` the module creates no certificate and passes yours through. |
 
 The toggle overrides `install_lbc`, `install_cluster_autoscaler`,
 `install_metrics_server`, `install_keda`, `create_namespace`,
@@ -53,9 +77,9 @@ The toggle overrides `install_lbc`, `install_cluster_autoscaler`,
 StorageClass half of `create_ebs_csi`. It does so without a warning, whatever
 those inputs are set to.
 
-On an existing cluster (`create_eks = false`) the IAM role and Pod Identity
-association of the Load Balancer Controller and the Cluster Autoscaler still
-follow `install_lbc` and `install_cluster_autoscaler`. Set one to `false`
+On an existing cluster (`create_eks = false`) the controller IAM follows
+`install_lbc` and `install_cluster_autoscaler`, as it does on the default
+path. Set one to `false`
 when that controller already runs there with its own IAM binding, because
 EKS allows one role per ServiceAccount.
 
@@ -67,7 +91,7 @@ EKS allows one role per ServiceAccount.
 | `n8n_encryption_key` | Must be `null`, for the same reason. |
 | `n8n_license_key_secret_ref`, `n8n_license_cert_secret_ref` | Optional. Set at most one. With neither set, the values name the Secret `n8n-enterprise-secrets`. |
 | `ingress_scheme`, `alb_ssl_policy`, `ingress_annotations`, `alb_inbound_cidrs`, `alb_inbound_prefix_list_ids` | Applied to nothing. The plan warns when one is set. Put them on your own Ingress. |
-| Every other `n8n_*`, `db_*` and `redis_*` input | Unchanged. They shape the Helm values in the `n8n_helm_values` output. |
+| Every other input | Unchanged. Inputs that configure n8n itself (most `n8n_*` inputs, and the database and Redis connection, TLS and authentication inputs) shape the Helm values in the `n8n_helm_values` output. Inputs that size or protect AWS resources, such as `db_backup_retention_period` or `redis_node_type`, still act on those resources only. |
 
 ## Cluster access for the operator
 
@@ -92,7 +116,7 @@ No role ARN annotation is needed.
 | Cluster Autoscaler | `kube-system` | `cluster-autoscaler` | `cluster-autoscaler` from `https://kubernetes.github.io/autoscaler`, version `cluster_autoscaler_chart_version` |
 | metrics-server | `kube-system` | No AWS access needed | `metrics-server` from `https://kubernetes-sigs.github.io/metrics-server/`, version `metrics_server_chart_version` |
 | KEDA | `keda` | No AWS access needed | `keda` from `https://kedacore.github.io/charts`, version `keda_chart_version` |
-| EBS CSI driver | `kube-system` | Installed by the module as an EKS add-on | Do not install a second driver |
+| EBS CSI driver | `kube-system` | Installed by the module as an EKS add-on while `create_ebs_csi = true` (the default) | Do not install a second driver. With `create_ebs_csi = false` the module installs none, and providing a driver is yours. |
 
 The values the module passes to each chart are in
 [`modules/controllers/controllers.tf`](../modules/controllers/controllers.tf)
@@ -108,8 +132,8 @@ Two requirements come from the n8n chart values, not from AWS:
 - **KEDA must be able to read Secrets in the n8n namespace** when Redis uses
   an AUTH token. This is the KEDA chart's default.
 
-The EBS CSI driver is installed, but the module creates no StorageClass in
-this mode. n8n itself needs no volume. If other workloads do, create a
+With `create_ebs_csi = true` the EBS CSI driver is installed, but the module
+creates no StorageClass in this mode. n8n itself needs no volume. If other workloads do, create a
 default StorageClass with the provisioner `ebs.csi.aws.com`.
 
 ## Secrets the operator creates
@@ -160,7 +184,7 @@ these fixed coordinates:
 | --- | --- | --- |
 | Release name | `n8n` | The Deployment and Service names in this page derive from it. |
 | Namespace | The `namespace` output | The S3 Pod Identity association binds this namespace. |
-| ServiceAccount | Set by the values (`n8n-enterprise`) | The same association binds this name. With another name n8n gets no S3 credentials. |
+| ServiceAccount | Set by the values: `n8n-enterprise`, or `n8n-enterprise-pull` when `n8n_image_pull_secrets` is set | The same association binds this name. With another name n8n gets no S3 credentials. With `n8n_image_pull_secrets` set you create this ServiceAccount yourself. |
 
 The values file needs care:
 
@@ -213,10 +237,18 @@ A load balancer or security group that a controller left behind blocks the
 deletion of the VPC. [Destroy and cleanup](./destroy-cleanup.md) shows how to
 find and remove such leftovers.
 
-## What is not verified by the module's tests
+## What is and is not verified
 
 The module's tests replace every provider with a mock. They show which
-resources the module plans and what the values contain. They do not show
-that an unconfigured `kubernetes` or `helm` provider plans cleanly, or that
-the chart accepts the values together with Secrets you created. Check both
-in a test environment before you rely on this mode.
+resources the module plans and what the values contain.
+
+Leaving the `kubernetes` and `helm` providers unconfigured was checked
+separately, in an isolated configuration with the provider versions this
+repository locks (`kubernetes` 3.2.1, `helm` 3.3.0, `time` 0.14.2), no
+provider block and no kubeconfig: with every resource of those providers at
+`count = 0`, `terraform plan` and `terraform apply` both succeed. That was
+not repeated with the whole module against a real AWS account.
+
+Not verified at all: that the chart accepts the values together with Secrets
+you created. Check both points in a test environment before you rely on this
+mode.

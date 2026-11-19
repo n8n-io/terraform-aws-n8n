@@ -11,8 +11,9 @@ route53_zone_id = "Z0123456789ABCDEFGHIJ"
 # AWS region. Change if you're deploying outside us-east-1.
 # aws_region = "eu-west-1"
 
-# EKS cluster name. Keep to 14 characters or fewer — ElastiCache cluster IDs
-# derived from this name are capped at 20 chars, and '-redis' consumes 6.
+# EKS cluster name. Use only lowercase letters, digits and hyphens: EKS
+# rejects anything else. Keep to 14 characters or fewer: ElastiCache cluster
+# IDs derived from this name are capped at 20 chars, and '-redis' consumes 6.
 # cluster_name = "n8n-cluster"
 
 # Extra AWS tags applied to every resource this example creates.
