@@ -94,6 +94,9 @@ ALLOWED_DIFFS=(
   # module rejects a literal license key in that mode: the cluster operator
   # creates the license Secret, so the example has no input for it.
   "infrastructure-only:n8n_license_key"
+  # infrastructure-only turns Redis TLS and AUTH on by default, a second
+  # deliberate difference: the operator creates the n8n Secrets anyway.
+  "infrastructure-only:redis_transit_encryption_enabled"
   # large swaps RDS for Aurora and accepts a BYO certificate_arn instead of
   # route53_zone_id; it does not offer additional hostnames.
   "large:aurora_*"

@@ -211,6 +211,13 @@ variable "n8n_main_hpa_min_replicas" {
   default     = null
 }
 
+variable "redis_transit_encryption_enabled" {
+  description = "Passed to the module's redis_transit_encryption_enabled. Defaults to true in this example, unlike the module and examples/small: n8n and KEDA connect to Redis over TLS, and the module generates an AUTH token, exposed through the redis_auth_token output. In this mode the operator creates the n8n Secrets anyway, so one more (n8n-enterprise-redis-secret) adds little work, and queue payloads stop crossing the VPC in cleartext. The certificate chains to Amazon Root CA 1, which standard trust stores include, so no CA bundle is needed. Turning it on selects a one-node aws_elasticache_replication_group, encrypted at rest, instead of the module's default aws_elasticache_cluster. Changing it on a running deployment replaces Redis and drops every queued job. Set to false to match examples/small."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "n8n_execution_data_storage_mode" {
   description = "Where n8n stores the data of each new execution. Passed to the module's n8n_execution_data_storage_mode. \"database\" keeps execution data in PostgreSQL; \"s3\" offloads it to the S3 bucket the module already creates for binary data. This example runs the module's default database (db.t3.small on 50 GB of gp2, a 150 IOPS baseline), which has the least room of any sizing this module ships to absorb execution-data growth, so reaching for this is often cheaper than resizing the database. Requires n8n >= 2.27 (pin n8n_image_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is not the same one binary data offload uses. There is no backfill: existing executions stay readable where they were written. Read the execution data section of the root README before enabling it, in particular the durability trade-off and the S3 lifecycle constraint."
   type        = string

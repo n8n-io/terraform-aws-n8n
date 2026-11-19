@@ -108,14 +108,17 @@ output. It is the only root module with no `kubernetes` or `helm` provider
 block. It cannot be brought up by `terraform apply` alone, which is the point
 of the mode; its README is the operator walkthrough and
 [`docs/infrastructure-only.md`](./docs/infrastructure-only.md) is the
-reference for what the operator must create. The mode is for new deployments
-only: turning the toggle off on a running deployment makes Terraform
+reference for what the operator must create. It also turns Redis TLS and
+AUTH on by default (`redis_transit_encryption_enabled = true`), a second
+deliberate difference from `small`: the operator creates the n8n Secrets in
+this mode anyway, so the Redis one costs a single command. The mode is for
+new deployments only: turning the toggle off on a running deployment makes Terraform
 uninstall n8n and the controllers and delete the Secrets and namespace it
 created.
 
-The DNS, topology, infrastructure-only and single-layer customer-managed
-variants are each
-"`small` plus one deliberate difference"; `customer-managed-everything`
+The DNS, topology and single-layer customer-managed variants are each
+"`small` plus one deliberate difference"; `infrastructure-only` adds Redis
+TLS as a second, `customer-managed-everything`
 stacks three of those differences, and `medium`/`large` are sizing tiers
 rather than variants. In every case the module inputs `small` passes
 through should stay in sync unless the difference itself removes them.
@@ -125,7 +128,8 @@ a pass-through and three lost their "Production considerations" section.
 now, not yet wired into CI) diffs the set of variable names every example's
 `variables.tf` declares against `small`'s and fails on any name present on
 one side only that is not in its per-example allowlist (the DNS-provider credentials,
-the license input `infrastructure-only` cannot take, `customer_managed_*`
+the license input `infrastructure-only` cannot take and its Redis TLS
+toggle, `customer_managed_*`
 stand-in sizing plus `kubernetes_version` where the example builds its own
 cluster, split-ingress's own Ingress knobs, worker-pools' chart pins and
 default-worker KEDA bounds, large's Aurora and BYO
@@ -186,7 +190,7 @@ expected by the Terraform Registry:
 | `examples/customer-managed-s3/`   | Customer-managed variant of `small`: a plain-Terraform bucket with its own security configuration, consumed via `create_s3_bucket = false`. |
 | `examples/customer-managed-cluster/` | Customer-managed variant of `small`: a plain-Terraform EKS cluster and node group, consumed via `create_eks = false` + `existing_eks_cluster_name`. |
 | `examples/customer-managed-everything/` | All of the above at once, plus a **direct `modules/controllers` invocation**: every layer the module can create is customer-managed. The only root module that exercises the controllers submodule's input contract directly. |
-| `examples/infrastructure-only/` | Infrastructure-only variant of `small`: `create_kubernetes_resources = false`, so the module provisions AWS only and a cluster operator installs the controllers and n8n from the `n8n_helm_values` output. No `kubernetes` or `helm` provider block (Route 53, includes the VPC). |
+| `examples/infrastructure-only/` | Infrastructure-only variant of `small`: `create_kubernetes_resources = false`, so the module provisions AWS only and a cluster operator installs the controllers and n8n from the `n8n_helm_values` output. Redis TLS and AUTH on by default. No `kubernetes` or `helm` provider block (Route 53, includes the VPC). |
 | `tests/*.tftest.hcl`              | `terraform test` plan-time tests with mocked providers.     |
 | `tests/scripts/smoke-test.sh`     | Post-`apply` smoke test for live deployments.               |
 | `tests/scripts/verify-custom-image.sh` | Post-`apply` check for baked-in community nodes (`n8n_image_repository` + `n8n_custom_extensions_path`). |

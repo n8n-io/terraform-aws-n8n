@@ -54,6 +54,8 @@ this project adheres to the stability contract in
     associations and the EBS CSI add-on keep their existing gates.
   - New example [`examples/infrastructure-only`](./examples/infrastructure-only/)
     and reference page [docs/infrastructure-only.md](./docs/infrastructure-only.md).
+    The example turns Redis TLS and AUTH on by default
+    (`redis_transit_encryption_enabled = true`), unlike `examples/small`.
   - Not covered by the mocked tests: the chart accepting the values with
     operator-created Secrets, and a caller leaving the `kubernetes` and
     `helm` providers unconfigured. The second was checked in an isolated

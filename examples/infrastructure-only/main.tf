@@ -112,6 +112,13 @@ module "n8n" {
   # history.
   n8n_execution_data_storage_mode = var.n8n_execution_data_storage_mode
 
+  # ── Redis TLS and AUTH ──────────────────────────────────────────────────────
+  # On by default in this example, a second deliberate difference from
+  # examples/small: the operator creates the n8n Secrets in this mode anyway,
+  # so the Redis AUTH Secret costs one more kubectl command. See the
+  # variable's description, and set it to false to match examples/small.
+  redis_transit_encryption_enabled = var.redis_transit_encryption_enabled
+
   # ── Data-resource deletion controls ─────────────────────────────────────────
   # All of these default to null, which lets the module's own defaults apply.
   # They are exposed here so the small example's production-considerations

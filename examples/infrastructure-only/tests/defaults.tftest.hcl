@@ -278,3 +278,54 @@ run "aws_partner_attribution_tag_rejects_a_value_over_the_aws_tag_value_limit" {
 # tests/defaults.tftest.hcl. `terraform validate` checks only that the
 # arguments, references and types line up; confirming the rendered result
 # needs a real `terraform plan`.
+
+# ── Redis TLS and AUTH ────────────────────────────────────────────────────────
+# On by default in this example, unlike examples/small. The token's result is
+# overridden at plan (override_during, Terraform 1.11+) so the module's
+# redis_auth_token output is known: it is non-null only when the module
+# generated a token, which it does only with transit encryption on, so it
+# proves the toggle reached the module. With the toggle off, the generator has
+# no instance, the override is unused, and the output is null.
+
+run "redis_tls_and_auth_are_on_by_default" {
+  command = plan
+
+  override_resource {
+    target          = module.n8n.random_password.redis_auth_token
+    override_during = plan
+    values = {
+      result = "test-redis-auth-token-not-real"
+    }
+  }
+
+  assert {
+    condition     = var.redis_transit_encryption_enabled == true
+    error_message = "redis_transit_encryption_enabled must default to true in this example"
+  }
+
+  assert {
+    condition     = nonsensitive(output.redis_auth_token) == "test-redis-auth-token-not-real"
+    error_message = "With the default, the module must generate a Redis AUTH token, which only happens with transit encryption on"
+  }
+}
+
+run "redis_tls_can_be_turned_off" {
+  command = plan
+
+  variables {
+    redis_transit_encryption_enabled = false
+  }
+
+  override_resource {
+    target          = module.n8n.random_password.redis_auth_token
+    override_during = plan
+    values = {
+      result = "test-redis-auth-token-not-real"
+    }
+  }
+
+  assert {
+    condition     = nonsensitive(output.redis_auth_token) == null
+    error_message = "redis_transit_encryption_enabled = false must reach the module: no AUTH token, matching examples/small"
+  }
+}

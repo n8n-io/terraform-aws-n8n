@@ -4,8 +4,11 @@ Provisions the AWS infrastructure for n8n and stops there. Terraform creates
 nothing inside the cluster, and a cluster operator installs the controllers
 and n8n with tooling of their own, such as Helm, Argo CD or Flux.
 
-This is [`examples/small`](../small/) with one deliberate difference:
-`create_kubernetes_resources = false`.
+This is [`examples/small`](../small/) with two deliberate differences:
+`create_kubernetes_resources = false`, and Redis TLS with an AUTH token on by
+default (`redis_transit_encryption_enabled = true`). The operator creates
+the n8n Secrets in this mode anyway, so the Redis one adds a single command.
+Set `redis_transit_encryption_enabled = false` to match `examples/small`.
 
 **`terraform apply` alone does not give you a running n8n.** That is the
 point of this mode. Use it for a new deployment only: setting the toggle to
@@ -16,7 +19,8 @@ controllers and delete the Secrets and namespace it created.
 
 - VPC with public and private subnets across two AZs, NAT gateway, EKS/ALB subnet tags (via `terraform-aws-modules/vpc/aws`)
 - EKS cluster, managed node group and EKS add-ons, including the EBS CSI driver
-- RDS PostgreSQL, ElastiCache Redis, S3 bucket
+- RDS PostgreSQL, S3 bucket
+- ElastiCache Redis as a one-node replication group with TLS, an AUTH token and encryption at rest. The certificate chains to Amazon Root CA 1, so n8n and KEDA need no CA bundle.
 - The ACM certificate, validated through Route 53
 - Every IAM role and Pod Identity association: for n8n's S3 access, the AWS Load Balancer Controller and the Cluster Autoscaler
 
@@ -89,11 +93,14 @@ These steps use `kubectl` and `helm`. Use the equivalent in your own tooling.
 
    kubectl -n "$NS" create secret generic n8n-enterprise-db-secret \
      --from-literal=password="$(terraform output -raw db_password)"
+
+   # Skip with redis_transit_encryption_enabled = false: Redis then has no AUTH.
+   kubectl -n "$NS" create secret generic n8n-enterprise-redis-secret \
+     --from-literal=password="$(terraform output -raw redis_auth_token)"
    ```
 
    Back up the encryption key now. Losing it makes every credential stored
-   in n8n unreadable. If you enable Redis AUTH, also create
-   `n8n-enterprise-redis-secret`; see
+   in n8n unreadable. See
    [Secrets the operator creates](../../docs/infrastructure-only.md#secrets-the-operator-creates).
 
 4. Install n8n. The release name `n8n` and the namespace are fixed, because
@@ -203,6 +210,7 @@ See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the
 | <a name="input_n8n_proxy_hops"></a> [n8n\_proxy\_hops](#input\_n8n\_proxy\_hops) | Passed to the module's n8n\_proxy\_hops: number of proxies in front of n8n that add an X-Forwarded-For entry (the load balancer of the Ingress you create counts as 1, an additional proxy or WAF that adds its own entry makes 2). At any hop count of 1 or more, a caller that bypasses the declared proxy chain can forge X-Forwarded-For and spoof its client IP, including an in-cluster caller that reaches the n8n Services directly. When a proxy sits in front of your load balancer, restrict it to that proxy's egress addresses on the Ingress you create, for example with the alb.ingress.kubernetes.io/inbound-cidrs annotation, and check the effective inbound rules of its security group. The module's alb\_inbound\_cidrs and alb\_inbound\_prefix\_list\_ids inputs have no effect in this example, because the module creates no Ingress. Keep in-cluster callers off the n8n Services. Leave null (the default) to use the module's default of 1. See [TLS proxy guide](../../docs/tls-proxy.md). | `number` | `null` | no |
 | <a name="input_n8n_task_runner_image_repository"></a> [n8n\_task\_runner\_image\_repository](#input\_n8n\_task\_runner\_image\_repository) | Container image repository for the task runner sidecar (n8nio/runners), without a tag or digest (e.g. "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners"). Leave null to use the Helm chart's own repository (n8nio/runners). Set alongside n8n\_image\_repository when mirroring both images into the same private registry; the two are independent. Use n8n\_task\_runner\_image\_tag for the runner tag. Private-registry pull access is granted the same way as n8n\_image\_repository, through n8n\_image\_pull\_secrets. In this example the module creates no ServiceAccount, so attach those secrets to the ServiceAccount n8n-enterprise-pull that you create yourself. | `string` | `null` | no |
 | <a name="input_n8n_task_runner_image_tag"></a> [n8n\_task\_runner\_image\_tag](#input\_n8n\_task\_runner\_image\_tag) | Image tag for the task runner sidecar (`n8nio/runners`). Leave null to inherit the n8n application image's tag, which is correct as long as that tag is a published n8n version. Set it to the underlying n8n version when running a custom image whose tag is not one (e.g. n8n\_image\_tag = "2.27.4-mypackages" together with n8n\_task\_runner\_image\_tag = "2.27.4"); otherwise the sidecar image cannot be pulled and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 2.0.0-rc.1 queue mode). | `string` | `null` | no |
+| <a name="input_redis_transit_encryption_enabled"></a> [redis\_transit\_encryption\_enabled](#input\_redis\_transit\_encryption\_enabled) | Passed to the module's redis\_transit\_encryption\_enabled. Defaults to true in this example, unlike the module and examples/small: n8n and KEDA connect to Redis over TLS, and the module generates an AUTH token, exposed through the redis\_auth\_token output. In this mode the operator creates the n8n Secrets anyway, so one more (n8n-enterprise-redis-secret) adds little work, and queue payloads stop crossing the VPC in cleartext. The certificate chains to Amazon Root CA 1, which standard trust stores include, so no CA bundle is needed. Turning it on selects a one-node aws\_elasticache\_replication\_group, encrypted at rest, instead of the module's default aws\_elasticache\_cluster. Changing it on a running deployment replaces Redis and drops every queued job. Set to false to match examples/small. | `bool` | `true` | no |
 | <a name="input_route53_zone_id"></a> [route53\_zone\_id](#input\_route53\_zone\_id) | Route53 hosted zone ID for the parent of n8n\_domain (e.g. the zone for example.com if n8n\_domain = n8n.example.com). The module creates the ACM certificate and its validation records inside this zone. It creates no alias A-record in this example: add the record yourself once your Ingress has a load balancer. | `string` | n/a | yes |
 | <a name="input_s3_force_destroy"></a> [s3\_force\_destroy](#input\_s3\_force\_destroy) | Passed to the module's s3\_force\_destroy. Leave null (the default) to use the module's teardown-friendly default of true. | `bool` | `null` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Additional AWS tags to apply to every resource this example creates. | `map(string)` | `{}` | no |
@@ -220,6 +228,6 @@ See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the
 | <a name="output_n8n_helm_values"></a> [n8n\_helm\_values](#output\_n8n\_helm\_values) | Values for the n8n Helm chart. Write to a file with terraform output -raw n8n\_helm\_values > values.yaml and install the chart with it as release n8n. |
 | <a name="output_n8n_url"></a> [n8n\_url](#output\_n8n\_url) | URL n8n answers on once the Ingress and DNS record you create are in place. |
 | <a name="output_namespace"></a> [namespace](#output\_namespace) | Namespace to install n8n into. The module does not create it in this example; the S3 Pod Identity association is bound to this name. |
-| <a name="output_redis_auth_token"></a> [redis\_auth\_token](#output\_redis\_auth\_token) | Redis AUTH token, or null when Redis runs without one (the default). When set, it goes into the Secret n8n-enterprise-redis-secret under the key password. |
+| <a name="output_redis_auth_token"></a> [redis\_auth\_token](#output\_redis\_auth\_token) | Redis AUTH token. Goes into the Secret n8n-enterprise-redis-secret under the key password. Null when redis\_transit\_encryption\_enabled = false, since Redis then runs without AUTH. |
 | <a name="output_vpc_id"></a> [vpc\_id](#output\_vpc\_id) | VPC ID. The Load Balancer Controller chart needs it. |
 <!-- END_TF_DOCS -->

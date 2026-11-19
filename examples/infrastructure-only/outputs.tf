@@ -58,7 +58,7 @@ output "db_password" {
 }
 
 output "redis_auth_token" {
-  description = "Redis AUTH token, or null when Redis runs without one (the default). When set, it goes into the Secret n8n-enterprise-redis-secret under the key password."
+  description = "Redis AUTH token. Goes into the Secret n8n-enterprise-redis-secret under the key password. Null when redis_transit_encryption_enabled = false, since Redis then runs without AUTH."
   value       = module.n8n.redis_auth_token
   sensitive   = true
 }
