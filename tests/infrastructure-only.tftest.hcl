@@ -180,6 +180,12 @@ run "default_path_output_is_what_the_release_receives" {
     )
     error_message = "The default path must keep pointing the chart at the module-managed Secrets by their existing names"
   }
+
+  # The chart outputs name exactly the chart the module's own release installs.
+  assert {
+    condition     = output.n8n_chart_repository == helm_release.n8n[0].repository && output.n8n_chart_version == helm_release.n8n[0].version
+    error_message = "n8n_chart_repository and n8n_chart_version must match what helm_release.n8n installs"
+  }
 }
 
 # Without a license the default path must still fail: the rule only relaxes in
@@ -398,6 +404,29 @@ run "infrastructure_only_outputs_report_what_terraform_does_not_own" {
   assert {
     condition     = output.namespace == "n8n"
     error_message = "namespace must return the intended name from var.namespace when the module creates no namespace"
+  }
+}
+
+# With no release, the chart outputs are the operator's only source for the
+# chart the values are written for. A mirror and a pinned version show they
+# follow the inputs rather than fixed defaults.
+run "infrastructure_only_outputs_name_the_chart_for_the_values" {
+  command = plan
+
+  variables {
+    create_kubernetes_resources = false
+    n8n_chart_repository        = "oci://123456789012.dkr.ecr.us-east-1.amazonaws.com/n8n-chart-mirror"
+    n8n_chart_version           = "3.0.0"
+  }
+
+  assert {
+    condition     = output.n8n_chart_repository == "oci://123456789012.dkr.ecr.us-east-1.amazonaws.com/n8n-chart-mirror"
+    error_message = "n8n_chart_repository must carry the configured chart repository in infrastructure-only mode"
+  }
+
+  assert {
+    condition     = output.n8n_chart_version == "3.0.0"
+    error_message = "n8n_chart_version must carry the configured chart version in infrastructure-only mode"
   }
 }
 

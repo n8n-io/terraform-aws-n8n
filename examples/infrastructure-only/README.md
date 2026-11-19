@@ -102,17 +102,18 @@ These steps use `kubectl` and `helm`. Use the equivalent in your own tooling.
    ```bash
    terraform output -raw n8n_helm_values > values.yaml
 
-   # The module's n8n_chart_version. This example does not override it, so it
-   # is the default in the module's variables.tf.
-   CHART_VERSION=2.0.0-rc.1
+   CHART_REPOSITORY=$(terraform output -raw n8n_chart_repository)
+   CHART_VERSION=$(terraform output -raw n8n_chart_version)
 
-   helm upgrade --install n8n oci://ghcr.io/n8n-io/n8n-helm-chart/n8n \
+   helm upgrade --install n8n "$CHART_REPOSITORY/n8n" \
      --version "$CHART_VERSION" --namespace "$NS" --values values.yaml
    ```
 
-   The values are written for that chart version, so check `CHART_VERSION`
-   against the module version you use before you run this. `values.yaml` can hold sensitive
-   settings, so check it before you commit it to Git.
+   The values are written for that chart version, so install exactly that
+   one. The command assumes an OCI repository, which is the default. For an
+   `https://` repository, use `--repo "$CHART_REPOSITORY" n8n` instead.
+   `values.yaml` can hold sensitive settings, so check it before you commit
+   it to Git.
 
 5. Create the webhook autoscaler, the two PodDisruptionBudgets and the
    Ingress, then the DNS record that points `n8n_domain` at the load
@@ -199,7 +200,7 @@ See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the
 | <a name="input_n8n_image_repository"></a> [n8n\_image\_repository](#input\_n8n\_image\_repository) | Container image repository for the n8n application, without a tag (e.g. "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n"). Leave null to use the Helm chart's own repository (docker.n8n.io/n8nio/n8n). Set this to run a custom image, for example one with community packages baked in so they are not reinstalled on every pod boot. The image must be pullable by the node group's IAM role (ECR in the same account is) or be public, otherwise name a dockerconfigjson secret in n8n\_image\_pull\_secrets, and n8n\_task\_runner\_image\_tag usually has to be set alongside it. | `string` | `null` | no |
 | <a name="input_n8n_image_tag"></a> [n8n\_image\_tag](#input\_n8n\_image\_tag) | n8n application image tag to deploy (e.g. "2.27.4"). Leave null to use the selected Helm chart's default (appVersion 2.44.5 in chart 2.0.0-rc.1). Inspect and pin the running application version before upgrading the chart to avoid a downgrade; see the [upgrade guide](../../docs/upgrading-n8n.md). | `string` | `null` | no |
 | <a name="input_n8n_main_hpa_min_replicas"></a> [n8n\_main\_hpa\_min\_replicas](#input\_n8n\_main\_hpa\_min\_replicas) | Minimum (and therefore default) replica count for n8n main pods, passed straight through to the module's own n8n\_main\_hpa\_min\_replicas. Leave null (the default) to use the module's default of 2 (multi-main, needs an Enterprise/Startup license carrying feat:multipleMainInstances). Set to 1 to run a single main pod in plain queue mode instead, which only needs a Business-tier license: n8n's multi-main leader-election gate never engages at 1 replica. | `number` | `null` | no |
-| <a name="input_n8n_proxy_hops"></a> [n8n\_proxy\_hops](#input\_n8n\_proxy\_hops) | Passed to the module's n8n\_proxy\_hops: number of proxies in front of n8n that add an X-Forwarded-For entry (the module's own ALB counts as 1, an additional proxy or WAF that adds its own entry makes 2). At any hop count of 1 or more, a caller that bypasses the declared proxy chain can forge X-Forwarded-For and spoof its client IP, including an in-cluster caller that reaches the n8n Services directly. When a proxy sits in front of the ALB, restrict the ALB to that proxy's egress addresses with the module's alb\_inbound\_cidrs or alb\_inbound\_prefix\_list\_ids input, which this example does not pass through (add it in main.tf), and keep in-cluster callers off the n8n Services. Leave null (the default) to use the module's default of 1. See [TLS proxy guide](../../docs/tls-proxy.md). | `number` | `null` | no |
+| <a name="input_n8n_proxy_hops"></a> [n8n\_proxy\_hops](#input\_n8n\_proxy\_hops) | Passed to the module's n8n\_proxy\_hops: number of proxies in front of n8n that add an X-Forwarded-For entry (the load balancer of the Ingress you create counts as 1, an additional proxy or WAF that adds its own entry makes 2). At any hop count of 1 or more, a caller that bypasses the declared proxy chain can forge X-Forwarded-For and spoof its client IP, including an in-cluster caller that reaches the n8n Services directly. When a proxy sits in front of your load balancer, restrict it to that proxy's egress addresses on the Ingress you create, for example with the alb.ingress.kubernetes.io/inbound-cidrs annotation, and check the effective inbound rules of its security group. The module's alb\_inbound\_cidrs and alb\_inbound\_prefix\_list\_ids inputs have no effect in this example, because the module creates no Ingress. Keep in-cluster callers off the n8n Services. Leave null (the default) to use the module's default of 1. See [TLS proxy guide](../../docs/tls-proxy.md). | `number` | `null` | no |
 | <a name="input_n8n_task_runner_image_repository"></a> [n8n\_task\_runner\_image\_repository](#input\_n8n\_task\_runner\_image\_repository) | Container image repository for the task runner sidecar (n8nio/runners), without a tag or digest (e.g. "123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners"). Leave null to use the Helm chart's own repository (n8nio/runners). Set alongside n8n\_image\_repository when mirroring both images into the same private registry; the two are independent. Use n8n\_task\_runner\_image\_tag for the runner tag. Private-registry pull access is granted the same way as n8n\_image\_repository, through n8n\_image\_pull\_secrets. In this example the module creates no ServiceAccount, so attach those secrets to the ServiceAccount n8n-enterprise-pull that you create yourself. | `string` | `null` | no |
 | <a name="input_n8n_task_runner_image_tag"></a> [n8n\_task\_runner\_image\_tag](#input\_n8n\_task\_runner\_image\_tag) | Image tag for the task runner sidecar (`n8nio/runners`). Leave null to inherit the n8n application image's tag, which is correct as long as that tag is a published n8n version. Set it to the underlying n8n version when running a custom image whose tag is not one (e.g. n8n\_image\_tag = "2.27.4-mypackages" together with n8n\_task\_runner\_image\_tag = "2.27.4"); otherwise the sidecar image cannot be pulled and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 2.0.0-rc.1 queue mode). | `string` | `null` | no |
 | <a name="input_route53_zone_id"></a> [route53\_zone\_id](#input\_route53\_zone\_id) | Route53 hosted zone ID for the parent of n8n\_domain (e.g. the zone for example.com if n8n\_domain = n8n.example.com). The module creates the ACM certificate and its validation records inside this zone. It creates no alias A-record in this example: add the record yourself once your Ingress has a load balancer. | `string` | n/a | yes |
@@ -214,6 +215,8 @@ See [`docs/build-time-decisions.md`](../../docs/build-time-decisions.md) for the
 | <a name="output_cluster_name"></a> [cluster\_name](#output\_cluster\_name) | EKS cluster name. The Load Balancer Controller and Cluster Autoscaler charts need it. |
 | <a name="output_db_password"></a> [db\_password](#output\_db\_password) | RDS PostgreSQL password. Goes into the Secret n8n-enterprise-db-secret under the key password. |
 | <a name="output_kubectl_config_command"></a> [kubectl\_config\_command](#output\_kubectl\_config\_command) | Command to configure kubectl for this cluster. |
+| <a name="output_n8n_chart_repository"></a> [n8n\_chart\_repository](#output\_n8n\_chart\_repository) | Repository to install the n8n chart from. The values in n8n\_helm\_values are written for this chart. |
+| <a name="output_n8n_chart_version"></a> [n8n\_chart\_version](#output\_n8n\_chart\_version) | Version of the n8n chart to install. The values in n8n\_helm\_values are written for this version. |
 | <a name="output_n8n_helm_values"></a> [n8n\_helm\_values](#output\_n8n\_helm\_values) | Values for the n8n Helm chart. Write to a file with terraform output -raw n8n\_helm\_values > values.yaml and install the chart with it as release n8n. |
 | <a name="output_n8n_url"></a> [n8n\_url](#output\_n8n\_url) | URL n8n answers on once the Ingress and DNS record you create are in place. |
 | <a name="output_namespace"></a> [namespace](#output\_namespace) | Namespace to install n8n into. The module does not create it in this example; the S3 Pod Identity association is bound to this name. |

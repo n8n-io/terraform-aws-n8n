@@ -6,9 +6,12 @@ cluster operator owns everything behind the Kubernetes API with tooling of
 their own, such as Helm, Argo CD or Flux.
 
 `create_kubernetes_resources = false` gives you that split. The module then
-makes no call to the Kubernetes API. EKS add-ons such as the Pod Identity
-Agent and the EBS CSI driver still run in the cluster, because the module
-installs them through the AWS API. This page is the reference for what the
+makes no call to the Kubernetes API. EKS add-ons still run in the cluster
+where the module installs them through the AWS API: the Pod Identity Agent
+when the module creates the cluster (`create_eks = true`), and the EBS CSI
+driver while `create_ebs_csi = true`. On an existing cluster
+(`create_eks = false`) the module installs no Pod Identity Agent. It only
+checks that the add-on is already there, so providing it is yours. This page is the reference for what the
 module still creates, what it skips, and what the operator must create so
 that n8n starts.
 
@@ -22,10 +25,15 @@ For a runnable configuration and a step-by-step walkthrough, see
   the n8n release, the controllers, and the Secrets the module created. If
   the module created the namespace (`create_namespace = true`, the default),
   it deletes the namespace too, and Kubernetes then removes everything else
-  in it. A namespace or Secret you supplied yourself (`create_namespace =
-  false`, a `*_secret_ref` input) is not Terraform's and stays. Nothing is
-  handed over. Setting the toggle back to `true` later does not adopt a
-  release the operator installed.
+  in it, including Secrets you created yourself and named through a
+  `*_secret_ref` input. A namespace you supplied (`create_namespace =
+  false`) is not deleted, and neither are the objects you created in it, but
+  Terraform still uninstalls the release and deletes the Secrets it created
+  there. Nothing is handed over. Setting
+  the toggle back to `true` later does not adopt a release the operator
+  installed. Back up the n8n encryption key outside the cluster before you
+  change this toggle: if the only copy is in a Secret that gets deleted,
+  every credential stored in n8n becomes unreadable.
 - **The operator owns the application secrets.** The module generates no n8n
   encryption key and no task runner token in this mode. Losing the encryption
   key makes every credential stored in n8n unreadable, so the operator must
@@ -56,12 +64,13 @@ API:
 - the Route 53 alias records for the load balancer,
 - the optional `redis_exporter`.
 
-It changes nothing on the AWS side. Each AWS resource keeps following the
-input that already controls it:
+The Route 53 alias records are the one AWS resource the toggle skips, because
+they point at the load balancer of the Ingress the module no longer creates.
+Every other AWS resource keeps following the input that already controls it:
 
 | AWS resource | Controlled by |
 | --- | --- |
-| EKS cluster, node group, Pod Identity Agent add-on | `create_eks` |
+| EKS cluster, node group, Pod Identity Agent add-on | `create_eks`. On an existing cluster the agent must already be installed. |
 | EBS CSI driver add-on and its IAM role | `create_ebs_csi` |
 | RDS PostgreSQL | `create_database` |
 | ElastiCache Redis | `create_elasticache` |
@@ -91,6 +100,7 @@ EKS allows one role per ServiceAccount.
 | `n8n_encryption_key` | Must be `null`, for the same reason. |
 | `n8n_license_key_secret_ref`, `n8n_license_cert_secret_ref` | Optional. Set at most one. With neither set, the values name the Secret `n8n-enterprise-secrets`. |
 | `ingress_scheme`, `alb_ssl_policy`, `ingress_annotations`, `alb_inbound_cidrs`, `alb_inbound_prefix_list_ids` | Applied to nothing. The plan warns when one is set. Put them on your own Ingress. |
+| `db_password`, `redis_auth_token` | Still accepted on the external database or Redis path, and still stored in Terraform state. The module passes them back through the `db_password` and `redis_auth_token` outputs, for you to copy into the Secrets below. A literal `redis_auth_token` also adds a `checksum/redis-auth-token` pod annotation to the Helm values: a SHA-256 digest that rolls the pods when the token changes, not the token itself. With `redis_auth_token_secret_ref` the values carry no digest. To keep them out of state, create those Secrets yourself and set `db_password_secret_ref` or `redis_auth_token_secret_ref` instead. |
 | Every other input | Unchanged. Inputs that configure n8n itself (most `n8n_*` inputs, and the database and Redis connection, TLS and authentication inputs) shape the Helm values in the `n8n_helm_values` output. Inputs that size or protect AWS resources, such as `db_backup_retention_period` or `redis_node_type`, still act on those resources only. |
 
 ## Cluster access for the operator
@@ -171,14 +181,34 @@ the default path. In this mode it cannot, because it never reads the Secret.
 
 ## The n8n release
 
+`terraform output` only reads the outputs of your root module, so re-export
+the values and the chart coordinates next to your module call:
+
+```hcl
+output "n8n_helm_values" {
+  value     = module.n8n.n8n_helm_values
+  sensitive = true
+}
+
+output "n8n_chart_repository" {
+  value = module.n8n.n8n_chart_repository
+}
+
+output "n8n_chart_version" {
+  value = module.n8n.n8n_chart_version
+}
+```
+
 After `terraform apply`:
 
 ```bash
 terraform output -raw n8n_helm_values > values.yaml
 ```
 
-Install the chart from `n8n_chart_repository` at `n8n_chart_version`, with
-these fixed coordinates:
+Install the chart from the `n8n_chart_repository` output at the
+`n8n_chart_version` output. The values are written for that version, and the
+module's worker pool checks only cover that version. Use these fixed
+coordinates:
 
 | Setting | Value | Why it is fixed |
 | --- | --- | --- |

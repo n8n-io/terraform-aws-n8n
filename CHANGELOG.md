@@ -13,8 +13,8 @@ this project adheres to the stability contract in
   infrastructure-only deployment. The module then makes no call to the
   Kubernetes API and creates no `kubernetes_*` or `helm_*` resource, so a
   cluster operator installs the controllers and n8n with Helm, Argo CD or
-  Flux. The AWS side is not affected: the EKS cluster and node group, the EKS
-  add-ons, RDS, ElastiCache, S3, the ACM certificate, and the IAM roles and
+  Flux. Apart from the Route 53 alias records, the AWS side is not affected:
+  the EKS cluster and node group, the EKS add-ons, RDS, ElastiCache, S3, the ACM certificate, and the IAM roles and
   Pod Identity associations each keep following the input that already
   controls them (`create_eks`, `create_ebs_csi`, `create_database`,
   `create_elasticache`, `create_s3_bucket`, `route53_zone_id`, and on an
@@ -31,12 +31,17 @@ this project adheres to the stability contract in
   `time_sleep.wait_for_alb_cleanup`).
   - **New deployments only.** Setting it to `false` on a running deployment
     makes Terraform uninstall n8n and the controllers and delete the Secrets
-    and the namespace it created, with everything in that namespace. A
-    namespace or Secret you supplied yourself stays. There is no migration
-    path.
+    and the namespace it created, with everything in that namespace,
+    including Secrets you named through a `*_secret_ref` input. A namespace
+    you supplied (`create_namespace = false`) is not deleted, and neither are
+    the objects you created in it, but Terraform still uninstalls the release
+    and deletes the Secrets it created there. Back up the n8n encryption key
+    outside the cluster first.
+    There is no migration path.
   - New sensitive output `n8n_helm_values`: the YAML the module passes to its
     own n8n release, for the operator to install with. The rendered values on
-    the default path are unchanged.
+    the default path are unchanged. New outputs `n8n_chart_repository` and
+    `n8n_chart_version` name the chart those values are written for.
   - In this mode the operator owns the application secrets. The module
     generates no encryption key and no task runner token, the
     `n8n_encryption_key` output is `null`, and `n8n_license_key` and

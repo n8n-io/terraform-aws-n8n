@@ -674,7 +674,7 @@ locals {
   n8n_ca_bundle_volume = local.n8n_extra_ca_enabled ? {
     name = "ca-bundle"
     secret = {
-      secretName = "n8n-ca-bundle-secret"
+      secretName = local.n8n_ca_bundle_secret_name
       items      = [{ key = "ca.crt", path = "ca.crt" }]
     }
   } : null

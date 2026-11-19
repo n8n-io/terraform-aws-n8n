@@ -41,6 +41,16 @@ output "n8n_helm_values" {
   sensitive   = true
 }
 
+output "n8n_chart_repository" {
+  description = "Repository to install the n8n chart from. The values in n8n_helm_values are written for this chart."
+  value       = module.n8n.n8n_chart_repository
+}
+
+output "n8n_chart_version" {
+  description = "Version of the n8n chart to install. The values in n8n_helm_values are written for this version."
+  value       = module.n8n.n8n_chart_version
+}
+
 output "db_password" {
   description = "RDS PostgreSQL password. Goes into the Secret n8n-enterprise-db-secret under the key password."
   value       = module.n8n.db_password

@@ -53,6 +53,17 @@ run "module_runs_in_infrastructure_only_mode" {
     condition     = output.namespace == "n8n"
     error_message = "The namespace output must carry the name the operator installs n8n into"
   }
+
+  # The README's helm command reads these two outputs.
+  assert {
+    condition     = output.n8n_chart_repository == module.n8n.n8n_chart_repository && output.n8n_chart_version == module.n8n.n8n_chart_version
+    error_message = "The example must re-export the chart repository and version the README installs from"
+  }
+
+  assert {
+    condition     = startswith(output.n8n_chart_repository, "oci://")
+    error_message = "The README's helm command assumes an OCI chart repository by default"
+  }
 }
 
 # EKS accepts only letters, digits and hyphens in a cluster name, and the
