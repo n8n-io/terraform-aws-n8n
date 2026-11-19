@@ -5,7 +5,7 @@
 # and the caller brings their own autoscaling policy for the same Deployment.
 
 resource "kubernetes_horizontal_pod_autoscaler_v2" "n8n_webhook" {
-  count = var.n8n_webhook_hpa_enabled ? 1 : 0
+  count = var.create_kubernetes_resources && var.n8n_webhook_hpa_enabled ? 1 : 0
 
   metadata {
     name      = "n8n-webhook-processor"
@@ -77,7 +77,9 @@ resource "kubernetes_horizontal_pod_autoscaler_v2" "n8n_webhook" {
 
 check "webhook_hpa_needs_metrics_server_somewhere" {
   assert {
-    condition     = var.n8n_webhook_hpa_enabled ? var.install_metrics_server : true
+    # Passes in infrastructure-only mode: the HPA above has no instance there,
+    # so nothing in this module is left to need metrics-server.
+    condition     = var.create_kubernetes_resources ? (var.n8n_webhook_hpa_enabled ? var.install_metrics_server : true) : true
     error_message = "install_metrics_server = false, but kubernetes_horizontal_pod_autoscaler_v2.n8n_webhook reads CPU utilization, which needs metrics-server (or an equivalent metrics.k8s.io implementation) to exist somewhere in the cluster. Without one this HPA never scales: it silently stays at n8n_webhook_hpa_min_replicas reporting unknown CPU metrics rather than failing the apply. Make sure an equivalent is already installed before relying on this combination."
   }
 }

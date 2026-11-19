@@ -9,6 +9,59 @@ this project adheres to the stability contract in
 
 ### Added
 
+- `create_kubernetes_resources` (default `true`): set it to `false` for an
+  infrastructure-only deployment. The module then makes no call to the
+  Kubernetes API and creates no `kubernetes_*` or `helm_*` resource, so a
+  cluster operator installs the controllers and n8n with Helm, Argo CD or
+  Flux. Apart from the Route 53 alias records, the AWS side is not affected:
+  the EKS cluster and node group, the EKS add-ons, RDS, ElastiCache, S3, the ACM certificate, and the IAM roles and
+  Pod Identity associations each keep following the input that already
+  controls them (`create_eks`, `create_ebs_csi`, `create_database`,
+  `create_elasticache`, `create_s3_bucket`, `route53_zone_id`, and on an
+  existing cluster `install_lbc` and `install_cluster_autoscaler` for the
+  controller IAM). It skips the controller releases, the `gp3` StorageClass, the
+  namespace, every Secret, the n8n release, the webhook autoscaler, both
+  PodDisruptionBudgets, the Ingress and the Route 53 alias records, and it
+  overrides the existing `install_*`, `create_namespace`, `create_ingress`
+  and related toggles without a warning. No change for existing callers: the
+  default plans exactly as before, and four `moved` blocks cover the
+  resources that gained a `count` (`helm_release.n8n`,
+  `random_password.task_runner_token`,
+  `kubernetes_secret_v1.n8n_task_runner_token`,
+  `time_sleep.wait_for_alb_cleanup`).
+  - **New deployments only.** Setting it to `false` on a running deployment
+    makes Terraform uninstall n8n and the controllers and delete the Secrets
+    and the namespace it created, with everything in that namespace,
+    including Secrets you named through a `*_secret_ref` input. A namespace
+    you supplied (`create_namespace = false`) is not deleted, and neither are
+    the objects you created in it, but Terraform still uninstalls the release
+    and deletes the Secrets it created there. Back up the n8n encryption key
+    outside the cluster first.
+    There is no migration path.
+  - New sensitive output `n8n_helm_values`: the YAML the module passes to its
+    own n8n release, for the operator to install with. The rendered values on
+    the default path are unchanged. New outputs `n8n_chart_repository` and
+    `n8n_chart_version` name the chart those values are written for.
+  - In this mode the operator owns the application secrets. The module
+    generates no encryption key and no task runner token, the
+    `n8n_encryption_key` output is `null`, and `n8n_license_key` and
+    `n8n_encryption_key` must be `null` (a plan-time error otherwise, because
+    the value would be stored in state unused). The license rule relaxes
+    there to at most one of `n8n_license_key_secret_ref` and
+    `n8n_license_cert_secret_ref`.
+  - `modules/controllers` takes the same input. It gates the four Helm
+    releases and the StorageClass only; the IAM roles, Pod Identity
+    associations and the EBS CSI add-on keep their existing gates.
+  - New example [`examples/infrastructure-only`](./examples/infrastructure-only/)
+    and reference page [docs/infrastructure-only.md](./docs/infrastructure-only.md).
+    The example turns Redis TLS and AUTH on by default
+    (`redis_transit_encryption_enabled = true`), unlike `examples/small`.
+  - Not covered by the mocked tests: the chart accepting the values with
+    operator-created Secrets, and a caller leaving the `kubernetes` and
+    `helm` providers unconfigured. The second was checked in an isolated
+    configuration at the locked provider versions, where plan and apply
+    succeed with no provider block and no kubeconfig, but not with the whole
+    module against AWS.
 - `n8n_otel_exporter_otlp_headers_secret_ref`: reads the OTLP header string
   (`N8N_OTEL_EXPORTER_OTLP_HEADERS`) from a caller-managed Kubernetes Secret,
   rendered into `env.shared` as a `secretKeyRef`. The value stays out of

@@ -150,6 +150,13 @@ variable "install_keda" {
   nullable    = false
 }
 
+variable "create_kubernetes_resources" {
+  description = "When true (the default), this submodule creates its Kubernetes and Helm resources as its install_* and create_ebs_csi inputs say. Set to false to make no call to the Kubernetes API: the four Helm releases and the gp3 StorageClass are skipped whatever those inputs are set to, so a cluster operator installs the controllers with tooling of their own. The AWS resources are not affected and keep following their own inputs: the IAM roles, policies and Pod Identity associations for the Load Balancer Controller and Cluster Autoscaler (create_eks or the matching install_* input), and the aws-ebs-csi-driver addon with its IAM role (create_ebs_csi). Root module passes its own var.create_kubernetes_resources straight through."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "create_ebs_csi" {
   description = "When true (the default), installs the aws-ebs-csi-driver addon, its IAM role/policy attachment, and a default gp3 StorageClass. Set to false when the cluster already runs its own CSI driver and default StorageClass."
   type        = bool

@@ -848,8 +848,14 @@ check "db_snapshot_fits_allocated_storage" {
 # that the credentials in it are disposable.
 check "db_snapshot_restore_needs_the_original_encryption_key" {
   assert {
-    condition = (var.create_database && var.db_snapshot_identifier != null) ? (
-      var.n8n_encryption_key != null || var.n8n_encryption_key_secret_ref != null
+    # Passes in infrastructure-only mode. The module generates no key there and
+    # rejects n8n_encryption_key, so the message below would be wrong twice,
+    # and it cannot see the Secret the operator creates. docs/infrastructure-only.md
+    # carries the warning for that path instead.
+    condition = var.create_kubernetes_resources ? (
+      (var.create_database && var.db_snapshot_identifier != null) ? (
+        var.n8n_encryption_key != null || var.n8n_encryption_key_secret_ref != null
+      ) : true
     ) : true
     error_message = join("", [
       "db_snapshot_identifier is set but neither n8n_encryption_key nor n8n_encryption_key_secret_ref is, ",

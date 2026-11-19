@@ -1,0 +1,146 @@
+locals {
+  aws_partner_attribution_tags = {
+    for k, v in { "aws-apn-id" = var.aws_partner_attribution_tag } : k => v if v != ""
+  }
+
+  common_tags = merge(
+    {
+      ManagedBy = "terraform"
+      Project   = "n8n"
+    },
+    # aws-apn-id is reserved for aws_partner_attribution_tag, so a tags entry
+    # cannot override it or bring it back after the input is set to "".
+    { for k, v in var.tags : k => v if k != "aws-apn-id" },
+    local.aws_partner_attribution_tags,
+  )
+}
+
+# ── VPC ───────────────────────────────────────────────────────────────────────
+# EKS requires subnets in at least two availability zones. The VPC module
+# handles the subnet tagging EKS and the AWS Load Balancer Controller need.
+#
+# A single NAT Gateway keeps costs low. For production HA, set
+# single_nat_gateway = false and one_nat_gateway_per_az = true.
+
+data "aws_availability_zones" "available" {
+  # checkov:skip=CKV_AWS_394:Region-portable example intentionally discovers AZs instead of hardcoding region-specific zone identities; see docs/versioning.md for the accepted replacement risk.
+  # slice(..., 0, 2) bounds the count, not the zone identities. A changed list
+  # can replace subnets. Pin the existing zones in long-lived deployments and
+  # review the plan before applying.
+  state = "available"
+}
+
+module "vpc" {
+  # checkov:skip=CKV_TF_1:A commit hash cannot be expressed for a Terraform Registry source: this address takes a `version` constraint, and pinning a SHA would mean switching to a `git::` source, which is the weaker supply-chain posture the check exists to discourage. Registry releases are immutable per published version. Annotated per call rather than suppressed repo-wide, so the check still fires if a genuinely mutable git:: source is ever added.
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 5.0"
+
+  name = "${var.cluster_name}-vpc"
+  cidr = "10.0.0.0/16"
+
+  azs             = slice(data.aws_availability_zones.available.names, 0, 2)
+  public_subnets  = ["10.0.1.0/24", "10.0.2.0/24"]
+  private_subnets = ["10.0.10.0/24", "10.0.11.0/24"]
+
+  enable_nat_gateway   = true
+  single_nat_gateway   = true
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  public_subnet_tags = {
+    "kubernetes.io/role/elb"                    = "1"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+  }
+
+  private_subnet_tags = {
+    "kubernetes.io/role/internal-elb"           = "1"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+  }
+
+  tags = local.common_tags
+}
+
+# ── n8n infrastructure ────────────────────────────────────────────────────────
+# create_kubernetes_resources = false is the one deliberate difference from
+# examples/small: the module provisions AWS only and makes no call to the
+# Kubernetes API. It still issues and validates the ACM certificate, since
+# route53_zone_id is set, but it creates no alias record: the ALB only exists
+# once the cluster operator creates an Ingress. See the README for the steps
+# the operator takes after terraform apply.
+
+module "n8n" {
+  source = "../.."
+
+  create_kubernetes_resources = false
+
+  aws_partner_attribution_tag = var.aws_partner_attribution_tag
+
+  aws_region      = var.aws_region
+  cluster_name    = var.cluster_name
+  n8n_domain      = var.n8n_domain
+  vpc_id          = module.vpc.vpc_id
+  private_subnets = module.vpc.private_subnets
+  public_subnets  = module.vpc.public_subnets
+  vpc_cidr_block  = module.vpc.vpc_cidr_block
+  route53_zone_id = var.route53_zone_id
+
+  n8n_main_hpa_min_replicas = var.n8n_main_hpa_min_replicas
+
+  # No n8n_license_key: the module rejects the literal in this mode, because
+  # it would be stored in state with nothing reading it. The operator creates
+  # the license Secret. The inputs below still matter: they shape the Helm
+  # values the n8n_helm_values output hands to the operator.
+  n8n_image_repository             = var.n8n_image_repository
+  n8n_image_tag                    = var.n8n_image_tag
+  n8n_task_runner_image_tag        = var.n8n_task_runner_image_tag
+  n8n_task_runner_image_repository = var.n8n_task_runner_image_repository
+  n8n_custom_extensions_path       = var.n8n_custom_extensions_path
+  n8n_image_pull_secrets           = var.n8n_image_pull_secrets
+
+  n8n_additional_domains = var.n8n_additional_domains
+
+  # ── Execution data ──────────────────────────────────────────────────────────
+  # Left at "database" so this example applies without the feat:executionDataS3
+  # entitlement. This sizing sees the least traffic but has the least database
+  # headroom to absorb it: db.t3.small with 50 GB of gp2 and a 150 IOPS
+  # baseline, where sustained execution-data writes burn burst credits and the
+  # volume fills. "s3" moves those payloads out of PostgreSQL entirely, reusing
+  # the bucket and Pod Identity role the module already creates for binary data,
+  # so nothing else changes. Read the execution data section of the root README
+  # first: it needs n8n >= 2.27 and an Enterprise license with that entitlement,
+  # it does not backfill, and it changes the durability posture of execution
+  # history.
+  n8n_execution_data_storage_mode = var.n8n_execution_data_storage_mode
+
+  # ── Redis TLS and AUTH ──────────────────────────────────────────────────────
+  # On by default in this example, a second deliberate difference from
+  # examples/small: the operator creates the n8n Secrets in this mode anyway,
+  # so the Redis AUTH Secret costs one more kubectl command. See the
+  # variable's description, and set it to false to match examples/small.
+  redis_transit_encryption_enabled = var.redis_transit_encryption_enabled
+
+  # ── Data-resource deletion controls ─────────────────────────────────────────
+  # All of these default to null, which lets the module's own defaults apply.
+  # They are exposed here so the small example's production-considerations
+  # checklist can be implemented without wrapping or forking the module.
+  db_backup_retention_period   = var.db_backup_retention_period
+  db_deletion_protection       = var.db_deletion_protection
+  db_skip_final_snapshot       = var.db_skip_final_snapshot
+  db_final_snapshot_identifier = var.db_final_snapshot_identifier
+  db_delete_automated_backups  = var.db_delete_automated_backups
+  s3_force_destroy             = var.s3_force_destroy
+
+  # ── TLS proxy support ───────────────────────────────────────────────────────
+  # Outbound CA trust, inbound proxy hop count, and proxy routing env. See
+  # docs/tls-proxy.md.
+  n8n_extra_ca_pem = var.n8n_extra_ca_pem
+  n8n_proxy_hops   = var.n8n_proxy_hops
+  n8n_extra_env    = var.n8n_extra_env
+
+  tags = local.common_tags
+
+  # Explicit module-level dependency keeps the ENTIRE VPC (NAT gateway routes,
+  # internet gateway) up until the module's resources are destroyed, so the
+  # nodes keep their route to the API server while the node group drains.
+  depends_on = [module.vpc]
+}

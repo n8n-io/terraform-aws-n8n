@@ -324,14 +324,21 @@ variable "n8n_webhook_url" {
 }
 
 variable "n8n_license_key" {
-  description = "n8n license activation key. The default multi-main topology requires Enterprise with feat:multipleMainInstances; Business is supported with n8n_main_hpa_min_replicas = 1. Get one at https://n8n.io/pricing. Required unless n8n_license_key_secret_ref points at an existing Kubernetes Secret that already carries it, or n8n_license_cert_secret_ref points at a caller-managed Secret holding an offline license certificate (N8N_LICENSE_CERT) for air-gapped or egress-restricted clusters that cannot reach n8n's license server, in which case leave this null. Setting more than one of the three is rejected at plan time; see n8n_license_key_secret_ref, which owns that validation to avoid a variable-validation dependency cycle among them."
+  description = "n8n license activation key. The default multi-main topology requires Enterprise with feat:multipleMainInstances; Business is supported with n8n_main_hpa_min_replicas = 1. Get one at https://n8n.io/pricing. Must be null when create_kubernetes_resources = false. Otherwise required unless n8n_license_key_secret_ref points at an existing Kubernetes Secret that already carries it, or n8n_license_cert_secret_ref points at a caller-managed Secret holding an offline license certificate (N8N_LICENSE_CERT) for air-gapped or egress-restricted clusters that cannot reach n8n's license server, in which case leave this null. Setting more than one of the three is rejected at plan time; see n8n_license_key_secret_ref, which owns that validation to avoid a variable-validation dependency cycle among them."
   type        = string
   sensitive   = true
   default     = null
+
+  # A hard error rather than the warning an ignored input usually gets: a
+  # license key nothing reads would still be written to state.
+  validation {
+    condition     = var.create_kubernetes_resources ? true : var.n8n_license_key == null
+    error_message = "n8n_license_key must be null when create_kubernetes_resources = false. The module creates no Kubernetes Secret in that mode, so the key would be stored in Terraform state and used by nothing. Create the Secret n8n-enterprise-secrets with the key N8N_LICENSE_ACTIVATION_KEY yourself, or name your own Secret with n8n_license_key_secret_ref or n8n_license_cert_secret_ref. See docs/infrastructure-only.md."
+  }
 }
 
 variable "n8n_license_key_secret_ref" {
-  description = "Existing Kubernetes Secret carrying the n8n license key, instead of supplying the value through n8n_license_key. The same topology requirements apply: Enterprise with feat:multipleMainInstances for multi-main, or Business with n8n_main_hpa_min_replicas = 1. name is the Secret's name in var.namespace; key defaults to \"license-key\", matching the chart's own license.existingSecret.key default, and can be overridden if the Secret you already sync uses a different key name. Null (the default) changes nothing: the module keeps writing the value from n8n_license_key into kubernetes_secret.n8n as it always has. The module does not verify that the named Secret exists or carries this key: a typo surfaces only as a pod stuck in CreateContainerConfigError naming the missing key, not as a Terraform error, because reading the Secret's data to check would put the credential back in Terraform state, which defeats the reason this input exists. Mutually exclusive with n8n_license_key and n8n_license_cert_secret_ref. Exactly one of the three must be set, so one can never silently win over the others, and setting none is also rejected since a license credential is otherwise required. All three checks live here rather than split across the variables, which would form a validation dependency cycle. kubernetes_secret.n8n exists whenever it still holds at least one of the encryption key or the license key, so setting n8n_encryption_key_secret_ref at the same time as leaving this null does not take that Secret away from the license key: chart 2.0's secretRefs.existingSecret (n8n.tf) reads only N8N_ENCRYPTION_KEY from it, independently of license.existingSecret, which this input and kubernetes_secret.n8n feed instead."
+  description = "Existing Kubernetes Secret carrying the n8n license key, instead of supplying the value through n8n_license_key. The same topology requirements apply: Enterprise with feat:multipleMainInstances for multi-main, or Business with n8n_main_hpa_min_replicas = 1. name is the Secret's name in var.namespace; key defaults to \"license-key\", matching the chart's own license.existingSecret.key default, and can be overridden if the Secret you already sync uses a different key name. Null (the default) changes nothing: the module keeps writing the value from n8n_license_key into kubernetes_secret.n8n as it always has. The module does not verify that the named Secret exists or carries this key: a typo surfaces only as a pod stuck in CreateContainerConfigError naming the missing key, not as a Terraform error, because reading the Secret's data to check would put the credential back in Terraform state, which defeats the reason this input exists. Mutually exclusive with n8n_license_key and n8n_license_cert_secret_ref. Exactly one of the three must be set, so one can never silently win over the others, and setting none is also rejected since a license credential is otherwise required. With create_kubernetes_resources = false the rule is different: n8n_license_key is rejected, at most one of the two references may be set, and none is accepted, in which case the Helm values name the operator-created Secret n8n-enterprise-secrets with the key N8N_LICENSE_ACTIVATION_KEY. All three checks live here rather than split across the variables, which would form a validation dependency cycle. kubernetes_secret.n8n exists whenever it still holds at least one of the encryption key or the license key, so setting n8n_encryption_key_secret_ref at the same time as leaving this null does not take that Secret away from the license key: chart 2.0's secretRefs.existingSecret (n8n.tf) reads only N8N_ENCRYPTION_KEY from it, independently of license.existingSecret, which this input and kubernetes_secret.n8n feed instead."
   type = object({
     name = string
     key  = optional(string)
@@ -339,15 +346,25 @@ variable "n8n_license_key_secret_ref" {
   default = null
 
   validation {
-    condition = length([
-      for v in [var.n8n_license_key, var.n8n_license_key_secret_ref, var.n8n_license_cert_secret_ref] : v if v != null
-    ]) == 1
-    error_message = "Set exactly one of n8n_license_key, n8n_license_key_secret_ref, or n8n_license_cert_secret_ref."
+    # In infrastructure-only mode the operator owns the license Secret, so no
+    # input is needed: with neither reference set, the Helm values name
+    # n8n-enterprise-secrets. The literal n8n_license_key is rejected there by
+    # its own validation, so only the two references are counted.
+    condition = var.create_kubernetes_resources ? (
+      length([
+        for v in [var.n8n_license_key, var.n8n_license_key_secret_ref, var.n8n_license_cert_secret_ref] : v if v != null
+      ]) == 1
+      ) : (
+      length([
+        for v in [var.n8n_license_key_secret_ref, var.n8n_license_cert_secret_ref] : v if v != null
+      ]) <= 1
+    )
+    error_message = "Set exactly one of n8n_license_key, n8n_license_key_secret_ref, or n8n_license_cert_secret_ref. When create_kubernetes_resources = false, set at most one of n8n_license_key_secret_ref and n8n_license_cert_secret_ref instead."
   }
 }
 
 variable "n8n_license_cert_secret_ref" {
-  description = "Existing Kubernetes Secret name and key holding a base64-encoded n8n Enterprise offline license certificate (N8N_LICENSE_CERT), for air-gapped or egress-restricted clusters that cannot reach n8n's license server to activate a key. Mutually exclusive with n8n_license_key and n8n_license_key_secret_ref. Exactly one of the three must be set (see n8n_license_key_secret_ref, which owns that validation). The module does not read the Secret's value; Terraform renders only the name and key into the chart's env.shared map as a secretKeyRef reference (n8n.tf), not into the chart's license.existingSecret block, which only ever maps to N8N_LICENSE_ACTIVATION_KEY. license.enabled still renders true on this path because the chart also gates N8N_MULTI_MAIN_SETUP_ENABLED on license.enabled, independent of which credential backs it. key defaults to \"cert\" when omitted."
+  description = "Existing Kubernetes Secret name and key holding a base64-encoded n8n Enterprise offline license certificate (N8N_LICENSE_CERT), for air-gapped or egress-restricted clusters that cannot reach n8n's license server to activate a key. Mutually exclusive with n8n_license_key and n8n_license_key_secret_ref. Exactly one of the three must be set, or at most one of the two references when create_kubernetes_resources = false (see n8n_license_key_secret_ref, which owns that validation). The module does not read the Secret's value; Terraform renders only the name and key into the chart's env.shared map as a secretKeyRef reference (n8n.tf), not into the chart's license.existingSecret block, which only ever maps to N8N_LICENSE_ACTIVATION_KEY. license.enabled still renders true on this path because the chart also gates N8N_MULTI_MAIN_SETUP_ENABLED on license.enabled, independent of which credential backs it. key defaults to \"cert\" when omitted."
   type = object({
     name = string
     key  = optional(string)
@@ -378,6 +395,11 @@ variable "n8n_encryption_key" {
   type        = string
   sensitive   = true
   default     = null
+
+  validation {
+    condition     = var.create_kubernetes_resources ? true : var.n8n_encryption_key == null
+    error_message = "n8n_encryption_key must be null when create_kubernetes_resources = false. The module creates no Kubernetes Secret in that mode, so the key would be stored in Terraform state and used by nothing. Put the key in the Secret n8n-enterprise-secrets under N8N_ENCRYPTION_KEY yourself, or name your own Secret with n8n_encryption_key_secret_ref. When restoring a database, it must be the key that database's credentials were encrypted under. See docs/infrastructure-only.md."
+  }
 
   validation {
     condition     = var.n8n_encryption_key == null || can(regex("^[0-9a-fA-F]{64}$", var.n8n_encryption_key))
@@ -490,6 +512,13 @@ variable "cluster_endpoint_private_access" {
 
 variable "create_namespace" {
   description = "When true (the default), the module creates the Kubernetes namespace named by var.namespace. Set to false to deploy into a namespace that already exists, e.g. one a platform team created with its own resource quotas, labels, or network policies. The module does not validate that the namespace exists; the apply fails on the first resource that references it if it does not. Kept as a static boolean rather than checking for the namespace's existence because count expressions cannot depend on values computed at apply time."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
+variable "create_kubernetes_resources" {
+  description = "When true (the default), the module creates everything it always has inside the cluster. Set to false for infrastructure-only mode: the module then makes no call to the Kubernetes API and creates no kubernetes_* or helm_* resource, Helm releases included, so a cluster operator installs the controllers and n8n with tooling of their own (Helm, Argo CD, Flux). Skipped in that mode: the n8n Helm release, the namespace, every Secret, the ServiceAccount, the webhook HorizontalPodAutoscaler, both PodDisruptionBudgets, the Ingress with its Route 53 alias records, the redis_exporter, the gp3 StorageClass, and the Load Balancer Controller, Cluster Autoscaler, metrics-server and KEDA releases. It overrides install_lbc, install_cluster_autoscaler, install_metrics_server, install_keda, create_namespace, create_ingress, n8n_webhook_hpa_enabled, n8n_webhook_pdb_enabled, n8n_worker_pdb_enabled, lbc_pdb_enabled, redis_exporter_enabled and the StorageClass half of create_ebs_csi without a warning, whatever they are set to. Apart from the Route 53 alias records, which point at the load balancer of the Ingress the module no longer creates, the AWS side is not affected, and each AWS resource keeps following the input that already controls it: the EKS cluster, node group and EKS add-ons (create_eks; create_ebs_csi for the EBS CSI driver), RDS (create_database), ElastiCache (create_elasticache), S3 (create_s3_bucket), the ACM certificate (route53_zone_id), and the IAM roles and Pod Identity associations, including the ones the operator's controllers and n8n use. On an existing cluster (create_eks = false) the controller IAM still follows install_lbc and install_cluster_autoscaler. The n8n_helm_values output carries the chart values the operator installs with, as release n8n in var.namespace; the inputs that configure n8n itself keep shaping them. The operator owns the application secrets: the module generates no encryption key or task runner token, and n8n_license_key and n8n_encryption_key must be null. The kubernetes, helm and time providers are still downloaded by terraform init. For new deployments only: setting this to false on a running deployment makes Terraform uninstall n8n and the controllers and delete the Secrets and the namespace it created, with everything in that namespace, including Secrets named through a *_secret_ref input, and it does not hand anything over. Back up the n8n encryption key outside the cluster first. See docs/infrastructure-only.md for the Secrets, ServiceAccounts and other objects the operator creates, and for the teardown order."
   type        = bool
   default     = true
   nullable    = false
@@ -774,7 +803,9 @@ variable "install_lbc" {
   default     = true
 
   validation {
-    condition     = var.install_lbc || !var.create_ingress
+    # No module-managed Ingress exists with create_kubernetes_resources =
+    # false either, so the combination is accepted there.
+    condition     = var.create_kubernetes_resources ? (var.install_lbc || !var.create_ingress) : true
     error_message = "install_lbc = false is incompatible with create_ingress = true: the module-managed Ingress waits for the Load Balancer Controller to provision an ALB, and with no controller installed that wait times out the apply. Either leave install_lbc = true, or set create_ingress = false and point your own Ingress resources at an LBC you install another way. There is no exception for create_eks = false against a cluster whose LBC already works: see docs/customer-managed-infrastructure.md's \"create_eks = false + create_ingress = true\" section for why, and what the two supported options are."
   }
 }

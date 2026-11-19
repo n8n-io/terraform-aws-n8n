@@ -52,7 +52,7 @@ locals {
 }
 
 resource "helm_release" "lbc" {
-  count = var.install_lbc ? 1 : 0
+  count = var.create_kubernetes_resources && var.install_lbc ? 1 : 0
 
   name            = "aws-load-balancer-controller"
   repository      = var.lbc_chart_repository
@@ -121,7 +121,7 @@ resource "helm_release" "lbc" {
 # to the IAM role via Pod Identity (iam.tf).
 
 resource "helm_release" "cluster_autoscaler" {
-  count = var.install_cluster_autoscaler ? 1 : 0
+  count = var.create_kubernetes_resources && var.install_cluster_autoscaler ? 1 : 0
 
   name            = "cluster-autoscaler"
   repository      = var.cluster_autoscaler_chart_repository
@@ -167,7 +167,7 @@ resource "helm_release" "cluster_autoscaler" {
 #   inside the VPC.
 
 resource "helm_release" "metrics_server" {
-  count = var.install_metrics_server ? 1 : 0
+  count = var.create_kubernetes_resources && var.install_metrics_server ? 1 : 0
 
   name            = "metrics-server"
   repository      = var.metrics_server_chart_repository

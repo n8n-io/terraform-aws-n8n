@@ -99,8 +99,26 @@ combines all three and additionally invokes `modules/controllers` directly,
 which makes it the only root module in the repo that exercises that
 submodule's input contract, so it is the one that catches a change to it.
 
+One **infrastructure-only example**, also at `small` sizing.
+[`examples/infrastructure-only/`](./examples/infrastructure-only/) sets
+`create_kubernetes_resources = false`: the module provisions AWS only and
+makes no call to the Kubernetes API, and a cluster operator installs the
+controllers and n8n with their own tooling, using the `n8n_helm_values`
+output. It is the only root module with no `kubernetes` or `helm` provider
+block. It cannot be brought up by `terraform apply` alone, which is the point
+of the mode; its README is the operator walkthrough and
+[`docs/infrastructure-only.md`](./docs/infrastructure-only.md) is the
+reference for what the operator must create. It also turns Redis TLS and
+AUTH on by default (`redis_transit_encryption_enabled = true`), a second
+deliberate difference from `small`: the operator creates the n8n Secrets in
+this mode anyway, so the Redis one costs a single command. The mode is for
+new deployments only: turning the toggle off on a running deployment makes Terraform
+uninstall n8n and the controllers and delete the Secrets and namespace it
+created.
+
 The DNS, topology and single-layer customer-managed variants are each
-"`small` plus one deliberate difference"; `customer-managed-everything`
+"`small` plus one deliberate difference"; `infrastructure-only` adds Redis
+TLS as a second, `customer-managed-everything`
 stacks three of those differences, and `medium`/`large` are sizing tiers
 rather than variants. In every case the module inputs `small` passes
 through should stay in sync unless the difference itself removes them.
@@ -109,7 +127,9 @@ a pass-through and three lost their "Production considerations" section.
 `scripts/check-example-parity.sh` (`task example-parity`, local-only for
 now, not yet wired into CI) diffs the set of variable names every example's
 `variables.tf` declares against `small`'s and fails on any name present on
-one side only that is not in its per-example allowlist (the DNS-provider credentials, `customer_managed_*`
+one side only that is not in its per-example allowlist (the DNS-provider credentials,
+the license input `infrastructure-only` cannot take and its Redis TLS
+toggle, `customer_managed_*`
 stand-in sizing plus `kubernetes_version` where the example builds its own
 cluster, split-ingress's own Ingress knobs, worker-pools' chart pins and
 default-worker KEDA bounds, large's Aurora and BYO
@@ -170,6 +190,7 @@ expected by the Terraform Registry:
 | `examples/customer-managed-s3/`   | Customer-managed variant of `small`: a plain-Terraform bucket with its own security configuration, consumed via `create_s3_bucket = false`. |
 | `examples/customer-managed-cluster/` | Customer-managed variant of `small`: a plain-Terraform EKS cluster and node group, consumed via `create_eks = false` + `existing_eks_cluster_name`. |
 | `examples/customer-managed-everything/` | All of the above at once, plus a **direct `modules/controllers` invocation**: every layer the module can create is customer-managed. The only root module that exercises the controllers submodule's input contract directly. |
+| `examples/infrastructure-only/` | Infrastructure-only variant of `small`: `create_kubernetes_resources = false`, so the module provisions AWS only and a cluster operator installs the controllers and n8n from the `n8n_helm_values` output. Redis TLS and AUTH on by default. No `kubernetes` or `helm` provider block (Route 53, includes the VPC). |
 | `tests/*.tftest.hcl`              | `terraform test` plan-time tests with mocked providers.     |
 | `tests/scripts/smoke-test.sh`     | Post-`apply` smoke test for live deployments.               |
 | `tests/scripts/verify-custom-image.sh` | Post-`apply` check for baked-in community nodes (`n8n_image_repository` + `n8n_custom_extensions_path`). |
@@ -219,7 +240,8 @@ Concretely, in this repo:
   `examples/cloudflare/`, `examples/godaddy/`, `examples/split-ingress/`,
   `examples/worker-pools/`, `examples/customer-managed-redis/`,
   `examples/customer-managed-s3/`, `examples/customer-managed-cluster/`,
-  `examples/customer-managed-everything/`) via the CI matrix.
+  `examples/customer-managed-everything/`, `examples/infrastructure-only/`)
+  via the CI matrix.
 - **`tflint`** against the module root and every example, with the AWS
   ruleset initialized via `tflint --init`.
 - **`checkov`** against the Terraform framework, at the version pinned in
@@ -295,15 +317,24 @@ pin, and probes, the way `tests/defaults.tftest.hcl`'s
   run in its own file when it needs a different mocked shape rather than
   widening the shared mock, which silently weakens every other run that reads
   the same attribute.
+- `tests/infrastructure-only.tftest.hcl` is separate for the same reason. It
+  covers `create_kubernetes_resources = false`, and its `override_resource`
+  with `override_during = plan` makes the S3 role ARN known at plan, so runs
+  that also use an external database and Redis can decode
+  `output.n8n_helm_values` and assert on the chart values. That is the one
+  place the values are assertable at all, and only on that fixture. It cannot
+  show that a caller may leave the `kubernetes` and `helm` providers
+  unconfigured, or that the chart accepts the values: mocks replace both.
 - Each example has its own `tests/defaults.tftest.hcl` (`small`, `medium`,
-  `large`, `cloudflare`, `godaddy`, `split-ingress`, `worker-pools`) that exercises the example end-to-end with
+  `large`, `cloudflare`, `godaddy`, `split-ingress`, `worker-pools`,
+  `infrastructure-only`) that exercises the example end-to-end with
   the same mocking strategy, catching wiring mistakes between the module and a
   realistic caller.
 - CI runs these suites twice: the `test` job on `TF_VERSION` and the
   `test-floor` job on `TF_FLOOR_VERSION`, the lowest release the declared
   `required_version` admits (see "The floor is `>= 1.13`" below).
   `tests/scripts/check-terraform-floor.sh` runs in `test-floor` and fails if
-  any of the thirteen declarations disagrees with `TF_FLOOR_VERSION`.
+  any of the fourteen declarations disagrees with `TF_FLOOR_VERSION`.
 - `tests/scripts/check-main-chart.sh` renders the pinned n8n chart with the
   topology locals for one, two, and three mains. It checks the main rollout
   strategy, HPA bounds, and disruption budget, and verifies that worker and
@@ -438,7 +469,7 @@ this repo's history, wrong, and that an untested floor hid twice.
 #### The floor is `>= 1.13`
 
 Declared as `required_version = ">= 1.13"` everywhere: root, `modules/controllers`,
-and all eleven examples, though not all in a `versions.tf` — nine examples have
+and all twelve examples, though not all in a `versions.tf` — ten examples have
 one, but `cloudflare` and `godaddy` declare it inline in `providers.tf`
 instead. CI's `test-floor` job runs every `terraform test` suite on
 `TF_FLOOR_VERSION` (`1.13.0`, the lowest release the floor admits), next to
@@ -471,7 +502,7 @@ about a version constraint. `-cluster` tried the same technique for an
 unrelated problem and it didn't work there; its floor is inherited from the
 module's, not from `override_during` (see its own `versions.tf`).
 
-Keep all thirteen declarations and `TF_FLOOR_VERSION` in step when bumping.
+Keep all fourteen declarations and `TF_FLOOR_VERSION` in step when bumping.
 A floor the CI does not exercise is a claim nobody is checking.
 
 **Recommended pattern** when end-to-end wiring cannot be tested under mocks:
@@ -528,6 +559,7 @@ conventions](https://developer.hashicorp.com/terraform/language/modules/develop/
 - `docs/troubleshooting.md`, `docs/post-deployment.md`,
   `docs/destroy-cleanup.md`, `docs/upgrading-n8n.md`, `docs/pod-identity.md`,
   `docs/helm-chart-coverage.md`, `docs/istio-ingress.md`, `docs/tls-proxy.md`,
+  `docs/infrastructure-only.md`,
   `docs/shared-responsibility.md`, `docs/build-time-decisions.md`, and
   `docs/sandbox.md` cover operator-facing concerns that don't belong inline
   in `README.md`. `docs/versioning.md` is the contributor-facing
@@ -648,7 +680,8 @@ markdownlint README.md CONTRIBUTING.md AGENTS.md docs/*.md
 # pushing.
 for ex in small medium large cloudflare godaddy split-ingress worker-pools \
           customer-managed-redis customer-managed-s3 \
-          customer-managed-cluster customer-managed-everything; do
+          customer-managed-cluster customer-managed-everything \
+          infrastructure-only; do
   ( cd "examples/$ex" \
       && terraform init -backend=false \
       && terraform validate \

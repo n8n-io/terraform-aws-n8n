@@ -14,7 +14,11 @@ locals {
   # With create_ingress = false there is no such ALB to look up, so the record
   # is the caller's to create. The ACM certificate above is still issued, and
   # remains useful for the caller's own Ingresses.
-  dns_alias_managed = local.dns_automated && var.create_ingress
+  #
+  # local.ingress_managed (locals.tf) is also false when
+  # create_kubernetes_resources = false: the ALB then only exists once the
+  # operator creates an Ingress, which Terraform never sees.
+  dns_alias_managed = local.dns_automated && local.ingress_managed
 }
 
 # ── ACM certificate ────────────────────────────────────────────────────────────

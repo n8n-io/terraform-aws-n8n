@@ -26,6 +26,8 @@ module "controllers" {
   vpc_id           = local.vpc_id
   create_eks       = var.create_eks
 
+  create_kubernetes_resources = var.create_kubernetes_resources
+
   iam_permissions_boundary_arn = var.iam_permissions_boundary_arn
   common_tags                  = local.common_tags
   lbc_default_tags             = local.aws_partner_attribution_tags

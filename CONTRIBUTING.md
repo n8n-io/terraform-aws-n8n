@@ -36,9 +36,11 @@ terraform-docs --output-check .
 Repeat the `init / validate / test / tflint / terraform-docs` block
 under each example directory (`examples/small`, `examples/medium`,
 `examples/large`, `examples/cloudflare`, `examples/godaddy`,
-`examples/split-ingress`, `examples/customer-managed-redis`,
+`examples/split-ingress`, `examples/worker-pools`,
+`examples/customer-managed-redis`,
 `examples/customer-managed-s3`, `examples/customer-managed-cluster`,
-`examples/customer-managed-everything`), which mirrors the CI matrix
+`examples/customer-managed-everything`, `examples/infrastructure-only`),
+which mirrors the CI matrix
 exactly. CI will run the same matrix on your PR.
 
 Don't skip the `customer-managed-*` four. `customer-managed-everything`

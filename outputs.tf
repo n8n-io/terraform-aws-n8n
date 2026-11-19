@@ -6,8 +6,11 @@ output "certificate_arn" {
 }
 
 output "alb_hostname" {
-  description = "ALB hostname of the module-managed Ingress. When route53_zone_id is set, the module already creates the alias record, so this output is informational. When certificate_arn is used, create a CNAME: your domain → this value. Null when create_ingress = false, since the caller then owns the load balancers."
-  value = var.create_ingress ? try(
+  description = "ALB hostname of the module-managed Ingress. When route53_zone_id is set, the module already creates the alias record, so this output is informational. When certificate_arn is used, create a CNAME: your domain → this value. Null when create_ingress = false or create_kubernetes_resources = false, since the caller then owns the load balancers."
+  # local.ingress_managed sits outside the try() on purpose: indexing an
+  # Ingress with no instance is an error the try() would catch, returning the
+  # fallback text instead of null.
+  value = local.ingress_managed ? try(
     kubernetes_ingress_v1.n8n[0].status[0].load_balancer[0].ingress[0].hostname,
     "ALB not yet provisioned — run: kubectl get ingress n8n-ingress -n ${var.namespace}"
   ) : null
@@ -42,7 +45,7 @@ output "n8n_url" {
 # Both values are sensitive — retrieve them with terraform output -raw <name>
 
 output "n8n_encryption_key" {
-  description = "n8n encryption key, back this up in a password manager. Losing it makes all stored credentials unreadable. Also the value to pass as var.n8n_encryption_key when restoring this database (e.g. an RDS snapshot) into a new stack, so the new deployment can still decrypt it. Null when n8n_encryption_key_secret_ref is set: the key then lives in a Secret the module never reads, so backing it up is the owner of that Secret's job."
+  description = "n8n encryption key, back this up in a password manager. Losing it makes all stored credentials unreadable. Also the value to pass as var.n8n_encryption_key when restoring this database (e.g. an RDS snapshot) into a new stack, so the new deployment can still decrypt it. Null when n8n_encryption_key_secret_ref is set: the key then lives in a Secret the module never reads, so backing it up is the owner of that Secret's job. Also null when create_kubernetes_resources = false: the module generates no key in that mode, and the cluster operator creates and backs up their own."
   value       = local.n8n_encryption_key
   sensitive   = true
 }
@@ -142,7 +145,7 @@ output "kubectl_config_command" {
 }
 
 output "namespace" {
-  description = "Kubernetes namespace n8n is deployed into."
+  description = "Kubernetes namespace n8n is deployed into. When create_kubernetes_resources = false the module creates no namespace, so this is the intended name from var.namespace: the one the S3 Pod Identity association is bound to and the cluster operator must install n8n into."
   # Deliberately sourced from local.namespace_name rather than var.namespace
   # directly. On the create_namespace = true path (the default), that local
   # reads the resource attribute rather than the plan-time-constant variable,
@@ -155,4 +158,31 @@ output "namespace" {
   # to depend on, so the local is just var.namespace, and there is nothing for
   # a consumer to wait on: the namespace already existed before this apply.
   value = local.namespace_name
+}
+
+output "n8n_helm_values" {
+  description = "Values for the n8n Helm chart, as one YAML string: exactly what the module passes to its own n8n release. Meant for infrastructure-only mode (create_kubernetes_resources = false), where a cluster operator installs the chart: write it to a file with terraform output -raw n8n_helm_values > values.yaml after terraform apply, then install the chart from the n8n_chart_repository output at the n8n_chart_version output, as release n8n in the namespace output. The release name and namespace are fixed, because the S3 Pod Identity association and the object names in docs/infrastructure-only.md depend on them. In that mode the values name Kubernetes Secrets the operator must create first; they hold no credential themselves. Marked sensitive because n8n_otel_exporter_otlp_headers and n8n_log_streaming_destinations render into it, and a literal credential placed in n8n_extra_env would too, so do not commit the file to Git without checking it. The content follows the chart's values schema and changes with n8n_chart_version; it is not part of this module's compatibility promise beyond being valid for that chart version. Unknown until apply when it embeds an endpoint the same apply creates."
+  value       = local.n8n_helm_values
+  sensitive   = true
+
+  # helm_release.n8n carries this rule on the default path. With
+  # create_kubernetes_resources = false the release has no instance and its
+  # precondition never runs, so the output owns it there: a chart that
+  # predates queueMode.workerGroups would otherwise hand the operator values
+  # that switch worker pools on with no pool behind them. Applied in that mode
+  # only, so each path has one owner for the error. See worker-pools.tf.
+  precondition {
+    condition     = var.create_kubernetes_resources ? true : (length(var.n8n_worker_pools) > 0 ? local.n8n_chart_renders_worker_pools : true)
+    error_message = local.n8n_worker_pools_chart_error
+  }
+}
+
+output "n8n_chart_repository" {
+  description = "Repository of the n8n Helm chart: the n8n_chart_repository input, which the module's own n8n release installs from. In infrastructure-only mode (create_kubernetes_resources = false), the repository the cluster operator installs the chart from, together with n8n_chart_version and n8n_helm_values."
+  value       = var.n8n_chart_repository
+}
+
+output "n8n_chart_version" {
+  description = "Version of the n8n Helm chart: the n8n_chart_version input, which the module's own n8n release installs. In infrastructure-only mode (create_kubernetes_resources = false), the version the cluster operator installs: n8n_helm_values is written for it, and the module's worker pool checks only cover it."
+  value       = var.n8n_chart_version
 }

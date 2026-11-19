@@ -23,7 +23,7 @@ env:
   # because `terraform test` on 1.12.x and older leaks about one provider
   # process per run block, which exhausts a 16 GB runner on the root suite
   # (see versions.tf). Must be X.Y.0 for a `>= X.Y` floor, and
-  # move together with all thirteen required_version declarations;
+  # move together with all fourteen required_version declarations;
   # tests/scripts/check-terraform-floor.sh fails the job otherwise.
   TF_FLOOR_VERSION: "1.13.0"
   TFLINT_VERSION: "v0.64.0"
@@ -138,13 +138,17 @@ jobs:
         working-directory: examples/customer-managed-everything
         run: terraform-docs --output-check .
 
+      - name: terraform-docs --output-check (examples/infrastructure-only)
+        working-directory: examples/infrastructure-only
+        run: terraform-docs --output-check .
+
   validate:
     name: terraform validate (${{ matrix.target }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/worker-pools", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/worker-pools", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything", "examples/infrastructure-only"]
     steps:
       - uses: actions/checkout@v4
 
@@ -183,7 +187,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/worker-pools", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/worker-pools", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything", "examples/infrastructure-only"]
     steps:
       - uses: actions/checkout@v4
 
@@ -223,7 +227,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/worker-pools", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/worker-pools", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything", "examples/infrastructure-only"]
     steps:
       - uses: actions/checkout@v4
 
@@ -310,7 +314,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/worker-pools", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything"]
+        target: [".", "examples/small", "examples/cloudflare", "examples/godaddy", "examples/medium", "examples/large", "examples/split-ingress", "examples/worker-pools", "examples/customer-managed-redis", "examples/customer-managed-s3", "examples/customer-managed-cluster", "examples/customer-managed-everything", "examples/infrastructure-only"]
     steps:
       - uses: actions/checkout@v4
 

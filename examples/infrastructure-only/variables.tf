@@ -1,0 +1,306 @@
+variable "aws_region" {
+  description = "AWS region to deploy into (e.g. us-east-1, eu-west-1, ap-southeast-1)."
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "cluster_name" {
+  description = "Name for the EKS cluster. Keep to 14 characters or fewer — the module derives an ElastiCache cluster ID of `<cluster_name>-redis`, and AWS caps ElastiCache IDs at 20 chars. Use only lowercase letters, digits and hyphens: the name is also used for the EKS cluster, which does not accept periods, and in the S3 bucket name `n8n-<cluster_name>-<id>`, which does not accept uppercase letters or underscores. The module rejects uppercase letters and underscores at plan time."
+  type        = string
+  default     = "n8n-cluster"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", var.cluster_name)) && length(var.cluster_name) <= 14
+    error_message = "cluster_name must be non-empty, use only lowercase letters, digits and hyphens, start and end with a letter or digit, and be 14 characters or fewer."
+  }
+}
+
+variable "n8n_domain" {
+  description = "Fully-qualified domain name for n8n (e.g. n8n.example.com). The parent zone must be hosted in Route53 (pass its ID via route53_zone_id)."
+  type        = string
+}
+
+variable "route53_zone_id" {
+  description = "Route53 hosted zone ID for the parent of n8n_domain (e.g. the zone for example.com if n8n_domain = n8n.example.com). The module creates the ACM certificate and its validation records inside this zone. It creates no alias A-record in this example: add the record yourself once your Ingress has a load balancer."
+  type        = string
+}
+
+variable "n8n_image_repository" {
+  description = "Container image repository for the n8n application, without a tag (e.g. \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n\"). Leave null to use the Helm chart's own repository (docker.n8n.io/n8nio/n8n). Set this to run a custom image, for example one with community packages baked in so they are not reinstalled on every pod boot. The image must be pullable by the node group's IAM role (ECR in the same account is) or be public, otherwise name a dockerconfigjson secret in n8n_image_pull_secrets, and n8n_task_runner_image_tag usually has to be set alongside it."
+  type        = string
+  default     = null
+
+  validation {
+    # Keep this pattern in sync with local.image_repository_regex in the
+    # module root's locals.tf; the grammar is duplicated in every example.
+    # Docker's own reference grammar (distribution/reference), repository half
+    # only, with every rule read off docker's exit code rather than inferred.
+    # splitDockerDomain treats a first component as a registry host when it has
+    # a dot or colon, is localhost, or contains an uppercase letter, so
+    # N8NIO/n8n and [2001:db8::1]:5000/n8n are pullable while myorg/N8N is not.
+    # Path components must be lowercase but may carry doubled separators
+    # (my--repo, my__repo). No label may be empty or end in a hyphen, which
+    # rules out a..b, foo-.com, a trailing slash and a doubled slash.
+    condition     = var.n8n_image_repository == null ? true : can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_image_repository))
+    error_message = "n8n_image_repository must be a bare image repository reference that Docker can pull: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n\", \"n8nio/n8n\", \"[2001:db8::1]:5000/n8n\"). No scheme (\"https://\"), no whitespace, no uppercase path components, and no empty label anywhere, which rules out a trailing slash, a doubled slash, and a doubled dot. Set to null to use the chart's default (docker.n8n.io/n8nio/n8n)."
+  }
+
+  validation {
+    condition     = var.n8n_image_repository == null ? true : !can(regex(":", reverse(split("/", var.n8n_image_repository))[0]))
+    error_message = "n8n_image_repository must not include a tag or digest, because the chart appends the tag itself. Pass the version via n8n_image_tag instead."
+  }
+
+  validation {
+    # Docker limits the repository path, after normalization, to 255
+    # characters: the registry host does not count, and a single-component
+    # Docker Hub name counts an implicit "library/" prefix. Keep in sync with
+    # the module root's variables.tf.
+    condition = var.n8n_image_repository == null ? true : length(join("", [
+      can(regex("^(?:(?:docker\\.io|index\\.docker\\.io)/)?[^/]+$", var.n8n_image_repository)) ? "library/" : "",
+      can(regex("^(?:localhost|[^/_]*[.:A-Z][^/_]*)/", var.n8n_image_repository)) ? regex("(?s)^[^/]+/(.*)$", var.n8n_image_repository)[0] : var.n8n_image_repository,
+    ])) <= 255
+    error_message = "n8n_image_repository's repository path must be 255 characters or fewer, Docker's limit. The path is measured without the registry host, and a single-component Docker Hub name counts its implicit \"library/\" prefix."
+  }
+}
+
+variable "n8n_image_pull_secrets" {
+  description = "Names of existing Kubernetes secrets of type kubernetes.io/dockerconfigjson, in the n8n namespace, that the pods authenticate to their image registry with. Leave empty (the default) unless n8n_image_repository points somewhere the node group's IAM role cannot already reach: a public registry and an ECR repository in this account both pull without credentials. Setting it makes the Helm values tell the chart not to create a ServiceAccount, and the module creates none in this example: create the ServiceAccount n8n-enterprise-pull yourself and attach these secrets to it. The module leaves the chart's own top-level imagePullSecrets value unset. Create and rotate the secrets yourself; the module takes names, not credentials, so none of them land in Terraform state. Cross-account ECR is the exception and should not use this: its authorization tokens expire after 12 hours, so add the node group role to the source repository's policy instead."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for name in var.n8n_image_pull_secrets :
+      can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$", name))
+    ])
+    error_message = "Every n8n_image_pull_secrets entry must be a DNS-1123 subdomain, which is what Kubernetes requires of a secret name: lowercase alphanumerics, hyphens and dots, starting and ending with an alphanumeric, with no empty label (e.g. \"ecr-cross-account\"). Pass the secret's name, not its contents."
+  }
+
+  validation {
+    condition = alltrue([
+      for name in var.n8n_image_pull_secrets : length(name) <= 253
+    ])
+    error_message = "Every n8n_image_pull_secrets entry must be 253 characters or fewer, the Kubernetes limit on a secret name."
+  }
+
+  validation {
+    condition = alltrue([
+      for name in var.n8n_image_pull_secrets :
+      alltrue([for label in split(".", name) : length(label) <= 63])
+    ])
+    error_message = "Every n8n_image_pull_secrets entry must have each dot-separated label 63 characters or fewer, the Kubernetes limit on a single DNS label."
+  }
+
+  validation {
+    condition     = length(distinct(var.n8n_image_pull_secrets)) == length(var.n8n_image_pull_secrets)
+    error_message = "n8n_image_pull_secrets must not repeat a secret name. Listing one twice adds nothing, since the kubelet tries each entry once."
+  }
+}
+
+variable "n8n_image_tag" {
+  description = "n8n application image tag to deploy (e.g. \"2.27.4\"). Leave null to use the selected Helm chart's default (appVersion 2.44.5 in chart 2.0.0-rc.1). Inspect and pin the running application version before upgrading the chart to avoid a downgrade; see the [upgrade guide](../../docs/upgrading-n8n.md)."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.n8n_image_tag == null ? true : can(regex("^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$", var.n8n_image_tag))
+    error_message = "n8n_image_tag must be a non-empty string with no whitespace, containing only alphanumeric characters, dots, underscores, and hyphens (e.g. \"1.2.3\", \"1.2.3-alpine\"). Set to null to use the selected chart's default."
+  }
+}
+
+variable "n8n_task_runner_image_tag" {
+  description = "Image tag for the task runner sidecar (`n8nio/runners`). Leave null to inherit the n8n application image's tag, which is correct as long as that tag is a published n8n version. Set it to the underlying n8n version when running a custom image whose tag is not one (e.g. n8n_image_tag = \"2.27.4-mypackages\" together with n8n_task_runner_image_tag = \"2.27.4\"); otherwise the sidecar image cannot be pulled and every pod carrying a runner stays in ImagePullBackOff (workers only in upstream chart 2.0.0-rc.1 queue mode)."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.n8n_task_runner_image_tag == null ? true : can(regex("^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$", var.n8n_task_runner_image_tag))
+    error_message = "n8n_task_runner_image_tag must be a non-empty string with no whitespace, containing only alphanumeric characters, dots, underscores, and hyphens (e.g. \"2.27.4\"). Set to null to inherit the n8n application image's tag."
+  }
+}
+
+variable "n8n_task_runner_image_repository" {
+  description = "Container image repository for the task runner sidecar (n8nio/runners), without a tag or digest (e.g. \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/n8n-runners\"). Leave null to use the Helm chart's own repository (n8nio/runners). Set alongside n8n_image_repository when mirroring both images into the same private registry; the two are independent. Use n8n_task_runner_image_tag for the runner tag. Private-registry pull access is granted the same way as n8n_image_repository, through n8n_image_pull_secrets. In this example the module creates no ServiceAccount, so attach those secrets to the ServiceAccount n8n-enterprise-pull that you create yourself."
+  type        = string
+  default     = null
+
+  validation {
+    # Keep this pattern in sync with local.image_repository_regex in the
+    # module root's locals.tf; the grammar is duplicated in every example.
+    # Docker's own reference grammar (distribution/reference), repository half
+    # only, with every rule read off docker's exit code rather than inferred.
+    # splitDockerDomain treats a first component as a registry host when it has
+    # a dot or colon, is localhost, or contains an uppercase letter, so
+    # N8NIO/runners and [2001:db8::1]:5000/runners are pullable while myorg/RUNNERS is not.
+    # Path components must be lowercase but may carry doubled separators
+    # (my--repo, my__repo). No label may be empty or end in a hyphen, which
+    # rules out a..b, foo-.com, a trailing slash and a doubled slash.
+    condition     = var.n8n_task_runner_image_repository == null ? true : can(regex("^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:__|[._]|-+)[a-z0-9]+)*)*$", var.n8n_task_runner_image_repository))
+    error_message = "n8n_task_runner_image_repository must be a bare image repository reference that Docker can pull: an optional registry host with an optional port, then one or more lowercase path components (e.g. \"myregistry.example.com/n8n-runners\", \"n8nio/runners\", \"[2001:db8::1]:5000/n8n-runners\"). No scheme (\"https://\"), no whitespace, no uppercase path components, and no empty label anywhere, which rules out a trailing slash, a doubled slash, and a doubled dot. Set to null to use the chart's default (n8nio/runners)."
+  }
+
+  validation {
+    condition     = var.n8n_task_runner_image_repository == null ? true : !can(regex(":", reverse(split("/", var.n8n_task_runner_image_repository))[0]))
+    error_message = "n8n_task_runner_image_repository must not include a tag or digest, because the chart appends the tag itself. Pass the version via n8n_task_runner_image_tag instead."
+  }
+
+  validation {
+    # Docker limits the repository path, after normalization, to 255
+    # characters: the registry host does not count, and a single-component
+    # Docker Hub name counts an implicit "library/" prefix. Keep in sync with
+    # the module root's variables.tf.
+    condition = var.n8n_task_runner_image_repository == null ? true : length(join("", [
+      can(regex("^(?:(?:docker\\.io|index\\.docker\\.io)/)?[^/]+$", var.n8n_task_runner_image_repository)) ? "library/" : "",
+      can(regex("^(?:localhost|[^/_]*[.:A-Z][^/_]*)/", var.n8n_task_runner_image_repository)) ? regex("(?s)^[^/]+/(.*)$", var.n8n_task_runner_image_repository)[0] : var.n8n_task_runner_image_repository,
+    ])) <= 255
+    error_message = "n8n_task_runner_image_repository's repository path must be 255 characters or fewer, Docker's limit. The path is measured without the registry host, and a single-component Docker Hub name counts its implicit \"library/\" prefix."
+  }
+}
+
+variable "n8n_custom_extensions_path" {
+  description = "Absolute path inside the n8n container that n8n scans for custom nodes at startup (e.g. \"/opt/n8n-nodes\"). Maps to N8N_CUSTOM_EXTENSIONS, and is set on main, worker and webhook processor pods alike. Set this alongside n8n_image_repository when the custom image bakes community packages in: since n8n 1.0 the loader no longer reads the image's global node_modules, so a plain npm install into the image is never scanned and the packages ship but never load. Nodes found here register under the package name CUSTOM, so a node installed from npm as n8n-nodes-example.myNode becomes CUSTOM.myNode and existing workflows referencing the npm-qualified type will not resolve. Leave null (the default) to omit the env var."
+  type        = string
+  default     = null
+
+  # Keep these validations in sync with the module root's variables.tf; they
+  # are duplicated in every example.
+  validation {
+    condition     = var.n8n_custom_extensions_path == null ? true : can(regex("^/[^[:space:];]*$", var.n8n_custom_extensions_path))
+    error_message = "n8n_custom_extensions_path must be an absolute container path with no whitespace and no semicolon (e.g. \"/opt/n8n-nodes\"). n8n splits N8N_CUSTOM_EXTENSIONS on \";\", so a semicolon here would be parsed as two directories and silently drop all but the last."
+  }
+
+  validation {
+    # The shadowing check below is a string comparison, so it only holds if the
+    # mounted directory has a single spelling. /home/node//.n8n/custom,
+    # /home/node/./.n8n/custom and /opt/../home/node/.n8n/custom all resolve
+    # inside the mount in the container while slipping past a startswith() on
+    # the raw value. Requiring a canonical path is the sound fix: abspath()
+    # would normalize against the machine running Terraform rather than the
+    # container filesystem, and rewrites separators on Windows.
+    condition     = var.n8n_custom_extensions_path == null ? true : !can(regex("//|/\\.\\.?(/|$)", var.n8n_custom_extensions_path))
+    error_message = "n8n_custom_extensions_path must be a canonical path: no repeated slashes and no \".\" or \"..\" components (e.g. \"/opt/n8n-nodes\"). Those spellings resolve to the same directory inside the container but would slip past the /home/node/.n8n shadowing check."
+  }
+
+  validation {
+    condition     = var.n8n_custom_extensions_path == null ? true : (var.n8n_custom_extensions_path == "/" || !endswith(var.n8n_custom_extensions_path, "/"))
+    error_message = "n8n_custom_extensions_path must not end in a trailing slash (e.g. \"/opt/n8n-nodes\", not \"/opt/n8n-nodes/\"). Same reason as the canonical-path rule above: the two spellings are the same directory to the container but different strings to the coverage check in n8n.tf, which compares this path against n8n_extra_volume_mounts entries literally."
+  }
+
+  validation {
+    # The chart mounts the `data` volume (an emptyDir at the chart default) at
+    # /home/node/.n8n on the main deployment only, so anything the image baked
+    # in under that path is hidden on mains while still present on workers and
+    # webhook processors: the nodes would load on some pod types and not others.
+    condition = var.n8n_custom_extensions_path == null ? true : !(
+      var.n8n_custom_extensions_path == "/home/node/.n8n" ||
+      startswith(var.n8n_custom_extensions_path, "/home/node/.n8n/")
+    )
+    error_message = "n8n_custom_extensions_path must not be inside /home/node/.n8n. The chart mounts an emptyDir there on main pods, which hides whatever the image baked in, so the nodes would load on workers and webhook processors but not on mains. Use a path outside it, for example /opt/n8n-nodes."
+  }
+}
+
+variable "n8n_additional_domains" {
+  description = "Extra hostnames n8n should answer on, beyond n8n_domain. Each is added to the module-issued ACM certificate as a subject alternative name, and given a Route 53 validation record. The module creates no Ingress and no alias A-record in this example: route each name in the Ingress you create, and add its DNS record yourself. Leave empty for a single hostname."
+  type        = list(string)
+  default     = []
+}
+
+variable "n8n_main_hpa_min_replicas" {
+  description = "Minimum (and therefore default) replica count for n8n main pods, passed straight through to the module's own n8n_main_hpa_min_replicas. Leave null (the default) to use the module's default of 2 (multi-main, needs an Enterprise/Startup license carrying feat:multipleMainInstances). Set to 1 to run a single main pod in plain queue mode instead, which only needs a Business-tier license: n8n's multi-main leader-election gate never engages at 1 replica."
+  type        = number
+  default     = null
+}
+
+variable "redis_transit_encryption_enabled" {
+  description = "Passed to the module's redis_transit_encryption_enabled. Defaults to true in this example, unlike the module and examples/small: n8n and KEDA connect to Redis over TLS, and the module generates an AUTH token, exposed through the redis_auth_token output. In this mode the operator creates the n8n Secrets anyway, so one more (n8n-enterprise-redis-secret) adds little work, and queue payloads stop crossing the VPC in cleartext. The certificate chains to Amazon Root CA 1, which standard trust stores include, so no CA bundle is needed. Turning it on selects a one-node aws_elasticache_replication_group, encrypted at rest, instead of the module's default aws_elasticache_cluster. Changing it on a running deployment replaces Redis and drops every queued job. Set to false to match examples/small."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
+variable "n8n_execution_data_storage_mode" {
+  description = "Where n8n stores the data of each new execution. Passed to the module's n8n_execution_data_storage_mode. \"database\" keeps execution data in PostgreSQL; \"s3\" offloads it to the S3 bucket the module already creates for binary data. This example runs the module's default database (db.t3.small on 50 GB of gp2, a 150 IOPS baseline), which has the least room of any sizing this module ships to absorb execution-data growth, so reaching for this is often cheaper than resizing the database. Requires n8n >= 2.27 (pin n8n_image_tag accordingly) and an Enterprise license carrying the feat:executionDataS3 entitlement, which is not the same one binary data offload uses. There is no backfill: existing executions stay readable where they were written. Read the execution data section of the root README before enabling it, in particular the durability trade-off and the S3 lifecycle constraint."
+  type        = string
+  default     = "database"
+  nullable    = false
+
+  validation {
+    condition     = contains(["database", "s3"], var.n8n_execution_data_storage_mode)
+    error_message = "n8n_execution_data_storage_mode must be either \"database\" or \"s3\"."
+  }
+}
+
+variable "db_backup_retention_period" {
+  description = "Number of whole days to retain automated RDS backups. A value of 0 disables automated backups and point-in-time recovery. Passed to the module's db_backup_retention_period. Leave null (the default) to use the module's default of 7 days."
+  type        = number
+  default     = null
+}
+
+variable "db_deletion_protection" {
+  description = "Passed to the module's db_deletion_protection. Leave null (the default) to use the module's teardown-friendly default of false."
+  type        = bool
+  default     = null
+}
+
+variable "db_skip_final_snapshot" {
+  description = "Passed to the module's db_skip_final_snapshot. Leave null (the default) to use the module's teardown-friendly default of true."
+  type        = bool
+  default     = null
+}
+
+variable "db_final_snapshot_identifier" {
+  description = "Passed to the module's db_final_snapshot_identifier. Required when db_skip_final_snapshot is false; must be left null otherwise, or the module rejects the plan."
+  type        = string
+  default     = null
+}
+
+variable "db_delete_automated_backups" {
+  description = "Passed to the module's db_delete_automated_backups. Leave null (the default) to use the module's teardown-friendly default of true."
+  type        = bool
+  default     = null
+}
+
+variable "s3_force_destroy" {
+  description = "Passed to the module's s3_force_destroy. Leave null (the default) to use the module's teardown-friendly default of true."
+  type        = bool
+  default     = null
+}
+
+variable "aws_partner_attribution_tag" {
+  description = "Value of the aws-apn-id tag added to every taggable AWS resource this example and the module create, so AWS Partner Revenue Measurement attributes their spend to n8n. Passed to the module's aws_partner_attribution_tag and merged into this example's own tags, which is how the VPC, NAT gateway and any stand-in infrastructure get it. This input owns the tag: an aws-apn-id key in tags is ignored. Set to an empty string to remove the tag from resources Terraform manages and stop new load balancers and volumes receiving it; EBS volumes that already exist keep it. Keep the default and validation in sync with the module root's variables.tf."
+  type        = string
+  default     = "pc:26au7o6cdeh7fqdt376h9m9xk"
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^(|pc:[a-z0-9]{1,253})$", var.aws_partner_attribution_tag))
+    error_message = "aws_partner_attribution_tag must be empty, or an AWS Marketplace product code such as pc:abc123."
+  }
+}
+
+variable "tags" {
+  description = "Additional AWS tags to apply to every resource this example creates."
+  type        = map(string)
+  default     = {}
+}
+
+variable "n8n_extra_ca_pem" {
+  description = "Passed to the module's n8n_extra_ca_pem: PEM CA certificate(s) trusted by the main, worker and webhook-processor pods for outbound TLS, for a TLS-inspecting egress proxy or a private CA; task-runner sidecars are not covered. Certificates only, never a private key. Leave null (the default) to add none. See [TLS proxy guide](../../docs/tls-proxy.md)."
+  type        = string
+  default     = null
+}
+
+variable "n8n_proxy_hops" {
+  description = "Passed to the module's n8n_proxy_hops: number of proxies in front of n8n that add an X-Forwarded-For entry (the load balancer of the Ingress you create counts as 1, an additional proxy or WAF that adds its own entry makes 2). At any hop count of 1 or more, a caller that bypasses the declared proxy chain can forge X-Forwarded-For and spoof its client IP, including an in-cluster caller that reaches the n8n Services directly. When a proxy sits in front of your load balancer, restrict it to that proxy's egress addresses on the Ingress you create, for example with the alb.ingress.kubernetes.io/inbound-cidrs annotation, and check the effective inbound rules of its security group. The module's alb_inbound_cidrs and alb_inbound_prefix_list_ids inputs have no effect in this example, because the module creates no Ingress. Keep in-cluster callers off the n8n Services. Leave null (the default) to use the module's default of 1. See [TLS proxy guide](../../docs/tls-proxy.md)."
+  type        = number
+  default     = null
+}
+
+variable "n8n_extra_env" {
+  description = "Passed to the module's n8n_extra_env: extra environment variables for the n8n containers on every role (main, worker, webhook processor), not the task runner sidecars, e.g. HTTP_PROXY, HTTPS_PROXY and NO_PROXY for an egress proxy. The module rejects names it manages. Values are stored in plaintext in Terraform state and the Helm release, so never embed credentials in a proxy URL (http://user:pass@proxy). See [TLS proxy guide](../../docs/tls-proxy.md)."
+  type = list(object({
+    name  = string
+    value = string
+  }))
+  default = []
+}
