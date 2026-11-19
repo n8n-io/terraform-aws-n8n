@@ -546,7 +546,9 @@ the EKS add-ons, RDS, ElastiCache,
 S3, the IAM roles and Pod Identity associations, and the ACM certificate each
 keep following the input that already controls them (`create_eks`,
 `create_ebs_csi`, `create_database`, `create_elasticache`,
-`create_s3_bucket`, `route53_zone_id`). That includes the IAM bindings the
+`create_s3_bucket`, `route53_zone_id`). The module installs the Pod
+Identity Agent add-on only when it creates the cluster; with
+`create_eks = false` the existing cluster must already run it. That includes the IAM bindings the
 operator's controllers and n8n use; on an existing cluster the controller
 bindings follow `install_lbc` and `install_cluster_autoscaler`. The module
 skips the controllers, the namespace, the Secrets, the n8n Helm release, the
@@ -563,6 +565,14 @@ outputs, so re-export them next to the module call:
 output "n8n_helm_values" {
   value     = module.n8n.n8n_helm_values
   sensitive = true
+}
+
+output "n8n_chart_repository" {
+  value = module.n8n.n8n_chart_repository
+}
+
+output "n8n_chart_version" {
+  value = module.n8n.n8n_chart_version
 }
 ```
 

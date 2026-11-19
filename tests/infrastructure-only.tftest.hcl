@@ -408,8 +408,10 @@ run "infrastructure_only_outputs_report_what_terraform_does_not_own" {
 }
 
 # With no release, the chart outputs are the operator's only source for the
-# chart the values are written for. A mirror and a pinned version show they
-# follow the inputs rather than fixed defaults.
+# chart the values are written for. Compared with the inputs rather than the
+# fixture literals, so the run checks the wiring; non-default inputs make sure
+# a hard-coded default would not also pass. The default path compares them
+# with helm_release.n8n instead (default_path_output_is_what_the_release_receives).
 run "infrastructure_only_outputs_name_the_chart_for_the_values" {
   command = plan
 
@@ -420,12 +422,12 @@ run "infrastructure_only_outputs_name_the_chart_for_the_values" {
   }
 
   assert {
-    condition     = output.n8n_chart_repository == "oci://123456789012.dkr.ecr.us-east-1.amazonaws.com/n8n-chart-mirror"
+    condition     = output.n8n_chart_repository == var.n8n_chart_repository
     error_message = "n8n_chart_repository must carry the configured chart repository in infrastructure-only mode"
   }
 
   assert {
-    condition     = output.n8n_chart_version == "3.0.0"
+    condition     = output.n8n_chart_version == var.n8n_chart_version
     error_message = "n8n_chart_version must carry the configured chart version in infrastructure-only mode"
   }
 }
