@@ -54,8 +54,12 @@ resource "aws_eks_addon" "ebs_csi" {
 # default annotation on current EKS versions, so it is inert; patching or
 # deleting a resource the module did not create would need imperative kubectl
 # workarounds. gp3 becomes the default purely by being the only annotated class.
+#
+# Also gated on create_kubernetes_resources, unlike the addon above: the addon
+# is an AWS resource and stays, the StorageClass is a Kubernetes object the
+# operator creates in infrastructure-only mode.
 resource "kubernetes_storage_class_v1" "gp3" {
-  count = var.create_ebs_csi ? 1 : 0
+  count = var.create_kubernetes_resources && var.create_ebs_csi ? 1 : 0
 
   metadata {
     name = "gp3"

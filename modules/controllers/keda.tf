@@ -63,7 +63,7 @@
 # ScaledObject with it, before this release is touched.
 
 resource "helm_release" "keda" {
-  count = var.install_keda ? 1 : 0
+  count = var.create_kubernetes_resources && var.install_keda ? 1 : 0
 
   name             = "keda"
   repository       = var.keda_chart_repository

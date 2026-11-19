@@ -33,9 +33,24 @@
 # ever stops reaching this resource. See AGENTS.md, "Known gap" under Static
 # analysis.
 
+locals {
+  # False in infrastructure-only mode (create_kubernetes_resources = false),
+  # whatever redis_exporter_enabled says: the module then creates nothing in
+  # the cluster.
+  #
+  # A ternary feeding a plain `local ? 1 : 0` count, not `a && b ? 1 : 0` in
+  # the count itself, and that shape is load-bearing. checkov (3.3.20) does
+  # not evaluate `&&` in a count: it scanned this default-off Deployment in
+  # the default pass with its variables unresolved, and reported three image
+  # findings against a resource no default configuration creates. It resolves
+  # this form, so the opt-in pass in tests/scripts/check-checkov.sh stays the
+  # one place the exporter is scanned (see AGENTS.md, "Known gap").
+  redis_exporter_managed = var.create_kubernetes_resources ? var.redis_exporter_enabled : false
+}
+
 resource "kubernetes_deployment_v1" "redis_exporter" {
   # checkov:skip=CKV_K8S_11:No CPU limit by design, so CPU stays uncapped on this one container. A CFS-throttled exporter reports late during exactly the incident it exists for; the accepted trade is that a misbehaving exporter competes for node CPU like any other burstable pod rather than being quota-capped. See the resources block below.
-  count = var.redis_exporter_enabled ? 1 : 0
+  count = local.redis_exporter_managed ? 1 : 0
 
   metadata {
     name = "redis-exporter"
@@ -266,7 +281,7 @@ resource "kubernetes_deployment_v1" "redis_exporter" {
 }
 
 resource "kubernetes_service_v1" "redis_exporter" {
-  count = var.redis_exporter_enabled ? 1 : 0
+  count = local.redis_exporter_managed ? 1 : 0
 
   metadata {
     name      = "redis-exporter"

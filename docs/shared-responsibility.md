@@ -18,6 +18,11 @@ worker fleet) this module can hand off entirely. The rows
 below cover responsibilities that exist regardless of which layer ownership
 mode is selected.
 
+With `create_kubernetes_resources = false` the boundary moves further: the
+module creates nothing inside the cluster, so every row below that describes
+a controller, a Kubernetes Secret, the Ingress or the n8n release becomes the
+caller's. See [Infrastructure-only mode](./infrastructure-only.md).
+
 | Area | What the module does | What the caller owns | Related input / doc |
 |---|---|---|---|
 | Cluster security add-ons and policy | With `create_eks = true` (the default), creates the EKS cluster and its node group, envelope-encrypts Kubernetes Secrets with a Customer Managed KMS key by default (`eks_secrets_encryption_enabled`), lets the caller restrict or disable the public API endpoint (`cluster_endpoint_public_access`, `cluster_endpoint_public_access_cidrs`, `cluster_endpoint_private_access`), and can turn on VPC CNI NetworkPolicy enforcement (`eks_network_policy_enabled`, off by default). With `create_eks = false`, it attaches to an existing cluster and manages none of these. | GuardDuty EKS Runtime Monitoring, Security Hub, and Pod Security admission policy are not enabled by the module and must be turned on separately (e.g. via `aws guardduty`/`aws securityhub`, or a `kubernetes_*` policy resource outside this module). The module creates no `NetworkPolicy` objects, even with enforcement on; writing them is the caller's job. Turning on enforcement activates every `NetworkPolicy` already in the cluster, not only policies for n8n, so audit policies in other namespaces first. On a module-created cluster, the public endpoint is reachable from `0.0.0.0/0` by default; narrow or close it with the inputs above. On an existing cluster (`create_eks = false`), node groups, Secrets encryption, and API endpoint exposure belong to the cluster owner, and so does NetworkPolicy enforcement. | `create_eks`, `eks_secrets_encryption_enabled`, `eks_network_policy_enabled`, `cluster_endpoint_public_access`, `cluster_endpoint_public_access_cidrs`, `cluster_endpoint_private_access`; [`docs/customer-managed-infrastructure.md`](./customer-managed-infrastructure.md) |

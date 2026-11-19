@@ -328,6 +328,13 @@ variable "n8n_license_key" {
   type        = string
   sensitive   = true
   default     = null
+
+  # A hard error rather than the warning an ignored input usually gets: a
+  # license key nothing reads would still be written to state.
+  validation {
+    condition     = var.create_kubernetes_resources ? true : var.n8n_license_key == null
+    error_message = "n8n_license_key must be null when create_kubernetes_resources = false. The module creates no Kubernetes Secret in that mode, so the key would be stored in Terraform state and used by nothing. Create the Secret n8n-enterprise-secrets with the key N8N_LICENSE_ACTIVATION_KEY yourself, or name your own Secret with n8n_license_key_secret_ref or n8n_license_cert_secret_ref. See docs/infrastructure-only.md."
+  }
 }
 
 variable "n8n_license_key_secret_ref" {
@@ -339,10 +346,20 @@ variable "n8n_license_key_secret_ref" {
   default = null
 
   validation {
-    condition = length([
-      for v in [var.n8n_license_key, var.n8n_license_key_secret_ref, var.n8n_license_cert_secret_ref] : v if v != null
-    ]) == 1
-    error_message = "Set exactly one of n8n_license_key, n8n_license_key_secret_ref, or n8n_license_cert_secret_ref."
+    # In infrastructure-only mode the operator owns the license Secret, so no
+    # input is needed: with neither reference set, the Helm values name
+    # n8n-enterprise-secrets. The literal n8n_license_key is rejected there by
+    # its own validation, so only the two references are counted.
+    condition = var.create_kubernetes_resources ? (
+      length([
+        for v in [var.n8n_license_key, var.n8n_license_key_secret_ref, var.n8n_license_cert_secret_ref] : v if v != null
+      ]) == 1
+      ) : (
+      length([
+        for v in [var.n8n_license_key_secret_ref, var.n8n_license_cert_secret_ref] : v if v != null
+      ]) <= 1
+    )
+    error_message = "Set exactly one of n8n_license_key, n8n_license_key_secret_ref, or n8n_license_cert_secret_ref. When create_kubernetes_resources = false, set at most one of n8n_license_key_secret_ref and n8n_license_cert_secret_ref instead."
   }
 }
 
@@ -378,6 +395,11 @@ variable "n8n_encryption_key" {
   type        = string
   sensitive   = true
   default     = null
+
+  validation {
+    condition     = var.create_kubernetes_resources ? true : var.n8n_encryption_key == null
+    error_message = "n8n_encryption_key must be null when create_kubernetes_resources = false. The module creates no Kubernetes Secret in that mode, so the key would be stored in Terraform state and used by nothing. Put the key in the Secret n8n-enterprise-secrets under N8N_ENCRYPTION_KEY yourself, or name your own Secret with n8n_encryption_key_secret_ref. When restoring a database, it must be the key that database's credentials were encrypted under. See docs/infrastructure-only.md."
+  }
 
   validation {
     condition     = var.n8n_encryption_key == null || can(regex("^[0-9a-fA-F]{64}$", var.n8n_encryption_key))
@@ -490,6 +512,13 @@ variable "cluster_endpoint_private_access" {
 
 variable "create_namespace" {
   description = "When true (the default), the module creates the Kubernetes namespace named by var.namespace. Set to false to deploy into a namespace that already exists, e.g. one a platform team created with its own resource quotas, labels, or network policies. The module does not validate that the namespace exists; the apply fails on the first resource that references it if it does not. Kept as a static boolean rather than checking for the namespace's existence because count expressions cannot depend on values computed at apply time."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
+variable "create_kubernetes_resources" {
+  description = "When true (the default), the module creates everything it always has inside the cluster. Set to false for infrastructure-only mode: the module then makes no call to the Kubernetes API and creates no kubernetes_* or helm_* resource, Helm releases included, so a cluster operator installs the controllers and n8n with tooling of their own (Helm, Argo CD, Flux). Skipped in that mode: the n8n Helm release, the namespace, every Secret, the ServiceAccount, the webhook HorizontalPodAutoscaler, both PodDisruptionBudgets, the Ingress with its Route 53 alias records, the redis_exporter, the gp3 StorageClass, and the Load Balancer Controller, Cluster Autoscaler, metrics-server and KEDA releases. It overrides install_lbc, install_cluster_autoscaler, install_metrics_server, install_keda, create_namespace, create_ingress, n8n_webhook_hpa_enabled, n8n_webhook_pdb_enabled, n8n_worker_pdb_enabled, lbc_pdb_enabled, redis_exporter_enabled and the StorageClass half of create_ebs_csi without a warning, whatever they are set to. Still created: the EKS cluster, node group and EKS add-ons (the EBS CSI driver included), RDS, ElastiCache, S3, the ACM certificate, and every IAM role and Pod Identity association, including the ones the operator's controllers and n8n use. On an existing cluster (create_eks = false) the controller IAM still follows install_lbc and install_cluster_autoscaler. The n8n_helm_values output carries the chart values the operator installs with, as release n8n in var.namespace; every other n8n_*, db_* and redis_* input keeps shaping them. The operator owns the application secrets: the module generates no encryption key or task runner token, and n8n_license_key and n8n_encryption_key must be null. The kubernetes, helm and time providers are still downloaded by terraform init. For new deployments only: setting this to false on a running deployment makes Terraform uninstall n8n and delete the namespace and its Secrets, and it does not hand anything over. See docs/infrastructure-only.md for the Secrets, ServiceAccounts and other objects the operator creates, and for the teardown order."
   type        = bool
   default     = true
   nullable    = false
@@ -774,7 +803,9 @@ variable "install_lbc" {
   default     = true
 
   validation {
-    condition     = var.install_lbc || !var.create_ingress
+    # No module-managed Ingress exists with create_kubernetes_resources =
+    # false either, so the combination is accepted there.
+    condition     = var.create_kubernetes_resources ? (var.install_lbc || !var.create_ingress) : true
     error_message = "install_lbc = false is incompatible with create_ingress = true: the module-managed Ingress waits for the Load Balancer Controller to provision an ALB, and with no controller installed that wait times out the apply. Either leave install_lbc = true, or set create_ingress = false and point your own Ingress resources at an LBC you install another way. There is no exception for create_eks = false against a cluster whose LBC already works: see docs/customer-managed-infrastructure.md's \"create_eks = false + create_ingress = true\" section for why, and what the two supported options are."
   }
 }

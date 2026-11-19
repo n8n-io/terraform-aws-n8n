@@ -5,7 +5,10 @@
 # already holds.
 
 resource "random_id" "n8n_encryption_key" {
-  count = var.n8n_encryption_key == null && var.n8n_encryption_key_secret_ref == null ? 1 : 0
+  # Not generated in infrastructure-only mode (create_kubernetes_resources =
+  # false): the operator owns the key there, and a generated one would sit in
+  # state with nothing reading it.
+  count = var.create_kubernetes_resources && var.n8n_encryption_key == null && var.n8n_encryption_key_secret_ref == null ? 1 : 0
 
   byte_length = 32
 }
@@ -15,7 +18,13 @@ locals {
   # key value in that case, since the module never reads the caller's Secret
   # (see that variable's description for why). secretRefs.existingSecret
   # points the chart at the caller's own Secret name instead, below.
-  n8n_encryption_key = var.n8n_encryption_key_secret_ref != null ? null : coalesce(var.n8n_encryption_key, try(random_id.n8n_encryption_key[0].hex, null))
+  #
+  # Also null in infrastructure-only mode, where the module neither generates
+  # nor accepts a key. Guarded ahead of the coalesce(), which errors rather
+  # than returning null when every argument is null.
+  n8n_encryption_key = !var.create_kubernetes_resources ? null : (
+    var.n8n_encryption_key_secret_ref != null ? null : coalesce(var.n8n_encryption_key, try(random_id.n8n_encryption_key[0].hex, null))
+  )
 }
 
 # There is deliberately no check block warning about n8n_encryption_key, even
@@ -52,6 +61,10 @@ locals {
 # 2.0.0-rc.1 in queue mode). Only read when n8n_task_runners_enabled = true.
 
 resource "random_password" "task_runner_token" {
+  # Not generated in infrastructure-only mode: the operator creates the
+  # n8n-task-runner-token Secret with a token of their own.
+  count = var.create_kubernetes_resources ? 1 : 0
+
   length  = 32
   special = false
 }
@@ -61,13 +74,15 @@ resource "random_password" "task_runner_token" {
 # kubernetes_secret.n8n does not exist when both the encryption key and the
 # license come from caller-managed Secrets.
 resource "kubernetes_secret_v1" "n8n_task_runner_token" {
+  count = var.create_kubernetes_resources ? 1 : 0
+
   metadata {
     name      = "n8n-task-runner-token"
     namespace = local.namespace_name
   }
 
   data = {
-    N8N_RUNNERS_AUTH_TOKEN = random_password.task_runner_token.result
+    N8N_RUNNERS_AUTH_TOKEN = random_password.task_runner_token[0].result
   }
 
   # See the comment on kubernetes_secret.n8n below.
@@ -154,7 +169,7 @@ locals {
     { enabled = true },
     local.n8n_license_uses_cert ? {} : {
       existingSecret = {
-        name = var.n8n_license_key_secret_ref != null ? var.n8n_license_key_secret_ref.name : kubernetes_secret.n8n[0].metadata[0].name
+        name = var.n8n_license_key_secret_ref != null ? var.n8n_license_key_secret_ref.name : (var.create_kubernetes_resources ? kubernetes_secret.n8n[0].metadata[0].name : "n8n-enterprise-secrets")
         key  = var.n8n_license_key_secret_ref != null ? local.n8n_license_key_secret_ref_key : "N8N_LICENSE_ACTIVATION_KEY"
       }
     },
@@ -169,7 +184,7 @@ locals {
 # through this resource, so it works on either path.
 
 resource "kubernetes_namespace" "n8n" {
-  count = var.create_namespace ? 1 : 0
+  count = var.create_kubernetes_resources && var.create_namespace ? 1 : 0
 
   metadata {
     name = var.namespace
@@ -183,7 +198,9 @@ resource "kubernetes_namespace" "n8n" {
 }
 
 locals {
-  namespace_name = var.create_namespace ? kubernetes_namespace.n8n[0].metadata[0].name : var.namespace
+  # In infrastructure-only mode the module creates no namespace whatever
+  # create_namespace says, so this is the intended name from var.namespace.
+  namespace_name = var.create_kubernetes_resources && var.create_namespace ? kubernetes_namespace.n8n[0].metadata[0].name : var.namespace
 }
 
 locals {
@@ -283,7 +300,7 @@ resource "kubernetes_secret" "n8n" {
   # Secret forced them to: a caller supplying their own Secret for the
   # encryption key no longer requires n8n_license_key_secret_ref to also be
   # set. See both variables' descriptions.
-  count = (var.n8n_encryption_key_secret_ref == null || (var.n8n_license_key_secret_ref == null && !local.n8n_license_uses_cert)) ? 1 : 0
+  count = var.create_kubernetes_resources && (var.n8n_encryption_key_secret_ref == null || (var.n8n_license_key_secret_ref == null && !local.n8n_license_uses_cert)) ? 1 : 0
 
   metadata {
     name      = "n8n-enterprise-secrets"
@@ -335,7 +352,7 @@ resource "kubernetes_secret" "n8n_db" {
   # true). Single-purpose Secret, unlike kubernetes_secret.n8n above, so the
   # whole resource is skipped rather than one key dropped from it. See
   # db_password_secret_ref's validation for when each path requires it.
-  count = var.db_password_secret_ref == null ? 1 : 0
+  count = var.create_kubernetes_resources && var.db_password_secret_ref == null ? 1 : 0
 
   metadata {
     name      = "n8n-enterprise-db-secret"
@@ -371,7 +388,7 @@ resource "kubernetes_secret" "n8n_redis" {
   # narrowing the condition further does not move its address the way gating
   # kubernetes_secret.n8n and kubernetes_secret.n8n_db above does for the
   # first time; no `moved` block is needed here. See refactoring.tf.
-  count = local.redis_auth_active && var.redis_auth_token_secret_ref == null ? 1 : 0
+  count = var.create_kubernetes_resources && local.redis_auth_active && var.redis_auth_token_secret_ref == null ? 1 : 0
 
   metadata {
     name      = "n8n-enterprise-redis-secret"
@@ -390,7 +407,7 @@ resource "kubernetes_secret" "n8n_redis" {
 # Caller-supplied CA certificate(s) (n8n_extra_ca_pem), mounted on every n8n
 # role and pointed at by NODE_EXTRA_CA_CERTS. Public certificates only.
 resource "kubernetes_secret_v1" "n8n_ca_bundle" {
-  count = local.n8n_extra_ca_enabled ? 1 : 0
+  count = var.create_kubernetes_resources && local.n8n_extra_ca_enabled ? 1 : 0
 
   metadata {
     name      = "n8n-ca-bundle-secret"
@@ -446,7 +463,7 @@ resource "kubernetes_secret_v1" "n8n_ca_bundle" {
 # field unset, and an unset ServiceAccount field means the pod mounts the token.
 
 resource "kubernetes_service_account_v1" "n8n" {
-  count = local.n8n_manages_service_account ? 1 : 0
+  count = var.create_kubernetes_resources && local.n8n_manages_service_account ? 1 : 0
 
   metadata {
     name      = local.n8n_service_account_name
@@ -733,20 +750,21 @@ locals {
   n8n_env_worker = { for e in var.n8n_worker_extra_env : e.name => e.value }
 }
 
-# ── Helm release ──────────────────────────────────────────────────────────────
+# ── Helm values ───────────────────────────────────────────────────────────────
+# The values helm_release.n8n receives, as one YAML string. A local rather than
+# inline in the release so the n8n_helm_values output can return the same
+# string: with create_kubernetes_resources = false there is no release, and a
+# cluster operator installs the chart with these values instead. Both readers
+# take this one expression, so they cannot drift apart.
+#
+# The only thing that differs between the two modes is which Secret a name
+# falls back to when no *_secret_ref input is set: the module-managed resource
+# when the module creates it, or the same fixed name as a string when the
+# operator does. Referencing the resource on the default path is what orders
+# the release after the Secret.
 
-resource "helm_release" "n8n" {
-  name            = "n8n"
-  repository      = var.n8n_chart_repository
-  chart           = "n8n"
-  version         = var.n8n_chart_version
-  namespace       = local.namespace_name
-  wait            = true
-  timeout         = var.n8n_helm_timeout
-  atomic          = true
-  cleanup_on_fail = true
-
-  values = [yamlencode(merge({
+locals {
+  n8n_helm_values = yamlencode(merge({
     # See local.n8n_license_values for the license paths this block covers.
     license = local.n8n_license_values
 
@@ -913,7 +931,7 @@ resource "helm_release" "n8n" {
       # is null (the default), and point at the caller's own Secret otherwise;
       # see that variable.
       passwordSecret = {
-        name = var.db_password_secret_ref != null ? var.db_password_secret_ref.name : kubernetes_secret.n8n_db[0].metadata[0].name
+        name = var.db_password_secret_ref != null ? var.db_password_secret_ref.name : (var.create_kubernetes_resources ? kubernetes_secret.n8n_db[0].metadata[0].name : "n8n-enterprise-db-secret")
         key  = var.db_password_secret_ref != null ? local.db_password_secret_ref_key : "password"
       }
     }, local.postgres_ssl_ca_values)
@@ -947,7 +965,7 @@ resource "helm_release" "n8n" {
       # caller's own Secret otherwise; see that variable.
       local.redis_auth_active ? {
         passwordSecret = {
-          name = var.redis_auth_token_secret_ref != null ? var.redis_auth_token_secret_ref.name : kubernetes_secret.n8n_redis[0].metadata[0].name
+          name = var.redis_auth_token_secret_ref != null ? var.redis_auth_token_secret_ref.name : (var.create_kubernetes_resources ? kubernetes_secret.n8n_redis[0].metadata[0].name : "n8n-enterprise-redis-secret")
           key  = var.redis_auth_token_secret_ref != null ? local.redis_auth_token_secret_ref_key : "password"
         }
       } : {},
@@ -1008,7 +1026,7 @@ resource "helm_release" "n8n" {
     # N8N_PROTOCOL are no longer read from this value at all). See
     # n8n_encryption_key_secret_ref's description.
     secretRefs = {
-      existingSecret = var.n8n_encryption_key_secret_ref != null ? var.n8n_encryption_key_secret_ref.name : kubernetes_secret.n8n[0].metadata[0].name
+      existingSecret = var.n8n_encryption_key_secret_ref != null ? var.n8n_encryption_key_secret_ref.name : (var.create_kubernetes_resources ? kubernetes_secret.n8n[0].metadata[0].name : "n8n-enterprise-secrets")
     }
 
     service = {
@@ -1196,7 +1214,7 @@ resource "helm_release" "n8n" {
     taskRunners = merge({
       enabled = var.n8n_task_runners_enabled
       authToken = {
-        existingSecret    = kubernetes_secret_v1.n8n_task_runner_token.metadata[0].name
+        existingSecret    = var.create_kubernetes_resources ? kubernetes_secret_v1.n8n_task_runner_token[0].metadata[0].name : "n8n-task-runner-token"
         existingSecretKey = "N8N_RUNNERS_AUTH_TOKEN"
       }
       broker = {
@@ -1343,7 +1361,28 @@ resource "helm_release" "n8n" {
     # live plan from origin/main at defaults showed that as the sole
     # helm_release diff every existing release would see on upgrade.
     local.n8n_multi_main_enabled ? {} : { strategy = local.n8n_main_strategy },
-  ))]
+  ))
+}
+
+# ── Helm release ──────────────────────────────────────────────────────────────
+
+# Skipped when create_kubernetes_resources = false. See local.n8n_helm_values
+# above and the n8n_helm_values output.
+
+resource "helm_release" "n8n" {
+  count = var.create_kubernetes_resources ? 1 : 0
+
+  name            = "n8n"
+  repository      = var.n8n_chart_repository
+  chart           = "n8n"
+  version         = var.n8n_chart_version
+  namespace       = local.namespace_name
+  wait            = true
+  timeout         = var.n8n_helm_timeout
+  atomic          = true
+  cleanup_on_fail = true
+
+  values = [local.n8n_helm_values]
 
   lifecycle {
     # A hard stop rather than a check: a chart that predates
@@ -1392,11 +1431,11 @@ resource "helm_release" "n8n" {
 # maxUnavailable = 1, not
 # minAvailable: minAvailable = 1 on a one-replica Deployment (the default
 # worker floor) would block every voluntary eviction and stall drains.
-# The selector references helm_release.n8n.name, which orders each budget after
+# The selector references helm_release.n8n[0].name, which orders each budget after
 # the release: the pods' namespace may be caller-owned, and a budget should be
 # destroyed before the Deployment it guards.
 resource "kubernetes_pod_disruption_budget_v1" "n8n_webhook" {
-  count = var.n8n_webhook_pdb_enabled ? 1 : 0
+  count = var.create_kubernetes_resources && var.n8n_webhook_pdb_enabled ? 1 : 0
 
   metadata {
     name      = "n8n-webhook-processor"
@@ -1410,14 +1449,14 @@ resource "kubernetes_pod_disruption_budget_v1" "n8n_webhook" {
       match_labels = {
         "app.kubernetes.io/name"      = "n8n"
         "app.kubernetes.io/component" = "webhook-processor"
-        "app.kubernetes.io/instance"  = helm_release.n8n.name
+        "app.kubernetes.io/instance"  = helm_release.n8n[0].name
       }
     }
   }
 }
 
 resource "kubernetes_pod_disruption_budget_v1" "n8n_worker" {
-  count = var.n8n_worker_pdb_enabled ? 1 : 0
+  count = var.create_kubernetes_resources && var.n8n_worker_pdb_enabled ? 1 : 0
 
   metadata {
     name      = "n8n-worker"
@@ -1431,7 +1470,7 @@ resource "kubernetes_pod_disruption_budget_v1" "n8n_worker" {
       match_labels = {
         "app.kubernetes.io/name"      = "n8n"
         "app.kubernetes.io/component" = "worker"
-        "app.kubernetes.io/instance"  = helm_release.n8n.name
+        "app.kubernetes.io/instance"  = helm_release.n8n[0].name
       }
     }
   }
@@ -1452,7 +1491,7 @@ resource "kubernetes_pod_disruption_budget_v1" "n8n_worker" {
 # outputs so a caller-built Ingress cannot drift from what n8n actually serves.
 
 resource "kubernetes_ingress_v1" "n8n" {
-  count = var.create_ingress ? 1 : 0
+  count = local.ingress_managed ? 1 : 0
 
   metadata {
     name        = "n8n-ingress"
@@ -1544,6 +1583,11 @@ resource "kubernetes_ingress_v1" "n8n" {
 #   3. kubernetes_namespace.n8n         ← namespace deleted (resources fully gone)
 
 resource "time_sleep" "wait_for_alb_cleanup" {
+  # No module-managed Ingress, namespace or ALB to wait for in
+  # infrastructure-only mode. There the operator removes their own Ingress
+  # and waits for the ALB before terraform destroy (docs/infrastructure-only.md).
+  count = var.create_kubernetes_resources ? 1 : 0
+
   destroy_duration = "60s"
 
   depends_on = [kubernetes_namespace.n8n]
@@ -1567,7 +1611,7 @@ resource "time_sleep" "wait_for_alb_cleanup" {
 
 check "ingress_scheme_not_overridden_by_annotations" {
   assert {
-    condition = var.create_ingress ? !contains(
+    condition = local.ingress_managed ? !contains(
       keys(var.ingress_annotations), "alb.ingress.kubernetes.io/scheme"
     ) : true
     error_message = join("", [
@@ -1586,7 +1630,10 @@ check "ingress_scheme_not_overridden_by_annotations" {
 
 check "alb_ssl_policy_not_overridden_by_annotations" {
   assert {
-    condition = !contains(keys(var.ingress_annotations), "alb.ingress.kubernetes.io/ssl-policy")
+    # Skipped in infrastructure-only mode only, where there is no ALB for the
+    # annotation to win on. Unlike its neighbours this check is not gated on
+    # create_ingress, and that is left as it was.
+    condition = var.create_kubernetes_resources ? !contains(keys(var.ingress_annotations), "alb.ingress.kubernetes.io/ssl-policy") : true
     error_message = join("", [
       "ingress_annotations sets alb.ingress.kubernetes.io/ssl-policy, which overrides var.alb_ssl_policy ",
       "(currently \"${var.alb_ssl_policy}\"). The ALB will use the annotation value. ",
@@ -1603,10 +1650,15 @@ check "alb_ssl_policy_not_overridden_by_annotations" {
 # source restriction had taken effect when their own Ingress carries none of
 # it. The source-restriction case is the worst of the five: the caller
 # believes the ALB is reachable only from their VPN range.
+#
+# create_kubernetes_resources = false is the same situation, since the module
+# then creates no Ingress either, so local.ingress_managed covers both. The
+# conflict checks around this one read the same local and pass on both paths:
+# this warning already says the accurate thing for them.
 
 check "ingress_tuning_requires_module_managed_ingress" {
   assert {
-    condition = var.create_ingress ? true : (
+    condition = local.ingress_managed ? true : (
       var.ingress_scheme == "internet-facing" &&
       var.alb_ssl_policy == local.alb_ssl_policy_default &&
       length(var.ingress_annotations) == 0 &&
@@ -1615,9 +1667,9 @@ check "ingress_tuning_requires_module_managed_ingress" {
     )
     error_message = join("", [
       "ingress_scheme, alb_ssl_policy, ingress_annotations, alb_inbound_cidrs, or alb_inbound_prefix_list_ids ",
-      "is set while create_ingress = false, so none of it is applied to anything. With create_ingress = false ",
-      "you own the Ingress resources; put the scheme, TLS policy, annotations, and source restrictions on ",
-      "your own Ingress instead.",
+      "is set while create_ingress = false or create_kubernetes_resources = false, so none of it is applied to ",
+      "anything. On either path you own the Ingress resources; put the scheme, TLS policy, annotations, and ",
+      "source restrictions on your own Ingress instead.",
     ])
   }
 }
@@ -1645,7 +1697,7 @@ check "ingress_tuning_requires_module_managed_ingress" {
 
 check "alb_source_restrictions_not_overridden_by_annotations" {
   assert {
-    condition = var.create_ingress ? (
+    condition = local.ingress_managed ? (
       length(var.alb_inbound_cidrs) > 0 ? !contains(
         keys(var.ingress_annotations), "alb.ingress.kubernetes.io/inbound-cidrs"
       ) : true
@@ -1658,7 +1710,7 @@ check "alb_source_restrictions_not_overridden_by_annotations" {
   }
 
   assert {
-    condition = var.create_ingress ? (
+    condition = local.ingress_managed ? (
       length(var.alb_inbound_prefix_list_ids) > 0 ? !contains(
         keys(var.ingress_annotations), "alb.ingress.kubernetes.io/security-group-prefix-lists"
       ) : true
@@ -1705,7 +1757,7 @@ check "alb_source_restrictions_require_controller_managed_security_group" {
   assert {
     # concat rather than `||`: check conditions in this module avoid chained
     # boolean operators, which do not short-circuit on Terraform 1.9.
-    condition = var.create_ingress ? (
+    condition = local.ingress_managed ? (
       length(concat(var.alb_inbound_cidrs, var.alb_inbound_prefix_list_ids)) > 0 ? !contains(
         keys(var.ingress_annotations), "alb.ingress.kubernetes.io/security-groups"
       ) : true
@@ -1730,7 +1782,7 @@ check "alb_source_restrictions_require_controller_managed_security_group" {
 
 check "ingress_annotations_preserve_session_stickiness" {
   assert {
-    condition = var.create_ingress ? (
+    condition = local.ingress_managed ? (
       contains(
         keys(var.ingress_annotations), "alb.ingress.kubernetes.io/target-group-attributes"
         ) ? strcontains(

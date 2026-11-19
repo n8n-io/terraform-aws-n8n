@@ -35,7 +35,7 @@ terraform {
   #          `terraform test`, not to the module code, but this floor now
   #          makes init reject 1.12 as well.
   #
-  # Declared as >= 1.13 in all thirteen required_version declarations in the
+  # Declared as >= 1.13 in all fourteen required_version declarations in the
   # repo. CI's test-floor job runs every test suite on TF_FLOOR_VERSION
   # (1.13.0), and tests/scripts/check-terraform-floor.sh keeps the two
   # equal, so the floor is a claim CI actually exercises rather than one

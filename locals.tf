@@ -107,6 +107,13 @@ locals {
     "alb.ingress.kubernetes.io/healthcheck-path" = "/healthz"
   }
 
+  # Whether the module creates the n8n Ingress. False with create_ingress =
+  # false, and also in infrastructure-only mode (create_kubernetes_resources
+  # = false), where the module creates nothing in the cluster. The Ingress,
+  # the Route 53 alias records behind it (dns.tf), the alb_hostname output and
+  # the Ingress check blocks (n8n.tf) all read this one local.
+  ingress_managed = var.create_kubernetes_resources && var.create_ingress
+
   # Source restrictions on the ALB security group LBC creates. Each key is
   # omitted entirely when its input is empty, so the default keeps LBC's own
   # default of 0.0.0.0/0 and no existing deployment sees a plan diff.

@@ -43,6 +43,11 @@ The module's dependency graph ensures resources are destroyed in the correct ord
 
 Most destroys complete in 10–15 minutes without intervention.
 
+With `create_kubernetes_resources = false` this order does not apply. The
+module manages nothing inside the cluster, so steps 1 to 5 are yours to do
+before `terraform destroy`. See
+[Infrastructure-only mode](./infrastructure-only.md#teardown).
+
 ## When deletion protection or data retention is enabled
 
 If you have flipped the module's teardown-friendly defaults, `terraform destroy`

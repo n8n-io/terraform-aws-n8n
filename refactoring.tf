@@ -328,3 +328,35 @@ moved {
   from = kubernetes_storage_class_v1.gp3
   to   = module.controllers.kubernetes_storage_class_v1.gp3[0]
 }
+
+# ── create_kubernetes_resources ───────────────────────────────────────────────
+# Skipped in infrastructure-only mode, where the module makes no call to the
+# Kubernetes API and a cluster operator installs the controllers and n8n. Every
+# other resource that mode skips already carried a count. These four were
+# unconditional, so without the blocks an upgrading deployment plans a destroy
+# and recreate of its n8n release (an uninstall and reinstall of n8n), the
+# task runner token and its Secret (a token rotation under running pods), and
+# the destroy-time pause.
+#
+# kubernetes_secret_v1.n8n_task_runner_token arrived with the chart 2.0 change
+# and gained its count before any later release, but a deployment applied from
+# that change holds the un-indexed address, so it gets a block as well.
+moved {
+  from = helm_release.n8n
+  to   = helm_release.n8n[0]
+}
+
+moved {
+  from = random_password.task_runner_token
+  to   = random_password.task_runner_token[0]
+}
+
+moved {
+  from = kubernetes_secret_v1.n8n_task_runner_token
+  to   = kubernetes_secret_v1.n8n_task_runner_token[0]
+}
+
+moved {
+  from = time_sleep.wait_for_alb_cleanup
+  to   = time_sleep.wait_for_alb_cleanup[0]
+}

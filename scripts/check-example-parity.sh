@@ -32,7 +32,7 @@ cd "$REPO_ROOT"
 
 BASELINE=small
 EXAMPLES=(cloudflare godaddy split-ingress worker-pools customer-managed-redis customer-managed-s3
-  customer-managed-cluster customer-managed-everything medium large)
+  customer-managed-cluster customer-managed-everything infrastructure-only medium large)
 
 # "example:pattern" pairs allowed to differ from examples/small, either way.
 ALLOWED_DIFFS=(
@@ -90,6 +90,10 @@ ALLOWED_DIFFS=(
   "large:db_skip_final_snapshot"
   "large:db_final_snapshot_identifier"
   "large:db_delete_automated_backups"
+  # infrastructure-only sets create_kubernetes_resources = false, and the
+  # module rejects a literal license key in that mode: the cluster operator
+  # creates the license Secret, so the example has no input for it.
+  "infrastructure-only:n8n_license_key"
   # large swaps RDS for Aurora and accepts a BYO certificate_arn instead of
   # route53_zone_id; it does not offer additional hostnames.
   "large:aurora_*"

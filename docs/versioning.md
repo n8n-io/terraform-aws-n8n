@@ -387,7 +387,7 @@ elsewhere that were measured on `3.5.0` were not re-measured.
 
 The provider rows in the drift report compare constraints with upstream
 versions, not with the versions selected in `.terraform.lock.hcl`. Check
-all 13 tracked lock files: the root, eleven examples, and
+all 14 tracked lock files: the root, twelve examples, and
 `modules/controllers`. A compatible provider update normally changes only
 its lock entries, not the module's constraints. Preserve checksums for
 `linux_amd64`, `linux_arm64`, and `darwin_arm64`, and leave unrelated
@@ -395,7 +395,7 @@ providers unchanged. Consumers of the published module use their own root
 lock file, not this repository's locks.
 
 Checkov `3.3.19` adds `CKV_AWS_394`, which requires a `zone-name` or
-`zone-id` filter on `aws_availability_zones`. All eleven examples retain
+`zone-id` filter on `aws_availability_zones`. All twelve examples retain
 dynamic discovery so they remain runnable across regions without changing
 existing subnet placement in a toolchain update. Each data source carries
 a scoped exception, not a repository-wide suppression. This accepts a
