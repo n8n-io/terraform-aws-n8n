@@ -108,11 +108,11 @@ For a full end-to-end example including the VPC, see [`examples/small/`](./examp
 
 ## Support
 
-This module is open source software, maintained by the n8n Solutions team independently of n8n's enterprise products. While the n8n Support team provides dedicated support for the enterprise offerings, this module isn't included.
+This module is open source software, maintained by the n8n Enterprise Deployments team. It isn't covered by n8n's enterprise Support offering.
 
-**Bug reports and feature requests:** open a [GitHub issue](https://github.com/n8n-io/terraform-aws-n8n/issues). We triage on a best-effort basis; there is no SLA.
+**Bug reports and feature requests:** open a [GitHub issue](https://github.com/n8n-io/terraform-aws-n8n/issues). We actively triage new issues, though there is no SLA.
 
-**Security issues:** see [`SECURITY.md`](./SECURITY.md) for the disclosure process. **Do not** open public issues for security findings.
+**Security issues:** see [`SECURITY.md`](./SECURITY.md) for reporting a vulnerability in this module. For anything affecting n8n itself, use n8n's [Vulnerability Disclosure Program](https://n8n.notion.site/n8n-vulnerability-disclosure-program). **Do not** open public issues for security findings.
 
 **General n8n questions** (not specific to this module): use the [n8n community forum](https://community.n8n.io/).
 
