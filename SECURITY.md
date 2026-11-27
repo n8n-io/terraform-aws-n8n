@@ -13,8 +13,9 @@ It does **not** cover:
   provisions or installs.
 
 If you've found something that affects the n8n product rather than
-this Terraform module, please report it through n8n's product security
-channel instead.
+this Terraform module, please report it through n8n's
+[Vulnerability Disclosure Program](https://n8n.notion.site/n8n-vulnerability-disclosure-program)
+instead.
 
 ## Reporting a vulnerability
 
@@ -30,8 +31,8 @@ Please **do not** open public GitHub issues for security findings.
 
 ## Response expectations
 
-This module is maintained by the n8n Solutions team on a best-effort
-basis. There is no contractual SLA. We aim to:
+This module is maintained by the n8n Enterprise Deployments team.
+There is no contractual SLA. We aim to:
 
 - Acknowledge new reports within 5 business days.
 - Provide an initial assessment (severity, scope, planned action)

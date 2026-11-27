@@ -26,6 +26,10 @@ this project adheres to the stability contract in
   [docs/upgrading-n8n.md](./docs/upgrading-n8n.md#before-bumping) when you
   pin a newer `n8n_image_tag`.
 
+### Changed
+
+- The module is now maintained by the n8n Enterprise Deployments team.
+
 ### Fixed
 
 - **Slack and Telegram human-in-the-loop callbacks returned 404.** n8n serves
